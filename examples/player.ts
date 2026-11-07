@@ -29,7 +29,7 @@ export default function* () {
   console.log(
     `joined battleon: ${yield* Player.joinMap("battleon-12345", { cell: "Enter", pad: "Spawn" })}`,
   );
-  console.log(`jumped to Enter: ${yield* Player.jumpToCell("Enter", "Spawn")}`);
+  console.log(`jumped to Enter: ${yield* Player.jumpToCell("Enter", { pad: "Spawn" })}`);
   console.log(`walked: ${yield* Player.walkTo(480, 330)}`);
   console.log(`rested until full: ${yield* Player.rest({ untilFull: true })}`);
 

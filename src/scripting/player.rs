@@ -105,7 +105,7 @@ pub(super) async fn serve(
 ) -> Reply {
     use bridge::player;
     Ok(match request {
-        Request::Ready => json!(domain::player::ready(loader)?),
+        Request::Ready => json!(domain::ready(loader)?),
         Request::JoinMap { map, cell, pad } => json!(
             domain::player::join(
                 loader,
@@ -139,7 +139,7 @@ pub(super) async fn serve(
                 .await?
             )
         }
-        request if !domain::player::has_avatar(loader)? => request.without_avatar(),
+        request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Map => json!(player::get_map(loader)?),
         Request::Cell => json!(player::get_cell(loader)?),
         Request::Pad => json!(player::get_pad(loader)?),

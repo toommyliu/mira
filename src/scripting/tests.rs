@@ -12,6 +12,7 @@ use super::{
     calls::{Call, Reply, Request, RunId},
     player::Request as P,
     runtime::Player,
+    world::Request as W,
 };
 use crate::bridge::CallError;
 
@@ -613,4 +614,75 @@ fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
     .finish();
     assert_eq!(reading.outcome, Outcome::Completed);
     assert_eq!(reading.logs, ["battleon"]);
+}
+
+#[test]
+fn world_requests_reach_the_player_typed() {
+    use crate::domain::world::MonsterQuery;
+
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { World } from "lyra";
+
+export default function* () {
+  yield* World.getAreaId();
+  yield* World.getRoomNumber();
+  yield* World.getCells();
+  yield* World.getCellPads();
+  yield* World.getMonsters({ cell: "r2" });
+  yield* World.getMonster("Frogzard");
+  yield* World.isMonsterAvailable({ mapId: 5 });
+  yield* World.getMonsterDrops({ mapId: 5 });
+  yield* World.setSpawnPoint({ pad: "Left" });
+  yield* World.getMapItem(3);
+  yield* World.loadSwf("town.swf");
+  yield* World.reload();
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let five = || MonsterQuery::MapId { map_id: 5.0 };
+    assert_eq!(
+        requests,
+        [
+            W::AreaId,
+            W::RoomNumber,
+            W::Cells,
+            W::CellPads,
+            W::Monsters {
+                cell: Some("r2".into())
+            },
+            W::Monster {
+                query: MonsterQuery::Name("Frogzard".into())
+            },
+            W::MonsterAvailable { query: five() },
+            W::MonsterDrops { query: five() },
+            W::SetSpawnPoint {
+                cell: None,
+                pad: Some("Left".into())
+            },
+            W::MapItem { item_id: 3 },
+            W::LoadSwf {
+                swf: "town.swf".into()
+            },
+            W::Reload,
+        ]
+        .map(Request::World)
+    );
 }

@@ -1130,6 +1130,12 @@ pub(crate) mod world {
         Ok(decode("world.getMonster", reply)?)
     }
 
+    pub(crate) fn get_monsters(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("world.getMonsters", call_args)?;
+        Ok(decode("world.getMonsters", reply)?)
+    }
+
     pub(crate) fn is_action_available(
         loader: &impl Loader,
         game_action: crate::bridge::GameAction,

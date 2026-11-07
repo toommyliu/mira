@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::mpsc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{player, runtime::Command};
+use super::{player, runtime::Command, world};
 use crate::bridge::{self, Bridge, CallError, Loader, Value};
 use crate::domain::{auth, combat};
 
@@ -17,6 +17,7 @@ pub(crate) struct CallId(pub(super) u64);
 #[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
     Player(player::Request),
+    World(world::Request),
     Combat(CombatRequest),
     Inventory(InventoryRequest),
 }
@@ -116,6 +117,9 @@ async fn serve(bridge: &Bridge, request: Request) -> Reply {
     match request {
         Request::Player(request) => {
             player::serve(bridge, |wants| bridge.subscribe(wants), request).await
+        }
+        Request::World(request) => {
+            world::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
         Request::Combat(CombatRequest::Kill { monster }) => {
             Ok(json!(combat::kill(bridge, &monster).await?))

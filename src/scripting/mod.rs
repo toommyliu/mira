@@ -3,6 +3,7 @@ mod limits;
 mod modules;
 mod player;
 mod runtime;
+mod world;
 
 pub(crate) use calls::{Calls, ToPlayer, answer};
 pub(crate) use limits::Limits;

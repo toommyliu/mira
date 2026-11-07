@@ -160,6 +160,7 @@ package lyra.generated
       external.externalize("world.getCells", World.getCells);
       external.externalize("world.getMapItem", World.getMapItem);
       external.externalize("world.getMonster", World.getMonster);
+      external.externalize("world.getMonsters", World.getMonsters);
       external.externalize("world.isActionAvailable", World.isActionAvailable);
       external.externalize("world.isCellReady", World.isCellReady);
       external.externalize("world.isLoaded", World.isLoaded);

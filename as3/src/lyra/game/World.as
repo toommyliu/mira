@@ -88,7 +88,6 @@ public class World
           sameText(world.strFrame, cell) &&
           (pad == null || sameText(world.strPad, pad)) &&
           Boolean(world.map.stage) &&
-          sameText(world.map.currentLabel, world.strFrame) &&
           !world.map.isPlaying &&
           Boolean(world.bitWalk) &&
           Boolean(world.myAvatar.pMC.stage) &&
@@ -155,6 +154,40 @@ public class World
       }
 
       return ids;
+    }
+
+    [BridgeExport]
+    public static function getMonsters():Array
+    {
+      var game:Object = Main.Game;
+      var monsters:Array = [];
+      if (!game || !game.world || !game.world.monsters)
+      {
+        return monsters;
+      }
+
+      for each (var mon:Object in game.world.monsters)
+      {
+        if (!mon || !mon.objData || !mon.dataLeaf)
+        {
+          continue;
+        }
+
+        monsters.push({
+          mapId: Number(mon.dataLeaf.MonMapID),
+          monsterId: Number(mon.objData.MonID),
+          name: String(mon.objData.strMonName || ""),
+          race: String(mon.objData.sRace || ""),
+          cell: String(mon.dataLeaf.strFrame || ""),
+          hp: Number(mon.dataLeaf.intHP),
+          maxHp: Number(mon.dataLeaf.intHPMax),
+          level: Number(mon.dataLeaf.iLvl || mon.objData.iLvl),
+          state: int(mon.dataLeaf.intState),
+          available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0
+        });
+      }
+
+      return monsters;
     }
 
     [BridgeExport]

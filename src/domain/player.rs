@@ -3,12 +3,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
 
-use super::{auth, poll};
+use super::{POLL, State, arrive, poll, wait_for_action, wait_until_ready, world};
 use crate::bridge::{self, CallError, Event, GameAction, Loader, Subscription, Value};
 
-const POLL: Duration = Duration::from_millis(100);
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
-const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
 const JUMP_TIMEOUT: Duration = Duration::from_secs(5);
 const WALK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -17,14 +14,6 @@ const OUTFIT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_CELL: &str = "Enter";
 const DEFAULT_PAD: &str = "Spawn";
 const OUTFIT_SLOTS: [&str; 8] = ["Weapon", "ar", "ba", "co", "he", "mi", "pe", "None"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum State {
-    Dead,
-    Idle,
-    Combat,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,42 +32,8 @@ pub(crate) struct Faction {
     rep: f64,
 }
 
-pub(crate) fn has_avatar(loader: &impl Loader) -> Result<bool, CallError> {
-    Ok(bridge::auth::is_logged_in(loader)?
-        && !bridge::flash::is_null(loader, "world.myAvatar.dataLeaf")?
-        && !bridge::flash::is_null(loader, "world.myAvatar.objData")?)
-}
-
-pub(crate) fn ready(loader: &impl Loader) -> Result<bool, CallError> {
-    Ok(auth::in_game(loader)? && bridge::player::is_loaded(loader)?)
-}
-
-async fn wait_until_ready(loader: &impl Loader) -> Result<bool, CallError> {
-    if !bridge::auth::is_logged_in(loader)? {
-        return Ok(false);
-    }
-    Ok(
-        poll(POLL, READY_TIMEOUT, || Ok(ready(loader)?.then_some(())))
-            .await?
-            .is_some(),
-    )
-}
-
-async fn wait_for_action(loader: &impl Loader, action: GameAction) -> Result<bool, CallError> {
-    Ok(poll(POLL, ACTION_TIMEOUT, || {
-        Ok(bridge::world::is_action_available(loader, action)?.then_some(()))
-    })
-    .await?
-    .is_some())
-}
-
 pub(crate) fn state(loader: &impl Loader) -> Result<Option<State>, CallError> {
-    Ok(match bridge::player::get_state(loader)? {
-        0 => Some(State::Dead),
-        1 => Some(State::Idle),
-        2 => Some(State::Combat),
-        _ => None,
-    })
+    Ok(State::from_game(bridge::player::get_state(loader)?))
 }
 
 pub(crate) fn alive(loader: &impl Loader) -> Result<bool, CallError> {
@@ -178,10 +133,17 @@ pub(crate) async fn join(
         return Ok(false);
     }
     arrive(loader, deadline - Instant::now(), || {
-        Ok(bridge::world::is_loaded(loader)?
-            && bridge::player::get_map(loader)?.is_some_and(|here| here.eq_ignore_ascii_case(name))
-            && bridge::world::is_cell_ready(loader, cell, None)?
+        let loaded = bridge::world::is_loaded(loader)?
+            && bridge::player::get_map(loader)?.is_some_and(|here| here.eq_ignore_ascii_case(name));
+        if !loaded {
+            return Ok(None);
+        }
+        if !world::has_cell(loader, cell)? {
+            return Ok(Some(false));
+        }
+        Ok((bridge::world::is_cell_ready(loader, cell, None)?
             && bridge::player::is_loaded(loader)?)
+        .then_some(true))
     })
     .await
 }
@@ -194,33 +156,25 @@ pub(crate) async fn jump(
     if !wait_until_ready(loader).await? {
         return Ok(false);
     }
+    if !world::has_cell(loader, cell)? {
+        return Ok(false);
+    }
     let pad = pad.unwrap_or(DEFAULT_PAD);
     bridge::player::jump(loader, cell, Some(pad))?;
-    arrive(loader, JUMP_TIMEOUT, || {
-        bridge::world::is_cell_ready(loader, cell, Some(pad))
+    let arrived = arrive(loader, JUMP_TIMEOUT, || {
+        Ok(bridge::world::is_cell_ready(loader, cell, Some(pad))?.then_some(true))
     })
-    .await
+    .await?;
+    if !arrived && tracing::enabled!(tracing::Level::DEBUG) {
+        tracing::debug!(cell, pad, state = %world::cell_state(loader), "the cell never became ready");
+    }
+    Ok(arrived)
 }
 
 fn map_name(map: &str) -> &str {
     map.find('-')
         .filter(|index| *index > 0 && *index < map.len() - 1)
         .map_or(map, |index| &map[..index])
-}
-
-async fn arrive(
-    loader: &impl Loader,
-    within: Duration,
-    mut arrived: impl FnMut() -> Result<bool, CallError>,
-) -> Result<bool, CallError> {
-    let ended = poll(POLL, within, || {
-        if !bridge::auth::is_logged_in(loader)? {
-            return Ok(Some(false));
-        }
-        Ok(arrived()?.then_some(true))
-    })
-    .await?;
-    Ok(ended.unwrap_or(false))
 }
 
 pub(crate) fn walk_to(loader: &impl Loader, x: i32, y: i32) -> Result<bool, CallError> {
@@ -370,6 +324,7 @@ mod tests {
     use super::*;
     use crate::bridge::{Events, Value};
     use crate::domain::testing::FakeLoader;
+    use tracing_subscriber::util::SubscriberInitExt as _;
 
     fn player(hp: i32) -> (FakeLoader, Rc<RefCell<Vec<(f64, f64)>>>) {
         let walks = Rc::new(RefCell::new(Vec::new()));
@@ -438,6 +393,11 @@ mod tests {
                     Value::Bool(place.logged_in && loaded)
                 }
                 "player.getMap" => Value::String(place.map.clone()),
+                "world.getCells" => Value::List(
+                    ["Enter", "r2", "Room"]
+                        .map(|cell| Value::String(cell.into()))
+                        .to_vec(),
+                ),
                 "player.isLoaded" => {
                     let loaded = place.loading == 0 && place.art == 0;
                     place.art = place.art.saturating_sub(1);
@@ -573,6 +533,33 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn travel_to_a_cell_the_map_does_not_have_fails_without_waiting() {
+        let (loader, place) = traveller(in_map("battleon", "Enter"));
+        let started = Instant::now();
+        assert_eq!(jump(&loader, "Nowhere", None).await, Ok(false));
+        assert_eq!(jump(&loader, "enter", None).await, Ok(false));
+        assert!(place.borrow().jumps.is_empty());
+
+        let events = Events::default();
+        let ((joined, took), ()) = tokio::join!(
+            async {
+                let joined = join(
+                    &loader,
+                    events.subscribe(moved),
+                    "yulgar",
+                    Some("Nowhere"),
+                    None,
+                )
+                .await;
+                (joined, started.elapsed())
+            },
+            transfer_later(&place, &events, "yulgar", "Enter", 0),
+        );
+        assert_eq!(joined, Ok(false));
+        assert!(took < Duration::from_secs(3), "gave up after {took:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn travel_fails_when_the_player_is_logged_out() {
         let (loader, place) = traveller(Place {
             logged_in: false,
@@ -585,5 +572,26 @@ mod tests {
         );
         assert_eq!(jump(&loader, "r2", None).await, Ok(false));
         assert!(place.borrow().joins.is_empty() && place.borrow().jumps.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_diagnostic_never_changes_a_failed_jumps_result() {
+        let _debug = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .set_default();
+        let loader = FakeLoader::new(|callback, _| match callback {
+            "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Ok(Value::Bool(true)),
+            "world.getCells" => Ok(Value::List(vec![Value::String("r2".into())])),
+            "player.jump" => Ok(Value::Undefined),
+            "world.isCellReady" => Ok(Value::Bool(false)),
+            "flash.getGameObject" | "flash.isNull" => Err(CallError::Threw {
+                callback,
+                message: "the map is null".into(),
+            }),
+            other => panic!("unexpected call {other}"),
+        });
+        assert_eq!(jump(&loader, "r2", None).await, Ok(false));
+        assert!(loader.count("flash.getGameObject") > 0);
     }
 }
