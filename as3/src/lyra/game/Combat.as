@@ -240,6 +240,13 @@ package lyra.game {
         return false;
       }
 
+      if (skill.pet == null && skill.checkPet != null) {
+        var pet:Object = self.getItemByEquipSlot("pe");
+        if (pet == null || pet.sMeta == null || pet.sMeta.indexOf(skill.checkPet) == -1) {
+          return false;
+        }
+      }
+
       if (skill.tgt == "s" || skill.tgt == "f") {
         return true;
       }
