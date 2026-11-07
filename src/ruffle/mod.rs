@@ -25,7 +25,7 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
     automation::{auto_attack, auto_relogin, auto_zone},
-    bridge::Bridge,
+    bridge::{Bridge, Packets},
     scripting::{self, Calls, ToPlayer},
 };
 use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
@@ -214,7 +214,7 @@ fn run(
         &tasks,
         auto_zone::run(
             bridge.clone(),
-            bridge.subscribe(auto_zone::wants),
+            Packets::subscribe(|wants| bridge.subscribe(wants)),
             zone,
             auto_zone::random_point,
         ),

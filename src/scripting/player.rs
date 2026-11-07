@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::calls::Reply;
 use crate::{
-    bridge::{self, Event, Loader, Subscription},
+    bridge::{self, Event, Loader, Packets, Subscription},
     domain::{self, player::Boost},
 };
 
@@ -109,7 +109,7 @@ pub(super) async fn serve(
         Request::JoinMap { map, cell, pad } => json!(
             domain::player::join(
                 loader,
-                subscribe(domain::player::moved),
+                Packets::subscribe(&subscribe),
                 &map,
                 cell.as_deref(),
                 pad.as_deref()
@@ -132,7 +132,7 @@ pub(super) async fn serve(
             json!(
                 domain::player::wear_outfit(
                     loader,
-                    subscribe(domain::player::worn),
+                    Packets::subscribe(&subscribe),
                     &name,
                     keep_colors
                 )
@@ -548,7 +548,7 @@ mod tests {
                         let replies = events.subscribe(wants);
                         if stale {
                             events.publish(&Event::ExtensionResponse {
-                                packet: json!({ "dataObj": {
+                                packet: json!({ "type": "json", "dataObj": {
                                     "cmd": "wearLoadout", "uid": 1, "success": true
                                 }})
                                 .to_string(),

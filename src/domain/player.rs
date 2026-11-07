@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
 
 use super::{POLL, State, arrive, poll, wait_for_action, wait_until_ready, world};
-use crate::bridge::{self, CallError, Event, GameAction, Loader, Subscription, Value};
+use crate::bridge::{self, CallError, Format, GameAction, Loader, Packet, Packets, Value};
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
 const JUMP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -104,13 +104,17 @@ pub(crate) fn outfit_names(loader: &impl Loader) -> Result<Vec<String>, CallErro
         .collect())
 }
 
-pub(crate) fn moved(event: &Event) -> bool {
-    matches!(event, Event::ExtensionResponse { packet } if packet.contains("\"cmd\":\"moveToArea\""))
+#[derive(Deserialize)]
+pub(crate) struct MoveToAreaPacket {}
+
+impl Packet for MoveToAreaPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "moveToArea";
 }
 
 pub(crate) async fn join(
     loader: &impl Loader,
-    moves: Subscription,
+    moves: Packets<MoveToAreaPacket>,
     map: &str,
     cell: Option<&str>,
     pad: Option<&str>,
@@ -280,13 +284,21 @@ fn equipped(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
     })
 }
 
-pub(crate) fn worn(event: &Event) -> bool {
-    matches!(event, Event::ExtensionResponse { packet } if packet.contains("\"cmd\":\"wearLoadout\""))
+#[derive(Deserialize)]
+pub(crate) struct WearLoadoutPacket {
+    uid: i64,
+    #[serde(default)]
+    success: bool,
+}
+
+impl Packet for WearLoadoutPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "wearLoadout";
 }
 
 pub(crate) async fn wear_outfit(
     loader: &impl Loader,
-    replies: Subscription,
+    replies: Packets<WearLoadoutPacket>,
     name: &str,
     keep_colors: Option<bool>,
 ) -> Result<bool, CallError> {
@@ -301,20 +313,13 @@ pub(crate) async fn wear_outfit(
     let uid = bridge::player::get_user_id(loader)?;
     let deadline = Instant::now() + OUTFIT_TIMEOUT;
     while let Ok(reply) = timeout_at(deadline, replies.next()).await {
-        if let Ok(Event::ExtensionResponse { packet }) = reply
-            && let Some(success) = wear_result(&packet, uid)
+        if let Ok(packet) = reply
+            && packet.uid == i64::from(uid)
         {
-            return Ok(success);
+            return Ok(packet.success);
         }
     }
     Ok(false)
-}
-
-fn wear_result(packet: &str, uid: i32) -> Option<bool> {
-    let reply: serde_json::Value = serde_json::from_str(packet).ok()?;
-    let data = reply.get("dataObj")?;
-    (data.get("cmd")?.as_str()? == "wearLoadout" && data.get("uid")?.as_i64()? == i64::from(uid))
-        .then(|| data.get("success").and_then(serde_json::Value::as_bool) == Some(true))
 }
 
 #[cfg(test)]
@@ -322,7 +327,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::bridge::{Events, Value};
+    use crate::bridge::{Event, Events, Value};
     use crate::domain::testing::FakeLoader;
     use tracing_subscriber::util::SubscriberInitExt as _;
 
@@ -440,7 +445,9 @@ mod tests {
             place.cell = cell.into();
         }
         events.publish(&Event::ExtensionResponse {
-            packet: format!(r#"{{"dataObj":{{"cmd":"moveToArea","areaName":"{map}-5"}}}}"#),
+            packet: format!(
+                r#"{{"type":"json","dataObj":{{"cmd":"moveToArea","areaName":"{map}-5"}}}}"#
+            ),
         });
     }
 
@@ -451,7 +458,7 @@ mod tests {
         let (joined, ()) = tokio::join!(
             join(
                 &loader,
-                events.subscribe(moved),
+                Packets::subscribe(|wants| events.subscribe(wants)),
                 "yulgar-1234",
                 Some("Room"),
                 None
@@ -474,7 +481,14 @@ mod tests {
         let started = Instant::now();
         let ((joined, took), ()) = tokio::join!(
             async {
-                let joined = join(&loader, events.subscribe(moved), "battleon-5", None, None).await;
+                let joined = join(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    "battleon-5",
+                    None,
+                    None,
+                )
+                .await;
                 (joined, started.elapsed())
             },
             transfer_later(&place, &events, "battleon", "Enter", 0),
@@ -489,7 +503,13 @@ mod tests {
         let (loader, place) = traveller(in_map("battleon", "Enter"));
         let events = Events::default();
         let (joined, ()) = tokio::join!(
-            join(&loader, events.subscribe(moved), "yulgar", None, None),
+            join(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                "yulgar",
+                None,
+                None
+            ),
             transfer_later(&place, &events, "yulgar", "Enter", 5),
         );
         assert_eq!(joined, Ok(true));
@@ -503,7 +523,7 @@ mod tests {
         assert_eq!(
             join(
                 &loader,
-                events.subscribe(moved),
+                Packets::subscribe(|wants| events.subscribe(wants)),
                 "Battleon",
                 Some("r2"),
                 None
@@ -520,9 +540,10 @@ mod tests {
         let events = Events::default();
         for target in ["yulgar", "battleon-5"] {
             let (loader, _) = traveller(in_map("battleon", "Enter"));
-            let moves = events.subscribe(moved);
+            let moves = Packets::subscribe(|wants| events.subscribe(wants));
             events.publish(&Event::ExtensionResponse {
-                packet: r#"{"dataObj":{"cmd":"moveToArea","areaName":"battleon-1"}}"#.into(),
+                packet: r#"{"type":"json","dataObj":{"cmd":"moveToArea","areaName":"battleon-1"}}"#
+                    .into(),
             });
             assert_eq!(
                 join(&loader, moves, target, None, None).await,
@@ -545,7 +566,7 @@ mod tests {
             async {
                 let joined = join(
                     &loader,
-                    events.subscribe(moved),
+                    Packets::subscribe(|wants| events.subscribe(wants)),
                     "yulgar",
                     Some("Nowhere"),
                     None,
@@ -567,7 +588,14 @@ mod tests {
         });
         let events = Events::default();
         assert_eq!(
-            join(&loader, events.subscribe(moved), "yulgar", None, None).await,
+            join(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                "yulgar",
+                None,
+                None
+            )
+            .await,
             Ok(false)
         );
         assert_eq!(jump(&loader, "r2", None).await, Ok(false));

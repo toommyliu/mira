@@ -1,10 +1,12 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::time::{Instant, timeout_at};
 
 use super::{State, arrive, ready, wait_for_action, wait_until_ready};
-use crate::bridge::{self, CallError, Event, GameAction, Loader, Subscription, Value};
+use crate::bridge::{
+    self, CallError, Format, GameAction, Loader, Packet, Packets, Value, packets::wire,
+};
 
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const DROPS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -148,13 +150,9 @@ pub(crate) fn monster_available(
         .any(|monster| monster.available && query.matches(monster)))
 }
 
-pub(crate) fn dropped(event: &Event) -> bool {
-    matches!(event, Event::ExtensionResponse { packet } if packet.contains("\"cmd\":\"monsterDrops\""))
-}
-
 pub(crate) async fn monster_drops(
     loader: &impl Loader,
-    replies: Subscription,
+    replies: Packets<MonsterDropsPacket>,
     query: &MonsterQuery,
 ) -> Result<Option<Vec<Drop>>, CallError> {
     if !wait_until_ready(loader).await? {
@@ -169,10 +167,16 @@ pub(crate) async fn monster_drops(
     }
     let deadline = Instant::now() + DROPS_TIMEOUT;
     while let Ok(reply) = timeout_at(deadline, replies.next()).await {
-        if let Ok(Event::ExtensionResponse { packet }) = reply
-            && let Some(drops) = drops_for(&packet, monster.mon_map_id)
+        if let Ok(packet) = reply
+            && packet.mon_map_id == Some(monster.mon_map_id)
         {
-            return Ok(Some(drops));
+            return Ok(Some(
+                packet
+                    .items
+                    .into_iter()
+                    .filter_map(DropItem::into_drop)
+                    .collect(),
+            ));
         }
     }
     Ok(None)
@@ -271,84 +275,74 @@ fn monster_from(value: Value) -> Option<Monster> {
     })
 }
 
-fn drops_for(packet: &str, mon_map_id: f64) -> Option<Vec<Drop>> {
-    let reply: serde_json::Value = serde_json::from_str(packet).ok()?;
-    let data = reply.get("dataObj")?;
-    if data.get("cmd")?.as_str()? != "monsterDrops"
-        || wire_number(data.get("MonMapID")?)? != mon_map_id
-    {
-        return None;
-    }
-    Some(
-        data.get("items")
-            .and_then(serde_json::Value::as_object)
-            .map(|items| items.values().filter_map(drop_from).collect())
-            .unwrap_or_default(),
-    )
+#[derive(Deserialize)]
+pub(crate) struct MonsterDropsPacket {
+    #[serde(rename = "MonMapID", default, deserialize_with = "wire::number")]
+    mon_map_id: Option<f64>,
+    #[serde(default, deserialize_with = "wire::values")]
+    items: Vec<DropItem>,
 }
 
-fn drop_from(item: &serde_json::Value) -> Option<Drop> {
-    let item_id = wire_number(item.get("ItemID")?)?;
-    if item_id <= 0.0 {
-        return None;
-    }
-    let number = |key: &str| item.get(key).and_then(wire_number);
-    let flag = |key: &str| item.get(key).is_some_and(wire_flag);
-    let quantity = number("iQty").unwrap_or(1.0);
-    let divisor = if flag("bVaryQty") {
-        quantity.max(1.0)
-    } else {
-        1.0
-    };
-    let quest_names = item
-        .get("questGated")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|names| !names.is_empty());
-    let mut required_quest_ids: Vec<i64> = Vec::new();
-    for part in item
-        .get("sReqQuests")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .split(',')
-    {
-        if let Ok(id) = part.trim().parse::<i64>()
-            && id > 0
-            && !required_quest_ids.contains(&id)
-        {
-            required_quest_ids.push(id);
+impl Packet for MonsterDropsPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "monsterDrops";
+}
+
+#[derive(Deserialize)]
+struct DropItem {
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
+    item_id: Option<f64>,
+    #[serde(rename = "sName", default, deserialize_with = "wire::text")]
+    name: String,
+    #[serde(rename = "iQty", default, deserialize_with = "wire::number")]
+    quantity: Option<f64>,
+    #[serde(rename = "bVaryQty", default, deserialize_with = "wire::flag")]
+    varies: bool,
+    #[serde(rename = "iRate", default, deserialize_with = "wire::number")]
+    rate: Option<f64>,
+    #[serde(rename = "iRateBoosted", default, deserialize_with = "wire::number")]
+    boosted_rate: Option<f64>,
+    #[serde(rename = "bEventDrop", default, deserialize_with = "wire::flag")]
+    event_drop: bool,
+    #[serde(rename = "bQuestGated", default, deserialize_with = "wire::flag")]
+    quest_gated: bool,
+    #[serde(rename = "questGated", default, deserialize_with = "listed")]
+    quest_names: bool,
+    #[serde(rename = "sReqQuests", default, deserialize_with = "wire::text")]
+    required_quests: String,
+}
+
+fn listed<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
+    Ok(matches!(
+        serde_json::Value::deserialize(input)?,
+        serde_json::Value::Array(names) if !names.is_empty()
+    ))
+}
+
+impl DropItem {
+    fn into_drop(self) -> Option<Drop> {
+        let item_id = self.item_id.filter(|id| *id > 0.0)?;
+        let quantity = self.quantity.unwrap_or(1.0);
+        let divisor = if self.varies { quantity.max(1.0) } else { 1.0 };
+        let mut required_quest_ids: Vec<i64> = Vec::new();
+        for part in self.required_quests.split(',') {
+            if let Ok(id) = part.trim().parse::<i64>()
+                && id > 0
+                && !required_quest_ids.contains(&id)
+            {
+                required_quest_ids.push(id);
+            }
         }
-    }
-    Some(Drop {
-        item_id,
-        name: item
-            .get("sName")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        quantity,
-        rate: number("iRate").map(|rate| (rate / divisor).min(100.0)),
-        boosted_rate: number("iRateBoosted").map(|rate| (rate / divisor).min(100.0)),
-        event_drop: flag("bEventDrop"),
-        quest_gated: flag("bQuestGated") || quest_names || !required_quest_ids.is_empty(),
-        required_quest_ids,
-    })
-}
-
-fn wire_number(value: &serde_json::Value) -> Option<f64> {
-    match value {
-        serde_json::Value::Number(number) => number.as_f64(),
-        serde_json::Value::String(text) => text.trim().parse().ok(),
-        _ => None,
-    }
-    .filter(|number: &f64| number.is_finite())
-}
-
-fn wire_flag(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Bool(flag) => *flag,
-        serde_json::Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        serde_json::Value::String(text) => matches!(text.trim(), "1" | "true"),
-        _ => false,
+        Some(Drop {
+            item_id,
+            name: self.name,
+            quantity,
+            rate: self.rate.map(|rate| (rate / divisor).min(100.0)),
+            boosted_rate: self.boosted_rate.map(|rate| (rate / divisor).min(100.0)),
+            event_drop: self.event_drop,
+            quest_gated: self.quest_gated || self.quest_names || !required_quest_ids.is_empty(),
+            required_quest_ids,
+        })
     }
 }
 
@@ -361,7 +355,10 @@ mod tests {
     use tracing_subscriber::util::SubscriberInitExt as _;
 
     use super::*;
-    use crate::{bridge::Events, domain::testing::FakeLoader};
+    use crate::{
+        bridge::{Event, Events},
+        domain::testing::FakeLoader,
+    };
 
     fn monster_row(mon_map_id: f64, name: &str, cell: &str, state: f64, available: bool) -> Value {
         Value::Object(
@@ -557,10 +554,10 @@ mod tests {
                     events.clone(),
                     vec![drops_reply(9.0), drops_reply(1.0)],
                 );
-                let replies = events.subscribe(dropped);
+                let replies = Packets::subscribe(|wants| events.subscribe(wants));
                 events.publish(&Event::ExtensionResponse {
                     packet:
-                        json!({ "dataObj": { "cmd": "monsterDrops", "MonMapID": 1, "items": {} } })
+                        json!({ "type": "json", "dataObj": { "cmd": "monsterDrops", "MonMapID": 1, "items": {} } })
                             .to_string(),
                 });
                 let drops = monster_drops(&loader, replies, &MonsterQuery::Name("Frogzard".into()))
@@ -582,9 +579,19 @@ mod tests {
                 let (loader, scene) = scene(quiet("r2"), events.clone(), Vec::new());
                 let slime = MonsterQuery::Name("Slime".into());
                 let frogzard = MonsterQuery::Name("Frogzard".into());
-                let missing = monster_drops(&loader, events.subscribe(dropped), &slime).await;
+                let missing = monster_drops(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    &slime,
+                )
+                .await;
                 assert_eq!(missing.unwrap(), None);
-                let unanswered = monster_drops(&loader, events.subscribe(dropped), &frogzard).await;
+                let unanswered = monster_drops(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    &frogzard,
+                )
+                .await;
                 assert_eq!(unanswered.unwrap(), None);
                 assert_eq!(scene.borrow().drop_requests, [1.0]);
             })

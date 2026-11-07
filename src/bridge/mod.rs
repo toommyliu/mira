@@ -1,6 +1,7 @@
 mod decode;
 mod game_action;
 mod generated;
+pub(crate) mod packets;
 
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -21,6 +22,7 @@ pub(crate) use decode::DecodeError;
 use decode::{arg, decode};
 pub(crate) use game_action::GameAction;
 pub(crate) use generated::*;
+pub(crate) use packets::{Format, Packet, Packets};
 pub(crate) use ruffle_core::external::Value;
 
 const MAILBOX_CAPACITY: usize = 256;

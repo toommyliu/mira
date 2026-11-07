@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::calls::Reply;
 use crate::{
-    bridge::{Event, Loader, Subscription},
+    bridge::{Event, Loader, Packets, Subscription},
     domain::{
         self, auth,
         world::{self, MonsterQuery},
@@ -71,7 +71,7 @@ pub(super) async fn serve(
 ) -> Reply {
     Ok(match request {
         Request::MonsterDrops { query } => {
-            json!(world::monster_drops(loader, subscribe(world::dropped), &query).await?)
+            json!(world::monster_drops(loader, Packets::subscribe(&subscribe), &query).await?)
         }
         Request::SetSpawnPoint { cell, pad } => {
             json!(world::set_spawn_point(loader, cell.as_deref(), pad.as_deref()).await?)

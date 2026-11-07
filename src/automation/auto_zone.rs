@@ -6,7 +6,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
+use crate::bridge::{self, CallError, Format, Lagged, Loader, Packet, Packets};
 use crate::domain::player;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,21 +133,20 @@ fn area(room: Room, zone: &str, charge: Charge) -> Option<Area> {
     Some((x[0]..=x[1], y[0]..=y[1]))
 }
 
-pub(crate) fn wants(event: &Event) -> bool {
-    matches!(event, Event::ExtensionResponse { packet } if packet.contains("\"cmd\":\"event\""))
+#[derive(Deserialize)]
+pub(crate) struct EventPacket {
+    args: EventArgs,
 }
 
-fn zone_set(packet: &str) -> Option<String> {
-    let params: serde_json::Value = serde_json::from_str(packet).ok()?;
-    let data = params.get("dataObj")?;
-    if data.get("cmd")?.as_str()? != "event" {
-        return None;
-    }
-    match data.get("args")?.as_object()?.get("zoneSet") {
-        Some(serde_json::Value::String(zone)) => Some(zone.clone()),
-        None => Some(String::new()),
-        Some(_) => None,
-    }
+#[derive(Deserialize)]
+struct EventArgs {
+    #[serde(rename = "zoneSet", default)]
+    zone_set: String,
+}
+
+impl Packet for EventPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "event";
 }
 
 struct Pending {
@@ -158,7 +157,7 @@ struct Pending {
 
 pub(crate) async fn run(
     loader: impl Loader,
-    zones: Subscription,
+    zones: Packets<EventPacket>,
     mut settings: watch::Receiver<Settings>,
     pick: impl Fn(&Area) -> (i32, i32),
 ) {
@@ -172,14 +171,13 @@ pub(crate) async fn run(
         let due = pending.as_ref().map(|pending| pending.at);
         tokio::select! {
             event = zones.next() => match event {
-                Ok(Event::ExtensionResponse { packet }) => {
-                    let zone = zone_set(&packet);
-                    tracing::debug!(?room, ?zone, %packet, "auto zone received an event packet");
-                    if let (Some(room), Some(zone)) = (room, zone) {
+                Ok(EventPacket { args: EventArgs { zone_set: zone } }) => {
+                    tracing::debug!(?room, zone, "auto zone received an event packet");
+                    if let Some(room) = room {
                         pending = Some(Pending { room, zone, at: Instant::now() + room.settle() });
                     }
                 }
-                Ok(_) | Err(Lagged) => {}
+                Err(Lagged) => {}
             },
             changed = settings.changed() => if changed.is_err() {
                 return;
@@ -277,7 +275,7 @@ mod tests {
     use tokio::{task::LocalSet, time::sleep};
 
     use super::*;
-    use crate::bridge::{CallError, Events, Value};
+    use crate::bridge::{CallError, Event, Events, Value};
     use crate::domain::testing::FakeLoader;
 
     struct Boss {
@@ -346,7 +344,7 @@ mod tests {
                 (other, _) => panic!("unexpected call {other} {path}"),
             })
         });
-        let zones = events.subscribe(wants);
+        let zones = Packets::subscribe(|wants| events.subscribe(wants));
         tokio::task::spawn_local(run(loader, zones, receiver, |area: &Area| {
             (*area.0.start(), *area.1.end())
         }));
@@ -470,29 +468,6 @@ mod tests {
                 assert_eq!(fight.walks(), [(490, 320)]);
             })
             .await;
-    }
-
-    #[test]
-    fn only_zone_events_are_read() {
-        assert_eq!(
-            zone_set(r#"{"dataObj":{"cmd":"event","args":{"zoneSet":"B"}}}"#),
-            Some("B".into())
-        );
-        assert_eq!(
-            zone_set(r#"{"dataObj":{"cmd":"event","args":{"other":1}}}"#),
-            Some(String::new())
-        );
-        assert_eq!(
-            zone_set(r#"{"dataObj":{"cmd":"event","args":{"zoneSet":null}}}"#),
-            None
-        );
-        assert_eq!(
-            zone_set(r#"{"dataObj":{"cmd":"ct","args":{"zoneSet":"B"}}}"#),
-            None
-        );
-        assert!(!wants(&Event::ExtensionResponse {
-            packet: r#"{"dataObj":{"cmd":"ct","args":{"zoneSet":"A"}}}"#.into()
-        }));
     }
 
     #[test]
