@@ -3,7 +3,7 @@ use std::{fs, io, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use super::{auth::auto_relogin, combat::auto_attack, world::auto_zone};
+use super::{auto_attack, auto_relogin, auto_zone};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

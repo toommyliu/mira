@@ -4,11 +4,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::runtime::Command;
-use crate::automation::{
-    auth,
-    bridge::{self, Bridge, CallError, Loader, Value},
-    combat, world,
-};
+use crate::bridge::{self, Bridge, CallError, Loader, Value};
+use crate::domain::{auth, combat, player};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(super) u64);
@@ -138,9 +135,9 @@ async fn serve(loader: &Bridge, request: Request) -> Reply {
         }),
         Request::Join { map, cell, pad } => {
             json!(
-                world::join(
+                player::join(
                     loader,
-                    loader.subscribe(world::moved),
+                    loader.subscribe(player::moved),
                     &map,
                     cell.as_deref(),
                     pad.as_deref()
@@ -148,7 +145,7 @@ async fn serve(loader: &Bridge, request: Request) -> Reply {
                 .await?
             )
         }
-        Request::Jump { cell, pad } => json!(world::jump(loader, &cell, pad.as_deref()).await?),
+        Request::Jump { cell, pad } => json!(player::jump(loader, &cell, pad.as_deref()).await?),
         Request::Kill { monster } => json!(combat::kill(loader, &monster).await?),
         Request::Count { item } => json!(if in_game()? { count(loader, &item)? } else { 0 }),
     })

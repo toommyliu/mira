@@ -1,14 +1,9 @@
-pub(crate) mod auto_zone;
-
 use std::time::Duration;
 
 use tokio::time::{Instant, timeout_at};
 
-use super::{
-    auth,
-    bridge::{self, CallError, Event, Loader, Subscription},
-    poll,
-};
+use super::{auth, poll};
+use crate::bridge::{self, CallError, Event, Loader, Subscription};
 
 const TRAVEL_POLL: Duration = Duration::from_millis(100);
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -100,10 +95,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::automation::{
-        bridge::{Events, Value},
-        testing::FakeLoader,
-    };
+    use crate::bridge::{Events, Value};
+    use crate::domain::testing::FakeLoader;
 
     fn player(hp: i32) -> (FakeLoader, Rc<RefCell<Vec<(f64, f64)>>>) {
         let walks = Rc::new(RefCell::new(Vec::new()));

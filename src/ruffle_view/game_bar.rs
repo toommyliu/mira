@@ -12,8 +12,8 @@ use super::{
     ui::{self, Glyph},
 };
 use crate::automation::{
-    auth::auto_relogin::{Phase, Settings},
-    world::auto_zone::Room,
+    auto_relogin::{Phase, Settings},
+    auto_zone::Room,
 };
 
 const LAST_SERVER: &str = "Last server";

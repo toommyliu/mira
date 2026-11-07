@@ -12,7 +12,7 @@ mod native;
 use std::ops::Range;
 
 use crate::{
-    automation::{auth::auto_relogin, combat::auto_attack, settings::Store, world::auto_zone},
+    automation::{auto_attack, auto_relogin, auto_zone, settings::Store},
     ruffle::{Msg, Output, Runtime, view::ViewEvent},
 };
 use gpui::{

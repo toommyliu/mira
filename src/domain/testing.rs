@@ -1,16 +1,16 @@
 use std::cell::RefCell;
 
-use super::bridge::{CallError, Loader, Value};
+use crate::bridge::{CallError, Loader, Value};
 
 type Handler = Box<dyn FnMut(&'static str, &[Value]) -> Result<Value, CallError>>;
 
-pub(super) struct FakeLoader {
+pub(crate) struct FakeLoader {
     handler: RefCell<Handler>,
     calls: RefCell<Vec<&'static str>>,
 }
 
 impl FakeLoader {
-    pub(super) fn new(
+    pub(crate) fn new(
         handler: impl FnMut(&'static str, &[Value]) -> Result<Value, CallError> + 'static,
     ) -> Self {
         Self {
@@ -19,7 +19,7 @@ impl FakeLoader {
         }
     }
 
-    pub(super) fn count(&self, callback: &str) -> usize {
+    pub(crate) fn count(&self, callback: &str) -> usize {
         self.calls
             .borrow()
             .iter()

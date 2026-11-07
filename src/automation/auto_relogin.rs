@@ -6,8 +6,8 @@ use tokio::{
     time::{Instant, sleep},
 };
 
-use super::{ConnectError, Credentials, LoginError, LoginOutcome, Refusal};
-use crate::automation::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
+use crate::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
+use crate::domain::auth::{self, ConnectError, Credentials, LoginError, LoginOutcome, Refusal};
 
 const DIALOG_POLL: Duration = Duration::from_secs(1);
 const STUCK_DIALOG: Duration = Duration::from_secs(30);
@@ -181,7 +181,7 @@ pub(crate) async fn run(
                     failure = None;
                     dialog = None;
                     session = capture(&loader).or(session);
-                    if let Ok(servers) = super::servers(&loader)
+                    if let Ok(servers) = auth::servers(&loader)
                         && !servers.is_empty()
                     {
                         (reporter.report)(Report::Servers(servers));
@@ -202,7 +202,7 @@ pub(crate) async fn run(
                 tracing::warn!(%error, "auto relogin gave up");
                 failure = Some(error.to_string());
             }
-            Wake::Dialog => match super::connection_dialog(&loader) {
+            Wake::Dialog => match auth::connection_dialog(&loader) {
                 Ok(Some(text)) => {
                     let since = match dialog {
                         Some(Dialog { text: seen, since }) if seen == text => since,
@@ -227,8 +227,8 @@ pub(crate) async fn run(
 }
 
 fn capture(loader: &impl Loader) -> Option<Session> {
-    let credentials = super::credentials(loader).ok().flatten()?;
-    let server = super::current_server(loader).ok().flatten()?;
+    let credentials = auth::credentials(loader).ok().flatten()?;
+    let server = auth::current_server(loader).ok().flatten()?;
     Some(Session {
         credentials,
         server,
@@ -269,18 +269,18 @@ async fn attempt_once(
     credentials: &Credentials,
     server: &str,
 ) -> Result<(), AttemptError> {
-    if super::in_game(loader)? {
+    if auth::in_game(loader)? {
         return Ok(());
     }
-    if bridge::auth::is_logged_in(loader)? || super::connection_dialog(loader)?.is_some() {
+    if bridge::auth::is_logged_in(loader)? || auth::connection_dialog(loader)?.is_some() {
         bridge::auth::logout(loader)?;
     }
-    if !super::server_selection_shown(loader)?
-        && super::login(loader, credentials).await? == LoginOutcome::InGame
+    if !auth::server_selection_shown(loader)?
+        && auth::login(loader, credentials).await? == LoginOutcome::InGame
     {
         return Ok(());
     }
-    match super::connect(loader, server).await {
+    match auth::connect(loader, server).await {
         Ok(()) => Ok(()),
         Err(
             error @ (ConnectError::Refused {
@@ -303,10 +303,8 @@ mod tests {
     use tokio::{task::LocalSet, time::Instant};
 
     use super::*;
-    use crate::automation::{
-        bridge::{Events, Value},
-        testing::FakeLoader,
-    };
+    use crate::bridge::{Events, Value};
+    use crate::domain::testing::FakeLoader;
 
     #[derive(Default)]
     struct Game {

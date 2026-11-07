@@ -6,7 +6,8 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::automation::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
+use crate::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
+use crate::domain::player;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -217,7 +218,7 @@ fn move_to_zone(
         return Ok(());
     };
     let (x, y) = pick(&area);
-    let walked = super::walk_to(loader, x, y)?;
+    let walked = player::walk_to(loader, x, y)?;
     tracing::debug!(zone = %pending.zone, ?charge, x, y, walked, "auto zone walked");
     Ok(())
 }
@@ -276,10 +277,8 @@ mod tests {
     use tokio::{task::LocalSet, time::sleep};
 
     use super::*;
-    use crate::automation::{
-        bridge::{CallError, Events, Value},
-        testing::FakeLoader,
-    };
+    use crate::bridge::{CallError, Events, Value};
+    use crate::domain::testing::FakeLoader;
 
     struct Boss {
         map: &'static str,

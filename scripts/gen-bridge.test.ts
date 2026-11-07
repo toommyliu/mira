@@ -89,7 +89,7 @@ test("a parameter can take a Rust type that converts into a loader value", () =>
 `);
   assert.match(
     renderRust(parseBridge([source])),
-    /game_action: crate::automation::bridge::GameAction[\s\S]*Value::from\(game_action\)/,
+    /game_action: crate::bridge::GameAction[\s\S]*Value::from\(game_action\)/,
   );
   const unknown = world(`
     [BridgeExport]

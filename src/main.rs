@@ -2,10 +2,13 @@
 compile_error!("Lyra supports macOS only.");
 
 mod automation;
+mod bridge;
+mod domain;
 mod logging;
 mod net;
 mod ruffle;
 mod ruffle_view;
+mod scripting;
 
 use gpui::{
     Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,

@@ -1,13 +1,9 @@
-pub(crate) mod auto_relogin;
-
 use std::time::Duration;
 
 use tokio::time::{Instant, sleep};
 
-use super::{
-    bridge::{self, CallError, Loader, Value},
-    poll,
-};
+use super::poll;
+use crate::bridge::{self, CallError, Loader, Value};
 
 const POLL: Duration = Duration::from_millis(500);
 const KICK_DEFAULT: Duration = Duration::from_secs(60);
@@ -236,7 +232,7 @@ mod tests {
     use std::{cell::RefCell, collections::BTreeMap};
 
     use super::*;
-    use crate::automation::testing::FakeLoader;
+    use crate::domain::testing::FakeLoader;
 
     fn credentials() -> Credentials {
         Credentials {

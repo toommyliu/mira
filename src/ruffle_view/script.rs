@@ -4,8 +4,8 @@ use gpui::{Context, PathPromptOptions, SharedString, Window};
 
 use super::RuffleView;
 use crate::{
-    automation::scripting::{Level, Limit, Limits, Outcome, Run},
     ruffle::Msg,
+    scripting::{Level, Limit, Limits, Outcome, Run},
 };
 
 #[derive(Default)]

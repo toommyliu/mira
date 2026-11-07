@@ -42,7 +42,7 @@ impl Event {
 }
 
 pub(crate) mod auth {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn connect_to(loader: &impl Loader, server: &str) -> Result<Value, CallError> {
         let call_args = vec![Value::String(server.to_owned())];
@@ -89,7 +89,7 @@ pub(crate) mod auth {
 }
 
 pub(crate) mod bank {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn contains(
         loader: &impl Loader,
@@ -173,7 +173,7 @@ pub(crate) mod bank {
 }
 
 pub(crate) mod combat {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn attack_monster(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
         let call_args = vec![selector];
@@ -247,7 +247,7 @@ pub(crate) mod combat {
 }
 
 pub(crate) mod drops {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn accept(loader: &impl Loader, item_id: i32) -> Result<bool, CallError> {
         let call_args = vec![Value::Number(f64::from(item_id))];
@@ -275,7 +275,7 @@ pub(crate) mod drops {
 }
 
 pub(crate) mod flash {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn call_game_function(
         loader: &impl Loader,
@@ -439,7 +439,7 @@ pub(crate) mod flash {
 }
 
 pub(crate) mod house {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn get_item(loader: &impl Loader, selector: Value) -> Result<Value, CallError> {
         let call_args = vec![selector];
@@ -467,7 +467,7 @@ pub(crate) mod house {
 }
 
 pub(crate) mod inventory {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn contains(
         loader: &impl Loader,
@@ -538,7 +538,7 @@ pub(crate) mod inventory {
 }
 
 pub(crate) mod outfits {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn equip(
         loader: &impl Loader,
@@ -580,7 +580,7 @@ pub(crate) mod outfits {
 }
 
 pub(crate) mod player {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn get_cell(loader: &impl Loader) -> Result<Option<String>, CallError> {
         let call_args = vec![];
@@ -768,7 +768,7 @@ pub(crate) mod player {
 }
 
 pub(crate) mod quests {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn abandon(loader: &impl Loader, quest_id: i32) -> Result<(), CallError> {
         let call_args = vec![Value::Number(f64::from(quest_id))];
@@ -868,7 +868,7 @@ pub(crate) mod quests {
 }
 
 pub(crate) mod settings {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn enemy_magnet(loader: &impl Loader) -> Result<(), CallError> {
         let call_args = vec![];
@@ -977,7 +977,7 @@ pub(crate) mod settings {
 }
 
 pub(crate) mod shops {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn buy(
         loader: &impl Loader,
@@ -1072,7 +1072,7 @@ pub(crate) mod shops {
 }
 
 pub(crate) mod temp_inventory {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn contains(
         loader: &impl Loader,
@@ -1098,7 +1098,7 @@ pub(crate) mod temp_inventory {
 }
 
 pub(crate) mod world {
-    use crate::automation::bridge::{CallError, Loader, Value, decode};
+    use crate::bridge::{CallError, Loader, Value, decode};
 
     pub(crate) fn get_available_monster_map_ids(loader: &impl Loader) -> Result<Value, CallError> {
         let call_args = vec![];
@@ -1132,7 +1132,7 @@ pub(crate) mod world {
 
     pub(crate) fn is_action_available(
         loader: &impl Loader,
-        game_action: crate::automation::bridge::GameAction,
+        game_action: crate::bridge::GameAction,
     ) -> Result<bool, CallError> {
         let call_args = vec![Value::from(game_action)];
         let reply = loader.call("world.isActionAvailable", call_args)?;

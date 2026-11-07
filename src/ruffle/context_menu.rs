@@ -4,7 +4,7 @@ use ruffle_core::{
 };
 
 use super::view::Point;
-use crate::automation::bridge::Bridge;
+use crate::bridge::Bridge;
 
 pub(crate) struct ContextMenu {
     pub(crate) items: Vec<ContextMenuItem>,

@@ -23,12 +23,10 @@ use ruffle_core::{
 };
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
-use crate::automation::{
-    auth::auto_relogin,
+use crate::{
+    automation::{auto_attack, auto_relogin, auto_zone},
     bridge::Bridge,
-    combat::auto_attack,
     scripting::{self, Calls, ToPlayer},
-    world::auto_zone,
 };
 use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
 use context_menu::{ContextMenu, MenuSelection, OpenMenu, PlayerInput};

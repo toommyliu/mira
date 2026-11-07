@@ -1,15 +1,11 @@
-pub(crate) mod auto_attack;
-
 use std::time::Duration;
 
 use tokio::time::sleep;
 
-use super::{
-    auth,
-    bridge::{self, CallError, Loader, Value},
-};
+use super::auth;
+use crate::bridge::{self, CallError, Loader, Value};
 
-const TICK: Duration = Duration::from_millis(200);
+pub(crate) const TICK: Duration = Duration::from_millis(200);
 const SKILLS: [i32; 4] = [1, 2, 3, 4];
 
 pub(crate) async fn kill(loader: &impl Loader, monster: &str) -> Result<bool, CallError> {
@@ -42,7 +38,7 @@ pub(crate) async fn kill(loader: &impl Loader, monster: &str) -> Result<bool, Ca
     }
 }
 
-fn use_next_skill(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
+pub(crate) fn use_next_skill(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
     for offset in 0..SKILLS.len() {
         let index = (*next + offset) % SKILLS.len();
         let skill = SKILLS[index];
@@ -67,7 +63,7 @@ fn target(loader: &impl Loader) -> Result<Option<f64>, CallError> {
     })
 }
 
-fn selector(key: &str, value: Value) -> Value {
+pub(crate) fn selector(key: &str, value: Value) -> Value {
     Value::Object([(key.to_owned(), value)].into())
 }
 
@@ -76,7 +72,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::automation::testing::FakeLoader;
+    use crate::domain::testing::FakeLoader;
 
     struct Monster {
         id: f64,

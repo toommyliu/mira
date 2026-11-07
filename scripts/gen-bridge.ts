@@ -393,7 +393,7 @@ function rustArgument(
   if (parameter.kind === "rest") return { signature: `${name}: Vec<Value>`, value: name };
   if (parameter.kind === "required" && parameter.rustType !== undefined) {
     return {
-      signature: `${name}: crate::automation::bridge::${parameter.rustType}`,
+      signature: `${name}: crate::bridge::${parameter.rustType}`,
       value: `Value::from(${name})`,
     };
   }
@@ -484,7 +484,7 @@ export function renderRust(bridge: Bridge): string {
   const modules = [...namespaces].map(([namespace, entries]) =>
     [
       `pub(crate) mod ${snakeCase(namespace, entries[0]?.location ?? namespace)} {`,
-      "use crate::automation::bridge::{CallError, Loader, Value, decode};",
+      "use crate::bridge::{CallError, Loader, Value, decode};",
       "",
       entries.map(renderRustExport).join("\n\n"),
       "}",
@@ -511,7 +511,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const as3Root = join(root, "as3", "src", "lyra");
 const outputs = {
   as3: join(as3Root, "generated", "BridgeRegistryGenerated.as"),
-  rust: join(root, "src", "automation", "bridge", "generated.rs"),
+  rust: join(root, "src", "bridge", "generated.rs"),
 };
 
 async function readSources(): Promise<Source[]> {

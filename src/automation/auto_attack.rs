@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, time::sleep};
 
-use super::{TICK, selector, use_next_skill};
-use crate::automation::{
+use crate::bridge::{self, CallError, Loader, Value};
+use crate::domain::{
     auth,
-    bridge::{self, CallError, Loader, Value},
+    combat::{TICK, selector, use_next_skill},
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ mod tests {
     use tokio::task::LocalSet;
 
     use super::*;
-    use crate::automation::testing::FakeLoader;
+    use crate::domain::testing::FakeLoader;
 
     #[derive(Default)]
     struct Fight {
