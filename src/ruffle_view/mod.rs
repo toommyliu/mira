@@ -1,8 +1,9 @@
-mod automation_panel;
+mod game_bar;
 mod input;
 mod menu;
 mod stats;
 mod text_input;
+mod ui;
 
 #[path = "macos.rs"]
 mod native;
@@ -11,7 +12,7 @@ use std::ops::Range;
 
 use crate::{
     automation::{auth::auto_relogin, combat::auto_attack, settings::Store, world::auto_zone},
-    ruffle::{Msg, Output, Runtime, context_menu::MenuSelection, view::ViewEvent},
+    ruffle::{Msg, Output, Runtime, view::ViewEvent},
 };
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
@@ -23,12 +24,14 @@ use gpui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
+pub(crate) use ui::BAR_HEIGHT;
+
 pub struct RuffleView {
     session: Runtime,
     error: Option<String>,
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
-    automation_placement: automation_panel::Placement,
+    player_bounds: Bounds<Pixels>,
     native: NativeView,
     focus: FocusHandle,
     hovered: bool,
@@ -39,7 +42,7 @@ pub struct RuffleView {
     automation: Store,
     auto_relogin: auto_relogin::Phase,
     servers: Vec<String>,
-    automation_open: bool,
+    bar: game_bar::BarState,
     _subscriptions: [Subscription; 3],
 }
 
@@ -143,22 +146,9 @@ impl RuffleView {
                     let selection = menu::show(view, menu).await;
                     menu::sync_modifiers(&input_view);
                     if this
-                        .update_in(cx, |this, window, cx| {
-                            if matches!(selection, Some(MenuSelection::Automation)) {
-                                this.automation_open = true;
-                                cx.notify();
-                            }
+                        .update_in(cx, |this, window, _| {
                             this.session.close_menu(selection);
-                            this.modifiers =
-                                if window.is_window_active() && this.focus.is_focused(window) {
-                                    menu::modifiers()
-                                } else {
-                                    Default::default()
-                                };
-                            for event in input::modifier_keys(Default::default(), this.modifiers) {
-                                this.session.send(event);
-                            }
-                            window.refresh();
+                            this.restore_modifiers(window);
                         })
                         .is_err()
                     {
@@ -199,7 +189,7 @@ impl RuffleView {
                 error: None,
                 stats: None,
                 stats_placement: stats::Placement::default(),
-                automation_placement: automation_panel::Placement::default(),
+                player_bounds: Bounds::default(),
                 native,
                 focus,
                 hovered: false,
@@ -210,23 +200,19 @@ impl RuffleView {
                 automation,
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
-                automation_open: false,
+                bar: game_bar::BarState::new(cx),
                 _subscriptions: subscriptions,
             }
         }))
     }
 
     fn layout(&mut self, bounds: Bounds<Pixels>, window: &Window) {
+        self.player_bounds = bounds;
         let scale = window.scale_factor();
         self.native.set_frame(bounds, scale);
         if let Some(viewport) = input::viewport(bounds, scale) {
             self.session.send(ViewEvent::Resized(viewport));
         }
-    }
-
-    fn close_automation(&mut self, cx: &mut Context<Self>) {
-        self.automation_open = false;
-        cx.notify();
     }
 
     fn change_auto_relogin(
@@ -240,6 +226,18 @@ impl RuffleView {
             tracing::error!(%error, "couldn't save automation settings");
         }
         cx.notify();
+    }
+
+    fn restore_modifiers(&mut self, window: &mut Window) {
+        self.modifiers = if window.is_window_active() && self.focus.is_focused(window) {
+            menu::modifiers()
+        } else {
+            Default::default()
+        };
+        for event in input::modifier_keys(Default::default(), self.modifiers) {
+            self.session.send(event);
+        }
+        window.refresh();
     }
 
     fn change_auto_zone(
@@ -268,11 +266,7 @@ impl RuffleView {
         cx.notify();
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.automation_open && event.keystroke.key == "escape" {
-            self.close_automation(cx);
-            return;
-        }
+    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         if let Some(key) = input::key(&event.keystroke) {
             self.session.send(ViewEvent::KeyDown(key));
         }
@@ -367,7 +361,7 @@ fn paint(this: Entity<RuffleView>, hitbox: Hitbox, window: &mut Window, cx: &mut
 }
 
 impl Render for RuffleView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity();
         let prepaint = {
             let this = this.clone();
@@ -376,9 +370,10 @@ impl Render for RuffleView {
                 window.insert_hitbox(bounds, HitboxBehavior::Normal)
             }
         };
-        div()
+        let player = div()
             .relative()
-            .size_full()
+            .flex_1()
+            .w_full()
             .when_some(self.error.clone(), |view, error| {
                 view.bg(gpui::rgb(0x181818))
                     .text_color(gpui::rgb(0xffffff))
@@ -394,25 +389,22 @@ impl Render for RuffleView {
                 })
                 .size_full(),
             )
-            .when(self.automation_open, |view| {
-                view.child(automation_panel::panel(
-                    self.automation.auto_relogin(),
-                    &self.auto_relogin,
-                    &self.servers,
-                    self.automation.auto_zone(),
-                    self.automation.auto_attack(),
-                    &self.automation_placement,
-                    window,
-                    cx,
-                ))
-            })
             .when_some(self.stats, |view, stats| {
                 view.child(stats::overlay(
                     stats,
                     &self.stats_placement,
+                    self.player_bounds,
                     cx.entity(),
-                    window,
                 ))
+            });
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(game_bar::bar(self, cx))
+            .child(player)
+            .when_some(self.bar.open(), |root, menu| {
+                root.child(game_bar::overlay(self, menu, cx))
             })
     }
 }

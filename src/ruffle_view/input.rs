@@ -6,6 +6,7 @@ use gpui::{Bounds, Keystroke, Pixels, ScrollDelta};
 #[derive(Default)]
 pub(super) struct Mouse {
     pressed: Vec<gpui::MouseButton>,
+    swallowed: Vec<gpui::MouseButton>,
 }
 
 impl Mouse {
@@ -32,10 +33,22 @@ impl Mouse {
     ) -> Option<ViewEvent> {
         let owned = self.pressed.contains(&event.button);
         self.pressed.retain(|button| *button != event.button);
+        if let Some(index) = self
+            .swallowed
+            .iter()
+            .position(|button| *button == event.button)
+        {
+            self.swallowed.swap_remove(index);
+            return None;
+        }
         (owned || over_game).then(|| ViewEvent::MouseUp {
             at: point(event.position, origin),
             button: button(event.button),
         })
+    }
+
+    pub(super) fn swallow(&mut self, button: gpui::MouseButton) {
+        self.swallowed.push(button);
     }
 
     pub(super) fn dragging(&self, button: Option<gpui::MouseButton>) -> bool {
@@ -250,6 +263,19 @@ mod tests {
                 )
                 .is_some()
         );
+    }
+
+    #[test]
+    fn a_press_that_closes_a_panel_keeps_its_release_from_the_game() {
+        let mut mouse = Mouse::default();
+        let origin = gpui::point(gpui::px(0.0), gpui::px(0.0));
+        let up = gpui::MouseUpEvent {
+            button: gpui::MouseButton::Left,
+            ..Default::default()
+        };
+        mouse.swallow(gpui::MouseButton::Left);
+        assert!(mouse.up(&up, origin, true).is_none());
+        assert!(mouse.up(&up, origin, true).is_some());
     }
 
     fn keystroke(key: &str, key_char: Option<&str>, modifiers: gpui::Modifiers) -> Keystroke {

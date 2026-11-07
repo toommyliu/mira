@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(960.0), px(550.0)),
+                size(px(960.0), px(550.0) + ruffle_view::BAR_HEIGHT),
                 cx,
             ))),
             titlebar: Some(TitlebarOptions {

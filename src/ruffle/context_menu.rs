@@ -18,7 +18,6 @@ pub(crate) enum MenuSelection {
     Ruffle(usize),
     SmoothMotion,
     Stats,
-    Automation,
 }
 
 pub(super) struct OpenMenu {
@@ -83,15 +82,22 @@ impl PlayerInput {
         };
         let handled = player.handle_event(event);
         let (x, y) = position.filter(|_| !handled)?;
-        // AppKit may consume releases during native menu tracking.
-        for key in self.keys.drain(..) {
-            player.handle_event(PlayerEvent::KeyUp { key });
-        }
+        self.release_keys(player);
         Some(OpenMenu {
             items: player.prepare_context_menu(),
             x,
             y,
         })
+    }
+}
+
+impl PlayerInput {
+    /// AppKit may consume key releases while it tracks a native menu, so a menu opening over
+    /// the player releases every held key first.
+    pub(super) fn release_keys(&mut self, player: &mut Player) {
+        for key in self.keys.drain(..) {
+            player.handle_event(PlayerEvent::KeyUp { key });
+        }
     }
 }
 
@@ -226,6 +232,17 @@ mod tests {
         assert!(player.mutate_with_update_context(|context| {
             !context.input.is_key_down(KeyCode::W) && !context.input.is_key_down(KeyCode::SHIFT)
         }));
+        let w = KeyDescriptor {
+            physical_key: PhysicalKey::KeyW,
+            logical_key: LogicalKey::Character('w'),
+            key_location: KeyLocation::Standard,
+        };
+        input.handle_event(&mut player, PlayerEvent::KeyDown { key: w });
+        input.release_keys(&mut player);
+        assert!(
+            !player.mutate_with_update_context(|context| context.input.is_key_down(KeyCode::W)),
+            "a menu opened outside the player releases held keys too"
+        );
         assert!(
             input
                 .handle_event(

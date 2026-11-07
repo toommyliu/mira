@@ -22,8 +22,8 @@ pub(super) struct Placement {
 pub(super) fn overlay(
     report: Report,
     placement: &Placement,
+    area: Bounds<Pixels>,
     this: Entity<super::RuffleView>,
-    window: &Window,
 ) -> impl IntoElement {
     let fps = report.game_fps.map_or_else(
         || format!("FPS:        - / {:.0}", report.target_fps),
@@ -35,7 +35,7 @@ pub(super) fn overlay(
         || {
             (
                 Anchor::TopRight,
-                point(window.viewport_size().width - MARGIN, MARGIN),
+                point(area.right() - MARGIN, area.top() + MARGIN),
             )
         },
         |position| (Anchor::TopLeft, position),
@@ -112,7 +112,10 @@ pub(super) fn overlay(
     anchored()
         .anchor(anchor)
         .position(position)
-        .snap_to_window_with_margin(gpui::Edges::all(MARGIN))
+        .snap_to_window_with_margin(gpui::Edges {
+            top: area.top() + MARGIN,
+            ..gpui::Edges::all(MARGIN)
+        })
         .child(panel)
 }
 
@@ -156,7 +159,7 @@ fn paint_drag(this: Entity<super::RuffleView>, hitbox: Hitbox, window: &mut Wind
                 this.stats_placement.position = Some(clamp_position(
                     event.position - grab,
                     hitbox.bounds.size,
-                    window.viewport_size(),
+                    this.player_bounds,
                 ));
                 cx.stop_propagation();
                 cx.notify();
@@ -180,17 +183,14 @@ fn paint_drag(this: Entity<super::RuffleView>, hitbox: Hitbox, window: &mut Wind
 fn clamp_position(
     origin: Point<Pixels>,
     panel: Size<Pixels>,
-    viewport: Size<Pixels>,
+    area: Bounds<Pixels>,
 ) -> Point<Pixels> {
-    point(
-        origin
-            .x
-            .clamp(MARGIN, (viewport.width - panel.width - MARGIN).max(MARGIN)),
-        origin.y.clamp(
-            MARGIN,
-            (viewport.height - panel.height - MARGIN).max(MARGIN),
-        ),
-    )
+    let min = area.origin + point(MARGIN, MARGIN);
+    let max = point(
+        (area.right() - panel.width - MARGIN).max(min.x),
+        (area.bottom() - panel.height - MARGIN).max(min.y),
+    );
+    point(origin.x.clamp(min.x, max.x), origin.y.clamp(min.y, max.y))
 }
 
 #[cfg(test)]
@@ -200,18 +200,18 @@ mod tests {
     #[test]
     fn dragging_keeps_the_panel_inside_the_player() {
         let panel = size(px(224.0), px(120.0));
-        let viewport = size(px(960.0), px(550.0));
+        let player = Bounds::new(point(px(0.0), px(34.0)), size(px(960.0), px(550.0)));
         assert_eq!(
-            clamp_position(point(px(100.0), px(200.0)), panel, viewport),
+            clamp_position(point(px(100.0), px(200.0)), panel, player),
             point(px(100.0), px(200.0))
         );
         assert_eq!(
-            clamp_position(point(px(-500.0), px(-500.0)), panel, viewport),
-            point(px(8.0), px(8.0))
+            clamp_position(point(px(-500.0), px(-500.0)), panel, player),
+            point(px(8.0), px(42.0))
         );
         assert_eq!(
-            clamp_position(point(px(1500.0), px(1500.0)), panel, viewport),
-            point(px(728.0), px(422.0))
+            clamp_position(point(px(1500.0), px(1500.0)), panel, player),
+            point(px(728.0), px(456.0))
         );
     }
 }

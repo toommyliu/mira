@@ -34,6 +34,7 @@ use view::{Effect, ViewEvent};
 pub(crate) enum Msg {
     View(ViewEvent),
     MenuClosed(Option<MenuSelection>),
+    ReleaseKeys,
     Frame,
     Poll(async_task::Runnable),
     Wake,
@@ -125,6 +126,10 @@ impl Runtime {
 
     pub(crate) fn close_menu(&self, selection: Option<MenuSelection>) {
         self.inbox.post(Msg::MenuClosed(selection));
+    }
+
+    pub(crate) fn release_keys(&self) {
+        self.inbox.post(Msg::ReleaseKeys);
     }
 }
 
@@ -285,6 +290,7 @@ fn run(
                         }
                     }
                 }
+                Some(Msg::ReleaseKeys) => input.release_keys(&mut player.lock().unwrap()),
                 Some(Msg::MenuClosed(selection)) => {
                     if let Some(menu) = open_menu.take() {
                         let mut player = player.lock().unwrap();
