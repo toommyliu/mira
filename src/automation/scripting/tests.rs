@@ -358,12 +358,20 @@ fn an_error_thrown_by_a_timer_ends_the_run() {
             "import { Effect } from \"effect\";\nsetTimeout(() => { throw new Error(\"timer boom\"); }, 10);\nexport default function* () { yield* Effect.never; }\n",
         ),
         (
+            "null.js",
+            "import { Effect } from \"effect\";\nsetTimeout(() => { throw null; }, 10);\nexport default function* () { yield* Effect.never; }\n",
+        ),
+        (
             "exhausts.js",
             "import { Effect } from \"effect\";\nsetTimeout(() => { const kept = []; while (true) kept.push(new Array(100000).fill(1)); }, 10);\nexport default function* () { yield* Effect.never; }\n",
         ),
     ]);
     let thrown = run_in(&folder, "throws.ts", Limits::default(), None);
     assert_eq!(failure(&thrown.outcome).0, "timer boom");
+    assert!(matches!(
+        run_in(&folder, "null.js", Limits::default(), None).outcome,
+        Outcome::Failed { .. }
+    ));
     let limits = Limits {
         memory: 32 << 20,
         ..Limits::default()

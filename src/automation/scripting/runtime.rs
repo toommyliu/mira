@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -18,7 +18,7 @@ use rquickjs::{
 
 use super::{
     calls::{self, Call, CallId, Replier, Reply, Request, RunId, ToPlayer},
-    limits::{Clock, Limits, Tripped},
+    limits::{CappedAllocator, Clock, Limits, Tripped},
     modules::{BOOTSTRAP, ModuleLoader, ModuleResolver, Modules, PRELUDE},
 };
 
@@ -48,6 +48,8 @@ pub(crate) enum Level {
 }
 
 pub(crate) type Log = Box<dyn Fn(Level, &str) + Send>;
+
+const THREW_NULL: &str = "the script threw null";
 
 pub(crate) type Player = Box<dyn Fn(ToPlayer) + Send>;
 
@@ -142,10 +144,11 @@ fn execute(
         Ok(entry) => entry,
         Err(message) => return failed(message),
     };
-    let Ok(runtime) = Runtime::new() else {
+    let refused = Rc::new(Cell::new(false));
+    let Ok(runtime) = Runtime::new_with_alloc(CappedAllocator::new(limits.memory, refused.clone()))
+    else {
         return failed("couldn't start the script runtime".into());
     };
-    runtime.set_memory_limit(limits.memory);
     runtime.set_max_stack_size(limits.stack);
     runtime.set_interrupt_handler(Some(clock.interrupt_handler(&limits)));
     runtime.set_loader(
@@ -155,11 +158,32 @@ fn execute(
     let Ok(context) = Context::full(&runtime) else {
         return failed("couldn't start the script runtime".into());
     };
+    let outcome = run(
+        &runtime, &context, &modules, &entry, limits, clock, commands, log, link,
+    );
+    match outcome {
+        Outcome::Failed { .. } if refused.get() => Outcome::Killed(Limit::Memory),
+        outcome => outcome,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    runtime: &Runtime,
+    context: &Context,
+    modules: &Modules,
+    entry: &str,
+    limits: Limits,
+    clock: &Arc<Clock>,
+    commands: &mpsc::Receiver<Command>,
+    log: Log,
+    link: Link,
+) -> Outcome {
     let settled: Settled = Rc::default();
     let started = Instant::now();
     let setup = context.with(|ctx| {
-        setup(&ctx, &entry, started, Rc::new(log), link, clock)
-            .map_err(|error| describe(error, &modules))
+        setup(&ctx, entry, started, Rc::new(log), link, clock)
+            .map_err(|error| describe(error, modules))
     });
     let (hooks, start, import) = match setup {
         Ok(setup) => setup,
@@ -184,7 +208,7 @@ fn execute(
             let outcome = error.0.with(|ctx| {
                 describe(
                     CaughtError::from_error(&ctx, rquickjs::Error::Exception),
-                    &modules,
+                    modules,
                 )
             });
             return finalize(outcome, stopping.is_some());
@@ -202,14 +226,14 @@ fn execute(
                     PromiseState::Pending => Ok(None),
                     PromiseState::Rejected => Err(describe(
                         promise.result::<()>().unwrap().catch(&ctx).unwrap_err(),
-                        &modules,
+                        modules,
                     )),
                     PromiseState::Resolved => {
                         let namespace: Object = promise
                             .result()
                             .unwrap()
                             .catch(&ctx)
-                            .map_err(|error| describe(error, &modules))?;
+                            .map_err(|error| describe(error, modules))?;
                         let exported: rquickjs::Value = namespace
                             .get("default")
                             .unwrap_or_else(|_| rquickjs::Value::new_undefined(ctx.clone()));
@@ -218,11 +242,11 @@ fn execute(
                             .restore(&ctx)
                             .map_err(|_| failed("lost the bootstrap".into()))?;
                         let settle = settle_function(&ctx, settled.clone(), modules.clone())
-                            .map_err(|error| describe(CaughtError::Error(error), &modules))?;
+                            .map_err(|error| describe(CaughtError::Error(error), modules))?;
                         let interrupt: Function = clock
                             .turn(|| start.call((exported, settle)))
                             .catch(&ctx)
-                            .map_err(|error| describe(error, &modules))?;
+                            .map_err(|error| describe(error, modules))?;
                         Ok(Some(Phase::Running(Persistent::save(&ctx, interrupt))))
                     }
                 }
@@ -277,9 +301,9 @@ fn execute(
                 Ok(())
             }
             Ok(Command::Reply { id, reply }) => hooks.call(
-                &context,
+                context,
                 clock,
-                &modules,
+                modules,
                 |hooks| &hooks.deliver,
                 (id.0, calls::encode(reply)),
             ),
@@ -287,7 +311,7 @@ fn execute(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Outcome::Stopped,
         };
         let fired = delivered
-            .and_then(|()| hooks.call(&context, clock, &modules, |hooks| &hooks.run_timers, ()));
+            .and_then(|()| hooks.call(context, clock, modules, |hooks| &hooks.run_timers, ()));
         if let Err(outcome) = fired {
             return clock_outcome(clock).unwrap_or(finalize(outcome, stopping.is_some()));
         }
@@ -458,6 +482,7 @@ fn describe(error: CaughtError<'_>, modules: &Modules) -> Outcome {
                     .map(|stack| modules.rewrite_stack(&stack)),
             }
         }
+        CaughtError::Value(value) if value.is_null() => failed(THREW_NULL.into()),
         CaughtError::Value(value) => failed(format!("{value:?}")),
         CaughtError::Error(rquickjs::Error::Allocation) => Outcome::Killed(Limit::Memory),
         CaughtError::Error(error) => failed(error.to_string()),

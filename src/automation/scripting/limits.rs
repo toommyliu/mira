@@ -1,4 +1,7 @@
 use std::{
+    cell::Cell,
+    ptr,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -6,7 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rquickjs::runtime::InterruptHandler;
+use rquickjs::{
+    allocator::{Allocator, RustAllocator},
+    runtime::InterruptHandler,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Limits {
@@ -110,5 +116,83 @@ impl Clock {
             }
             tripped != 0
         })
+    }
+}
+
+pub(super) struct CappedAllocator {
+    limit: usize,
+    used: usize,
+    refused: Rc<Cell<bool>>,
+}
+
+impl CappedAllocator {
+    pub(super) fn new(limit: usize, refused: Rc<Cell<bool>>) -> Self {
+        Self {
+            limit,
+            used: 0,
+            refused,
+        }
+    }
+
+    fn admit(&mut self, size: usize) -> bool {
+        let fits = self.used.saturating_add(size) <= self.limit;
+        if !fits {
+            self.refused.set(true);
+        }
+        fits
+    }
+}
+
+// SAFETY: every allocation is made and released by RustAllocator; this type only tracks sizes.
+unsafe impl Allocator for CappedAllocator {
+    fn alloc(&mut self, size: usize) -> *mut u8 {
+        if !self.admit(size) {
+            return ptr::null_mut();
+        }
+        let allocated = RustAllocator.alloc(size);
+        if !allocated.is_null() {
+            self.used += unsafe { RustAllocator::usable_size(allocated) };
+        }
+        allocated
+    }
+
+    fn calloc(&mut self, count: usize, size: usize) -> *mut u8 {
+        let Some(total) = count.checked_mul(size) else {
+            return ptr::null_mut();
+        };
+        if !self.admit(total) {
+            return ptr::null_mut();
+        }
+        let allocated = RustAllocator.calloc(count, size);
+        if !allocated.is_null() {
+            self.used += unsafe { RustAllocator::usable_size(allocated) };
+        }
+        allocated
+    }
+
+    unsafe fn dealloc(&mut self, allocated: *mut u8) {
+        unsafe {
+            self.used -= RustAllocator::usable_size(allocated);
+            RustAllocator.dealloc(allocated);
+        }
+    }
+
+    unsafe fn realloc(&mut self, allocated: *mut u8, new_size: usize) -> *mut u8 {
+        if allocated.is_null() {
+            return self.alloc(new_size);
+        }
+        let old_size = unsafe { RustAllocator::usable_size(allocated) };
+        if new_size > old_size && !self.admit(new_size - old_size) {
+            return ptr::null_mut();
+        }
+        let moved = unsafe { RustAllocator.realloc(allocated, new_size) };
+        if !moved.is_null() {
+            self.used = self.used - old_size + unsafe { RustAllocator::usable_size(moved) };
+        }
+        moved
+    }
+
+    unsafe fn usable_size(allocated: *mut u8) -> usize {
+        unsafe { RustAllocator::usable_size(allocated) }
     }
 }
