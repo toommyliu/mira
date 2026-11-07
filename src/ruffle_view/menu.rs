@@ -72,7 +72,7 @@ fn track(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
     }
     menu.addItem(&smooth_motion);
     let stats = NSMenuItem::new(mtm);
-    stats.setTitle(&NSString::from_str("Show stats"));
+    stats.setTitle(&NSString::from_str("Performance stats"));
     stats.setState(isize::from(context.stats));
     stats.setTag(context.items.len() as isize + 1);
     unsafe {
