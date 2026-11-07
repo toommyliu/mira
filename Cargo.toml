@@ -9,6 +9,7 @@ anyhow = "1"
 arboard = { version = "3.7", default-features = false }
 async-channel = "2.5"
 async-task = "4.7"
+block2 = "0.6"
 dirs = "6"
 encoding_rs = "0.8.35"
 getrandom = "0.2"

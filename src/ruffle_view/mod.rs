@@ -140,8 +140,7 @@ impl RuffleView {
                     else {
                         break;
                     };
-                    // AppKit runs a nested event loop while tracking a menu. Release GPUI's borrow first.
-                    let selection = menu::show(&view, menu);
+                    let selection = menu::show(view, menu).await;
                     menu::sync_modifiers(&input_view);
                     if this
                         .update_in(cx, |this, window, cx| {

@@ -1,11 +1,12 @@
 use std::cell::Cell;
 
+use block2::RcBlock;
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, define_class, msg_send, rc::Retained,
     runtime::NSObject, sel,
 };
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSMenu, NSMenuItem, NSView};
-use objc2_foundation::{NSPoint, NSString};
+use objc2_foundation::{NSPoint, NSRunLoop, NSString};
 
 use crate::ruffle::context_menu::{ContextMenu, MenuSelection};
 
@@ -23,7 +24,21 @@ define_class!(
     }
 );
 
-pub(super) fn show(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
+// GCD won't drain the main queue while one of its blocks is tracking a menu, which stalls GPUI.
+pub(super) async fn show(view: Retained<NSView>, context: ContextMenu) -> Option<MenuSelection> {
+    let (sender, selection) = async_channel::bounded(1);
+    let pending = Cell::new(Some((view, context)));
+    let block = RcBlock::new(move || {
+        if let Some((view, context)) = pending.take() {
+            let _ = sender.try_send(track(&view, context));
+        }
+    });
+    // SAFETY: the main run loop runs the block on the main thread, where it was created.
+    unsafe { NSRunLoop::mainRunLoop().performBlock(&block) };
+    selection.recv().await.ok().flatten()
+}
+
+fn track(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
     let mtm = MainThreadMarker::new().unwrap();
     let target: Retained<MenuTarget> =
         unsafe { msg_send![super(MenuTarget::alloc().set_ivars(Cell::new(None))), init] };
