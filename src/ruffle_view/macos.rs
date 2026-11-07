@@ -16,7 +16,7 @@ use objc2_core_graphics::CGColor;
 use objc2_foundation::{
     NSNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
 };
-use objc2_quartz_core::{CADisplayLink, CAMetalLayer, CATransaction};
+use objc2_quartz_core::{CADisplayLink, CAFrameRateRange, CAMetalLayer, CATransaction};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +103,11 @@ impl NativeView {
                 .displayLinkWithTarget_selector(&target, sel!(call:))
         };
         clock.setPaused(true);
+        clock.setPreferredFrameRateRange(CAFrameRateRange {
+            minimum: 60.0,
+            maximum: 72.0,
+            preferred: 72.0,
+        });
         unsafe {
             clock.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes);
         }
