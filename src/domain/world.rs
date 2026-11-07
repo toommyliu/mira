@@ -13,9 +13,9 @@ const DROPS_TIMEOUT: Duration = Duration::from_secs(5);
 #[serde(untagged)]
 pub(crate) enum MonsterQuery {
     Name(String),
-    MapId {
-        #[serde(rename = "mapId")]
-        map_id: f64,
+    MonMapId {
+        #[serde(rename = "monMapId")]
+        mon_map_id: f64,
     },
 }
 
@@ -26,7 +26,7 @@ impl MonsterQuery {
                 let name = name.trim();
                 name == "*" || monster.name.trim().to_lowercase() == name.to_lowercase()
             }
-            MonsterQuery::MapId { map_id } => monster.map_id == *map_id,
+            MonsterQuery::MonMapId { mon_map_id } => monster.mon_map_id == *mon_map_id,
         }
     }
 }
@@ -34,7 +34,7 @@ impl MonsterQuery {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Monster {
-    map_id: f64,
+    mon_map_id: f64,
     monster_id: f64,
     name: String,
     race: String,
@@ -164,13 +164,13 @@ pub(crate) async fn monster_drops(
         return Ok(None);
     };
     replies.clear();
-    if !bridge::world::request_monster_drops(loader, monster.map_id)? {
+    if !bridge::world::request_monster_drops(loader, monster.mon_map_id)? {
         return Ok(None);
     }
     let deadline = Instant::now() + DROPS_TIMEOUT;
     while let Ok(reply) = timeout_at(deadline, replies.next()).await {
         if let Ok(Event::ExtensionResponse { packet }) = reply
-            && let Some(drops) = drops_for(&packet, monster.map_id)
+            && let Some(drops) = drops_for(&packet, monster.mon_map_id)
         {
             return Ok(Some(drops));
         }
@@ -256,9 +256,9 @@ fn monster_from(value: Value) -> Option<Monster> {
         Some(Value::String(text)) => text.clone(),
         _ => String::new(),
     };
-    let map_id = number("mapId");
-    (map_id > 0.0).then(|| Monster {
-        map_id,
+    let mon_map_id = number("monMapId");
+    (mon_map_id > 0.0).then(|| Monster {
+        mon_map_id,
         monster_id: number("monsterId"),
         name: text("name"),
         race: text("race"),
@@ -271,10 +271,11 @@ fn monster_from(value: Value) -> Option<Monster> {
     })
 }
 
-fn drops_for(packet: &str, map_id: f64) -> Option<Vec<Drop>> {
+fn drops_for(packet: &str, mon_map_id: f64) -> Option<Vec<Drop>> {
     let reply: serde_json::Value = serde_json::from_str(packet).ok()?;
     let data = reply.get("dataObj")?;
-    if data.get("cmd")?.as_str()? != "monsterDrops" || wire_number(data.get("MonMapID")?)? != map_id
+    if data.get("cmd")?.as_str()? != "monsterDrops"
+        || wire_number(data.get("MonMapID")?)? != mon_map_id
     {
         return None;
     }
@@ -362,11 +363,11 @@ mod tests {
     use super::*;
     use crate::{bridge::Events, domain::testing::FakeLoader};
 
-    fn monster_row(map_id: f64, name: &str, cell: &str, state: f64, available: bool) -> Value {
+    fn monster_row(mon_map_id: f64, name: &str, cell: &str, state: f64, available: bool) -> Value {
         Value::Object(
             [
-                ("mapId", Value::Number(map_id)),
-                ("monsterId", Value::Number(map_id + 100.0)),
+                ("monMapId", Value::Number(mon_map_id)),
+                ("monsterId", Value::Number(mon_map_id + 100.0)),
                 ("name", Value::String(name.into())),
                 ("race", Value::String("Beast".into())),
                 ("cell", Value::String(cell.into())),
@@ -466,10 +467,10 @@ mod tests {
         }
     }
 
-    fn drops_reply(map_id: f64) -> serde_json::Value {
+    fn drops_reply(mon_map_id: f64) -> serde_json::Value {
         json!({ "type": "json", "dataObj": {
             "cmd": "monsterDrops",
-            "MonMapID": map_id,
+            "MonMapID": mon_map_id,
             "items": {
                 "11": { "ItemID": 11, "sName": "Frogzard Scale", "iQty": 4, "bVaryQty": true,
                         "iRate": 200, "iRateBoosted": "300", "sReqQuests": "7, 3,7,x,0" },
@@ -488,7 +489,7 @@ mod tests {
         assert_eq!(monsters(&loader, Some("R2")).unwrap().len(), 2);
         assert_eq!(
             serde_json::to_value(&all[0]).unwrap(),
-            json!({ "mapId": 1.0, "monsterId": 101.0, "name": "Frogzard", "race": "Beast",
+            json!({ "monMapId": 1.0, "monsterId": 101.0, "name": "Frogzard", "race": "Beast",
                     "cell": "r2", "hp": 900.0, "maxHp": 1000.0, "level": 12.0, "state": "idle" })
         );
         assert_eq!(
@@ -503,15 +504,15 @@ mod tests {
         let id = |query: MonsterQuery| {
             monster(&loader, &query)
                 .unwrap()
-                .map(|monster| monster.map_id)
+                .map(|monster| monster.mon_map_id)
         };
         assert_eq!(id(MonsterQuery::Name("  FROGZARD ".into())), Some(1.0));
         assert_eq!(id(MonsterQuery::Name("*".into())), Some(1.0));
-        assert_eq!(id(MonsterQuery::MapId { map_id: 2.0 }), Some(2.0));
+        assert_eq!(id(MonsterQuery::MonMapId { mon_map_id: 2.0 }), Some(2.0));
         assert_eq!(id(MonsterQuery::Name("Slime".into())), None);
         let available = |query: MonsterQuery| monster_available(&loader, &query).unwrap();
         assert!(available(MonsterQuery::Name("frogzard".into())));
-        assert!(!available(MonsterQuery::MapId { map_id: 2.0 }));
+        assert!(!available(MonsterQuery::MonMapId { mon_map_id: 2.0 }));
         assert!(!available(MonsterQuery::Name("Slime".into())));
     }
 

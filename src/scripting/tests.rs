@@ -631,8 +631,8 @@ export default function* () {
   yield* World.getCellPads();
   yield* World.getMonsters({ cell: "r2" });
   yield* World.getMonster("Frogzard");
-  yield* World.isMonsterAvailable({ mapId: 5 });
-  yield* World.getMonsterDrops({ mapId: 5 });
+  yield* World.isMonsterAvailable({ monMapId: 5 });
+  yield* World.getMonsterDrops({ monMapId: 5 });
   yield* World.setSpawnPoint({ pad: "Left" });
   yield* World.getMapItem(3);
   yield* World.loadSwf("town.swf");
@@ -657,7 +657,7 @@ export default function* () {
             _ => None,
         })
         .collect();
-    let five = || MonsterQuery::MapId { map_id: 5.0 };
+    let five = || MonsterQuery::MonMapId { mon_map_id: 5.0 };
     assert_eq!(
         requests,
         [

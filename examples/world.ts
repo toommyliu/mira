@@ -19,7 +19,7 @@ export default function* () {
   console.log(`${monsters.length} monsters in the map`);
   for (const monster of monsters) {
     console.log(
-      `  ${monster.name} (#${monster.mapId}) in ${monster.cell}: ${monster.hp}/${monster.maxHp} HP, ${monster.state}`,
+      `  ${monster.name} (#${monster.monMapId}) in ${monster.cell}: ${monster.hp}/${monster.maxHp} HP, ${monster.state}`,
     );
   }
 
@@ -29,9 +29,9 @@ export default function* () {
   const target = yield* World.getMonster("*");
   if (target !== null) {
     console.log(
-      `first monster here: ${target.name}, available ${yield* World.isMonsterAvailable({ mapId: target.mapId })}`,
+      `first monster here: ${target.name}, available ${yield* World.isMonsterAvailable({ monMapId: target.monMapId })}`,
     );
-    const drops = yield* World.getMonsterDrops({ mapId: target.mapId });
+    const drops = yield* World.getMonsterDrops({ monMapId: target.monMapId });
     for (const drop of drops ?? []) {
       const rate = drop.rate === null ? "" : ` at ${drop.rate}%`;
       console.log(`  drops ${drop.name} (#${drop.itemId}) x${drop.quantity}${rate}`);

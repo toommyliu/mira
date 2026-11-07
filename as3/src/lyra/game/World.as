@@ -174,7 +174,7 @@ public class World
         }
 
         monsters.push({
-          mapId: Number(mon.dataLeaf.MonMapID),
+          monMapId: Number(mon.dataLeaf.MonMapID),
           monsterId: Number(mon.objData.MonID),
           name: String(mon.objData.strMonName || ""),
           race: String(mon.objData.sRace || ""),

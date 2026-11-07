@@ -71,9 +71,9 @@ export const Player = {
   },
 };
 
-export type MonsterQuery = string | { readonly mapId: number };
+export type MonsterQuery = string | { readonly monMapId: number };
 export type Monster = {
-  readonly mapId: number;
+  readonly monMapId: number;
   readonly monsterId: number;
   readonly name: string;
   readonly race: string;
