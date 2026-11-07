@@ -1,6 +1,8 @@
+import { connect, deliver, type Native } from "./native.ts";
+
 type Level = "debug" | "info" | "warn" | "error";
 
-type Host = {
+type Host = Native & {
   readonly now: () => number;
   readonly log: (level: Level, message: string) => void;
 };
@@ -51,6 +53,7 @@ const decodeUtf8 = (bytes: Uint8Array): string => {
 };
 
 export function install(host: Host) {
+  connect(host);
   const timers = new Map<number, Timer>();
   let lastId = 0;
   const schedule = (id: number, delay: unknown, run: () => void) => {
@@ -106,6 +109,7 @@ export function install(host: Host) {
     },
   });
   return {
+    deliver,
     nextTimer: (): number => {
       let earliest = Infinity;
       for (const timer of timers.values()) earliest = Math.min(earliest, timer.at);

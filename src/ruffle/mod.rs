@@ -24,9 +24,13 @@ use ruffle_core::{
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::automation::{
-    auth::auto_relogin, bridge::Bridge, combat::auto_attack, world::auto_zone,
+    auth::auto_relogin,
+    bridge::Bridge,
+    combat::auto_attack,
+    scripting::{self, Calls, ToPlayer},
+    world::auto_zone,
 };
-use backends::{Navigator, Tasks, Ui, spawn_local};
+use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
 use context_menu::{ContextMenu, MenuSelection, OpenMenu, PlayerInput};
 pub(crate) use surface::Surface;
 use view::{Effect, ViewEvent};
@@ -37,6 +41,7 @@ pub(crate) enum Msg {
     ReleaseKeys,
     Frame,
     Poll(async_task::Runnable),
+    Script(ToPlayer),
     Wake,
     Stop,
 }
@@ -223,6 +228,8 @@ fn run(
         Err(error) => tracing::warn!(%error, "couldn't load smooth motion preference"),
     }
     let mut open_menu: Option<OpenMenu> = None;
+    let mut scripts = Calls::default();
+    let scripts_bridge = bridge.clone();
     let mut input = PlayerInput::new(bridge);
     let show_stats = preferences::BoolPreference::new(data.join("show-stats"));
     let stats_enabled = show_stats.load().unwrap_or_else(|error| {
@@ -250,6 +257,9 @@ fn run(
                 Some(Msg::Poll(task)) => {
                     task.run();
                 }
+                Some(Msg::Script(message)) => scripts.handle(message, |call| {
+                    spawn(&inbox, scripting::answer(scripts_bridge.clone(), call))
+                }),
                 Some(Msg::Frame) => {
                     inbox.frame_pending.store(false, Ordering::Relaxed);
                     frame_due = true;
@@ -335,6 +345,7 @@ fn run(
         stats.sample(&mut player, viewport.dimensions());
         wait = pacing.wait(Instant::now(), interpolating, player.time_til_next_frame());
     }
+    drop(scripts);
     tasks.borrow_mut().clear();
     while let Ok(message) = rx.try_recv() {
         if let Msg::Poll(task) = message {

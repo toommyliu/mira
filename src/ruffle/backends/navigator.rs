@@ -17,18 +17,26 @@ use crate::ruffle::{Inbox, Msg};
 
 pub(crate) type Tasks = Rc<RefCell<Vec<async_task::Task<()>>>>;
 
+pub(crate) fn spawn(
+    inbox: &Inbox,
+    future: impl Future<Output = ()> + 'static,
+) -> async_task::Task<()> {
+    let inbox = inbox.clone();
+    let (runnable, task) =
+        async_task::spawn_local(future, move |runnable| inbox.post(Msg::Poll(runnable)));
+    runnable.schedule();
+    task
+}
+
 pub(crate) fn spawn_local(
     inbox: &Inbox,
     tasks: &Tasks,
     future: impl Future<Output = ()> + 'static,
 ) {
-    let inbox = inbox.clone();
-    let (runnable, task) =
-        async_task::spawn_local(future, move |runnable| inbox.post(Msg::Poll(runnable)));
+    let task = spawn(inbox, future);
     let mut tasks = tasks.borrow_mut();
     tasks.retain(|task| !task.is_finished());
     tasks.push(task);
-    runnable.schedule();
 }
 
 pub(crate) struct Navigator {

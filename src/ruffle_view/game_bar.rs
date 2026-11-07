@@ -27,6 +27,7 @@ const BORDER: Pixels = px(1.0);
 pub(super) enum BarMenu {
     AutoZone,
     AutoRelogin,
+    Script,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,10 +37,11 @@ enum Submenu {
 }
 
 impl BarMenu {
-    fn submenu(self) -> Submenu {
+    fn submenu(self) -> Option<Submenu> {
         match self {
-            BarMenu::AutoZone => Submenu::Rooms,
-            BarMenu::AutoRelogin => Submenu::Servers,
+            BarMenu::AutoZone => Some(Submenu::Rooms),
+            BarMenu::AutoRelogin => Some(Submenu::Servers),
+            BarMenu::Script => None,
         }
     }
 }
@@ -128,7 +130,7 @@ pub(super) struct BarState {
     aim_from: Option<Point<Pixels>>,
     edit: Option<Edit>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 2]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 3]>>,
     submenu_rows: Rc<Cell<[Bounds<Pixels>; 2]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -166,7 +168,7 @@ impl RuffleView {
         cx.notify();
     }
 
-    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.bar.open = None;
         self.bar.submenu = None;
@@ -308,7 +310,9 @@ impl RuffleView {
             return;
         };
         let at = event.position;
-        let submenu = menu.submenu();
+        let Some(submenu) = menu.submenu() else {
+            return;
+        };
         if self.bar.submenu_rows.get()[submenu as usize].contains(&at) {
             self.bar.aim_from = Some(at);
             self.open_submenu(submenu, cx);
@@ -434,6 +438,14 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                     this.change_auto_attack(|settings| settings.enabled = !attack, cx)
                 })),
         )
+        .child(div().flex_1())
+        .child(trigger(
+            view,
+            BarMenu::Script,
+            "Script",
+            view.script.label(),
+            cx,
+        ))
 }
 
 fn bar_control(id: &'static str) -> Stateful<Div> {
@@ -460,6 +472,7 @@ fn trigger(
     let id = match menu {
         BarMenu::AutoZone => "auto-zone",
         BarMenu::AutoRelogin => "auto-relogin",
+        BarMenu::Script => "script",
     };
     div()
         .on_children_prepainted(move |bounds, _, _| {
@@ -496,6 +509,7 @@ pub(super) fn overlay(
     let panel = match menu {
         BarMenu::AutoZone => zone_panel(view, cx),
         BarMenu::AutoRelogin => relogin_panel(view, cx),
+        BarMenu::Script => script_panel(view, cx),
     }
     .track_focus(&view.bar.focus)
     .on_key_down(cx.listener(RuffleView::panel_key_down))
@@ -597,6 +611,25 @@ fn zone_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> 
             settings.room.map_or("None", Room::label).into(),
             cx,
         ))
+}
+
+fn script_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
+    let action = if view.script.running() {
+        ui::pressable(ui::row("script-stop"))
+            .role(Role::MenuItem)
+            .child("Stop")
+            .on_click(cx.listener(|this, _, _, cx| this.stop_script(cx)))
+    } else {
+        ui::pressable(ui::row("script-load"))
+            .role(Role::MenuItem)
+            .child("Load script…")
+            .on_click(cx.listener(|this, _, window, cx| this.load_script(window, cx)))
+    };
+    ui::panel("script-panel", px(264.0))
+        .when_some(view.script.status(), |panel, text| {
+            panel.child(div().pt(px(6.0)).child(ui::status(text)))
+        })
+        .child(action)
 }
 
 fn relogin_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {

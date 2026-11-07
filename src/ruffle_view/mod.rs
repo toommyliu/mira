@@ -1,6 +1,7 @@
 mod game_bar;
 mod input;
 mod menu;
+mod script;
 mod stats;
 mod text_input;
 mod ui;
@@ -43,6 +44,7 @@ pub struct RuffleView {
     auto_relogin: auto_relogin::Phase,
     servers: Vec<String>,
     bar: game_bar::BarState,
+    script: script::Script,
     _subscriptions: [Subscription; 3],
 }
 
@@ -201,6 +203,7 @@ impl RuffleView {
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(cx),
+                script: script::Script::Idle,
                 _subscriptions: subscriptions,
             }
         }))

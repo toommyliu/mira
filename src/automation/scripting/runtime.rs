@@ -2,17 +2,22 @@ use std::{
     cell::RefCell,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
 
 use rquickjs::{
-    CatchResultExt, CaughtError, Context, Ctx, Function, Module, Object, Persistent, Promise,
-    Runtime, function::Opt, promise::PromiseState,
+    CatchResultExt, CaughtError, Context, Ctx, Exception, Function, Module, Object, Persistent,
+    Promise, Runtime, function::Opt, promise::PromiseState,
 };
 
 use super::{
+    calls::{self, Call, CallId, Replier, Reply, Request, RunId, ToPlayer},
     limits::{Clock, Limits, Tripped},
     modules::{BOOTSTRAP, ModuleLoader, ModuleResolver, Modules, PRELUDE},
 };
@@ -44,8 +49,18 @@ pub(crate) enum Level {
 
 pub(crate) type Log = Box<dyn Fn(Level, &str) + Send>;
 
-enum Command {
+pub(crate) type Player = Box<dyn Fn(ToPlayer) + Send>;
+
+pub(crate) enum Command {
     Stop,
+    Reply { id: CallId, reply: Reply },
+}
+
+#[derive(Clone)]
+struct Link {
+    run: RunId,
+    player: Rc<dyn Fn(ToPlayer)>,
+    commands: mpsc::Sender<Command>,
 }
 
 pub(crate) struct Run {
@@ -59,14 +74,27 @@ impl Run {
         entry: PathBuf,
         limits: Limits,
         log: Log,
+        player: Player,
         finish: impl FnOnce(Outcome) + Send + 'static,
     ) -> std::io::Result<Self> {
+        static RUNS: AtomicU64 = AtomicU64::new(0);
+        let run = RunId(RUNS.fetch_add(1, Ordering::Relaxed));
         let (commands, inbox) = mpsc::channel();
+        let replies = commands.clone();
         let clock = Clock::new();
         let shared = clock.clone();
         let thread = thread::Builder::new()
             .name("lyra-script".into())
-            .spawn(move || finish(execute(&entry, limits, &shared, &inbox, log)))?;
+            .spawn(move || {
+                let link = Link {
+                    run,
+                    player: Rc::new(player),
+                    commands: replies,
+                };
+                let outcome = execute(&entry, limits, &shared, &inbox, log, link.clone());
+                (link.player)(ToPlayer::Ended(run));
+                finish(outcome);
+            })?;
         Ok(Self {
             commands,
             clock,
@@ -103,6 +131,7 @@ fn execute(
     clock: &Arc<Clock>,
     commands: &mpsc::Receiver<Command>,
     log: Log,
+    link: Link,
 ) -> Outcome {
     let root = match entry.parent().map(std::fs::canonicalize) {
         Some(Ok(root)) => root,
@@ -129,7 +158,8 @@ fn execute(
     let settled: Settled = Rc::default();
     let started = Instant::now();
     let setup = context.with(|ctx| {
-        setup(&ctx, &entry, started, Rc::new(log), clock).map_err(|error| describe(error, &modules))
+        setup(&ctx, &entry, started, Rc::new(log), link, clock)
+            .map_err(|error| describe(error, &modules))
     });
     let (hooks, start, import) = match setup {
         Ok(setup) => setup,
@@ -211,7 +241,7 @@ fn execute(
         }
         let next_timer = context.with(|ctx| {
             hooks
-                .0
+                .next_timer
                 .clone()
                 .restore(&ctx)
                 .ok()
@@ -233,7 +263,7 @@ fn execute(
                 .recv()
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
-        match command {
+        let delivered = match command {
             Ok(Command::Stop) if stopping.is_none() => {
                 stopping = Some(Instant::now());
                 match &phase {
@@ -244,34 +274,60 @@ fn execute(
                     }),
                     Phase::Importing(_) => return Outcome::Stopped,
                 }
+                Ok(())
             }
-            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(Command::Reply { id, reply }) => hooks.call(
+                &context,
+                clock,
+                &modules,
+                |hooks| &hooks.deliver,
+                (id.0, calls::encode(reply)),
+            ),
+            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Outcome::Stopped,
-        }
-        let fired = context.with(|ctx| {
-            let run = hooks
-                .1
-                .clone()
-                .restore(&ctx)
-                .map_err(|_| failed("lost the timer hooks".into()))?;
-            clock
-                .turn(|| run.call::<_, ()>(()))
-                .catch(&ctx)
-                .map_err(|error| describe(error, &modules))
-        });
+        };
+        let fired = delivered
+            .and_then(|()| hooks.call(&context, clock, &modules, |hooks| &hooks.run_timers, ()));
         if let Err(outcome) = fired {
             return clock_outcome(clock).unwrap_or(finalize(outcome, stopping.is_some()));
         }
     }
 }
 
-type Hooks = (Persistent<Function<'static>>, Persistent<Function<'static>>);
+struct Hooks {
+    next_timer: Persistent<Function<'static>>,
+    run_timers: Persistent<Function<'static>>,
+    deliver: Persistent<Function<'static>>,
+}
+
+impl Hooks {
+    fn call<A: for<'js> rquickjs::function::IntoArgs<'js>>(
+        &self,
+        context: &Context,
+        clock: &Clock,
+        modules: &Modules,
+        hook: impl Fn(&Self) -> &Persistent<Function<'static>>,
+        args: A,
+    ) -> Result<(), Outcome> {
+        context.with(|ctx| {
+            let function = hook(self)
+                .clone()
+                .restore(&ctx)
+                .map_err(|_| failed("lost the runtime hooks".into()))?;
+            clock
+                .turn(|| function.call::<_, ()>(args))
+                .catch(&ctx)
+                .map_err(|error| describe(error, modules))
+        })
+    }
+}
 
 fn setup<'js>(
     ctx: &Ctx<'js>,
     entry: &str,
     started: Instant,
     log: Rc<Log>,
+    link: Link,
     clock: &Clock,
 ) -> Result<
     (
@@ -307,9 +363,41 @@ fn setup<'js>(
         }),
     )
     .catch(ctx)?;
+    let calling = link.clone();
+    host.set(
+        "call",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, id: u64, request: String| -> rquickjs::Result<()> {
+                let request: Request = serde_json::from_str(&request).map_err(|error| {
+                    Exception::throw_type(&ctx, &format!("Lyra can't send {request}: {error}"))
+                })?;
+                let id = CallId(id);
+                (calling.player)(ToPlayer::Call(Call {
+                    run: calling.run,
+                    id,
+                    request,
+                    reply: Replier::new(id, calling.commands.clone()),
+                }));
+                Ok(())
+            },
+        ),
+    )
+    .catch(ctx)?;
+    host.set(
+        "cancel",
+        Function::new(ctx.clone(), move |id: u64| {
+            (link.player)(ToPlayer::Cancel {
+                run: link.run,
+                id: CallId(id),
+            })
+        }),
+    )
+    .catch(ctx)?;
     let hooks: Object = install.call((host,)).catch(ctx)?;
     let next: Function = hooks.get("nextTimer").catch(ctx)?;
     let run: Function = hooks.get("runTimers").catch(ctx)?;
+    let deliver: Function = hooks.get("deliver").catch(ctx)?;
     let bootstrap: Object = Module::import(ctx, BOOTSTRAP)
         .catch(ctx)?
         .finish()
@@ -317,7 +405,11 @@ fn setup<'js>(
     let start: Function = bootstrap.get("start").catch(ctx)?;
     let import = clock.turn(|| Module::import(ctx, entry)).catch(ctx)?;
     Ok((
-        (Persistent::save(ctx, next), Persistent::save(ctx, run)),
+        Hooks {
+            next_timer: Persistent::save(ctx, next),
+            run_timers: Persistent::save(ctx, run),
+            deliver: Persistent::save(ctx, deliver),
+        },
         Persistent::save(ctx, start),
         Persistent::save(ctx, import),
     ))

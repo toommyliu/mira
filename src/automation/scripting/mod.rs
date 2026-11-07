@@ -1,8 +1,10 @@
+mod calls;
 mod limits;
 mod modules;
 mod runtime;
 
+pub(crate) use calls::{Calls, ToPlayer, answer};
 pub(crate) use limits::Limits;
-pub(crate) use runtime::{Level, Limit, Log, Outcome, Run};
+pub(crate) use runtime::{Level, Limit, Outcome, Run};
 #[cfg(test)]
 mod tests;

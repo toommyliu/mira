@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Level, Limit, Limits, Outcome, Run};
+use super::{Level, Limit, Limits, Outcome, Run, runtime::Player};
 
 struct Folder(PathBuf);
 
@@ -36,7 +36,31 @@ struct Finished {
     elapsed: Duration,
 }
 
-fn run_in(folder: &Folder, entry: &str, limits: Limits, stop_after: Option<Duration>) -> Finished {
+struct Started {
+    run: Run,
+    outcome: mpsc::Receiver<Outcome>,
+    logs: Arc<Mutex<Vec<String>>>,
+    started: Instant,
+}
+
+impl Started {
+    fn finish(self) -> Finished {
+        let outcome = self
+            .outcome
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the script finished");
+        let elapsed = self.started.elapsed();
+        drop(self.run);
+        let logs = self.logs.lock().unwrap().clone();
+        Finished {
+            outcome,
+            logs,
+            elapsed,
+        }
+    }
+}
+
+fn start(folder: &Folder, entry: &str, limits: Limits, player: Player) -> Started {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let sink = logs.clone();
     let (finished, outcome) = mpsc::channel();
@@ -48,26 +72,27 @@ fn run_in(folder: &Folder, entry: &str, limits: Limits, stop_after: Option<Durat
             let prefix = if level == Level::Error { "error: " } else { "" };
             sink.lock().unwrap().push(format!("{prefix}{message}"));
         }),
+        player,
         move |outcome| {
             let _ = finished.send(outcome);
         },
     )
     .unwrap();
-    if let Some(delay) = stop_after {
-        std::thread::sleep(delay);
-        run.stop();
-    }
-    let outcome = outcome
-        .recv_timeout(Duration::from_secs(20))
-        .expect("the script finished");
-    let elapsed = started.elapsed();
-    drop(run);
-    let logs = logs.lock().unwrap().clone();
-    Finished {
+    Started {
+        run,
         outcome,
         logs,
-        elapsed,
+        started,
     }
+}
+
+fn run_in(folder: &Folder, entry: &str, limits: Limits, stop_after: Option<Duration>) -> Finished {
+    let started = start(folder, entry, limits, Box::new(|_| {}));
+    if let Some(delay) = stop_after {
+        std::thread::sleep(delay);
+        started.run.stop();
+    }
+    started.finish()
 }
 
 fn run(files: &[(&str, &str)]) -> Finished {
@@ -353,7 +378,7 @@ fn an_error_thrown_by_a_timer_ends_the_run() {
 fn an_endless_promise_chain_is_killed_at_the_turn_limit() {
     let folder = Folder::new(&[(
         "main.js",
-        "import { Effect } from \"effect\";\nconst again = () => Promise.resolve().then(again);\nagain();\nexport default function* () { yield* Effect.never; }\n",
+        "import { Effect } from \"effect\";\nconst again = () => {\n  Promise.resolve().then(again);\n};\nagain();\nexport default function* () { yield* Effect.never; }\n",
     )]);
     let limits = Limits {
         turn: Duration::from_millis(300),

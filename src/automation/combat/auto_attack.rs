@@ -1,15 +1,11 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, time::sleep};
 
+use super::{TICK, selector, use_next_skill};
 use crate::automation::{
     auth,
     bridge::{self, CallError, Loader, Value},
 };
-
-const TICK: Duration = Duration::from_millis(200);
-const SKILLS: [i32; 4] = [1, 2, 3, 4];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -41,18 +37,7 @@ fn attack(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
     if !bridge::combat::has_target(loader)? && !target_any_monster(loader)? {
         return Ok(());
     }
-    for offset in 0..SKILLS.len() {
-        let index = (*next + offset) % SKILLS.len();
-        let skill = SKILLS[index];
-        if bridge::combat::get_skill_cooldown_remaining(loader, skill)? > 0 {
-            continue;
-        }
-        if bridge::combat::use_skill(loader, &skill.to_string(), None, None)? {
-            *next = (index + 1) % SKILLS.len();
-            break;
-        }
-    }
-    Ok(())
+    use_next_skill(loader, next)
 }
 
 fn target_any_monster(loader: &impl Loader) -> Result<bool, CallError> {
@@ -65,10 +50,7 @@ fn target_any_monster(loader: &impl Loader) -> Result<bool, CallError> {
     }) else {
         return Ok(false);
     };
-    bridge::combat::attack_monster(
-        loader,
-        Value::Object([("monsterMapId".to_owned(), Value::Number(id))].into()),
-    )
+    bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
 }
 
 #[cfg(test)]
