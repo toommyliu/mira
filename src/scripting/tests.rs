@@ -10,6 +10,7 @@ use serde_json::json;
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
     calls::{Call, Reply, Request, RunId},
+    combat::Request as C,
     player::Request as P,
     runtime::Player,
     world::Request as W,
@@ -684,5 +685,70 @@ export default function* () {
             W::Reload,
         ]
         .map(Request::World)
+    );
+}
+
+#[test]
+fn combat_requests_reach_the_player_typed() {
+    use crate::domain::world::MonsterQuery;
+
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Combat } from "lyra";
+
+export default function* () {
+  yield* Combat.getTarget();
+  yield* Combat.hasTarget();
+  yield* Combat.attack("Frogzard");
+  yield* Combat.useSkill(2, { target: { monMapId: 5 }, waitUntilReady: true });
+  yield* Combat.canUseSkill(0);
+  yield* Combat.getSkillCooldown(5);
+  yield* Combat.cancelTarget();
+  yield* Combat.cancelAutoAttack();
+  yield* Combat.kill("*");
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let skill = |slot: u8| serde_json::from_value(json!(slot)).unwrap();
+    assert_eq!(
+        requests,
+        [
+            C::Target,
+            C::HasTarget,
+            C::Attack {
+                query: MonsterQuery::Name("Frogzard".into())
+            },
+            C::UseSkill {
+                skill: skill(2),
+                target: Some(MonsterQuery::MonMapId { mon_map_id: 5.0 }),
+                force: None,
+                wait_until_ready: Some(true)
+            },
+            C::CanUseSkill { skill: skill(0) },
+            C::SkillCooldown { skill: skill(5) },
+            C::CancelTarget,
+            C::CancelAutoAttack,
+            C::Kill {
+                query: MonsterQuery::Name("*".into())
+            },
+        ]
+        .map(Request::Combat)
     );
 }

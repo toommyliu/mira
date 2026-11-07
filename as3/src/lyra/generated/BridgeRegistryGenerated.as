@@ -42,6 +42,7 @@ package lyra.generated
       external.externalize("combat.attackMonster", Combat.attackMonster);
       external.externalize("combat.cancelAutoAttack", Combat.cancelAutoAttack);
       external.externalize("combat.cancelTarget", Combat.cancelTarget);
+      external.externalize("combat.canUseSkill", Combat.canUseSkill);
       external.externalize("combat.castConsumableOnMonster", Combat.castConsumableOnMonster);
       external.externalize("combat.getConsumableSkillItem", Combat.getConsumableSkillItem);
       external.externalize("combat.getSkillCooldownRemaining", Combat.getSkillCooldownRemaining);

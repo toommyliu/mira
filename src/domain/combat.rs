@@ -1,40 +1,234 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use tokio::time::sleep;
+use serde::{Deserialize, Serialize};
+use tokio::{pin, select, time::sleep};
 
-use super::auth;
-use crate::bridge::{self, CallError, Loader, Value};
+use super::{
+    State, auth, has_avatar,
+    world::{self, Monster, MonsterQuery},
+};
+use crate::bridge::{
+    self, CallError, Format, Lagged, Loader, Packet, Packets, Value, packets::wire,
+};
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
 const SKILLS: [i32; 4] = [1, 2, 3, 4];
 
-pub(crate) async fn kill(loader: &impl Loader, monster: &str) -> Result<bool, CallError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u8")]
+pub(crate) struct Skill(u8);
+
+impl Skill {
+    pub(crate) fn index(self) -> i32 {
+        i32::from(self.0)
+    }
+}
+
+impl TryFrom<u8> for Skill {
+    type Error = String;
+
+    fn try_from(slot: u8) -> Result<Self, Self::Error> {
+        if slot <= 5 {
+            Ok(Skill(slot))
+        } else {
+            Err(format!("skill {slot} is not a slot from 0 to 5"))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub(crate) enum Target {
+    Monster(Monster),
+    Player(PlayerTarget),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PlayerTarget {
+    name: String,
+    username: String,
+    cell: String,
+    pad: String,
+    hp: f64,
+    max_hp: f64,
+    mp: f64,
+    max_mp: f64,
+    level: f64,
+    state: Option<State>,
+    afk: bool,
+}
+
+pub(crate) fn target(loader: &impl Loader) -> Result<Option<Target>, CallError> {
+    let target = bridge::combat::get_target(loader)?;
+    let Value::Object(fields) = &target else {
+        return Ok(None);
+    };
+    Ok(match fields.get("type") {
+        Some(Value::String(kind)) if kind == "monster" => {
+            world::monster_from(target).map(Target::Monster)
+        }
+        Some(Value::String(kind)) if kind == "player" => Some(Target::Player(player_from(fields))),
+        _ => None,
+    })
+}
+
+fn player_from(fields: &std::collections::BTreeMap<String, Value>) -> PlayerTarget {
+    let number = |key: &str| match fields.get(key) {
+        Some(Value::Number(number)) if number.is_finite() => *number,
+        _ => 0.0,
+    };
+    let text = |key: &str| match fields.get(key) {
+        Some(Value::String(text)) => text.clone(),
+        _ => String::new(),
+    };
+    PlayerTarget {
+        name: text("name"),
+        username: text("username"),
+        cell: text("cell"),
+        pad: text("pad"),
+        hp: number("hp"),
+        max_hp: number("maxHp"),
+        mp: number("mp"),
+        max_mp: number("maxMp"),
+        level: number("level"),
+        state: State::from_game(number("state") as i32),
+        afk: matches!(fields.get("afk"), Some(Value::Bool(true))),
+    }
+}
+
+pub(crate) fn attack(loader: &impl Loader, query: &MonsterQuery) -> Result<bool, CallError> {
+    match world::available_mon_map_id(loader, query)? {
+        Some(id) => attack_id(loader, id),
+        None => Ok(false),
+    }
+}
+
+fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
+    bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
+}
+
+pub(crate) async fn use_skill(
+    loader: &impl Loader,
+    skill: Skill,
+    target: Option<&MonsterQuery>,
+    force: bool,
+    wait_until_ready: bool,
+) -> Result<bool, CallError> {
+    if wait_until_ready && !ready(loader, skill).await? {
+        return Ok(false);
+    }
+    if !has_avatar(loader)? {
+        return Ok(false);
+    }
+    let selector = match target {
+        None => None,
+        Some(query) => match world::available_mon_map_id(loader, query)? {
+            Some(id) => Some(selector("monsterMapId", Value::Number(id))),
+            None => return Ok(false),
+        },
+    };
+    bridge::combat::use_skill(loader, &skill.index().to_string(), selector, Some(force))
+}
+
+async fn ready(loader: &impl Loader, skill: Skill) -> Result<bool, CallError> {
+    loop {
+        if !has_avatar(loader)? {
+            return Ok(false);
+        }
+        let left = bridge::combat::get_skill_cooldown_remaining(loader, skill.index())?;
+        if left <= 0 {
+            return Ok(true);
+        }
+        sleep(Duration::from_millis(u64::from(left.unsigned_abs()))).await;
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CtPacket {
+    #[serde(rename = "m", default)]
+    monsters: HashMap<String, MonsterState>,
+}
+
+#[derive(Deserialize)]
+struct MonsterState {
+    #[serde(rename = "intState", default, deserialize_with = "wire::number")]
+    state: Option<f64>,
+}
+
+impl Packet for CtPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "ct";
+}
+
+impl CtPacket {
+    fn killed(&self, id: f64) -> bool {
+        self.monsters
+            .iter()
+            .any(|(key, monster)| key.parse::<f64>().ok() == Some(id) && monster.state == Some(0.0))
+    }
+}
+
+pub(crate) async fn kill(
+    loader: &impl Loader,
+    fights: Packets<CtPacket>,
+    query: &MonsterQuery,
+) -> Result<bool, CallError> {
     if !auth::in_game(loader)? {
         return Ok(false);
     }
-    let cell = bridge::player::get_cell(loader)?;
-    let named = selector("name", Value::String(monster.to_owned()));
-    let id = if bridge::combat::attack_monster(loader, named)? {
-        target(loader)?
-    } else {
-        None
-    };
-    let Some(id) = id else {
+    let Some(id) = world::available_mon_map_id(loader, query)? else {
         return Ok(false);
     };
+    fights.clear();
+    if !attack_id(loader, id)? {
+        return Ok(false);
+    }
+    let engaged = Engaged(loader);
+    let killed = fight(loader, &fights, id).await;
+    std::mem::forget(engaged);
+    killed
+}
+
+async fn fight(
+    loader: &impl Loader,
+    fights: &Packets<CtPacket>,
+    id: f64,
+) -> Result<bool, CallError> {
+    let cell = bridge::player::get_cell(loader)?;
     let mut next = 0;
     loop {
         if !auth::in_game(loader)? || bridge::player::get_cell(loader)? != cell {
             return Ok(false);
         }
-        if !bridge::world::is_monster_available(loader, id)? {
-            return Ok(true);
-        }
-        if target(loader)? != Some(id) {
-            bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))?;
+        if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == id) {
+            attack_id(loader, id)?;
         }
         use_next_skill(loader, &mut next)?;
-        sleep(TICK).await;
+        let tick = sleep(TICK);
+        pin!(tick);
+        loop {
+            select! {
+                event = fights.next() => match event {
+                    Ok(packet) if packet.killed(id) => return Ok(true),
+                    Ok(_) => {}
+                    Err(Lagged) => if !bridge::world::is_monster_available(loader, id)? {
+                        return Ok(true);
+                    },
+                },
+                () = &mut tick => break,
+            }
+        }
+    }
+}
+
+struct Engaged<'a, L: Loader>(&'a L);
+
+impl<L: Loader> Drop for Engaged<'_, L> {
+    fn drop(&mut self) {
+        if let Err(error) = bridge::combat::cancel_target(self.0) {
+            tracing::debug!(%error, "couldn't cancel the target of an interrupted kill");
+        }
     }
 }
 
@@ -53,16 +247,6 @@ pub(crate) fn use_next_skill(loader: &impl Loader, next: &mut usize) -> Result<(
     Ok(())
 }
 
-fn target(loader: &impl Loader) -> Result<Option<f64>, CallError> {
-    let Value::Object(target) = bridge::combat::get_target(loader)? else {
-        return Ok(None);
-    };
-    Ok(match (target.get("type"), target.get("monsterMapId")) {
-        (Some(Value::String(kind)), Some(Value::Number(id))) if kind == "monster" => Some(*id),
-        _ => None,
-    })
-}
-
 pub(crate) fn selector(key: &str, value: Value) -> Value {
     Value::Object([(key.to_owned(), value)].into())
 }
@@ -71,8 +255,13 @@ pub(crate) fn selector(key: &str, value: Value) -> Value {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
+    use tokio::time::{Instant, timeout};
+
     use super::*;
-    use crate::domain::testing::FakeLoader;
+    use crate::{
+        bridge::{Event, Events},
+        domain::testing::FakeLoader,
+    };
 
     struct Monster {
         id: f64,
@@ -85,49 +274,104 @@ mod tests {
         cell: &'static str,
         monsters: Vec<Monster>,
         target: Option<f64>,
+        in_game_until: Option<Instant>,
+        cooling_until: Option<Instant>,
         drop_target_after_first_cast: bool,
         leave_after_first_cast: bool,
+        flood_after_death: bool,
         cast: Vec<i32>,
     }
 
-    fn fighting(fight: Fight) -> (FakeLoader, Rc<RefCell<Fight>>) {
+    impl Fight {
+        fn in_game(&self) -> bool {
+            self.in_game_until
+                .is_none_or(|until| Instant::now() < until)
+        }
+
+        fn cooldown(&self) -> f64 {
+            self.cooling_until.map_or(0.0, |until| {
+                until.saturating_duration_since(Instant::now()).as_millis() as f64
+            })
+        }
+    }
+
+    fn number(value: f64) -> Value {
+        Value::Number(value)
+    }
+
+    fn row(fields: &[(&str, Value)]) -> Value {
+        Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect(),
+        )
+    }
+
+    fn selected(selector: &Value) -> f64 {
+        match selector {
+            Value::Object(fields) => match fields.get("monsterMapId") {
+                Some(Value::Number(id)) => *id,
+                _ => panic!("the selector names a monster by id: {fields:?}"),
+            },
+            other => panic!("not a selector: {other:?}"),
+        }
+    }
+
+    fn struck(id: f64, state: u8) -> Event {
+        Event::ExtensionResponse {
+            packet: format!(
+                r#"{{"type":"json","dataObj":{{"cmd":"ct","m":{{"{id}":{{"intState":{state}}}}}}}}}"#
+            ),
+        }
+    }
+
+    fn fighting(fight: Fight) -> (FakeLoader, Rc<RefCell<Fight>>, Rc<Events>) {
         let fight = Rc::new(RefCell::new(fight));
+        let events = Rc::new(Events::default());
         let state = fight.clone();
+        let publisher = events.clone();
         let loader = FakeLoader::new(move |callback, args| {
             let mut fight = state.borrow_mut();
             Ok(match callback {
-                "auth.isLoggedIn" | "world.isLoaded" => Value::Bool(true),
+                "auth.isLoggedIn" | "world.isLoaded" => Value::Bool(fight.in_game()),
+                "flash.isNull" => Value::Bool(false),
                 "player.getCell" => Value::String(fight.cell.into()),
+                "world.getMonsters" => Value::List(
+                    fight
+                        .monsters
+                        .iter()
+                        .map(|monster| {
+                            row(&[
+                                ("monMapId", number(monster.id)),
+                                ("name", Value::String(monster.name.into())),
+                                ("cell", Value::String("r2".into())),
+                                ("hp", number(f64::from(monster.hp))),
+                                ("state", number(if monster.hp > 0 { 1.0 } else { 0.0 })),
+                                ("available", Value::Bool(monster.hp > 0)),
+                            ])
+                        })
+                        .collect(),
+                ),
                 "combat.attackMonster" => {
-                    let [Value::Object(selector)] = args else {
-                        panic!("attackMonster needs a selector: {args:?}");
-                    };
-                    let found = fight.monsters.iter().find(|monster| {
-                        monster.hp > 0
-                            && match (selector.get("name"), selector.get("monsterMapId")) {
-                                (Some(Value::String(name)), _) => {
-                                    monster.name.eq_ignore_ascii_case(name)
-                                }
-                                (_, Some(Value::Number(id))) => monster.id == *id,
-                                _ => false,
-                            }
-                    });
-                    let id = found.map(|monster| monster.id);
-                    if id.is_some() {
-                        fight.target = id;
+                    let id = selected(&args[0]);
+                    let alive = fight.monsters.iter().any(|m| m.id == id && m.hp > 0);
+                    if alive {
+                        fight.target = Some(id);
                     }
-                    Value::Bool(id.is_some())
+                    Value::Bool(alive)
                 }
                 "combat.getTarget" => match fight.target {
-                    Some(id) => Value::Object(
-                        [
-                            ("type".to_owned(), Value::String("monster".into())),
-                            ("monsterMapId".to_owned(), Value::Number(id)),
-                        ]
-                        .into(),
-                    ),
+                    Some(id) => row(&[
+                        ("type", Value::String("monster".into())),
+                        ("monMapId", number(id)),
+                    ]),
                     None => Value::Null,
                 },
+                "combat.cancelTarget" => {
+                    fight.target = None;
+                    Value::Null
+                }
                 "world.isMonsterAvailable" => {
                     let [Value::Number(id)] = args else {
                         panic!("isMonsterAvailable needs an id: {args:?}");
@@ -135,16 +379,30 @@ mod tests {
                     let alive = fight.monsters.iter().any(|m| m.id == *id && m.hp > 0);
                     Value::Bool(fight.cell == "r2" && alive)
                 }
-                "combat.getSkillCooldownRemaining" => Value::Number(0.0),
+                "combat.getSkillCooldownRemaining" => number(fight.cooldown()),
                 "combat.useSkill" => {
                     let Value::String(skill) = &args[0] else {
                         panic!("useSkill needs a skill: {args:?}");
                     };
+                    if fight.cooldown() > 0.0 {
+                        return Ok(Value::Bool(false));
+                    }
+                    if args[1] != Value::Null {
+                        fight.target = Some(selected(&args[1]));
+                    }
                     fight.cast.push(skill.parse().unwrap());
+                    publisher.publish(&struck(1.0, 0));
                     let target = fight.target;
                     if let Some(monster) = fight.monsters.iter_mut().find(|m| Some(m.id) == target)
                     {
                         monster.hp = monster.hp.saturating_sub(1);
+                        let (id, dead) = (monster.id, monster.hp == 0);
+                        publisher.publish(&struck(id, u8::from(!dead)));
+                        if dead && fight.flood_after_death {
+                            for _ in 0..300 {
+                                publisher.publish(&struck(3.0, 1));
+                            }
+                        }
                     }
                     if fight.cast.len() == 1 {
                         if fight.drop_target_after_first_cast {
@@ -159,7 +417,7 @@ mod tests {
                 other => panic!("unexpected call {other} {args:?}"),
             })
         });
-        (loader, fight)
+        (loader, fight, events)
     }
 
     fn frogzards() -> Vec<Monster> {
@@ -182,41 +440,178 @@ mod tests {
         ]
     }
 
+    fn named(name: &str) -> MonsterQuery {
+        MonsterQuery::Name(name.into())
+    }
+
     #[tokio::test(start_paused = true)]
     async fn kill_fights_a_live_monster_of_that_name_until_it_dies() {
-        let (loader, fight) = fighting(Fight {
+        let (loader, fight, events) = fighting(Fight {
             cell: "r2",
             monsters: frogzards(),
             drop_target_after_first_cast: true,
             ..Fight::default()
         });
-        assert_eq!(kill(&loader, "frogzard").await, Ok(true));
+        assert_eq!(
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &named("frogzard")
+            )
+            .await,
+            Ok(true)
+        );
         let fight = fight.borrow();
         assert_eq!(fight.cast, [1, 2, 3]);
         assert_eq!(fight.monsters[1].hp, 0);
         assert_eq!(fight.monsters[2].hp, 5);
+        assert_eq!(loader.count("combat.cancelTarget"), 0);
+        assert_eq!(loader.count("world.isMonsterAvailable"), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_death_lost_to_a_flood_of_packets_still_ends_the_kill() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            flood_after_death: true,
+            ..Fight::default()
+        });
+        let frogzard = named("Frogzard");
+        let killed = timeout(
+            Duration::from_secs(5),
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &frogzard,
+            ),
+        );
+        assert_eq!(killed.await, Ok(Ok(true)));
+        assert_eq!(fight.borrow().cast, [1, 2, 3]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn kill_fails_when_no_monster_of_that_name_is_alive() {
-        let (loader, fight) = fighting(Fight {
+        let (loader, fight, events) = fighting(Fight {
             cell: "r2",
             monsters: frogzards(),
             ..Fight::default()
         });
-        assert_eq!(kill(&loader, "Dragon").await, Ok(false));
+        assert_eq!(
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &named("Dragon")
+            )
+            .await,
+            Ok(false)
+        );
         assert!(fight.borrow().cast.is_empty());
     }
 
     #[tokio::test(start_paused = true)]
     async fn leaving_the_cell_before_the_monster_dies_fails_the_kill() {
-        let (loader, fight) = fighting(Fight {
+        let (loader, fight, events) = fighting(Fight {
             cell: "r2",
             monsters: frogzards(),
             leave_after_first_cast: true,
             ..Fight::default()
         });
-        assert_eq!(kill(&loader, "Frogzard").await, Ok(false));
+        assert_eq!(
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &named("Frogzard")
+            )
+            .await,
+            Ok(false)
+        );
         assert_eq!(fight.borrow().cast, [1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn interrupting_a_kill_drops_its_target() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        let interrupted = timeout(
+            TICK,
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &MonsterQuery::MonMapId { mon_map_id: 3.0 },
+            ),
+        );
+        assert!(interrupted.await.is_err());
+        let fight = fight.borrow();
+        assert!(!fight.cast.is_empty());
+        assert_eq!(fight.target, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_until_ready_casts_once_the_cooldown_ends() {
+        let cooldown = Duration::from_millis(2500);
+        let (loader, fight, _) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            target: Some(2.0),
+            cooling_until: Some(Instant::now() + cooldown),
+            ..Fight::default()
+        });
+        let skill = Skill(2);
+        assert_eq!(
+            use_skill(&loader, skill, None, false, false).await,
+            Ok(false)
+        );
+        let started = Instant::now();
+        assert_eq!(use_skill(&loader, skill, None, false, true).await, Ok(true));
+        assert_eq!(started.elapsed(), cooldown);
+        assert_eq!(fight.borrow().cast, [2]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn logging_out_while_waiting_gives_up_without_casting() {
+        let (loader, fight, _) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            target: Some(2.0),
+            in_game_until: Some(Instant::now() + Duration::from_secs(1)),
+            cooling_until: Some(Instant::now() + Duration::from_secs(2)),
+            ..Fight::default()
+        });
+        assert_eq!(
+            use_skill(&loader, Skill(1), None, false, true).await,
+            Ok(false)
+        );
+        assert!(fight.borrow().cast.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_skill_aimed_at_a_monster_targets_a_live_one_or_is_not_used() {
+        let (loader, fight, _) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        let frogzard = named("Frogzard");
+        let dragon = named("Dragon");
+        assert_eq!(
+            use_skill(&loader, Skill(1), Some(&dragon), false, false).await,
+            Ok(false)
+        );
+        assert!(fight.borrow().cast.is_empty());
+        assert_eq!(
+            use_skill(&loader, Skill(1), Some(&frogzard), false, false).await,
+            Ok(true)
+        );
+        assert_eq!(fight.borrow().target, Some(2.0));
+    }
+
+    #[test]
+    fn only_slots_zero_to_five_are_skills() {
+        assert_eq!(serde_json::from_str::<Skill>("5").ok(), Some(Skill(5)));
+        assert!(serde_json::from_str::<Skill>("6").is_err());
     }
 }

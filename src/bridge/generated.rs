@@ -193,6 +193,12 @@ pub(crate) mod combat {
         Ok(decode("combat.cancelTarget", reply)?)
     }
 
+    pub(crate) fn can_use_skill(loader: &impl Loader, index: i32) -> Result<bool, CallError> {
+        let call_args = vec![Value::Number(f64::from(index))];
+        let reply = loader.call("combat.canUseSkill", call_args)?;
+        Ok(decode("combat.canUseSkill", reply)?)
+    }
+
     pub(crate) fn cast_consumable_on_monster(
         loader: &impl Loader,
         selector: Value,

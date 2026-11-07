@@ -36,7 +36,7 @@ impl MonsterQuery {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Monster {
-    mon_map_id: f64,
+    pub(crate) mon_map_id: f64,
     monster_id: f64,
     name: String,
     race: String,
@@ -144,10 +144,18 @@ pub(crate) fn monster_available(
     loader: &impl Loader,
     query: &MonsterQuery,
 ) -> Result<bool, CallError> {
+    Ok(available_mon_map_id(loader, query)?.is_some())
+}
+
+pub(crate) fn available_mon_map_id(
+    loader: &impl Loader,
+    query: &MonsterQuery,
+) -> Result<Option<f64>, CallError> {
     let cell = bridge::player::get_cell(loader)?.unwrap_or_default();
     Ok(monsters(loader, Some(&cell))?
-        .iter()
-        .any(|monster| monster.available && query.matches(monster)))
+        .into_iter()
+        .find(|monster| monster.available && query.matches(monster))
+        .map(|monster| monster.mon_map_id))
 }
 
 pub(crate) async fn monster_drops(
@@ -248,7 +256,7 @@ fn texts(value: Value) -> Vec<String> {
         .collect()
 }
 
-fn monster_from(value: Value) -> Option<Monster> {
+pub(crate) fn monster_from(value: Value) -> Option<Monster> {
     let Value::Object(fields) = value else {
         return None;
     };

@@ -19,6 +19,9 @@ const player = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const world = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "world", op, ...args });
 
+const combat = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "combat", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -109,6 +112,43 @@ export const World = {
   getMapItem: (itemId: number) => world<boolean>("mapItem", { itemId }),
   loadSwf: (swf: string) => world<boolean>("loadSwf", { swf }),
   reload: () => world<boolean>("reload"),
+};
+
+export type Skill = 0 | 1 | 2 | 3 | 4 | 5;
+export type PlayerTarget = {
+  readonly name: string;
+  readonly username: string;
+  readonly cell: string;
+  readonly pad: string;
+  readonly hp: number;
+  readonly maxHp: number;
+  readonly mp: number;
+  readonly maxMp: number;
+  readonly level: number;
+  readonly state: State | null;
+  readonly afk: boolean;
+};
+export type Target =
+  | ({ readonly type: "monster" } & Monster)
+  | ({ readonly type: "player" } & PlayerTarget);
+export type SkillOptions = {
+  readonly target?: MonsterQuery;
+  readonly force?: boolean;
+  readonly waitUntilReady?: boolean;
+};
+
+export const Combat = {
+  getTarget: () => combat<Target | null>("target"),
+  hasTarget: () => combat<boolean>("hasTarget"),
+  attack: (query: MonsterQuery) => combat<boolean>("attack", { query }),
+  useSkill: (skill: Skill, options: SkillOptions = {}) =>
+    combat<boolean>("useSkill", { skill, ...options }),
+  canUseSkill: (skill: Skill) => combat<boolean>("canUseSkill", { skill }),
+  /** Milliseconds until the skill and the global cooldown are both ready. */
+  getSkillCooldown: (skill: Skill) => combat<number>("skillCooldown", { skill }),
+  cancelTarget: () => combat<void>("cancelTarget"),
+  cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
+  kill: (query: MonsterQuery) => combat<boolean>("kill", { query }),
 };
 
 export const Script = {

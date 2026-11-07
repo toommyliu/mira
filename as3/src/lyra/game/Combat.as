@@ -71,7 +71,7 @@ package lyra.game {
             state: dataLeaf.intState,
             cell: dataLeaf.strFrame,
             monsterId: dataLeaf.MonID,
-            monsterMapId: dataLeaf.MonMapID,
+            monMapId: dataLeaf.MonMapID,
             level: dataLeaf.iLvl,
             race: objData.sRace,
             name: objData.strMonName
@@ -189,6 +189,67 @@ package lyra.game {
       }
 
       return getSkillCooldownRemainingValue(skill);
+    }
+
+    private static function hasSpiritPower(leaf:Object, needed:int):Boolean {
+      for each (var aura:Object in leaf.auras) {
+        if (aura.nam == "Spirit Power") {
+          return needed <= aura.val;
+        }
+      }
+
+      return false;
+    }
+
+    private static function isDisabled(world:Object, leaf:Object):Boolean {
+      for each (var aura:Object in leaf.auras) {
+        var category:String = world.auraCatOf(aura);
+        if (category == "stun" || category == "stone" || category == "paralyze" || category == "disable" || category == "disabled") {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    // Mirrors the refusals in the client's World.testAction, except range. actionTimeCheck clears skill.OldCD once a
+    // skill is ready, so it is called only for the auto attack, whose branch returns before that.
+    [BridgeExport]
+    public static function canUseSkill(index:int):Boolean {
+      var world:Object = Main.Game.world;
+      var skill:Object = world.actions && world.actions.active ? world.actions.active[index] : null;
+      var self:Object = world.myAvatar;
+      var leaf:Object = self.dataLeaf;
+      if (!skill || !skill.isOK || skill.skillLock || skill.lock || leaf.intState == 0) {
+        return false;
+      }
+
+      if (skill.auto ? !world.actionTimeCheck(skill) : getSkillCooldownRemainingValue(skill) > 0) {
+        return false;
+      }
+
+      if (skill.ref == "i1" && (skill.sArg1 == "" || (world.lockdownPots && new Date().getTime() - world.lockdownPotsTS <= 5000))) {
+        return false;
+      }
+
+      if (skill.mp != null && Math.round(skill.mp * leaf.sta["$cmc"]) > leaf.intMP) {
+        return false;
+      }
+
+      if ((skill.sp != null && !hasSpiritPower(leaf, skill.sp)) || isDisabled(world, leaf)) {
+        return false;
+      }
+
+      if (skill.tgt == "s" || skill.tgt == "f") {
+        return true;
+      }
+
+      var target:Object = self.target;
+      if (target == null || target == self || target.dataLeaf == null || target.dataLeaf.intHP <= 0) {
+        return false;
+      }
+
+      return !("filter" in skill && "sRace" in target.objData) || target.objData.sRace.toLowerCase() == skill.filter.toLowerCase();
     }
 
     [BridgeTsParamType("selector: FlashTypes.MonsterSelector")]

@@ -3,9 +3,9 @@ use std::{collections::HashMap, sync::mpsc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{player, runtime::Command, world};
+use super::{combat, player, runtime::Command, world};
 use crate::bridge::{self, Bridge, CallError, Loader, Value};
-use crate::domain::{auth, combat};
+use crate::domain::auth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(super) u64);
@@ -18,14 +18,8 @@ pub(crate) struct CallId(pub(super) u64);
 pub(crate) enum Request {
     Player(player::Request),
     World(world::Request),
-    Combat(CombatRequest),
+    Combat(combat::Request),
     Inventory(InventoryRequest),
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum CombatRequest {
-    Kill { monster: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -121,8 +115,8 @@ async fn serve(bridge: &Bridge, request: Request) -> Reply {
         Request::World(request) => {
             world::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
-        Request::Combat(CombatRequest::Kill { monster }) => {
-            Ok(json!(combat::kill(bridge, &monster).await?))
+        Request::Combat(request) => {
+            combat::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
         Request::Inventory(InventoryRequest::Count { item }) => {
             Ok(json!(if auth::in_game(bridge)? {

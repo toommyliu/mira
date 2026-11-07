@@ -1,4 +1,5 @@
 mod calls;
+mod combat;
 mod limits;
 mod modules;
 mod player;
