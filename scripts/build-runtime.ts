@@ -47,6 +47,7 @@ async function main(): Promise<void> {
       ...modules.map((module) => ({ in: `effect/${module}`, out: `effect/${module}` })),
       { in: "./src/prelude.ts", out: "lyra/prelude" },
       { in: "./src/bootstrap.ts", out: "lyra/bootstrap" },
+      { in: "./src/lyra.ts", out: "lyra/index" },
     ],
     outdir,
     bundle: true,

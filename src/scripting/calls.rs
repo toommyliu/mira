@@ -3,9 +3,9 @@ use std::{collections::HashMap, sync::mpsc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::runtime::Command;
+use super::{player, runtime::Command};
 use crate::bridge::{self, Bridge, CallError, Loader, Value};
-use crate::domain::{auth, combat, player};
+use crate::domain::{auth, combat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(super) u64);
@@ -14,26 +14,23 @@ pub(crate) struct RunId(pub(super) u64);
 pub(crate) struct CallId(pub(super) u64);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
-    Map,
-    Cell,
-    Hp,
-    Join {
-        map: String,
-        cell: Option<String>,
-        pad: Option<String>,
-    },
-    Jump {
-        cell: String,
-        pad: Option<String>,
-    },
-    Kill {
-        monster: String,
-    },
-    Count {
-        item: String,
-    },
+    Player(player::Request),
+    Combat(CombatRequest),
+    Inventory(InventoryRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum CombatRequest {
+    Kill { monster: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum InventoryRequest {
+    Count { item: String },
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -115,40 +112,22 @@ pub(crate) async fn answer(bridge: Bridge, call: Call) {
     reply.send(serve(&bridge, request).await);
 }
 
-async fn serve(loader: &Bridge, request: Request) -> Reply {
-    let in_game = || auth::in_game(loader);
-    Ok(match request {
-        Request::Map => json!(if in_game()? {
-            bridge::player::get_map(loader)?
-        } else {
-            None
-        }),
-        Request::Cell => json!(if in_game()? {
-            bridge::player::get_cell(loader)?
-        } else {
-            None
-        }),
-        Request::Hp => json!(if in_game()? {
-            bridge::player::get_hp(loader)?
-        } else {
-            0
-        }),
-        Request::Join { map, cell, pad } => {
-            json!(
-                player::join(
-                    loader,
-                    loader.subscribe(player::moved),
-                    &map,
-                    cell.as_deref(),
-                    pad.as_deref()
-                )
-                .await?
-            )
+async fn serve(bridge: &Bridge, request: Request) -> Reply {
+    match request {
+        Request::Player(request) => {
+            player::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
-        Request::Jump { cell, pad } => json!(player::jump(loader, &cell, pad.as_deref()).await?),
-        Request::Kill { monster } => json!(combat::kill(loader, &monster).await?),
-        Request::Count { item } => json!(if in_game()? { count(loader, &item)? } else { 0 }),
-    })
+        Request::Combat(CombatRequest::Kill { monster }) => {
+            Ok(json!(combat::kill(bridge, &monster).await?))
+        }
+        Request::Inventory(InventoryRequest::Count { item }) => {
+            Ok(json!(if auth::in_game(bridge)? {
+                count(bridge, &item)?
+            } else {
+                0
+            }))
+        }
+    }
 }
 
 fn count(loader: &impl Loader, item: &str) -> Result<u32, CallError> {
@@ -189,7 +168,7 @@ mod tests {
         let message = ToPlayer::Call(Call {
             run: RunId(run),
             id: CallId(id),
-            request: Request::Hp,
+            request: Request::Player(player::Request::Hp),
             reply: Replier::new(CallId(id), commands),
         });
         (message, replies)

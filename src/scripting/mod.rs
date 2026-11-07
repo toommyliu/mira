@@ -1,6 +1,7 @@
 mod calls;
 mod limits;
 mod modules;
+mod player;
 mod runtime;
 
 pub(crate) use calls::{Calls, ToPlayer, answer};

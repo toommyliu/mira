@@ -5,7 +5,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Level, Limit, Limits, Outcome, Run, runtime::Player};
+use serde_json::json;
+
+use super::{
+    Level, Limit, Limits, Outcome, Run, ToPlayer,
+    calls::{Call, Reply, Request, RunId},
+    player::Request as P,
+    runtime::Player,
+};
+use crate::bridge::CallError;
 
 struct Folder(PathBuf);
 
@@ -93,6 +101,52 @@ fn run_in(folder: &Folder, entry: &str, limits: Limits, stop_after: Option<Durat
         started.run.stop();
     }
     started.finish()
+}
+
+#[derive(Debug, PartialEq)]
+enum Seen {
+    Call(u64, Request),
+    Cancel(u64),
+    Ended,
+}
+
+#[derive(Clone, Default)]
+struct FakePlayer {
+    seen: Arc<Mutex<Vec<(RunId, Seen)>>>,
+    held: Arc<Mutex<Vec<Call>>>,
+}
+
+impl FakePlayer {
+    fn answering(
+        &self,
+        answer: impl Fn(&Request, &mut Vec<Call>) -> Option<Reply> + Send + 'static,
+    ) -> Player {
+        let fake = self.clone();
+        Box::new(move |message| {
+            let (run, seen) = match &message {
+                ToPlayer::Call(call) => (call.run, Seen::Call(call.id.0, call.request.clone())),
+                ToPlayer::Cancel { run, id } => (*run, Seen::Cancel(id.0)),
+                ToPlayer::Ended(run) => (*run, Seen::Ended),
+            };
+            fake.seen.lock().unwrap().push((run, seen));
+            if let ToPlayer::Call(call) = message {
+                let mut held = fake.held.lock().unwrap();
+                match answer(&call.request, &mut held) {
+                    Some(reply) => call.reply.send(reply),
+                    None => held.push(call),
+                }
+            }
+        })
+    }
+
+    fn seen(&self) -> Vec<Seen> {
+        self.seen
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|(_, seen)| seen)
+            .collect()
+    }
 }
 
 fn run(files: &[(&str, &str)]) -> Finished {
@@ -395,4 +449,168 @@ fn an_endless_promise_chain_is_killed_at_the_turn_limit() {
     let finished = run_in(&folder, "main.js", limits, None);
     assert_eq!(finished.outcome, Outcome::Killed(Limit::Turn));
     assert!(finished.elapsed < Duration::from_secs(5));
+}
+
+#[test]
+fn a_script_drives_the_game_through_the_lyra_module() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Player } from "lyra";
+
+export default function* () {
+  yield* Player.joinMap("battleon", { cell: "r2" });
+  console.log(`${yield* Player.getMap()} ${yield* Player.getHp()} ${yield* Player.getState()}`);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(Ok(match request {
+                Request::Player(P::JoinMap { .. }) => json!(true),
+                Request::Player(P::Map) => json!("battleon"),
+                Request::Player(P::Hp) => json!(1200),
+                Request::Player(P::State) => json!("idle"),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["battleon 1200 idle"]);
+    assert_eq!(
+        player.seen(),
+        [
+            Seen::Call(
+                1,
+                Request::Player(P::JoinMap {
+                    map: "battleon".into(),
+                    cell: Some("r2".into()),
+                    pad: None
+                })
+            ),
+            Seen::Call(2, Request::Player(P::Map)),
+            Seen::Call(3, Request::Player(P::Hp)),
+            Seen::Call(4, Request::Player(P::State)),
+            Seen::Ended,
+        ]
+    );
+}
+
+#[test]
+fn a_failed_loader_call_ends_the_script_with_its_message() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Player } from "lyra";
+
+export default function* () {
+  console.log(String(yield* Player.jumpToCell("r2")));
+  yield* Player.getHp();
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(match request {
+                Request::Player(P::JumpToCell { .. }) => Ok(json!(false)),
+                _ => Err(CallError::Threw {
+                    callback: "player.getHp",
+                    message: "boom".into(),
+                }),
+            })
+        }),
+    )
+    .finish();
+    assert_eq!(finished.logs, ["false"]);
+    assert_eq!(failure(&finished.outcome).0, "player.getHp threw: boom");
+}
+
+#[test]
+fn interrupting_a_fiber_cancels_its_pending_call() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Player } from "lyra";
+
+export default function* () {
+  const result = yield* Player.joinMap("yulgar").pipe(Effect.timeoutOption("50 millis"));
+  console.log(result._tag);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| None),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["None"]);
+    assert_eq!(
+        player.seen(),
+        [
+            Seen::Call(
+                1,
+                Request::Player(P::JoinMap {
+                    map: "yulgar".into(),
+                    cell: None,
+                    pad: None
+                })
+            ),
+            Seen::Cancel(1),
+            Seen::Ended,
+        ]
+    );
+}
+
+#[test]
+fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
+    let folder = Folder::new(&[
+        (
+            "travel.ts",
+            "import { Player } from \"lyra\";\nexport default function* () { yield* Player.joinMap(\"yulgar\"); }\n",
+        ),
+        (
+            "read.ts",
+            "import { Player } from \"lyra\";\nexport default function* () { console.log(yield* Player.getMap()); }\n",
+        ),
+    ]);
+    let player = FakePlayer::default();
+    let travelling = start(
+        &folder,
+        "travel.ts",
+        Limits::default(),
+        player.answering(|_, _| None),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while player.held.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the join reached the player");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    travelling.run.stop();
+    assert_eq!(travelling.finish().outcome, Outcome::Stopped);
+    assert_eq!(player.seen().last(), Some(&Seen::Ended));
+    let reading = start(
+        &folder,
+        "read.ts",
+        Limits::default(),
+        player.answering(|_, held| {
+            for late in held.drain(..) {
+                late.reply.send(Ok(json!("late")));
+            }
+            Some(Ok(json!("battleon")))
+        }),
+    )
+    .finish();
+    assert_eq!(reading.outcome, Outcome::Completed);
+    assert_eq!(reading.logs, ["battleon"]);
 }

@@ -173,6 +173,9 @@ impl Modules {
 }
 
 fn package(name: &str) -> std::result::Result<String, String> {
+    if name == "lyra" {
+        return Ok(format!("{INTERNAL}lyra/index.js"));
+    }
     let path = match name.strip_prefix("effect") {
         Some("") => "effect/index.js".to_owned(),
         Some(module) if module.starts_with('/') && !module[1..].contains('/') => {
@@ -180,7 +183,7 @@ fn package(name: &str) -> std::result::Result<String, String> {
         }
         _ => {
             return Err(format!(
-                "{name} can't be imported; scripts can import effect, effect/<Module> and their own files"
+                "{name} can't be imported; scripts can import lyra, effect, effect/<Module> and their own files"
             ));
         }
     };
