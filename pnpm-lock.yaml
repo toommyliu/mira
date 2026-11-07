@@ -13,8 +13,8 @@ catalogs:
       specifier: 26.6.6
       version: 26.6.6
     effect:
-      specifier: 4.1.1
-      version: 4.1.1
+      specifier: 4.1.2
+      version: 4.1.2
     esbuild:
       specifier: 0.28.2
       version: 0.28.2
@@ -49,7 +49,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.1.1
+        version: 4.1.2
     devDependencies:
       '@effect/tsgo':
         specifier: 'catalog:'
@@ -505,8 +505,8 @@ packages:
   '@types/node@26.6.6':
     resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
 
-  effect@4.1.1:
-    resolution: {integrity: sha512-XYu65BrcmNqu5i7PPvP4dqL+R5ma37zIsfuSPjcn78mog+6e5PkilNg7Xo+pBpjXJYlWEIpH4j91tMrfW05CMw==}
+  effect@4.1.2:
+    resolution: {integrity: sha512-d3Oah1WyKxFLFh19yWheS5IXIVaITzxZ71JkE1rkUozq/6EcJSU5nPk5bF2QrSygZ3SQoiNQB8TsxFriyMeMaQ==}
 
   esbuild@0.28.2:
     resolution: {integrity: sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==}
@@ -778,7 +778,7 @@ snapshots:
     dependencies:
       undici-types: 8.9.0
 
-  effect@4.1.1: {}
+  effect@4.1.2: {}
 
   esbuild@0.28.2:
     optionalDependencies:
