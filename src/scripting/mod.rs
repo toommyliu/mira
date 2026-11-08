@@ -1,6 +1,7 @@
 mod bank;
 mod calls;
 mod combat;
+mod drops;
 mod inventory;
 mod limits;
 mod modules;

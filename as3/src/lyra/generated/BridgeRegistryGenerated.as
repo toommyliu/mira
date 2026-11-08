@@ -49,6 +49,8 @@ package lyra.generated
       external.externalize("combat.hasTarget", Combat.hasTarget);
       external.externalize("combat.useSkill", Combat.useSkill);
       external.externalize("drops.accept", DropList.accept);
+      external.externalize("drops.getItem", DropList.getItem);
+      external.externalize("drops.getItems", DropList.getItems);
       external.externalize("drops.isUsingCustomDrops", DropList.isUsingCustomDrops);
       external.externalize("drops.reject", DropList.reject);
       external.externalize("drops.toggleUi", DropList.toggleUi);

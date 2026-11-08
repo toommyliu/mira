@@ -6,7 +6,8 @@ package lyra.game {
     private static const UNEQUIPPABLE_SLOTS:Array = ["Weapon", "ar"];
     private static const UNENHANCED_SLOTS:Array = ["mi", "co", "pe", "am"];
 
-    private static function categories():Object {
+    [BridgeIgnore]
+    public static function categories():Object {
       return Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
     }
 

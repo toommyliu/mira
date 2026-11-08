@@ -34,6 +34,9 @@ const bank = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const quests = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "quests", op, ...args });
 
+const drops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "drops", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -296,6 +299,17 @@ export const Quests = {
   complete: (questId: number, options: CompleteOptions = {}) =>
     quests<boolean>("complete", { questId, ...options }),
   abandon: (questId: number) => quests<boolean>("abandon", { questId }),
+};
+
+/** Items waiting in the drop list, with `quantity` as the amount waiting. */
+export const Drops = {
+  getItems: () => drops<readonly Item[]>("items"),
+  getItem: (query: ItemQuery) => drops<Item | null>("item", { query }),
+  contains: (query: ItemQuery, quantity?: number) =>
+    drops<boolean>("contains", { query, quantity }),
+  /** Also claims a drop the drop list lost or hides, if the client has seen the item. */
+  accept: (query: ItemQuery) => drops<boolean>("accept", { query }),
+  reject: (query: ItemQuery) => drops<boolean>("reject", { query }),
 };
 
 export const Script = {

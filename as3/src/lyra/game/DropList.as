@@ -5,82 +5,143 @@ package lyra.game {
 
   [BridgeNamespace("drops")]
   public class DropList {
-    private static const DROP_COUNT_REGEX:RegExp = /(.*)\s+x\s*(\d*)/i;
-    private static const DROP_MC:String = "DFrame2MC";
+    private static const DROP_FRAME:String = "DFrame2MC";
+    private static const NAME_AND_COUNT:RegExp = /^(.*?)(?:\s+x(\d+))?$/;
 
-    private static function getItemId(item:Object):int {
-      if (!item || !("ItemID" in item)) {
+    private static function itemNamed(name:String):Object {
+      var wanted:String = name.toLowerCase();
+      for each (var item:Object in Main.Game.world.invTree) {
+        if (item && String(item.sName).toLowerCase() == wanted) {
+          return item;
+        }
+      }
+
+      return null;
+    }
+
+    // DFrame2MC keeps its item in an internal field this package cannot read, so the frame's text is read instead.
+    private static function frameEntry(frame:*):Object {
+      if (getQualifiedClassName(frame).indexOf(DROP_FRAME) == -1 || !frame.cnt || !frame.mouseChildren || !frame.cnt.ybtn.mouseEnabled) {
+        return null;
+      }
+
+      var shown:Array = NAME_AND_COUNT.exec(String(frame.cnt.strName.text).replace(/^\s+|\s+$/g, ""));
+      var item:Object = shown ? itemNamed(shown[1]) : null;
+      return item ? {item: item, quantity: shown[2] ? int(shown[2]) : 1, frame: frame} : null;
+    }
+
+    private static function entries():Array {
+      var game:Object = Main.Game;
+      var found:Array = [];
+      if (game.cDropsUI) {
+        for each (var item:Object in game.cDropsUI.invTree) {
+          found.push({item: item, quantity: int(game.cDropsUI.itemCount[item.dID]), frame: null});
+        }
+      }
+
+      for (var index:int = 0; index < game.ui.dropStack.numChildren; index++) {
+        var entry:Object = frameEntry(game.ui.dropStack.getChildAt(index));
+        if (entry) {
+          found.push(entry);
+        }
+      }
+
+      return found;
+    }
+
+    private static function find(selector:Object):Object {
+      var all:Array = entries();
+      var items:Array = [];
+      for each (var entry:Object in all) {
+        items.push(entry.item);
+      }
+
+      var item:Object = ItemLookup.find(items, selector);
+      return item ? all[items.indexOf(item)] : null;
+    }
+
+    private static function row(entry:Object):Object {
+      var row:Object = Inventory.row(entry.item);
+      row.quantity = entry.quantity;
+      return row;
+    }
+
+    [BridgeExport]
+    public static function getItems():Array {
+      var rows:Array = [];
+      for each (var entry:Object in entries()) {
+        rows.push(row(entry));
+      }
+
+      return rows;
+    }
+
+    [BridgeExport]
+    public static function getItem(selector:Object):Object {
+      var entry:Object = find(selector);
+      return entry ? row(entry) : null;
+    }
+
+    private static function known(selector:Object):Object {
+      var items:Array = [];
+      for each (var item:Object in Main.Game.world.invTree) {
+        if (item) {
+          items.push(item);
+        }
+      }
+
+      return ItemLookup.find(items, selector);
+    }
+
+    // Returns the item ID requested, or 0 when nothing was sent.
+    [BridgeExport]
+    public static function accept(selector:Object):int {
+      var entry:Object = find(selector);
+      var item:Object = entry ? entry.item : known(selector);
+      if (!item) {
         return 0;
+      }
+
+      var game:Object = Main.Game;
+      var avatar:Object = game.world.myAvatar;
+      var full:Boolean = game.isHouseItem(item)
+        ? avatar.houseitems.length >= avatar.objData.iHouseSlots
+        : Inventory.categories().isFullFor(avatar.items, item, avatar.objData.iBagSlots);
+      if (full) {
+        return 0;
+      }
+
+      if (entry && entry.frame) {
+        entry.frame.cnt.ybtn.dispatchEvent(new MouseEvent(MouseEvent.CLICK));
+      }
+      else if (entry) {
+        if (!isCustomDropsUiOpen()) {
+          game.cDropsUI.onShow();
+        }
+
+        game.cDropsUI.requestDrop(item, false);
+      }
+      else {
+        game.sfc.sendXtMessage("zm", "getDrop", [item.ItemID], "str", game.world.curRoom);
       }
 
       return int(item.ItemID);
     }
 
-    private static function isDefaultDropFrame(child:*):Boolean {
-      return getQualifiedClassName(child).indexOf(DROP_MC) != -1 && Boolean(child.cnt);
-    }
-
-    private static function normalizeDropName(value:*):String {
-      return String(value).replace(/^\s+|\s+$/g, "").toLowerCase();
-    }
-
-    private static function parseDefaultDropName(value:*):String {
-      var name:String = normalizeDropName(value);
-      var match:Array = DROP_COUNT_REGEX.exec(name);
-      if (match && match.length > 1) {
-        return normalizeDropName(match[1]);
-      }
-
-      return name;
-    }
-
-    private static function getCustomDropEntry(itemId:int):* {
-      var source:* = getCustomDropSource();
-      if (!source) {
-        return null;
-      }
-
-      for (var i:int = 0; i < source.numChildren; i++) {
-        var child:* = source.getChildAt(i);
-        if (child.itemObj && int(child.itemObj.ItemID) == itemId) {
-          return child;
-        }
-      }
-
-      return null;
-    }
-
-    private static function getDefaultDropFrame(itemId:int):* {
-      var game:Object = Main.Game;
-      var item:* = game.world.invTree[itemId];
-      if (!item || !item.sName) {
-        return null;
-      }
-
-      var itemName:String = normalizeDropName(item.sName);
-      var children:int = game.ui.dropStack.numChildren;
-      for (var i:int = 0; i < children; i++) {
-        var child:* = game.ui.dropStack.getChildAt(i);
-        if (
-          isDefaultDropFrame(child) &&
-          parseDefaultDropName(child.cnt.strName.text) == itemName
-        ) {
-          return child;
-        }
-      }
-
-      return null;
-    }
-
     [BridgeExport]
-    public static function accept(itemId:int):Boolean {
-      var game:Object = Main.Game;
-      if (isUsingCustomDrops() && !isCustomDropsUiOpen())
-        toggleUi();
+    public static function reject(selector:Object):Boolean {
+      var entry:Object = find(selector);
+      if (!entry) {
+        return false;
+      }
 
-      // The response handler updates and closes
-      // whichever UI is active after the server accepts the item.
-      game.sfc.sendXtMessage("zm", "getDrop", [itemId], "str", game.world.curRoom);
+      if (entry.frame) {
+        entry.frame.cnt.nbtn.dispatchEvent(new MouseEvent(MouseEvent.CLICK));
+      }
+      else {
+        Main.Game.cDropsUI.onBtNo(entry.item);
+      }
+
       return true;
     }
 
@@ -96,30 +157,6 @@ package lyra.game {
     }
 
     [BridgeExport]
-    public static function reject(itemId:int):Boolean {
-      if (isUsingCustomDrops()) {
-        var entry:* = getCustomDropEntry(itemId);
-        if (!entry && !isCustomDropsUiOpen()) {
-          toggleUi();
-          entry = getCustomDropEntry(itemId);
-        }
-
-        if (!entry || !entry.itemObj)
-          return false;
-
-        Main.Game.cDropsUI.onBtNo(entry.itemObj);
-        return getCustomDropEntry(itemId) == null;
-      }
-
-      var frame:* = getDefaultDropFrame(itemId);
-      if (!frame)
-        return false;
-
-      frame.cnt.nbtn.dispatchEvent(new MouseEvent(MouseEvent.CLICK));
-      return !frame.mouseChildren;
-    }
-
-    [BridgeExport]
     public static function isUsingCustomDrops():Boolean {
       var game:Object = Main.Game;
       return Boolean(game.cDropsUI) && game.litePreference.data.bCustomDrops;
@@ -129,16 +166,6 @@ package lyra.game {
     public static function isDraggable():Boolean {
       var game:Object = Main.Game;
       return isUsingCustomDrops() && Boolean(game.cDropsUI.mcDraggable);
-    }
-
-    private static function getCustomDropSource():* {
-      var game:Object = Main.Game;
-      if (isDraggable())
-        return game.cDropsUI.mcDraggable.menu;
-      else if (isUsingCustomDrops())
-        return game.cDropsUI;
-
-      return null;
     }
 
     [BridgeIgnore]

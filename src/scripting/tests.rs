@@ -12,6 +12,7 @@ use super::{
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
+    drops::Request as D,
     inventory::{Request as I, TempRequest as T},
     player::Request as P,
     quests::Request as Q,
@@ -762,7 +763,7 @@ fn item_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Bank, Inventory, TempInventory } from "lyra";
+        r#"import { Bank, Drops, Inventory, TempInventory } from "lyra";
 
 export default function* () {
   yield* Inventory.getItems();
@@ -796,6 +797,11 @@ export default function* () {
   yield* Bank.deposit("Gem");
   yield* Bank.withdraw({ itemId: 3 });
   yield* Bank.swap("Gem", "Ore");
+  yield* Drops.getItems();
+  yield* Drops.getItem({ itemId: 45230 });
+  yield* Drops.contains("Gem", 2);
+  yield* Drops.accept("Gem");
+  yield* Drops.reject({ itemId: 45230 });
 }
 "#,
     )]);
@@ -899,6 +905,19 @@ export default function* () {
             },
         ]
         .map(Request::Bank),
+    );
+    expected.extend(
+        [
+            D::Items,
+            D::Item { query: id(45230.0) },
+            D::Contains {
+                query: name("Gem"),
+                quantity: Some(2.0),
+            },
+            D::Accept { query: name("Gem") },
+            D::Reject { query: id(45230.0) },
+        ]
+        .map(Request::Drops),
     );
     assert_eq!(requests, expected);
 }

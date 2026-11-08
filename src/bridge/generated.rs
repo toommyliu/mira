@@ -245,10 +245,22 @@ pub(crate) mod combat {
 pub(crate) mod drops {
     use crate::bridge::{CallError, Loader, Value, decode};
 
-    pub(crate) fn accept(loader: &impl Loader, item_id: i32) -> Result<bool, CallError> {
-        let call_args = vec![Value::Number(f64::from(item_id))];
+    pub(crate) fn accept(loader: &impl Loader, selector: Value) -> Result<i32, CallError> {
+        let call_args = vec![selector];
         let reply = loader.call("drops.accept", call_args)?;
         Ok(decode("drops.accept", reply)?)
+    }
+
+    pub(crate) fn get_item(loader: &impl Loader, selector: Value) -> Result<Value, CallError> {
+        let call_args = vec![selector];
+        let reply = loader.call("drops.getItem", call_args)?;
+        Ok(decode("drops.getItem", reply)?)
+    }
+
+    pub(crate) fn get_items(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("drops.getItems", call_args)?;
+        Ok(decode("drops.getItems", reply)?)
     }
 
     pub(crate) fn is_using_custom_drops(loader: &impl Loader) -> Result<bool, CallError> {
@@ -257,8 +269,8 @@ pub(crate) mod drops {
         Ok(decode("drops.isUsingCustomDrops", reply)?)
     }
 
-    pub(crate) fn reject(loader: &impl Loader, item_id: i32) -> Result<bool, CallError> {
-        let call_args = vec![Value::Number(f64::from(item_id))];
+    pub(crate) fn reject(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
+        let call_args = vec![selector];
         let reply = loader.call("drops.reject", call_args)?;
         Ok(decode("drops.reject", reply)?)
     }
