@@ -74,7 +74,8 @@ package lyra.game {
             monMapId: dataLeaf.MonMapID,
             level: dataLeaf.iLvl,
             race: objData.sRace,
-            name: objData.strMonName
+            name: objData.strMonName,
+            auras: Auras.rows(dataLeaf)
           };
         }
 

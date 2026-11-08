@@ -149,6 +149,11 @@ package lyra.game {
     }
 
     [BridgeExport]
+    public static function getAuras():Array {
+      return Auras.rows(Main.Game.world.myAvatar.dataLeaf);
+    }
+
+    [BridgeExport]
     public static function getClassName():String {
       var game:Object = Main.Game;
       return game.world.myAvatar.objData.strClassName.toUpperCase();

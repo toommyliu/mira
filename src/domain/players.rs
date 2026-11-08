@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use super::{
     State,
+    auras::{self, Aura},
     inventory::{row, rows},
 };
 use crate::bridge::{self, CallError, Loader, Value};
@@ -28,10 +29,15 @@ pub(crate) struct RoomPlayer {
     level: f64,
     state: Option<State>,
     afk: bool,
+    auras: Vec<Aura>,
 }
 
 pub(crate) fn player_from(value: Value) -> Option<RoomPlayer> {
-    let row = row(value)?;
+    let mut row = row(value)?;
+    let auras = row
+        .0
+        .remove("auras")
+        .map_or_else(Vec::new, auras::from_rows);
     let username = row.text("username");
     let user_id = row.positive("userId")?;
     if username.is_empty() {
@@ -55,6 +61,7 @@ pub(crate) fn player_from(value: Value) -> Option<RoomPlayer> {
         level: number("level"),
         state: State::from_game(number("state") as i32),
         afk: row.flag("afk"),
+        auras,
     })
 }
 
@@ -87,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn players_in_the_room_report_their_id_and_position() {
+    fn players_in_the_room_report_their_id_position_and_auras() {
         let loader = FakeLoader::new(|callback, args| {
             Ok(match callback {
                 "players.getAll" => Value::List(vec![
@@ -106,6 +113,10 @@ mod tests {
                         ("level", Value::Number(100.0)),
                         ("state", Value::Number(2.0)),
                         ("afk", Value::Bool(true)),
+                        (
+                            "auras",
+                            Value::List(vec![object(&[("name", text("Burn"))])]),
+                        ),
                     ]),
                     object(&[
                         ("name", text("No username")),
@@ -127,6 +138,9 @@ mod tests {
                 "position": { "x": 139.0, "y": 332.0 }, "cell": "Enter", "pad": "Spawn",
                 "hp": 900.0, "maxHp": 1000.0, "mp": 50.0, "maxMp": 100.0, "level": 100.0,
                 "state": "combat", "afk": true,
+                "auras": [{ "name": "Burn", "value": null, "stack": 1,
+                            "category": null, "icon": null, "persistent": false,
+                            "duration": 0.0, "expiresAt": null }],
             }])
         );
         assert_eq!(get(&loader, " player2 ").unwrap(), None);

@@ -571,6 +571,12 @@ pub(crate) mod outfits {
 pub(crate) mod player {
     use crate::bridge::{CallError, Loader, Value, decode};
 
+    pub(crate) fn get_auras(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("player.getAuras", call_args)?;
+        Ok(decode("player.getAuras", reply)?)
+    }
+
     pub(crate) fn get_cell(loader: &impl Loader) -> Result<Option<String>, CallError> {
         let call_args = vec![];
         let reply = loader.call("player.getCell", call_args)?;

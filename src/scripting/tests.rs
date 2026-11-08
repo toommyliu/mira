@@ -696,12 +696,12 @@ export default function* () {
 }
 
 #[test]
-fn combat_and_player_requests_reach_the_player_typed() {
+fn combat_player_and_aura_requests_reach_the_player_typed() {
     use crate::domain::world::MonsterQuery;
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Combat, Players } from "lyra";
+        r#"import { Combat, Player, Players } from "lyra";
 
 export default function* () {
   yield* Combat.getTarget();
@@ -713,6 +713,9 @@ export default function* () {
   yield* Combat.cancelTarget();
   yield* Combat.cancelAutoAttack();
   yield* Combat.kill("*");
+  yield* Player.getAuras();
+  yield* Player.getAura("Spirit Power");
+  yield* Player.hasAura("Spirit Power");
   yield* Players.getAll();
   yield* Players.get("player1");
 }
@@ -758,6 +761,18 @@ export default function* () {
     ]
     .map(Request::Combat)
     .into();
+    expected.extend(
+        [
+            P::Auras,
+            P::Aura {
+                name: "Spirit Power".into(),
+            },
+            P::HasAura {
+                name: "Spirit Power".into(),
+            },
+        ]
+        .map(Request::Player),
+    );
     expected.extend([
         Request::Players(PL::All),
         Request::Players(PL::Get {

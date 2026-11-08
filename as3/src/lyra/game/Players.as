@@ -19,7 +19,8 @@ package lyra.game {
         name: leaf.uoName,
         userId: leaf.entID,
         x: leaf.tx,
-        y: leaf.ty
+        y: leaf.ty,
+        auras: Auras.rows(leaf)
       };
     }
 

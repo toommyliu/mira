@@ -4,7 +4,7 @@ use serde_json::json;
 use super::calls::Reply;
 use crate::{
     bridge::{self, Event, Loader, Packets, Subscription},
-    domain::{self, player::Boost},
+    domain::{self, auras, player::Boost},
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -55,6 +55,13 @@ pub(crate) enum Request {
         until_full: Option<bool>,
     },
     Outfits,
+    Auras,
+    Aura {
+        name: String,
+    },
+    HasAura {
+        name: String,
+    },
     EquipOutfit {
         name: String,
         keep_colors: Option<bool>,
@@ -81,13 +88,15 @@ impl Request {
             | Request::Pad
             | Request::State
             | Request::Position
-            | Request::ClassName => serde_json::Value::Null,
-            Request::Factions | Request::Outfits => json!([]),
+            | Request::ClassName
+            | Request::Aura { .. } => serde_json::Value::Null,
+            Request::Factions | Request::Outfits | Request::Auras => json!([]),
             Request::Ready
             | Request::Alive
             | Request::Member
             | Request::Afk
             | Request::HasBoost { .. }
+            | Request::HasAura { .. }
             | Request::JoinMap { .. }
             | Request::JumpToCell { .. }
             | Request::WalkTo { .. }
@@ -162,6 +171,9 @@ pub(super) async fn serve(
         Request::Factions => json!(domain::player::factions(loader)?),
         Request::HasBoost { kind } => json!(domain::player::has_boost(loader, kind)?),
         Request::Outfits => json!(domain::player::outfit_names(loader)?),
+        Request::Auras => json!(auras::player(loader)?),
+        Request::Aura { name } => json!(auras::find(auras::player(loader)?, &name)),
+        Request::HasAura { name } => json!(auras::has_any(&auras::player(loader)?, &[&name])),
     })
 }
 
@@ -200,6 +212,19 @@ mod tests {
             (Request::State, json!(null)),
             (Request::Factions, json!([])),
             (Request::Outfits, json!([])),
+            (Request::Auras, json!([])),
+            (
+                Request::Aura {
+                    name: "Spirit Power".into(),
+                },
+                json!(null),
+            ),
+            (
+                Request::HasAura {
+                    name: "Spirit Power".into(),
+                },
+                json!(false),
+            ),
             (
                 Request::JoinMap {
                     map: "battleon".into(),

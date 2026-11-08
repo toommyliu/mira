@@ -60,6 +60,18 @@ export type PadOptions = { readonly pad?: string };
 export type WalkOptions = { readonly speed?: number };
 export type RestOptions = { readonly untilFull?: boolean };
 export type OutfitOptions = { readonly keepColors?: boolean };
+export type Aura = {
+  readonly name: string;
+  readonly value: number | string | null;
+  readonly stack: number;
+  readonly category: string | null;
+  readonly icon: string | null;
+  readonly persistent: boolean;
+  /** Full duration in seconds, or `0` when the aura has no timer. */
+  readonly duration: number;
+  /** Epoch milliseconds when the game's timer runs out. */
+  readonly expiresAt: number | null;
+};
 
 export const Player = {
   isReady: () => player<boolean>("ready"),
@@ -82,6 +94,9 @@ export const Player = {
   isAfk: () => player<boolean>("afk"),
   getFactions: () => player<readonly Faction[]>("factions"),
   hasBoost: (kind: Boost) => player<boolean>("hasBoost", { kind }),
+  getAuras: () => player<readonly Aura[]>("auras"),
+  getAura: (name: string) => player<Aura | null>("aura", { name }),
+  hasAura: (name: string) => player<boolean>("hasAura", { name }),
   joinMap: (map: string, options: CellOptions = {}) =>
     player<boolean>("joinMap", { map, ...options }),
   jumpToCell: (cell: string, options: PadOptions = {}) =>
@@ -109,6 +124,7 @@ export type Monster = {
   readonly maxHp: number;
   readonly level: number;
   readonly state: State | null;
+  readonly auras: readonly Aura[];
 };
 export type Drop = {
   readonly itemId: number;
@@ -153,6 +169,7 @@ export type RoomPlayer = {
   readonly level: number;
   readonly state: State | null;
   readonly afk: boolean;
+  readonly auras: readonly Aura[];
 };
 export type Target =
   | ({ readonly type: "monster" } & Monster)

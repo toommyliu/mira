@@ -2,7 +2,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{State, arrive, ready, wait_for_action, wait_until_ready};
+use super::{
+    State, arrive,
+    auras::{self, Aura},
+    ready, wait_for_action, wait_until_ready,
+};
 use crate::bridge::{
     self, CallError, Format, GameAction, Loader, Packet, Packets, Value, packets::wire,
 };
@@ -44,6 +48,7 @@ pub(crate) struct Monster {
     max_hp: f64,
     level: f64,
     state: Option<State>,
+    auras: Vec<Aura>,
     #[serde(skip)]
     available: bool,
 }
@@ -252,9 +257,12 @@ fn texts(value: Value) -> Vec<String> {
 }
 
 pub(crate) fn monster_from(value: Value) -> Option<Monster> {
-    let Value::Object(fields) = value else {
+    let Value::Object(mut fields) = value else {
         return None;
     };
+    let auras = fields
+        .remove("auras")
+        .map_or_else(Vec::new, auras::from_rows);
     let number = |key: &str| match fields.get(key) {
         Some(Value::Number(number)) if number.is_finite() => *number,
         _ => 0.0,
@@ -274,6 +282,7 @@ pub(crate) fn monster_from(value: Value) -> Option<Monster> {
         max_hp: number("maxHp"),
         level: number("level"),
         state: State::from_game(number("state") as i32),
+        auras,
         available: matches!(fields.get("available"), Some(Value::Bool(true))),
     })
 }
@@ -380,6 +389,16 @@ mod tests {
                 ("level", Value::Number(12.0)),
                 ("state", Value::Number(state)),
                 ("available", Value::Bool(available)),
+                (
+                    "auras",
+                    Value::List(if mon_map_id == 1.0 {
+                        vec![Value::Object(
+                            [("name".to_owned(), Value::String("Burn".into()))].into(),
+                        )]
+                    } else {
+                        Vec::new()
+                    }),
+                ),
             ]
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value))
@@ -494,12 +513,16 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&all[0]).unwrap(),
             json!({ "monMapId": 1.0, "monsterId": 101.0, "name": "Frogzard", "race": "Beast",
-                    "cell": "r2", "hp": 900.0, "maxHp": 1000.0, "level": 12.0, "state": "idle" })
+                    "cell": "r2", "hp": 900.0, "maxHp": 1000.0, "level": 12.0, "state": "idle",
+                    "auras": [{ "name": "Burn", "value": null, "stack": 1,
+                                "category": null, "icon": null, "persistent": false,
+                                "duration": 0.0, "expiresAt": null }] })
         );
         assert_eq!(
             serde_json::to_value(&all[1]).unwrap()["state"],
             json!("dead")
         );
+        assert_eq!(serde_json::to_value(&all[1]).unwrap()["auras"], json!([]));
     }
 
     #[test]

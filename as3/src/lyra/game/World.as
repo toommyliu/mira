@@ -183,7 +183,8 @@ public class World
           maxHp: Number(mon.dataLeaf.intHPMax),
           level: Number(mon.dataLeaf.iLvl || mon.objData.iLvl),
           state: int(mon.dataLeaf.intState),
-          available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0
+          available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0,
+          auras: Auras.rows(mon.dataLeaf)
         });
       }
 

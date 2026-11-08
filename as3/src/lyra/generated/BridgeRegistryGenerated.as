@@ -87,6 +87,7 @@ package lyra.generated
       external.externalize("outfits.get", Outfits.get);
       external.externalize("outfits.getAll", Outfits.getAll);
       external.externalize("outfits.wear", Outfits.wear);
+      external.externalize("player.getAuras", Player.getAuras);
       external.externalize("player.getCell", Player.getCell);
       external.externalize("player.getCharId", Player.getCharId);
       external.externalize("player.getClassName", Player.getClassName);
