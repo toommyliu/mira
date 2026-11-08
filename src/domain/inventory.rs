@@ -22,7 +22,7 @@ pub(crate) enum ItemQuery {
 }
 
 impl ItemQuery {
-    fn selector(&self) -> Value {
+    pub(super) fn selector(&self) -> Value {
         match self {
             ItemQuery::Name(name) => selector("name", Value::String(name.trim().to_owned())),
             ItemQuery::ItemId { item_id } => by_id(*item_id),
@@ -30,7 +30,7 @@ impl ItemQuery {
     }
 }
 
-fn by_id(item_id: f64) -> Value {
+pub(super) fn by_id(item_id: f64) -> Value {
     selector("itemId", Value::Number(item_id))
 }
 
@@ -54,7 +54,7 @@ pub(crate) enum ItemPool {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Item {
-    item_id: f64,
+    pub(super) item_id: f64,
     char_item_id: Option<f64>,
     name: String,
     description: String,
@@ -143,7 +143,7 @@ fn row(value: Value) -> Option<Row> {
     }
 }
 
-fn item_from(value: Value) -> Option<Item> {
+pub(super) fn item_from(value: Value) -> Option<Item> {
     let row = row(value)?;
     let positive = |key: &str| row.number(key).filter(|number| *number > 0.0);
     Some(Item {
@@ -192,7 +192,7 @@ fn temp_item_from(value: Value) -> Option<TempItem> {
     })
 }
 
-fn rows<T>(value: Value, parse: fn(Value) -> Option<T>) -> Vec<T> {
+pub(super) fn rows<T>(value: Value, parse: fn(Value) -> Option<T>) -> Vec<T> {
     match value {
         Value::List(rows) => rows.into_iter().filter_map(parse).collect(),
         _ => Vec::new(),
@@ -322,7 +322,10 @@ impl TurnInPacket {
     }
 }
 
-async fn reply<T: Packet>(replies: &Packets<T>, mut answer: impl FnMut(T) -> Option<bool>) -> bool {
+pub(super) async fn reply<T: Packet>(
+    replies: &Packets<T>,
+    mut answer: impl FnMut(T) -> Option<bool>,
+) -> bool {
     let deadline = Instant::now() + REPLY_TIMEOUT;
     while let Ok(reply) = timeout_at(deadline, replies.next()).await {
         if let Some(result) = reply.ok().and_then(&mut answer) {
@@ -336,7 +339,10 @@ fn own_uid(loader: &impl Loader) -> Result<f64, CallError> {
     Ok(f64::from(bridge::player::get_user_id(loader)?))
 }
 
-async fn ready_item(loader: &impl Loader, query: &ItemQuery) -> Result<Option<Item>, CallError> {
+pub(super) async fn ready_item(
+    loader: &impl Loader,
+    query: &ItemQuery,
+) -> Result<Option<Item>, CallError> {
     if !wait_until_ready(loader).await? {
         return Ok(None);
     }

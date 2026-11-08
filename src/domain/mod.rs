@@ -1,4 +1,5 @@
 pub(crate) mod auth;
+pub(crate) mod bank;
 pub(crate) mod combat;
 pub(crate) mod inventory;
 pub(crate) mod player;

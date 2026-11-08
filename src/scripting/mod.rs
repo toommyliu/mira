@@ -1,3 +1,4 @@
+mod bank;
 mod calls;
 mod combat;
 mod inventory;

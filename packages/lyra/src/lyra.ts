@@ -28,6 +28,9 @@ const inventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const tempInventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "tempInventory", op, ...args });
 
+const bank = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "bank", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -222,6 +225,25 @@ export const TempInventory = {
   getQuantity: (query: ItemQuery) => tempInventory<number>("quantity", { query }),
   contains: (query: ItemQuery, quantity?: number) =>
     tempInventory<boolean>("contains", { query, quantity }),
+};
+
+export const Bank = {
+  /** Reads load the bank on first use too. Returns false if it doesn't load. */
+  load: () => bank<boolean>("load"),
+  getItems: () => bank<readonly Item[]>("items"),
+  getItem: (query: ItemQuery) => bank<Item | null>("item", { query }),
+  getQuantity: (query: ItemQuery) => bank<number>("quantity", { query }),
+  contains: (query: ItemQuery, quantity?: number) => bank<boolean>("contains", { query, quantity }),
+  /** AC items don't take bank slots. */
+  getSlots: () => bank<number>("slots"),
+  getUsedSlots: () => bank<number>("usedSlots"),
+  getAvailableSlots: () => bank<number>("availableSlots"),
+  isOpen: () => bank<boolean>("isOpen"),
+  open: () => bank<boolean>("open"),
+  deposit: (query: ItemQuery) => bank<boolean>("deposit", { query }),
+  withdraw: (query: ItemQuery) => bank<boolean>("withdraw", { query }),
+  swap: (inventoryQuery: ItemQuery, bankQuery: ItemQuery) =>
+    bank<boolean>("swap", { inventoryQuery, bankQuery }),
 };
 
 export const Script = {

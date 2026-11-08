@@ -10,7 +10,8 @@ package lyra.game {
       return Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
     }
 
-    private static function row(item:Object):Object {
+    [BridgeIgnore]
+    public static function row(item:Object):Object {
       return {
         itemId: item.ItemID,
         charItemId: item.CharItemID,

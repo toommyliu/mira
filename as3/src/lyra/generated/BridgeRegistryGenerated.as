@@ -27,7 +27,6 @@ package lyra.generated
       external.externalize("auth.isTemporarilyKicked", Auth.isTemporarilyKicked);
       external.externalize("auth.login", Auth.login);
       external.externalize("auth.logout", Auth.logout);
-      external.externalize("bank.contains", Bank.contains);
       external.externalize("bank.deposit", Bank.deposit);
       external.externalize("bank.getItem", Bank.getItem);
       external.externalize("bank.getItems", Bank.getItems);

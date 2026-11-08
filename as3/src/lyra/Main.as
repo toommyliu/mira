@@ -13,7 +13,6 @@ package lyra {
 	import flash.utils.getQualifiedClassName;
 
 	import lyra.Externalizer;
-	import lyra.game.Bank;
 	import lyra.module.Modules;
 	import lyra.util.SFSEvent;
 
@@ -118,7 +117,6 @@ package lyra {
 		private function onConnectionLost(evt:*):void {
 			this.emitConnection('OnConnectionLost');
 			this.emitDebug('Connection to SmartFoxServer lost.');
-			Bank.onLogout();
 		}
 
 		private function onExtensionResponse(packet:*):void {

@@ -1,211 +1,141 @@
-package lyra.game
-{
+package lyra.game {
   import lyra.Main;
-  import flash.events.Event;
-  import flash.events.IOErrorEvent;
 
   [BridgeNamespace("bank")]
-  public class Bank
-  {
-    private static var loaded:Boolean = false;
-    private static var loading:Boolean = false;
-
-    private static function failLoad(message:String):void
-    {
-      loading = false;
-      loaded = false;
-      Main.getInstance().emitDebug("Bank load failed: " + message);
+  public class Bank {
+    private static function categories():Object {
+      return Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
     }
 
-    private static function onLoadComplete(event:Event):void
-    {
-      try
-      {
-        var response:Object = JSON.parse(event.target.data);
-        if (!(response is Array))
-        {
-          failLoad("invalid response");
-          return;
-        }
-
-        var snapshot:Array = response as Array;
-        Main.Game.world.addItemsToBank(snapshot);
-        loading = false;
-        loaded = true;
-      }
-      catch (error:Error)
-      {
-        failLoad(error.message);
-      }
+    private static function find(selector:Object):Object {
+      return ItemLookup.find(Main.Game.world.bankinfo.BankArray, selector);
     }
 
-    private static function onLoadError(event:IOErrorEvent):void
-    {
-      failLoad(event.text);
+    private static function isFull():Boolean {
+      var avatar:Object = Main.Game.world.myAvatar;
+      return avatar.iBankCount >= avatar.objData.iBankSlots;
+    }
+
+    private static function canStore(item:Object):Boolean {
+      return !categories().isClass(item) && item.bEquip != 1;
     }
 
     [BridgeExport]
-    public static function getItems():Array
-    {
-      var game:Object = Main.Game;
-      return game.world.bankinfo.BankArray;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function getItem(selector:Object):Object
-    {
-      var game:Object = Main.Game;
-      if (!game.world.bankinfo)
-      {
-        return null;
+    public static function getItems():Array {
+      var rows:Array = [];
+      for each (var item:Object in Main.Game.world.bankinfo.BankArray) {
+        rows.push(Inventory.row(item));
       }
 
-      var itemId:Number = ItemLookup.toItemId(selector);
-      if (!isNaN(itemId) && game.world.bankinfo.getBankItem is Function)
-      {
-        var bankItem:Object = game.world.bankinfo.getBankItem(int(itemId));
-        if (bankItem)
-        {
-          return bankItem;
-        }
+      return rows;
+    }
+
+    [BridgeExport]
+    public static function getItem(selector:Object):Object {
+      var item:Object = find(selector);
+      return item ? Inventory.row(item) : null;
+    }
+
+    [BridgeExport]
+    public static function isLoaded():Boolean {
+      return Main.Game.world.myAvatar.bank != null;
+    }
+
+    [BridgeExport]
+    public static function loadItems():void {
+      if (!isLoaded()) {
+        Main.Game.getBank();
       }
-
-      return ItemLookup.find(game.world.bankinfo.BankArray, selector);
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function contains(selector:Object, quantity:int = 1):Boolean
-    {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj)
-      {
-        return false;
-      }
-
-      return itemObj.iQty >= quantity;
     }
 
     [BridgeExport]
-    public static function loadItems(force:Boolean = false):void
-    {
-      var game:Object = Main.Game;
-      if (loading || (loaded && !force))
-      {
-        return;
-      }
-
-      loaded = false;
-      loading = true;
-      game.requestAPI(
-        "bank",
-        {"layout":{"cat":"all"}},
-        onLoadComplete,
-        onLoadError,
-        true
-      );
+    public static function getSlots():int {
+      return Main.Game.world.myAvatar.objData.iBankSlots;
     }
 
     [BridgeExport]
-    public static function isLoaded():Boolean
-    {
-      return loaded;
+    public static function getUsedSlots():int {
+      return Main.Game.world.myAvatar.iBankCount;
     }
 
+    // Mirrors the refusals in the client's World.sendBankFromInvRequest, without its message boxes.
     [BridgeExport]
-    public static function getSlots():int
-    {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.objData.iBankSlots;
-    }
-
-    [BridgeExport]
-    public static function getUsedSlots():int
-    {
-      var game:Object = Main.Game;
-      var usedSlots:int = 0;
-      for each (var item:Object in game.world.bankinfo.BankArray)
-      {
-        if (item.bCoins == 0)
-        {
-          usedSlots++;
-        }
-      }
-      return usedSlots;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function deposit(selector:Object):Boolean
-    {
+    public static function deposit(selector:Object):Boolean {
       var item:Object = Inventory.find(selector);
-      if (!item)
-      {
+      if (!item || !canStore(item) || (item.bCoins == 0 && isFull())) {
         return false;
       }
 
-      var game:Object = Main.Game;
-      game.world.sendBankFromInvRequest(item);
+      Main.Game.world.sendBankFromInvRequest(item);
       return true;
     }
 
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
+    // The client checks inventory space only while its bank window is open, so this checks it always.
     [BridgeExport]
-    public static function withdraw(selector:Object):Boolean
-    {
-      var item:Object = getItem(selector);
-      if (!item)
-      {
+    public static function withdraw(selector:Object):Boolean {
+      var item:Object = find(selector);
+      var avatar:Object = Main.Game.world.myAvatar;
+      if (!item) {
         return false;
       }
 
-      var game:Object = Main.Game;
-      game.world.sendBankToInvRequest(item);
+      var full:Boolean = categories().isHouse(item)
+        ? avatar.houseitems.length >= avatar.objData.iHouseSlots
+        : categories().isFullFor(avatar.items, item, avatar.objData.iBagSlots);
+      if (full) {
+        return false;
+      }
+
+      Main.Game.world.sendBankToInvRequest(item);
       return true;
     }
 
-    [BridgeTsParamType("inventorySelector: FlashTypes.InventoryItemSelector")]
-    [BridgeTsParamType("bankSelector: FlashTypes.InventoryItemSelector")]
+    // Mirrors the refusals in the client's World.sendBankSwapInvRequest, without its message boxes.
     [BridgeExport]
-    public static function swap(inventorySelector:Object, bankSelector:Object):Boolean
-    {
+    public static function swap(inventorySelector:Object, bankSelector:Object):Boolean {
       var invItem:Object = Inventory.find(inventorySelector);
-      var bankItem:Object = getItem(bankSelector);
-
-      if (!invItem || !bankItem)
-      {
+      var bankItem:Object = find(bankSelector);
+      if (!invItem || !bankItem || !canStore(invItem)) {
         return false;
       }
 
-      var game:Object = Main.Game;
-      game.world.sendBankSwapInvRequest(bankItem, invItem);
+      var cats:Object = categories();
+      var avatar:Object = Main.Game.world.myAvatar;
+      var bagSlots:int = avatar.objData.iBagSlots;
+      if (invItem.bCoins == 0 && bankItem.bCoins == 1 && isFull()) {
+        return false;
+      }
+
+      if (cats.isMisc(bankItem) && !cats.isMisc(invItem) && cats.isFullFor(avatar.items, bankItem, bagSlots)) {
+        return false;
+      }
+
+      if (cats.isBag(bankItem) && !cats.isBag(invItem) && cats.countBag(avatar.items) >= bagSlots) {
+        return false;
+      }
+
+      Main.Game.world.sendBankSwapInvRequest(bankItem, invItem);
       return true;
     }
 
     [BridgeExport]
-    public static function open():void
-    {
-      var game:Object = Main.Game;
-      if (!game.world.uiLock && game.ui.mcPopup.currentLabel != "Bank")
-      {
-        game.ui.mcPopup.fOpen("Bank");
+    public static function open():Boolean {
+      var world:Object = Main.Game.world;
+      if (world.uiLock) {
+        return false;
       }
+
+      if (!isOpen()) {
+        world.toggleBank();
+      }
+
+      return true;
     }
 
     [BridgeExport]
-    public static function isOpen():Boolean
-    {
-      var game:Object = Main.Game;
-      return game.ui.mcPopup.currentLabel == "Bank"
-        && game.ui.mcPopup.getChildByName("mcBank") != null;
-    }
-
-    [BridgeIgnore]
-    public static function onLogout():void
-    {
-      loaded = false;
-      loading = false;
+    public static function isOpen():Boolean {
+      var popup:Object = Main.Game.ui.mcPopup;
+      return popup.currentLabel == "Bank" && popup.getChildByName("mcBank") != null;
     }
   }
 }

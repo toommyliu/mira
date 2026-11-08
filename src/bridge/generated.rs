@@ -91,16 +91,6 @@ pub(crate) mod auth {
 pub(crate) mod bank {
     use crate::bridge::{CallError, Loader, Value, decode};
 
-    pub(crate) fn contains(
-        loader: &impl Loader,
-        selector: Value,
-        quantity: Option<i32>,
-    ) -> Result<bool, CallError> {
-        let call_args = vec![selector, Value::Number(f64::from(quantity.unwrap_or(1)))];
-        let reply = loader.call("bank.contains", call_args)?;
-        Ok(decode("bank.contains", reply)?)
-    }
-
     pub(crate) fn deposit(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
         let call_args = vec![selector];
         let reply = loader.call("bank.deposit", call_args)?;
@@ -143,13 +133,13 @@ pub(crate) mod bank {
         Ok(decode("bank.isOpen", reply)?)
     }
 
-    pub(crate) fn load_items(loader: &impl Loader, force: Option<bool>) -> Result<(), CallError> {
-        let call_args = vec![Value::Bool(force.unwrap_or(false))];
+    pub(crate) fn load_items(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
         let reply = loader.call("bank.loadItems", call_args)?;
         Ok(decode("bank.loadItems", reply)?)
     }
 
-    pub(crate) fn open(loader: &impl Loader) -> Result<(), CallError> {
+    pub(crate) fn open(loader: &impl Loader) -> Result<bool, CallError> {
         let call_args = vec![];
         let reply = loader.call("bank.open", call_args)?;
         Ok(decode("bank.open", reply)?)

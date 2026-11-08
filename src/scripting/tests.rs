@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
+    bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
     inventory::{Request as I, TempRequest as T},
@@ -755,12 +756,12 @@ export default function* () {
 }
 
 #[test]
-fn inventory_requests_reach_the_player_typed() {
+fn item_requests_reach_the_player_typed() {
     use crate::domain::inventory::{ItemQuery, Pool};
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Inventory, TempInventory } from "lyra";
+        r#"import { Bank, Inventory, TempInventory } from "lyra";
 
 export default function* () {
   yield* Inventory.getItems();
@@ -781,6 +782,19 @@ export default function* () {
   yield* TempInventory.getItem("Scale");
   yield* TempInventory.getQuantity("Scale");
   yield* TempInventory.contains("Scale", 10);
+  yield* Bank.load();
+  yield* Bank.getItems();
+  yield* Bank.getItem("Gem");
+  yield* Bank.getQuantity({ itemId: 3 });
+  yield* Bank.contains("Gem", 2);
+  yield* Bank.getSlots();
+  yield* Bank.getUsedSlots();
+  yield* Bank.getAvailableSlots();
+  yield* Bank.isOpen();
+  yield* Bank.open();
+  yield* Bank.deposit("Gem");
+  yield* Bank.withdraw({ itemId: 3 });
+  yield* Bank.swap("Gem", "Ore");
 }
 "#,
     )]);
@@ -860,6 +874,30 @@ export default function* () {
             },
         ]
         .map(Request::TempInventory),
+    );
+    expected.extend(
+        [
+            B::Load,
+            B::Items,
+            B::Item { query: name("Gem") },
+            B::Quantity { query: id(3.0) },
+            B::Contains {
+                query: name("Gem"),
+                quantity: Some(2.0),
+            },
+            B::Slots,
+            B::UsedSlots,
+            B::AvailableSlots,
+            B::IsOpen,
+            B::Open,
+            B::Deposit { query: name("Gem") },
+            B::Withdraw { query: id(3.0) },
+            B::Swap {
+                inventory_query: name("Gem"),
+                bank_query: name("Ore"),
+            },
+        ]
+        .map(Request::Bank),
     );
     assert_eq!(requests, expected);
 }
