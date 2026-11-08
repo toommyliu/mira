@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
 
 use super::{
     State,
@@ -10,6 +10,9 @@ use crate::bridge::{self, CallError, Format, Loader, Packet, Value, packets::wir
 pub(crate) struct PlayerUpdate {
     pub(crate) username: String,
     pub(crate) afk: Option<bool>,
+    pub(crate) cell: Option<String>,
+    pub(crate) pad: Option<String>,
+    pub(crate) joined: bool,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +27,12 @@ pub(crate) struct PlayerUpdatePacket {
 struct Changes {
     #[serde(default, deserialize_with = "flagged")]
     afk: Option<bool>,
+    #[serde(rename = "strFrame")]
+    cell: Option<String>,
+    #[serde(rename = "strPad")]
+    pad: Option<String>,
+    #[serde(rename = "strUsername")]
+    everything: Option<IgnoredAny>,
 }
 
 fn flagged<'de, D: Deserializer<'de>>(input: D) -> Result<Option<bool>, D::Error> {
@@ -40,6 +49,9 @@ impl From<PlayerUpdatePacket> for PlayerUpdate {
         PlayerUpdate {
             username: packet.username,
             afk: packet.changes.afk,
+            cell: packet.changes.cell,
+            pad: packet.changes.pad,
+            joined: packet.changes.everything.is_some(),
         }
     }
 }
@@ -66,11 +78,30 @@ impl From<PlayerUpdateLine> for PlayerUpdate {
                 .map(|(_, value)| value.trim().to_owned())
         };
         let afk = field("afk").map(|value| value == "true");
+        let cell = field("strFrame");
+        let pad = field("strPad");
         PlayerUpdate {
             username: line.username,
             afk,
+            cell,
+            pad,
+            joined: false,
         }
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ExitAreaLine {
+    _cmd: String,
+    _room: IgnoredAny,
+    _id: IgnoredAny,
+    #[serde(deserialize_with = "wire::text")]
+    pub(crate) username: String,
+}
+
+impl Packet for ExitAreaLine {
+    const FORMAT: Format = Format::Str;
+    const CMD: &'static str = "exitArea";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]

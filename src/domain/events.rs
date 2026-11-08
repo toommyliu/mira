@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     combat::CtPacket,
     drops::DropItemPacket,
-    players::{PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket},
+    player::MoveToAreaPacket,
+    players::{ExitAreaLine, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket},
     world::EventPacket,
 };
 use crate::bridge::{
@@ -18,6 +19,11 @@ pub(crate) enum Kind {
     ItemDrop,
     Afk,
     Zone,
+    MapJoined,
+    CellChanged,
+    PlayerJoined,
+    PlayerLeft,
+    Logout,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -44,6 +50,27 @@ pub(crate) enum GameEvent {
     Zone {
         zone: String,
     },
+    MapJoined {
+        map: String,
+    },
+    CellChanged {
+        username: String,
+        #[serde(rename = "self")]
+        is_self: bool,
+        cell: String,
+        pad: String,
+    },
+    PlayerJoined {
+        username: String,
+        #[serde(rename = "self")]
+        is_self: bool,
+    },
+    PlayerLeft {
+        username: String,
+        #[serde(rename = "self")]
+        is_self: bool,
+    },
+    Logout,
 }
 
 pub(crate) trait Me {
@@ -58,16 +85,29 @@ impl Kind {
         match self {
             Kind::MonsterDeath => names(packet, CtPacket::FORMAT, CtPacket::CMD),
             Kind::ItemDrop => names(packet, DropItemPacket::FORMAT, DropItemPacket::CMD),
-            Kind::Afk => {
+            Kind::Afk | Kind::CellChanged => {
                 names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
                     || names(packet, PlayerUpdateLine::FORMAT, PlayerUpdateLine::CMD)
             }
+            Kind::PlayerJoined => {
+                names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
+            }
             Kind::Zone => names(packet, EventPacket::FORMAT, EventPacket::CMD),
+            Kind::MapJoined => names(packet, MoveToAreaPacket::FORMAT, MoveToAreaPacket::CMD),
+            Kind::PlayerLeft => names(packet, ExitAreaLine::FORMAT, ExitAreaLine::CMD),
+            Kind::Logout => false,
         }
+    }
+
+    pub(crate) fn needs_connection(self) -> bool {
+        self != Kind::Logout
     }
 
     pub(crate) fn read(self, event: &Event, me: &impl Me, events: &mut Vec<GameEvent>) {
         let Event::ExtensionResponse { packet } = event else {
+            if self == Kind::Logout && disconnected(event) {
+                events.push(GameEvent::Logout);
+            }
             return;
         };
         match self {
@@ -92,16 +132,64 @@ impl Kind {
                 }
             }
             Kind::Afk => {
-                if let Some(update) = player_update(packet)
-                    && let Some(afk) = update.afk
+                if let Some(PlayerUpdate {
+                    username,
+                    afk: Some(afk),
+                    ..
+                }) = player_update(packet)
                 {
                     events.push(GameEvent::Afk {
-                        is_self: is_me(me, &update.username),
-                        username: update.username,
+                        is_self: is_me(me, &username),
+                        username,
                         afk,
                     });
                 }
             }
+            Kind::CellChanged => {
+                if let Some(PlayerUpdate {
+                    username,
+                    cell: Some(cell),
+                    pad: Some(pad),
+                    ..
+                }) = player_update(packet)
+                {
+                    events.push(GameEvent::CellChanged {
+                        is_self: is_me(me, &username),
+                        username,
+                        cell,
+                        pad,
+                    });
+                }
+            }
+            Kind::PlayerJoined => {
+                if let Some(PlayerUpdate {
+                    username,
+                    joined: true,
+                    ..
+                }) = decode::<PlayerUpdatePacket>(packet).map(PlayerUpdate::from)
+                {
+                    events.push(GameEvent::PlayerJoined {
+                        is_self: is_me(me, &username),
+                        username,
+                    });
+                }
+            }
+            Kind::PlayerLeft => {
+                if let Some(ExitAreaLine { username, .. }) = decode::<ExitAreaLine>(packet) {
+                    events.push(GameEvent::PlayerLeft {
+                        is_self: is_me(me, &username),
+                        username,
+                    });
+                }
+            }
+            Kind::MapJoined => {
+                if let Some(MoveToAreaPacket { map }) = decode::<MoveToAreaPacket>(packet)
+                    && !map.is_empty()
+                {
+                    events.push(GameEvent::MapJoined { map });
+                }
+            }
+            Kind::Logout => {}
             Kind::Zone => {
                 if let Some(event) = decode::<EventPacket>(packet) {
                     events.push(GameEvent::Zone {
@@ -245,6 +333,79 @@ mod tests {
         ] {
             assert_eq!(read(Kind::Afk, packet.clone()), [], "{packet}");
         }
+    }
+
+    #[test]
+    fn players_moving_joining_and_leaving_name_the_player() {
+        let jumped = json!({ "type": "str", "dataObj": ["uotls", "-1", "player2", "strFrame:r2,strPad:Right,px:500,py:375,mvts:-1,mvtd:0,tx:0,ty:0,bResting:false"] });
+        let walked = json!({ "type": "str", "dataObj": ["uotls", "-1", "player2", "tx:793,ty:353,sp:8,strFrame:r2"] });
+        let respawned = json!({ "type": "json", "dataObj": { "cmd": "uotls", "unm": "player1", "o": {
+            "intHP": 4850, "intState": 1, "strFrame": "Enter", "strPad": "Spawn"
+        } } });
+        let entered = json!({ "type": "json", "dataObj": { "cmd": "uotls", "unm": "player2", "o": {
+            "strUsername": "Player2", "entID": 28554, "strFrame": "r2", "strPad": "Right", "intState": 1, "afk": false
+        } } });
+        let left = json!({ "type": "str", "dataObj": ["exitArea", "-1", "28554", "player2"] });
+        let cell = |username: &str, is_self: bool, cell: &str, pad: &str| GameEvent::CellChanged {
+            username: username.into(),
+            is_self,
+            cell: cell.into(),
+            pad: pad.into(),
+        };
+        assert_eq!(
+            read(Kind::CellChanged, jumped),
+            [cell("player2", false, "r2", "Right")]
+        );
+        assert_eq!(read(Kind::CellChanged, walked), []);
+        assert_eq!(
+            read(Kind::CellChanged, respawned.clone()),
+            [cell("player1", true, "Enter", "Spawn")]
+        );
+        assert_eq!(read(Kind::PlayerJoined, respawned), []);
+        assert_eq!(
+            read(Kind::PlayerJoined, entered),
+            [GameEvent::PlayerJoined {
+                username: "player2".into(),
+                is_self: false
+            }]
+        );
+        assert!(wanted(Kind::PlayerLeft, left.clone()));
+        assert_eq!(
+            read(Kind::PlayerLeft, left),
+            [GameEvent::PlayerLeft {
+                username: "player2".into(),
+                is_self: false
+            }]
+        );
+    }
+
+    #[test]
+    fn joining_a_map_reports_its_name() {
+        let packet = json!({ "type": "json", "dataObj": {
+            "cmd": "moveToArea", "strMapName": "battleon", "areaName": "battleon-1", "areaId": 161642
+        } });
+        assert!(wanted(Kind::MapJoined, packet.clone()));
+        assert_eq!(
+            read(Kind::MapJoined, packet),
+            [GameEvent::MapJoined {
+                map: "battleon".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn logging_out_comes_from_the_lost_connection() {
+        let lost = Event::Connection {
+            status: "OnConnectionLost".into(),
+        };
+        let mut events = Vec::new();
+        Kind::Logout.read(&lost, &Player1, &mut events);
+        assert_eq!(events, [GameEvent::Logout]);
+        assert!(Kind::Logout.wants(&lost) && !Kind::Logout.needs_connection());
+        assert!(!wanted(
+            Kind::Logout,
+            json!({ "type": "json", "dataObj": { "cmd": "ct" } })
+        ));
     }
 
     #[test]

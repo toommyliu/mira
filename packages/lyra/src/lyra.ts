@@ -652,7 +652,21 @@ export type GameEvent =
       readonly afk: boolean;
     }
   /** `""` is the map's default zone. */
-  | { readonly type: "zone"; readonly zone: string };
+  | { readonly type: "zone"; readonly zone: string }
+  | { readonly type: "mapJoined"; readonly map: string }
+  /** A player jumped to a cell. Walking within a cell doesn't count. */
+  | {
+      readonly type: "cellChanged";
+      readonly username: string;
+      readonly self: boolean;
+      readonly cell: string;
+      readonly pad: string;
+    }
+  /** Another player entered the room. */
+  | { readonly type: "playerJoined"; readonly username: string; readonly self: boolean }
+  | { readonly type: "playerLeft"; readonly username: string; readonly self: boolean }
+  /** The connection to the server dropped. */
+  | { readonly type: "logout" };
 export type EventType = GameEvent["type"];
 export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
 /** `type` picks the event. Other fields must match exactly. */
@@ -710,7 +724,10 @@ export const Wait = {
     filter: F,
     options: ForOptions<E> = {},
   ): Effect.Effect<PacketFor<F> | null, E> => waitFor(openPackets(filter), options),
-  /** Null if `trigger` returns false, the timeout passes, or the connection drops. */
+  /**
+   * Null if `trigger` returns false, the timeout passes, or the connection drops.
+   * A `logout` wait returns the event when the connection drops.
+   */
   forEvent: <const T extends EventType, E = never>(
     filter: EventFilter<T>,
     options: ForOptions<E> = {},

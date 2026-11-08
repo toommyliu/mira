@@ -10,6 +10,7 @@ use super::{
 };
 use crate::bridge::{
     self, CallError, Format, GameAction, Interruption, Loader, Packet, Packets, Value,
+    packets::wire,
 };
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -111,7 +112,10 @@ pub(crate) fn outfit_names(loader: &impl Loader) -> Result<Vec<String>, CallErro
 }
 
 #[derive(Deserialize)]
-pub(crate) struct MoveToAreaPacket {}
+pub(crate) struct MoveToAreaPacket {
+    #[serde(rename = "strMapName", default, deserialize_with = "wire::text")]
+    pub(crate) map: String,
+}
 
 impl Packet for MoveToAreaPacket {
     const FORMAT: Format = Format::Json;

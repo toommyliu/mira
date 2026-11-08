@@ -40,7 +40,7 @@ pub(super) fn serve(
     feeds.open(
         id,
         Feed::new(events, move |event, items| {
-            if disconnected(&event) {
+            if kind.needs_connection() && disconnected(&event) {
                 items.push(json!({ "lost": true }));
                 return;
             }
@@ -60,5 +60,53 @@ impl<L: Loader> Me for Player<'_, L> {
             tracing::debug!(%error, "couldn't read the username for an event");
             None
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        bridge::{CallError, Events, Value as Flash},
+        scripting::feeds,
+    };
+
+    #[derive(Clone)]
+    struct Offline;
+
+    impl Loader for Offline {
+        fn call(&self, callback: &'static str, _: Vec<Flash>) -> Result<Flash, CallError> {
+            panic!("{callback} was called");
+        }
+    }
+
+    #[tokio::test]
+    async fn losing_the_connection_is_the_logout_event_and_ends_every_other_kind() {
+        let events = Events::default();
+        let feeds = Feeds::default();
+        for (id, kind) in [(1, "logout"), (2, "zone")] {
+            let request =
+                serde_json::from_value(json!({ "op": "subscribe", "id": id, "type": kind }))
+                    .unwrap();
+            assert_eq!(
+                serve(&Offline, |wants| events.subscribe(wants), &feeds, request),
+                Ok(Value::Null)
+            );
+        }
+        events.publish(&Event::Connection {
+            status: "OnConnectionLost".into(),
+        });
+        let next = |id: u64| {
+            let request = serde_json::from_value(json!({ "op": "next", "id": id })).unwrap();
+            feeds::serve(&feeds, request)
+        };
+        assert_eq!(
+            next(1).await,
+            Ok(json!({ "lagged": false, "items": [{ "type": "logout" }] }))
+        );
+        assert_eq!(
+            next(2).await,
+            Ok(json!({ "lagged": false, "items": [{ "lost": true }] }))
+        );
     }
 }
