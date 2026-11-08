@@ -16,6 +16,7 @@ use super::{
     house::Request as H,
     inventory::{Request as I, TempRequest as T},
     player::Request as P,
+    players::Request as PL,
     quests::Request as Q,
     runtime::Player,
     shops::Request as S,
@@ -695,12 +696,12 @@ export default function* () {
 }
 
 #[test]
-fn combat_requests_reach_the_player_typed() {
+fn combat_and_player_requests_reach_the_player_typed() {
     use crate::domain::world::MonsterQuery;
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Combat } from "lyra";
+        r#"import { Combat, Players } from "lyra";
 
 export default function* () {
   yield* Combat.getTarget();
@@ -712,6 +713,8 @@ export default function* () {
   yield* Combat.cancelTarget();
   yield* Combat.cancelAutoAttack();
   yield* Combat.kill("*");
+  yield* Players.getAll();
+  yield* Players.get("player1");
 }
 "#,
     )]);
@@ -733,30 +736,35 @@ export default function* () {
         })
         .collect();
     let skill = |slot: u8| serde_json::from_value(json!(slot)).unwrap();
-    assert_eq!(
-        requests,
-        [
-            C::Target,
-            C::HasTarget,
-            C::Attack {
-                query: MonsterQuery::Name("Frogzard".into())
-            },
-            C::UseSkill {
-                skill: skill(2),
-                target: Some(MonsterQuery::MonMapId { mon_map_id: 5.0 }),
-                force: None,
-                wait_until_ready: Some(true)
-            },
-            C::CanUseSkill { skill: skill(0) },
-            C::SkillCooldown { skill: skill(5) },
-            C::CancelTarget,
-            C::CancelAutoAttack,
-            C::Kill {
-                query: MonsterQuery::Name("*".into())
-            },
-        ]
-        .map(Request::Combat)
-    );
+    let mut expected: Vec<Request> = [
+        C::Target,
+        C::HasTarget,
+        C::Attack {
+            query: MonsterQuery::Name("Frogzard".into()),
+        },
+        C::UseSkill {
+            skill: skill(2),
+            target: Some(MonsterQuery::MonMapId { mon_map_id: 5.0 }),
+            force: None,
+            wait_until_ready: Some(true),
+        },
+        C::CanUseSkill { skill: skill(0) },
+        C::SkillCooldown { skill: skill(5) },
+        C::CancelTarget,
+        C::CancelAutoAttack,
+        C::Kill {
+            query: MonsterQuery::Name("*".into()),
+        },
+    ]
+    .map(Request::Combat)
+    .into();
+    expected.extend([
+        Request::Players(PL::All),
+        Request::Players(PL::Get {
+            username: "player1".into(),
+        }),
+    ]);
+    assert_eq!(requests, expected);
 }
 
 #[test]

@@ -7,6 +7,7 @@ mod inventory;
 mod limits;
 mod modules;
 mod player;
+mod players;
 mod quests;
 mod runtime;
 mod shops;

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    bank, combat, drops, house, inventory, player, quests, runtime::Command, shops, world,
+    bank, combat, drops, house, inventory, player, players, quests, runtime::Command, shops, world,
 };
 use crate::bridge::{Bridge, CallError};
 
@@ -18,6 +18,7 @@ pub(crate) struct CallId(pub(super) u64);
 #[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
     Player(player::Request),
+    Players(players::Request),
     World(world::Request),
     Combat(combat::Request),
     Inventory(inventory::Request),
@@ -113,6 +114,7 @@ async fn serve(bridge: &Bridge, request: Request) -> Reply {
         Request::Player(request) => {
             player::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
+        Request::Players(request) => players::serve(bridge, request),
         Request::World(request) => {
             world::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }

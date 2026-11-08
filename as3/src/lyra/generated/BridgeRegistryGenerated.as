@@ -10,6 +10,7 @@ package lyra.generated
   import lyra.game.Inventory;
   import lyra.game.Outfits;
   import lyra.game.Player;
+  import lyra.game.Players;
   import lyra.game.Quests;
   import lyra.game.Settings;
   import lyra.game.Shops;
@@ -112,6 +113,8 @@ package lyra.generated
       external.externalize("player.jump", Player.jump);
       external.externalize("player.rest", Player.rest);
       external.externalize("player.walkTo", Player.walkTo);
+      external.externalize("players.get", Players.get);
+      external.externalize("players.getAll", Players.getAll);
       external.externalize("quests.abandon", Quests.abandon);
       external.externalize("quests.accept", Quests.accept);
       external.externalize("quests.canComplete", Quests.canComplete);

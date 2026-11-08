@@ -756,6 +756,22 @@ pub(crate) mod player {
     }
 }
 
+pub(crate) mod players {
+    use crate::bridge::{CallError, Loader, Value, decode};
+
+    pub(crate) fn get(loader: &impl Loader, username: &str) -> Result<Value, CallError> {
+        let call_args = vec![Value::String(username.to_owned())];
+        let reply = loader.call("players.get", call_args)?;
+        Ok(decode("players.get", reply)?)
+    }
+
+    pub(crate) fn get_all(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("players.getAll", call_args)?;
+        Ok(decode("players.getAll", reply)?)
+    }
+}
+
 pub(crate) mod quests {
     use crate::bridge::{CallError, Loader, Value, decode};
 

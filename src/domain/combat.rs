@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use tokio::{pin, select, time::sleep};
 
 use super::{
-    State, auth, has_avatar,
+    auth, has_avatar,
     inventory::{self, TurnInPacket},
+    players::{self, RoomPlayer},
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
@@ -46,23 +47,7 @@ impl TryFrom<u8> for Skill {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum Target {
     Monster(Monster),
-    Player(PlayerTarget),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PlayerTarget {
-    name: String,
-    username: String,
-    cell: String,
-    pad: String,
-    hp: f64,
-    max_hp: f64,
-    mp: f64,
-    max_mp: f64,
-    level: f64,
-    state: Option<State>,
-    afk: bool,
+    Player(RoomPlayer),
 }
 
 pub(crate) fn target(loader: &impl Loader) -> Result<Option<Target>, CallError> {
@@ -74,33 +59,11 @@ pub(crate) fn target(loader: &impl Loader) -> Result<Option<Target>, CallError> 
         Some(Value::String(kind)) if kind == "monster" => {
             world::monster_from(target).map(Target::Monster)
         }
-        Some(Value::String(kind)) if kind == "player" => Some(Target::Player(player_from(fields))),
+        Some(Value::String(kind)) if kind == "player" => {
+            players::player_from(target).map(Target::Player)
+        }
         _ => None,
     })
-}
-
-fn player_from(fields: &std::collections::BTreeMap<String, Value>) -> PlayerTarget {
-    let number = |key: &str| match fields.get(key) {
-        Some(Value::Number(number)) if number.is_finite() => *number,
-        _ => 0.0,
-    };
-    let text = |key: &str| match fields.get(key) {
-        Some(Value::String(text)) => text.clone(),
-        _ => String::new(),
-    };
-    PlayerTarget {
-        name: text("name"),
-        username: text("username"),
-        cell: text("cell"),
-        pad: text("pad"),
-        hp: number("hp"),
-        max_hp: number("maxHp"),
-        mp: number("mp"),
-        max_mp: number("maxMp"),
-        level: number("level"),
-        state: State::from_game(number("state") as i32),
-        afk: matches!(fields.get("afk"), Some(Value::Bool(true))),
-    }
 }
 
 pub(crate) fn attack(loader: &impl Loader, query: &MonsterQuery) -> Result<bool, CallError> {

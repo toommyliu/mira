@@ -79,23 +79,9 @@ package lyra.game {
         }
 
         if (target.npcType == "player") {
-          return {
-            type: "player",
-            hp: dataLeaf.intHP,
-            maxHp: dataLeaf.intHPMax,
-            state: dataLeaf.intState,
-            cell: dataLeaf.strFrame,
-            afk: dataLeaf.afk,
-            entityId: dataLeaf.entID,
-            entityType: dataLeaf.entType,
-            level: dataLeaf.intLevel,
-            mp: dataLeaf.intMP,
-            maxMp: dataLeaf.intMPMax,
-            sp: dataLeaf.intSP,
-            pad: dataLeaf.strPad,
-            username: dataLeaf.strUsername,
-            name: dataLeaf.uoName
-          };
+          var player:Object = Players.row(dataLeaf);
+          player.type = "player";
+          return player;
         }
       }
 

@@ -16,6 +16,9 @@ const call = <A>(request: object): Effect.Effect<A> =>
 const player = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "player", op, ...args });
 
+const players = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "players", op, ...args });
+
 const world = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "world", op, ...args });
 
@@ -136,9 +139,11 @@ export const World = {
 };
 
 export type Skill = 0 | 1 | 2 | 3 | 4 | 5;
-export type PlayerTarget = {
+export type RoomPlayer = {
   readonly name: string;
   readonly username: string;
+  readonly userId: number;
+  readonly position: Position | null;
   readonly cell: string;
   readonly pad: string;
   readonly hp: number;
@@ -151,11 +156,16 @@ export type PlayerTarget = {
 };
 export type Target =
   | ({ readonly type: "monster" } & Monster)
-  | ({ readonly type: "player" } & PlayerTarget);
+  | ({ readonly type: "player" } & RoomPlayer);
 export type SkillOptions = {
   readonly target?: MonsterQuery;
   readonly force?: boolean;
   readonly waitUntilReady?: boolean;
+};
+
+export const Players = {
+  getAll: () => players<readonly RoomPlayer[]>("all"),
+  get: (username: string) => players<RoomPlayer | null>("get", { username }),
 };
 
 export const Combat = {
