@@ -171,9 +171,9 @@ impl CtPacket {
     }
 
     fn killed(&self, id: f64) -> bool {
-        self.monsters
-            .iter()
-            .any(|(key, monster)| key.parse::<f64>().ok() == Some(id) && monster.state == Some(0.0))
+        self.deaths()
+            .into_iter()
+            .any(|death| f64::from(death) == id)
     }
 }
 
