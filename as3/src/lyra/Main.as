@@ -14,6 +14,7 @@ package lyra {
 
 	import lyra.Externalizer;
 	import lyra.module.Modules;
+	import lyra.ui.ChatHistory;
 	import lyra.ui.QuestCopyMenu;
 	import lyra.util.SFSEvent;
 
@@ -101,6 +102,7 @@ package lyra {
 			Modules.init();
 			this.stg.addEventListener(Event.ENTER_FRAME, Modules.handleFrame);
 			QuestCopyMenu.init(this.stg, this.gameDomain);
+			ChatHistory.init(this.stg);
 
 			this.emitLoaded();
 		}
@@ -117,6 +119,7 @@ package lyra {
 		}
 
 		private function onConnectionLost(evt:*):void {
+			ChatHistory.clear();
 			this.emitConnection('OnConnectionLost');
 			this.emitDebug('Connection to SmartFoxServer lost.');
 		}
