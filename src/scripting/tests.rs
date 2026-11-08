@@ -461,6 +461,27 @@ fn an_endless_promise_chain_is_killed_at_the_turn_limit() {
 }
 
 #[test]
+fn waiting_until_a_condition_holds_checks_it_right_away_and_then_on_each_interval() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Wait } from "lyra";
+
+export default function* () {
+  const already = yield* Wait.until(Effect.succeed(true), { interval: "1 hour" });
+  let checks = 0;
+  const met = yield* Wait.until(Effect.sync(() => ++checks === 3), { interval: "10 millis" });
+  const timedOut = yield* Wait.until(Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
+  console.log(already, met, checks, timedOut);
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["true true 3 false"]);
+    assert!(finished.elapsed >= Duration::from_millis(70));
+}
+
+#[test]
 fn a_script_drives_the_game_through_the_lyra_module() {
     let folder = Folder::new(&[(
         "main.ts",

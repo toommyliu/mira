@@ -1,5 +1,6 @@
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { send } from "./native.ts";
 
@@ -405,4 +406,28 @@ export const Shops = {
 
 export const Script = {
   sleep: (duration: Duration.Input) => Effect.sleep(duration),
+};
+
+export type UntilOptions = {
+  /** Defaults to 100 ms. */
+  readonly interval?: Duration.Input;
+  /** Waits forever when omitted. */
+  readonly timeout?: Duration.Input;
+};
+
+const poll = <E>(condition: Effect.Effect<boolean, E>, interval: Duration.Input) =>
+  Effect.gen(function* () {
+    while (!(yield* condition)) yield* Effect.sleep(interval);
+    return true;
+  });
+
+export const Wait = {
+  /** Checks right away, then every `interval`. False if `timeout` passes first. */
+  until: <E = never>(
+    condition: Effect.Effect<boolean, E>,
+    { interval = "100 millis", timeout }: UntilOptions = {},
+  ): Effect.Effect<boolean, E> =>
+    timeout === undefined
+      ? poll(condition, interval)
+      : poll(condition, interval).pipe(Effect.timeoutOption(timeout), Effect.map(Option.isSome)),
 };
