@@ -1,3 +1,4 @@
+import { AbortController, AbortSignal, reportListenerErrors } from "./abort.ts";
 import { connect, deliver, type Native } from "./native.ts";
 
 type Level = "debug" | "info" | "warn" | "error";
@@ -11,7 +12,10 @@ type Timer = { readonly at: number; readonly run: () => void };
 
 const describe = (value: unknown): string => {
   if (typeof value === "string") return value;
-  if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`;
+  if (value instanceof Error) {
+    const header = `${value.name}: ${value.message}`;
+    return value.stack ? `${header}\n${value.stack}` : header;
+  }
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {
@@ -68,7 +72,10 @@ export function install(host: Host) {
       (...values: unknown[]) => host.log(level, values.map(describe).join(" ")),
     ]),
   );
+  reportListenerErrors((error) => host.log("error", describe(error)));
   Object.assign(globalThis, {
+    AbortController,
+    AbortSignal,
     setTimeout: (callback: (...args: unknown[]) => void, delay?: unknown, ...args: unknown[]) => {
       const id = ++lastId;
       schedule(id, delay, () => callback(...args));

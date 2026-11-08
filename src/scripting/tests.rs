@@ -328,6 +328,45 @@ fn every_run_starts_with_fresh_globals() {
 }
 
 #[test]
+fn effect_promises_get_a_signal_that_aborts_when_interrupted() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+
+export default function* () {
+  const aborted = yield* Effect.promise((signal) => Promise.resolve(signal.aborted));
+  const timedOut = yield* Effect.promise(
+    (signal) => new Promise<void>(() => signal.addEventListener("abort", () => console.log("aborted"))),
+  ).pipe(Effect.timeoutOption("20 millis"));
+  console.log(aborted, timedOut._tag);
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["aborted", "false None"]);
+}
+
+#[test]
+fn an_abort_listener_removed_during_abort_does_not_run() {
+    let finished = run(&[(
+        "main.js",
+        r#"export default function* () {
+  const controller = new AbortController();
+  const later = () => console.log("removed listener ran");
+  controller.signal.addEventListener("abort", () => controller.signal.removeEventListener("abort", later));
+  controller.signal.addEventListener("abort", later);
+  controller.signal.onabort = () =>
+    controller.signal.addEventListener("abort", () => console.log("added listener ran"));
+  controller.abort();
+  console.log(`aborted ${controller.signal.aborted}`);
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["aborted true"]);
+}
+
+#[test]
 fn stopping_runs_effect_finalizers() {
     let folder = Folder::new(&[(
         "main.ts",
