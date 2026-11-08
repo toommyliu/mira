@@ -70,7 +70,8 @@ package lyra.game {
       return rows;
     }
 
-    private static function row(quest:Object):Object {
+    [BridgeIgnore]
+    public static function row(quest:Object):Object {
       return {
         id: quest.QuestID,
         name: quest.sName,

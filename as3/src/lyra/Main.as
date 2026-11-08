@@ -14,6 +14,7 @@ package lyra {
 
 	import lyra.Externalizer;
 	import lyra.module.Modules;
+	import lyra.ui.QuestCopyMenu;
 	import lyra.util.SFSEvent;
 
 	[BridgeNamespace("flash")]
@@ -99,6 +100,7 @@ package lyra {
 
 			Modules.init();
 			this.stg.addEventListener(Event.ENTER_FRAME, Modules.handleFrame);
+			QuestCopyMenu.init(this.stg, this.gameDomain);
 
 			this.emitLoaded();
 		}
