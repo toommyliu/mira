@@ -12,7 +12,10 @@ mod native;
 use std::ops::Range;
 
 use crate::{
-    automation::{auto_attack, auto_relogin, auto_zone, settings::Store},
+    automation::{
+        auto_attack, auto_relogin, auto_zone,
+        settings::{Automation, Store},
+    },
     ruffle::{Msg, Output, Runtime, view::ViewEvent},
 };
 use gpui::{
@@ -67,9 +70,7 @@ impl RuffleView {
             failed,
             outputs_tx,
             stats_tx,
-            automation.watch_auto_relogin(),
-            automation.watch_auto_zone(),
-            automation.watch_auto_attack(),
+            Automation::clone(&automation),
             native.supports_display_frames(),
         )?;
         let inbox = session.inbox();
@@ -77,7 +78,11 @@ impl RuffleView {
         let inbox = session.inbox();
         native
             .connect_visibility(move |visible| inbox.post(Msg::View(ViewEvent::Visible(visible))));
+        let relogin_changes = automation.watch_auto_relogin();
+        let zone_changes = automation.watch_auto_zone();
         Ok(cx.new(|cx| {
+            notify_on_change(relogin_changes, cx);
+            notify_on_change(zone_changes, cx);
             cx.spawn(async move |this, cx| {
                 while stats.changed().await.is_ok() {
                     let report = *stats.borrow_and_update();
@@ -223,9 +228,9 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_relogin::Settings),
         cx: &mut Context<Self>,
     ) {
-        let mut settings = self.automation.auto_relogin().clone();
-        change(&mut settings);
-        if let Err(error) = self.automation.set_auto_relogin(settings) {
+        if let Err(error) = self.automation.change(|automation| {
+            automation.update_auto_relogin(change);
+        }) {
             tracing::error!(%error, "couldn't save automation settings");
         }
         cx.notify();
@@ -248,9 +253,9 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_zone::Settings),
         cx: &mut Context<Self>,
     ) {
-        let mut settings = self.automation.auto_zone();
-        change(&mut settings);
-        if let Err(error) = self.automation.set_auto_zone(settings) {
+        if let Err(error) = self.automation.change(|automation| {
+            automation.update_auto_zone(change);
+        }) {
             tracing::error!(%error, "couldn't save automation settings");
         }
         cx.notify();
@@ -261,9 +266,9 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_attack::Settings),
         cx: &mut Context<Self>,
     ) {
-        let mut settings = self.automation.auto_attack();
-        change(&mut settings);
-        if let Err(error) = self.automation.set_auto_attack(settings) {
+        if let Err(error) = self.automation.change(|automation| {
+            automation.update_auto_attack(change);
+        }) {
             tracing::error!(%error, "couldn't save automation settings");
         }
         cx.notify();
@@ -292,6 +297,20 @@ impl RuffleView {
         }
         self.modifiers = event.modifiers;
     }
+}
+
+fn notify_on_change<T: Send + Sync + 'static>(
+    mut changes: tokio::sync::watch::Receiver<T>,
+    cx: &mut Context<RuffleView>,
+) {
+    cx.spawn(async move |this, cx| {
+        while changes.changed().await.is_ok() {
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 fn paint(this: Entity<RuffleView>, hitbox: Hitbox, window: &mut Window, cx: &mut App) {

@@ -7,19 +7,9 @@ import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
 import { failed, stopping } from "./run.ts";
-import { send } from "./native.ts";
+import { call } from "./call.ts";
 
 declare const console: { readonly warn: (message: string) => void };
-
-const call = <A>(request: object): Effect.Effect<A> =>
-  Effect.callback<A>((resume) => {
-    const cancel = send(request, (settled) => {
-      resume(
-        "ok" in settled ? Effect.succeed(settled.ok as A) : Effect.die(new Error(settled.error)),
-      );
-    });
-    return Effect.sync(cancel);
-  });
 
 const auth = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "auth", op, ...args });

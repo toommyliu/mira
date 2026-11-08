@@ -1,4 +1,5 @@
 mod auth;
+mod automation;
 mod bank;
 mod calls;
 mod combat;

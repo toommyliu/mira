@@ -227,7 +227,7 @@ impl RuffleView {
                 self.start_edit(field.after(shift));
             }
             "up" | "down" => {
-                let stored = i64::from(field.get(self.automation.auto_relogin()));
+                let stored = i64::from(field.get(&self.automation.auto_relogin()));
                 let edit = self.bar.edit.as_mut().unwrap();
                 let step = if shift { 10 } else { 1 };
                 let draft = edit.text.parse().unwrap_or(stored);
@@ -266,7 +266,7 @@ impl RuffleView {
     }
 
     fn start_edit(&mut self, field: Field) {
-        let value = field.get(self.automation.auto_relogin());
+        let value = field.get(&self.automation.auto_relogin());
         self.bar.edit = Some(Edit {
             field,
             text: value.to_string(),
@@ -669,7 +669,10 @@ fn field_row(
 ) -> impl IntoElement + use<> {
     let settings = view.automation.auto_relogin();
     let edit = view.bar.edit.as_ref().filter(|edit| edit.field == field);
-    let text = edit.map_or_else(|| field.get(settings).to_string(), |edit| edit.text.clone());
+    let text = edit.map_or_else(
+        || field.get(&settings).to_string(),
+        |edit| edit.text.clone(),
+    );
     let name = field.label();
     ui::row(SharedString::from(format!("{name}-row")))
         .child(name)

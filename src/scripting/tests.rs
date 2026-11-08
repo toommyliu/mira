@@ -10,6 +10,7 @@ use serde_json::json;
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
     auth::Request as A,
+    automation::{ReloginRequest as AR, ZoneRequest as AZ},
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
@@ -275,6 +276,10 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
             "import \"internal:/lyra/prelude.js\";\nexport default function* () {}\n",
         ),
         (
+            "script/runtime.ts",
+            "import \"lyra/prelude\";\nexport default function* () {}\n",
+        ),
+        (
             "script/platform.ts",
             "import \"effect/http\";\nexport default function* () {}\n",
         ),
@@ -291,6 +296,7 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
         "script/parent.ts",
         "script/package.ts",
         "script/internal.ts",
+        "script/runtime.ts",
         "script/platform.ts",
         "script/guessed.ts",
     ] {
@@ -1091,6 +1097,61 @@ export default function* () {
             },
         ]
         .map(Request::Auth)
+    );
+}
+
+#[test]
+fn automation_requests_reach_the_player_typed() {
+    use crate::automation::auto_zone::Room;
+
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import * as AutoRelogin from "lyra/autorelogin";
+import * as AutoZone from "lyra/autozone";
+
+export default function* () {
+  yield* AutoRelogin.get();
+  yield* AutoRelogin.update({ enabled: true, server: null, delaySeconds: 10 });
+  yield* AutoZone.get();
+  yield* AutoZone.update({ map: "queeniona" });
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            Request::AutoRelogin(AR::Get),
+            Request::AutoRelogin(AR::Update {
+                enabled: Some(true),
+                server: Some(None),
+                delay_seconds: Some(10),
+                retries: None,
+                backoff_seconds: None,
+                backoff_cap_seconds: None,
+            }),
+            Request::AutoZone(AZ::Get),
+            Request::AutoZone(AZ::Update {
+                enabled: None,
+                map: Some(Some(Room::Queeniona)),
+            }),
+        ]
     );
 }
 

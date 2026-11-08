@@ -4,13 +4,14 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    auth, bank, combat, drops, events,
+    auth, automation, bank, combat, drops, events,
     feeds::{self, Feeds},
     house, inventory, packets, player, players, quests,
     runtime::Command,
     shops, world,
 };
 use crate::{
+    automation::settings::Automation,
     bridge::{Bridge, CallError},
     domain::auth::Logins,
 };
@@ -25,6 +26,8 @@ pub(crate) struct CallId(pub(super) u64);
 #[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
     Auth(auth::Request),
+    AutoRelogin(automation::ReloginRequest),
+    AutoZone(automation::ZoneRequest),
     Player(player::Request),
     Players(players::Request),
     World(world::Request),
@@ -121,14 +124,28 @@ impl Calls {
     }
 }
 
-pub(crate) async fn answer(bridge: Bridge, logins: Rc<Logins>, feeds: Rc<Feeds>, call: Call) {
+pub(crate) async fn answer(
+    bridge: Bridge,
+    logins: Rc<Logins>,
+    automation: Automation,
+    feeds: Rc<Feeds>,
+    call: Call,
+) {
     let Call { request, reply, .. } = call;
-    reply.send(serve(&bridge, &logins, &feeds, request).await);
+    reply.send(serve(&bridge, &logins, &automation, &feeds, request).await);
 }
 
-async fn serve(bridge: &Bridge, logins: &Logins, feeds: &Feeds, request: Request) -> Reply {
+async fn serve(
+    bridge: &Bridge,
+    logins: &Logins,
+    automation: &Automation,
+    feeds: &Feeds,
+    request: Request,
+) -> Reply {
     match request {
         Request::Auth(request) => auth::serve(bridge, logins, request).await,
+        Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
+        Request::AutoZone(request) => automation::serve_zone(automation, request),
         Request::Packets(request) => {
             packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }

@@ -48,6 +48,8 @@ async function main(): Promise<void> {
       { in: "./src/prelude.ts", out: "lyra/prelude" },
       { in: "./src/bootstrap.ts", out: "lyra/bootstrap" },
       { in: "./src/lyra.ts", out: "lyra/index" },
+      { in: "./src/autorelogin.ts", out: "lyra/autorelogin" },
+      { in: "./src/autozone.ts", out: "lyra/autozone" },
     ],
     outdir,
     bundle: true,

@@ -25,7 +25,7 @@ use ruffle_core::{
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
-    automation::{auto_attack, auto_relogin, auto_zone},
+    automation::{auto_attack, auto_relogin, auto_zone, settings::Automation},
     bridge::{Bridge, Packets},
     domain::auth::Logins,
     scripting::{self, Calls, ToPlayer},
@@ -84,9 +84,7 @@ impl Runtime {
         failures: async_channel::Sender<String>,
         outputs: async_channel::Sender<Output>,
         stats: tokio::sync::watch::Sender<Option<stats::Report>>,
-        relogin: tokio::sync::watch::Receiver<auto_relogin::Settings>,
-        zone: tokio::sync::watch::Receiver<auto_zone::Settings>,
-        attack: tokio::sync::watch::Receiver<auto_attack::Settings>,
+        automation: Automation,
         display_frames: bool,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -106,9 +104,7 @@ impl Runtime {
                     outbox,
                     outputs,
                     stats,
-                    relogin,
-                    zone,
-                    attack,
+                    automation,
                     display_frames,
                 ) {
                     tracing::error!(%error, "player failed");
@@ -155,9 +151,7 @@ fn run(
     inbox: Inbox,
     outputs: async_channel::Sender<Output>,
     stats: tokio::sync::watch::Sender<Option<stats::Report>>,
-    relogin: tokio::sync::watch::Receiver<auto_relogin::Settings>,
-    zone: tokio::sync::watch::Receiver<auto_zone::Settings>,
-    attack: tokio::sync::watch::Receiver<auto_attack::Settings>,
+    automation: Automation,
     display_frames: bool,
 ) -> anyhow::Result<()> {
     let mut pacing = pacing::Pacing::new(display_frames, Instant::now());
@@ -207,7 +201,7 @@ fn run(
             bridge.clone(),
             logins.clone(),
             bridge.subscribe(auto_relogin::wants),
-            relogin,
+            automation.watch_auto_relogin(),
             move |phase| {
                 let _ = phases.try_send(Output::AutoRelogin(phase));
             },
@@ -219,11 +213,15 @@ fn run(
         auto_zone::run(
             bridge.clone(),
             Packets::subscribe(|wants| bridge.subscribe(wants)),
-            zone,
+            automation.watch_auto_zone(),
             auto_zone::random_point,
         ),
     );
-    spawn_local(&inbox, &tasks, auto_attack::run(bridge.clone(), attack));
+    spawn_local(
+        &inbox,
+        &tasks,
+        auto_attack::run(bridge.clone(), automation.watch_auto_attack()),
+    );
     let smooth_motion = preferences::BoolPreference::new(data.join("smooth-motion"));
     match smooth_motion.load() {
         Ok(enabled) => player.lock().unwrap().set_frame_interpolation(enabled),
@@ -262,7 +260,13 @@ fn run(
                 Some(Msg::Script(message)) => scripts.handle(message, |call, feeds| {
                     spawn(
                         &inbox,
-                        scripting::answer(scripts_bridge.clone(), logins.clone(), feeds, call),
+                        scripting::answer(
+                            scripts_bridge.clone(),
+                            logins.clone(),
+                            automation.clone(),
+                            feeds,
+                            call,
+                        ),
                     )
                 }),
                 Some(Msg::Frame) => {
