@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     combat::CtPacket,
     drops::DropItemPacket,
-    players::{PlayerUpdateLine, PlayerUpdatePacket},
+    players::{PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket},
     world::EventPacket,
 };
 use crate::bridge::{
@@ -36,11 +36,18 @@ pub(crate) enum GameEvent {
         quantity: i32,
     },
     Afk {
+        username: String,
+        #[serde(rename = "self")]
+        is_self: bool,
         afk: bool,
     },
     Zone {
         zone: String,
     },
+}
+
+pub(crate) trait Me {
+    fn username(&self) -> Option<String>;
 }
 
 impl Kind {
@@ -59,12 +66,10 @@ impl Kind {
         }
     }
 
-    pub(crate) fn read(
-        self,
-        packet: &str,
-        username: impl FnOnce() -> Option<String>,
-        events: &mut Vec<GameEvent>,
-    ) {
+    pub(crate) fn read(self, event: &Event, me: &impl Me, events: &mut Vec<GameEvent>) {
+        let Event::ExtensionResponse { packet } = event else {
+            return;
+        };
         match self {
             Kind::MonsterDeath => {
                 if let Some(ct) = decode::<CtPacket>(packet) {
@@ -87,15 +92,14 @@ impl Kind {
                 }
             }
             Kind::Afk => {
-                let update = match decode::<PlayerUpdatePacket>(packet) {
-                    Some(update) => update.afk().map(|afk| (update.username, afk)),
-                    None => decode::<PlayerUpdateLine>(packet)
-                        .and_then(|update| update.afk().map(|afk| (update.username, afk))),
-                };
-                if let Some((who, afk)) = update
-                    && username().is_some_and(|me| me.eq_ignore_ascii_case(&who))
+                if let Some(update) = player_update(packet)
+                    && let Some(afk) = update.afk
                 {
-                    events.push(GameEvent::Afk { afk });
+                    events.push(GameEvent::Afk {
+                        is_self: is_me(me, &update.username),
+                        username: update.username,
+                        afk,
+                    });
                 }
             }
             Kind::Zone => {
@@ -107,6 +111,17 @@ impl Kind {
             }
         }
     }
+}
+
+fn player_update(packet: &str) -> Option<PlayerUpdate> {
+    decode::<PlayerUpdatePacket>(packet)
+        .map(PlayerUpdate::from)
+        .or_else(|| decode::<PlayerUpdateLine>(packet).map(PlayerUpdate::from))
+}
+
+fn is_me(me: &impl Me, username: &str) -> bool {
+    me.username()
+        .is_some_and(|me| me.eq_ignore_ascii_case(username))
 }
 
 fn decode<T: Packet>(packet: &str) -> Option<T> {
@@ -122,16 +137,28 @@ mod tests {
 
     use super::*;
 
+    struct Player1;
+
+    impl Me for Player1 {
+        fn username(&self) -> Option<String> {
+            Some("Player1".into())
+        }
+    }
+
+    fn server(packet: serde_json::Value) -> Event {
+        Event::ExtensionResponse {
+            packet: packet.to_string(),
+        }
+    }
+
     fn read(kind: Kind, packet: serde_json::Value) -> Vec<GameEvent> {
         let mut events = Vec::new();
-        kind.read(&packet.to_string(), || Some("Player1".into()), &mut events);
+        kind.read(&server(packet), &Player1, &mut events);
         events
     }
 
     fn wanted(kind: Kind, packet: serde_json::Value) -> bool {
-        kind.wants(&Event::ExtensionResponse {
-            packet: packet.to_string(),
-        })
+        kind.wants(&server(packet))
     }
 
     #[test]
@@ -192,31 +219,32 @@ mod tests {
     }
 
     #[test]
-    fn only_your_own_afk_changes_count() {
+    fn afk_changes_name_the_player_and_whether_it_is_you() {
         let json = |name: &str, afk: bool| json!({ "type": "json", "dataObj": { "cmd": "uotls", "unm": name, "o": { "afk": afk } } });
         let line = |name: &str, update: &str| json!({ "type": "str", "dataObj": ["uotls", "-1", name, update] });
-        for (packet, afk) in [
-            (json("player1", true), true),
-            (json("player1", false), false),
-            (line("player1", "strFrame:r2,afk:true"), true),
-            (line("player1", "afk:false"), false),
+        let afk = |username: &str, is_self: bool, afk: bool| GameEvent::Afk {
+            username: username.into(),
+            is_self,
+            afk,
+        };
+        for (packet, expected) in [
+            (json("player1", true), afk("player1", true, true)),
+            (json("player1", false), afk("player1", true, false)),
+            (
+                line("player1", "strFrame:r2,afk:true"),
+                afk("player1", true, true),
+            ),
+            (line("player2", "afk:false"), afk("player2", false, false)),
+            (json("player2", true), afk("player2", false, true)),
         ] {
-            assert_eq!(
-                read(Kind::Afk, packet.clone()),
-                [GameEvent::Afk { afk }],
-                "{packet}"
-            );
+            assert_eq!(read(Kind::Afk, packet.clone()), [expected], "{packet}");
         }
         for packet in [
-            json("player2", true),
             line("player1", "strFrame:r2"),
             json!({ "type": "json", "dataObj": { "cmd": "uotls", "unm": "player1", "o": { "tx": 5 } } }),
         ] {
             assert_eq!(read(Kind::Afk, packet.clone()), [], "{packet}");
         }
-        let mut events = Vec::new();
-        Kind::Afk.read(&json("player1", true).to_string(), || None, &mut events);
-        assert_eq!(events, []);
     }
 
     #[test]

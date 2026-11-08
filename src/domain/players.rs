@@ -7,16 +7,21 @@ use super::{
 };
 use crate::bridge::{self, CallError, Format, Loader, Packet, Value, packets::wire};
 
+pub(crate) struct PlayerUpdate {
+    pub(crate) username: String,
+    pub(crate) afk: Option<bool>,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct PlayerUpdatePacket {
     #[serde(rename = "unm", deserialize_with = "wire::text")]
-    pub(crate) username: String,
+    username: String,
     #[serde(rename = "o", default)]
-    update: PlayerUpdate,
+    changes: Changes,
 }
 
 #[derive(Default, Deserialize)]
-struct PlayerUpdate {
+struct Changes {
     #[serde(default, deserialize_with = "flagged")]
     afk: Option<bool>,
 }
@@ -30,9 +35,12 @@ impl Packet for PlayerUpdatePacket {
     const CMD: &'static str = "uotls";
 }
 
-impl PlayerUpdatePacket {
-    pub(crate) fn afk(&self) -> Option<bool> {
-        self.update.afk
+impl From<PlayerUpdatePacket> for PlayerUpdate {
+    fn from(packet: PlayerUpdatePacket) -> Self {
+        PlayerUpdate {
+            username: packet.username,
+            afk: packet.changes.afk,
+        }
     }
 }
 
@@ -40,8 +48,8 @@ impl PlayerUpdatePacket {
 pub(crate) struct PlayerUpdateLine {
     _cmd: String,
     _room: String,
-    pub(crate) username: String,
-    update: String,
+    username: String,
+    changes: String,
 }
 
 impl Packet for PlayerUpdateLine {
@@ -49,14 +57,19 @@ impl Packet for PlayerUpdateLine {
     const CMD: &'static str = "uotls";
 }
 
-impl PlayerUpdateLine {
-    pub(crate) fn afk(&self) -> Option<bool> {
-        self.update
-            .split(',')
-            .find_map(|field| match field.split_once(':') {
-                Some(("afk", value)) => Some(value.trim() == "true"),
-                _ => None,
-            })
+impl From<PlayerUpdateLine> for PlayerUpdate {
+    fn from(line: PlayerUpdateLine) -> Self {
+        let field = |key: &str| {
+            line.changes
+                .split(',')
+                .find_map(|field| field.split_once(':').filter(|(name, _)| *name == key))
+                .map(|(_, value)| value.trim().to_owned())
+        };
+        let afk = field("afk").map(|value| value == "true");
+        PlayerUpdate {
+            username: line.username,
+            afk,
+        }
     }
 }
 

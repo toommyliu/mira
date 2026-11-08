@@ -7,8 +7,12 @@ export default function* () {
     return;
   }
 
-  yield* Events.on({ type: "afk" }, ({ afk }) => Effect.sync(() => console.log(`afk ${afk}`)));
-  yield* Events.on({ type: "afk", afk: true }, () => Packets.sendToServer("%xt%zm%afk%1%false%"));
+  yield* Events.on({ type: "afk" }, ({ username, afk }) =>
+    Effect.sync(() => console.log(`${username} afk ${afk}`)),
+  );
+  yield* Events.on({ type: "afk", self: true, afk: true }, () =>
+    Packets.sendToServer("%xt%zm%afk%1%false%"),
+  );
   yield* Events.on({ type: "itemDrop" }, (drop) =>
     Effect.sync(() => console.log(`dropped ${drop.quantity} ${drop.name}`)),
   );

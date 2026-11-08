@@ -644,8 +644,13 @@ export type GameEvent =
       /** The amount in this drop. */
       readonly quantity: number;
     }
-  /** You went AFK or came back. */
-  | { readonly type: "afk"; readonly afk: boolean }
+  /** A player went AFK or came back. `self` is you. */
+  | {
+      readonly type: "afk";
+      readonly username: string;
+      readonly self: boolean;
+      readonly afk: boolean;
+    }
   /** `""` is the map's default zone. */
   | { readonly type: "zone"; readonly zone: string };
 export type EventType = GameEvent["type"];

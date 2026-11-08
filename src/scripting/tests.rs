@@ -746,7 +746,9 @@ fn event_handlers_run_until_the_script_returns() {
 import { Events, Packets } from "lyra";
 
 export default function* () {
-  yield* Events.on({ type: "afk", afk: true }, () => Packets.sendToServer("%xt%zm%afk%1%false%"));
+  yield* Events.on({ type: "afk", self: true, afk: true }, () =>
+    Packets.sendToServer("%xt%zm%afk%1%false%"),
+  );
   yield* Effect.sleep("50 millis");
 }
 "#,
@@ -760,8 +762,9 @@ export default function* () {
                     if !delivered.swap(true, std::sync::atomic::Ordering::SeqCst) =>
                 {
                     batch(json!([
-                        { "type": "afk", "afk": false },
-                        { "type": "afk", "afk": true },
+                        { "type": "afk", "username": "player1", "self": true, "afk": false },
+                        { "type": "afk", "username": "player2", "self": false, "afk": true },
+                        { "type": "afk", "username": "player1", "self": true, "afk": true },
                     ]))
                 }
                 Request::Feeds(F::Next { .. }) => None,

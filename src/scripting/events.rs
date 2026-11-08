@@ -7,7 +7,10 @@ use super::{
 };
 use crate::{
     bridge::{Event, Loader, Subscription, packets::disconnected},
-    domain::{auth, events::Kind},
+    domain::{
+        auth,
+        events::{Kind, Me},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -36,22 +39,26 @@ pub(super) fn serve(
     let loader = loader.clone();
     feeds.open(
         id,
-        Feed::new(events, move |event, items| match event {
-            Event::ExtensionResponse { packet } => {
-                let mut read = Vec::new();
-                kind.read(&packet, || username(&loader), &mut read);
-                items.extend(read.into_iter().map(|event| json!(event)));
+        Feed::new(events, move |event, items| {
+            if disconnected(&event) {
+                items.push(json!({ "lost": true }));
+                return;
             }
-            event if disconnected(&event) => items.push(json!({ "lost": true })),
-            _ => {}
+            let mut read = Vec::new();
+            kind.read(&event, &Player(&loader), &mut read);
+            items.extend(read.into_iter().map(|event| json!(event)));
         }),
     );
     Ok(Value::Null)
 }
 
-fn username(loader: &impl Loader) -> Option<String> {
-    auth::username(loader).unwrap_or_else(|error| {
-        tracing::debug!(%error, "couldn't read the username for an event");
-        None
-    })
+struct Player<'a, L>(&'a L);
+
+impl<L: Loader> Me for Player<'_, L> {
+    fn username(&self) -> Option<String> {
+        auth::username(self.0).unwrap_or_else(|error| {
+            tracing::debug!(%error, "couldn't read the username for an event");
+            None
+        })
+    }
 }
