@@ -269,6 +269,29 @@ pub(crate) fn available_slots(loader: &impl Loader, pool: Pool) -> Result<i32, C
 }
 
 #[derive(Deserialize)]
+pub(crate) struct AddItemsPacket {
+    #[serde(default, deserialize_with = "wire::values")]
+    pub(crate) items: Vec<AddedItem>,
+}
+
+impl Packet for AddItemsPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "addItems";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AddedItem {
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    pub(crate) item_id: Option<i32>,
+    #[serde(rename = "sName", default, deserialize_with = "wire::text")]
+    pub(crate) name: String,
+    #[serde(rename = "iQty", default, deserialize_with = "wire::integer")]
+    pub(crate) quantity: Option<i32>,
+    #[serde(rename = "bTemp", default, deserialize_with = "wire::flag")]
+    pub(crate) temp: bool,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct EquipItemPacket {
     #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
     item_id: Option<i32>,

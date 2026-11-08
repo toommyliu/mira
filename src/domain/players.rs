@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
 
 use super::{
@@ -12,6 +14,7 @@ pub(crate) struct PlayerUpdate {
     pub(crate) afk: Option<bool>,
     pub(crate) cell: Option<String>,
     pub(crate) pad: Option<String>,
+    pub(crate) state: Option<State>,
     pub(crate) joined: bool,
 }
 
@@ -31,6 +34,8 @@ struct Changes {
     cell: Option<String>,
     #[serde(rename = "strPad")]
     pad: Option<String>,
+    #[serde(rename = "intState", default, deserialize_with = "wire::integer")]
+    state: Option<i32>,
     #[serde(rename = "strUsername")]
     everything: Option<IgnoredAny>,
 }
@@ -51,6 +56,7 @@ impl From<PlayerUpdatePacket> for PlayerUpdate {
             afk: packet.changes.afk,
             cell: packet.changes.cell,
             pad: packet.changes.pad,
+            state: packet.changes.state.and_then(State::from_game),
             joined: packet.changes.everything.is_some(),
         }
     }
@@ -80,14 +86,35 @@ impl From<PlayerUpdateLine> for PlayerUpdate {
         let afk = field("afk").map(|value| value == "true");
         let cell = field("strFrame");
         let pad = field("strPad");
+        let state = field("intState")
+            .and_then(|state| state.parse().ok())
+            .and_then(State::from_game);
         PlayerUpdate {
             username: line.username,
             afk,
             cell,
             pad,
+            state,
             joined: false,
         }
     }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FightPlayersPacket {
+    #[serde(rename = "p", default)]
+    pub(crate) players: HashMap<String, Option<FightPlayer>>,
+}
+
+impl Packet for FightPlayersPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "ct";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FightPlayer {
+    #[serde(rename = "intState", default, deserialize_with = "wire::integer")]
+    pub(crate) state: Option<i32>,
 }
 
 #[derive(Deserialize)]

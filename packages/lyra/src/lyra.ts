@@ -666,7 +666,42 @@ export type GameEvent =
   | { readonly type: "playerJoined"; readonly username: string; readonly self: boolean }
   | { readonly type: "playerLeft"; readonly username: string; readonly self: boolean }
   /** The connection to the server dropped. */
-  | { readonly type: "logout" };
+  | { readonly type: "logout" }
+  /** `"dead"` is a death. `"idle"` is a respawn or leaving combat. */
+  | {
+      readonly type: "playerState";
+      readonly username: string;
+      readonly self: boolean;
+      readonly state: State;
+    }
+  | { readonly type: "monsterRespawn"; readonly monMapId: number }
+  /** `targetId` is a monster's `monMapId` or a player's `userId`. */
+  | {
+      readonly type: "auraAdded";
+      readonly name: string;
+      readonly targetType: "monster" | "player";
+      readonly targetId: number;
+      readonly self: boolean;
+      /** Seconds. */
+      readonly duration: number | null;
+    }
+  | {
+      readonly type: "auraRemoved";
+      readonly name: string;
+      readonly targetType: "monster" | "player";
+      readonly targetId: number;
+      readonly self: boolean;
+    }
+  /** A line a monster says, or a message the server shows you. */
+  | { readonly type: "message"; readonly text: string; readonly monMapId: number | null }
+  /** An item went straight into your inventory, such as a quest reward or a temporary item. */
+  | {
+      readonly type: "itemAdded";
+      readonly itemId: number;
+      readonly name: string;
+      readonly quantity: number;
+      readonly temp: boolean;
+    };
 export type EventType = GameEvent["type"];
 export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
 /** `type` picks the event. Other fields must match exactly. */

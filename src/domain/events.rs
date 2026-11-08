@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    combat::CtPacket,
+    State,
+    auras::FightAurasPacket,
+    combat::{CtPacket, FightMessagesPacket, UserMessagePacket},
     drops::DropItemPacket,
+    inventory::AddItemsPacket,
     player::MoveToAreaPacket,
-    players::{ExitAreaLine, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket},
-    world::EventPacket,
+    players::{
+        ExitAreaLine, FightPlayersPacket, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket,
+    },
+    world::{EventPacket, RespawnMonLine},
 };
 use crate::bridge::{
     Event, Packet,
@@ -24,6 +29,19 @@ pub(crate) enum Kind {
     PlayerJoined,
     PlayerLeft,
     Logout,
+    PlayerState,
+    MonsterRespawn,
+    AuraAdded,
+    AuraRemoved,
+    Message,
+    ItemAdded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TargetType {
+    Monster,
+    Player,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -71,10 +89,45 @@ pub(crate) enum GameEvent {
         is_self: bool,
     },
     Logout,
+    PlayerState {
+        username: String,
+        #[serde(rename = "self")]
+        is_self: bool,
+        state: State,
+    },
+    MonsterRespawn {
+        mon_map_id: i32,
+    },
+    AuraAdded {
+        name: String,
+        target_type: TargetType,
+        target_id: i32,
+        #[serde(rename = "self")]
+        is_self: bool,
+        duration: Option<f64>,
+    },
+    AuraRemoved {
+        name: String,
+        target_type: TargetType,
+        target_id: i32,
+        #[serde(rename = "self")]
+        is_self: bool,
+    },
+    Message {
+        text: String,
+        mon_map_id: Option<i32>,
+    },
+    ItemAdded {
+        item_id: i32,
+        name: String,
+        quantity: i32,
+        temp: bool,
+    },
 }
 
 pub(crate) trait Me {
     fn username(&self) -> Option<String>;
+    fn user_id(&self) -> Option<i32>;
 }
 
 impl Kind {
@@ -96,6 +149,23 @@ impl Kind {
             Kind::MapJoined => names(packet, MoveToAreaPacket::FORMAT, MoveToAreaPacket::CMD),
             Kind::PlayerLeft => names(packet, ExitAreaLine::FORMAT, ExitAreaLine::CMD),
             Kind::Logout => false,
+            Kind::PlayerState => {
+                names(packet, FightPlayersPacket::FORMAT, FightPlayersPacket::CMD)
+                    || names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
+                    || names(packet, PlayerUpdateLine::FORMAT, PlayerUpdateLine::CMD)
+            }
+            Kind::MonsterRespawn => names(packet, RespawnMonLine::FORMAT, RespawnMonLine::CMD),
+            Kind::AuraAdded | Kind::AuraRemoved => {
+                names(packet, FightAurasPacket::FORMAT, FightAurasPacket::CMD)
+            }
+            Kind::Message => {
+                names(
+                    packet,
+                    FightMessagesPacket::FORMAT,
+                    FightMessagesPacket::CMD,
+                ) || names(packet, UserMessagePacket::FORMAT, UserMessagePacket::CMD)
+            }
+            Kind::ItemAdded => names(packet, AddItemsPacket::FORMAT, AddItemsPacket::CMD),
         }
     }
 
@@ -190,6 +260,120 @@ impl Kind {
                 }
             }
             Kind::Logout => {}
+            Kind::PlayerState => {
+                if let Some(fight) = decode::<FightPlayersPacket>(packet) {
+                    let mut players: Vec<_> = fight
+                        .players
+                        .into_iter()
+                        .filter_map(|(username, player)| {
+                            Some((username, State::from_game(player?.state?)?))
+                        })
+                        .collect();
+                    players.sort_by(|(left, _), (right, _)| left.cmp(right));
+                    for (username, state) in players {
+                        events.push(GameEvent::PlayerState {
+                            is_self: is_me(me, &username),
+                            username,
+                            state,
+                        });
+                    }
+                } else if let Some(PlayerUpdate {
+                    username,
+                    state: Some(state),
+                    ..
+                }) = player_update(packet)
+                {
+                    events.push(GameEvent::PlayerState {
+                        is_self: is_me(me, &username),
+                        username,
+                        state,
+                    });
+                }
+            }
+            Kind::MonsterRespawn => {
+                if let Some(respawned) = decode::<RespawnMonLine>(packet) {
+                    events.extend(
+                        respawned
+                            .ids
+                            .into_iter()
+                            .map(|mon_map_id| GameEvent::MonsterRespawn { mon_map_id }),
+                    );
+                }
+            }
+            Kind::AuraAdded | Kind::AuraRemoved => {
+                let Some(fight) = decode::<FightAurasPacket>(packet) else {
+                    return;
+                };
+                for change in fight.changes.into_iter().flatten() {
+                    let added = match change.cmd.as_str() {
+                        "aura+" => true,
+                        "aura-" => false,
+                        _ => continue,
+                    };
+                    if added != (self == Kind::AuraAdded) {
+                        continue;
+                    }
+                    for (target_type, target_id) in targets(&change.targets) {
+                        let is_self =
+                            target_type == TargetType::Player && me.user_id() == Some(target_id);
+                        for aura in change.auras.iter().chain(&change.aura) {
+                            let name = aura.name.clone();
+                            events.push(if added {
+                                GameEvent::AuraAdded {
+                                    name,
+                                    target_type,
+                                    target_id,
+                                    is_self,
+                                    duration: aura.duration,
+                                }
+                            } else {
+                                GameEvent::AuraRemoved {
+                                    name,
+                                    target_type,
+                                    target_id,
+                                    is_self,
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            Kind::Message => {
+                if let Some(fight) = decode::<FightMessagesPacket>(packet) {
+                    for animation in fight.anims.into_iter().flatten() {
+                        if animation.msg.is_empty() {
+                            continue;
+                        }
+                        let mon_map_id = targets(&animation.caster)
+                            .chain(targets(&animation.target))
+                            .find(|(target_type, _)| *target_type == TargetType::Monster)
+                            .map(|(_, id)| id);
+                        events.push(GameEvent::Message {
+                            text: animation.msg,
+                            mon_map_id,
+                        });
+                    }
+                } else if let Some(message) = decode::<UserMessagePacket>(packet)
+                    && !message.text.is_empty()
+                {
+                    events.push(GameEvent::Message {
+                        text: message.text,
+                        mon_map_id: None,
+                    });
+                }
+            }
+            Kind::ItemAdded => {
+                if let Some(added) = decode::<AddItemsPacket>(packet) {
+                    events.extend(added.items.into_iter().filter_map(|item| {
+                        Some(GameEvent::ItemAdded {
+                            item_id: item.item_id.filter(|id| *id > 0)?,
+                            name: item.name,
+                            quantity: item.quantity.unwrap_or(1),
+                            temp: item.temp,
+                        })
+                    }));
+                }
+            }
             Kind::Zone => {
                 if let Some(event) = decode::<EventPacket>(packet) {
                     events.push(GameEvent::Zone {
@@ -205,6 +389,18 @@ fn player_update(packet: &str) -> Option<PlayerUpdate> {
     decode::<PlayerUpdatePacket>(packet)
         .map(PlayerUpdate::from)
         .or_else(|| decode::<PlayerUpdateLine>(packet).map(PlayerUpdate::from))
+}
+
+fn targets(references: &str) -> impl Iterator<Item = (TargetType, i32)> + '_ {
+    references.split(',').filter_map(|reference| {
+        let (kind, id) = reference.trim().split_once(':')?;
+        let kind = match kind {
+            "m" => TargetType::Monster,
+            "p" => TargetType::Player,
+            _ => return None,
+        };
+        Some((kind, id.parse().ok()?))
+    })
 }
 
 fn is_me(me: &impl Me, username: &str) -> bool {
@@ -230,6 +426,10 @@ mod tests {
     impl Me for Player1 {
         fn username(&self) -> Option<String> {
             Some("Player1".into())
+        }
+
+        fn user_id(&self) -> Option<i32> {
+            Some(28552)
         }
     }
 
@@ -406,6 +606,129 @@ mod tests {
             Kind::Logout,
             json!({ "type": "json", "dataObj": { "cmd": "ct" } })
         ));
+    }
+
+    #[test]
+    fn player_states_come_from_fight_updates_and_player_updates() {
+        let fight = json!({ "type": "json", "dataObj": { "cmd": "ct", "p": {
+            "player2": { "intState": 2 },
+            "player1": { "intMP": 63, "intHP": 0, "intState": 0 },
+            "player3": { "intHP": 10 },
+        } } });
+        let update = json!({ "type": "json", "dataObj": { "cmd": "uotls", "unm": "player1", "o": { "intState": 1 } } });
+        let state = |username: &str, is_self: bool, state: State| GameEvent::PlayerState {
+            username: username.into(),
+            is_self,
+            state,
+        };
+        assert!(
+            wanted(Kind::PlayerState, fight.clone()) && wanted(Kind::PlayerState, update.clone())
+        );
+        assert_eq!(
+            read(Kind::PlayerState, fight),
+            [
+                state("player1", true, State::Dead),
+                state("player2", false, State::Combat),
+            ]
+        );
+        assert_eq!(
+            read(Kind::PlayerState, update),
+            [state("player1", true, State::Idle)]
+        );
+    }
+
+    #[test]
+    fn a_respawn_reports_each_monster() {
+        let respawned = |ids: &str| json!({ "type": "str", "dataObj": ["respawnMon", "-1", ids] });
+        assert!(wanted(Kind::MonsterRespawn, respawned("8")));
+        assert_eq!(
+            read(Kind::MonsterRespawn, respawned("8")),
+            [GameEvent::MonsterRespawn { mon_map_id: 8 }]
+        );
+        assert_eq!(
+            read(Kind::MonsterRespawn, respawned("2,3")),
+            [
+                GameEvent::MonsterRespawn { mon_map_id: 2 },
+                GameEvent::MonsterRespawn { mon_map_id: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn auras_report_their_target_and_whether_it_is_you() {
+        let packet = json!({ "type": "json", "dataObj": { "cmd": "ct", "a": [
+            { "cmd": "aura+", "cInf": "p:28552", "tInf": "m:1", "auras": [{ "nam": "Censure", "dur": 10, "isNew": true }] },
+            { "cmd": "aura+", "cInf": "p:28552", "tInf": "p:28552", "auras": [{ "nam": "Royal Resolve", "dur": 6 }] },
+            { "cmd": "aura+", "cInf": "p:28554", "tInf": "p:28554", "auras": [{ "nam": "Shield" }] },
+            { "cmd": "aura-", "tInf": "p:28552", "aura": { "nam": "Stacks Consumed" } },
+            null,
+        ] } });
+        let added = |name: &str, target_type, target_id, is_self, duration| GameEvent::AuraAdded {
+            name: name.into(),
+            target_type,
+            target_id,
+            is_self,
+            duration,
+        };
+        assert!(wanted(Kind::AuraAdded, packet.clone()));
+        assert_eq!(
+            read(Kind::AuraAdded, packet.clone()),
+            [
+                added("Censure", TargetType::Monster, 1, false, Some(10.0)),
+                added("Royal Resolve", TargetType::Player, 28552, true, Some(6.0)),
+                added("Shield", TargetType::Player, 28554, false, None),
+            ]
+        );
+        assert_eq!(
+            read(Kind::AuraRemoved, packet),
+            [GameEvent::AuraRemoved {
+                name: "Stacks Consumed".into(),
+                target_type: TargetType::Player,
+                target_id: 28552,
+                is_self: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn messages_come_from_monster_animations_and_server_lines() {
+        let fight = json!({ "type": "json", "dataObj": { "cmd": "ct", "anims": [
+            { "fx": "m", "animStr": "ChargeA", "msg": "You shall listen.", "cInf": "m:1", "tInf": "m:1", "strFrame": "Boss" },
+            { "animStr": "Attack1", "cInf": "p:28552", "tInf": "m:1", "strFrame": "Boss" },
+        ] } });
+        let line = json!({ "type": "json", "dataObj": { "cmd": "umsg", "s": "We move closer to wiping the slate clean." } });
+        assert!(wanted(Kind::Message, fight.clone()) && wanted(Kind::Message, line.clone()));
+        assert_eq!(
+            read(Kind::Message, fight),
+            [GameEvent::Message {
+                text: "You shall listen.".into(),
+                mon_map_id: Some(1)
+            }]
+        );
+        assert_eq!(
+            read(Kind::Message, line),
+            [GameEvent::Message {
+                text: "We move closer to wiping the slate clean.".into(),
+                mon_map_id: None
+            }]
+        );
+    }
+
+    #[test]
+    fn added_items_report_whether_they_are_temporary() {
+        let packet = json!({ "type": "json", "dataObj": { "cmd": "addItems", "items": {
+            "87": { "ItemID": 87, "sName": "Treeant Branch", "iQty": 1, "bTemp": true, "iStk": 1 }
+        } } });
+        assert!(wanted(Kind::ItemAdded, packet.clone()));
+        assert_eq!(
+            read(Kind::ItemAdded, packet),
+            [GameEvent::ItemAdded {
+                item_id: 87,
+                name: "Treeant Branch".into(),
+                quantity: 1,
+                temp: true
+            }]
+        );
     }
 
     #[test]

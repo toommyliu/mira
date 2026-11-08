@@ -158,6 +158,38 @@ impl Packet for CtPacket {
     const CMD: &'static str = "ct";
 }
 
+#[derive(Deserialize)]
+pub(crate) struct FightMessagesPacket {
+    #[serde(default)]
+    pub(crate) anims: Vec<Option<Animation>>,
+}
+
+impl Packet for FightMessagesPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "ct";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Animation {
+    #[serde(default, deserialize_with = "wire::text")]
+    pub(crate) msg: String,
+    #[serde(rename = "cInf", default, deserialize_with = "wire::text")]
+    pub(crate) caster: String,
+    #[serde(rename = "tInf", default, deserialize_with = "wire::text")]
+    pub(crate) target: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UserMessagePacket {
+    #[serde(rename = "s", default, deserialize_with = "wire::text")]
+    pub(crate) text: String,
+}
+
+impl Packet for UserMessagePacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "umsg";
+}
+
 impl CtPacket {
     pub(crate) fn deaths(&self) -> Vec<i32> {
         let mut deaths: Vec<i32> = self

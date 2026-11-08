@@ -1,7 +1,37 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::inventory::{row, rows};
-use crate::bridge::{self, CallError, Loader, Value};
+use crate::bridge::{self, CallError, Format, Loader, Packet, Value, packets::wire};
+
+#[derive(Deserialize)]
+pub(crate) struct FightAurasPacket {
+    #[serde(rename = "a", default)]
+    pub(crate) changes: Vec<Option<AuraChange>>,
+}
+
+impl Packet for FightAurasPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "ct";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AuraChange {
+    #[serde(default, deserialize_with = "wire::text")]
+    pub(crate) cmd: String,
+    #[serde(rename = "tInf", default, deserialize_with = "wire::text")]
+    pub(crate) targets: String,
+    #[serde(default)]
+    pub(crate) auras: Vec<AuraEntry>,
+    pub(crate) aura: Option<AuraEntry>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AuraEntry {
+    #[serde(rename = "nam", default, deserialize_with = "wire::text")]
+    pub(crate) name: String,
+    #[serde(rename = "dur", default, deserialize_with = "wire::number")]
+    pub(crate) duration: Option<f64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]

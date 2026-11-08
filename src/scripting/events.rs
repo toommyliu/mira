@@ -6,7 +6,7 @@ use super::{
     feeds::{Feed, FeedId, Feeds},
 };
 use crate::{
-    bridge::{Event, Loader, Subscription, packets::disconnected},
+    bridge::{self, Event, Loader, Subscription, packets::disconnected},
     domain::{
         auth,
         events::{Kind, Me},
@@ -60,6 +60,12 @@ impl<L: Loader> Me for Player<'_, L> {
             tracing::debug!(%error, "couldn't read the username for an event");
             None
         })
+    }
+
+    fn user_id(&self) -> Option<i32> {
+        bridge::player::get_user_id(self.0)
+            .inspect_err(|error| tracing::debug!(%error, "couldn't read the user id for an event"))
+            .ok()
     }
 }
 

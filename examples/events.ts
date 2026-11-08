@@ -19,6 +19,16 @@ export default function* () {
   yield* Events.on({ type: "zone" }, ({ zone }) =>
     Effect.sync(() => console.log(`zone ${zone === "" ? "default" : zone}`)),
   );
+  yield* Events.on({ type: "playerState", self: true, state: "dead" }, () =>
+    Effect.sync(() => console.log("you died")),
+  );
+  yield* Events.on({ type: "itemAdded", temp: true }, (item) =>
+    Effect.sync(() => console.log(`got ${item.quantity} ${item.name}`)),
+  );
+  yield* Events.on({ type: "message" }, ({ text }) => Effect.sync(() => console.log(`says: ${text}`)));
+  yield* Events.on({ type: "auraAdded", self: true }, ({ name, duration }) =>
+    Effect.sync(() => console.log(`aura ${name} for ${duration ?? "?"}s`)),
+  );
 
   const death = yield* Wait.forEvent(
     { type: "monsterDeath" },

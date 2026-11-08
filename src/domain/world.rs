@@ -304,6 +304,31 @@ impl Packet for EventPacket {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct RespawnMonLine {
+    _cmd: String,
+    _room: serde::de::IgnoredAny,
+    #[serde(deserialize_with = "id_list")]
+    pub(crate) ids: Vec<i32>,
+}
+
+impl Packet for RespawnMonLine {
+    const FORMAT: Format = Format::Str;
+    const CMD: &'static str = "respawnMon";
+}
+
+fn id_list<'de, D: Deserializer<'de>>(input: D) -> Result<Vec<i32>, D::Error> {
+    let ids = match serde_json::Value::deserialize(input)? {
+        serde_json::Value::String(ids) => ids,
+        serde_json::Value::Number(id) => id.to_string(),
+        _ => String::new(),
+    };
+    Ok(ids
+        .split(',')
+        .filter_map(|id| id.trim().parse().ok())
+        .collect())
+}
+
+#[derive(Deserialize)]
 pub(crate) struct MonsterDropsPacket {
     #[serde(rename = "MonMapID", default, deserialize_with = "wire::number")]
     mon_map_id: Option<f64>,
