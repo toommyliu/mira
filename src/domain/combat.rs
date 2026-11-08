@@ -1,10 +1,14 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::{pin, select, time::sleep};
+use tokio::{
+    pin, select,
+    time::{Instant, sleep, timeout_at},
+};
 
 use super::{
     State, auth, has_avatar,
+    inventory::TurnInPacket,
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
@@ -12,6 +16,7 @@ use crate::bridge::{
 };
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
+const CONSUMED_TIMEOUT: Duration = Duration::from_secs(5);
 const SKILLS: [i32; 4] = [1, 2, 3, 4];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -21,6 +26,10 @@ pub(crate) struct Skill(u8);
 impl Skill {
     pub(crate) fn index(self) -> i32 {
         i32::from(self.0)
+    }
+
+    fn consumable(self) -> bool {
+        self.0 == 5
     }
 }
 
@@ -110,6 +119,7 @@ fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
 
 pub(crate) async fn use_skill(
     loader: &impl Loader,
+    turn_ins: Packets<TurnInPacket>,
     skill: Skill,
     target: Option<&MonsterQuery>,
     force: bool,
@@ -128,7 +138,38 @@ pub(crate) async fn use_skill(
             None => return Ok(false),
         },
     };
-    bridge::combat::use_skill(loader, &skill.index().to_string(), selector, Some(force))
+    let consumed = if skill.consumable() {
+        match slotted_item(loader)? {
+            None => return Ok(false),
+            item_id => item_id,
+        }
+    } else {
+        None
+    };
+    turn_ins.clear();
+    if !bridge::combat::use_skill(loader, &skill.index().to_string(), selector, Some(force))? {
+        return Ok(false);
+    }
+    let Some(item_id) = consumed else {
+        return Ok(true);
+    };
+    let deadline = Instant::now() + CONSUMED_TIMEOUT;
+    while let Ok(reply) = timeout_at(deadline, turn_ins.next()).await {
+        if reply.is_ok_and(|packet| packet.took(item_id)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn slotted_item(loader: &impl Loader) -> Result<Option<f64>, CallError> {
+    Ok(match bridge::combat::get_consumable_skill_item(loader)? {
+        Value::Object(fields) => match fields.get("itemId") {
+            Some(Value::Number(id)) if *id > 0.0 => Some(*id),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 async fn ready(loader: &impl Loader, skill: Skill) -> Result<bool, CallError> {
@@ -279,6 +320,8 @@ mod tests {
         drop_target_after_first_cast: bool,
         leave_after_first_cast: bool,
         flood_after_death: bool,
+        slotted: Option<f64>,
+        taken_on_cast: Option<&'static str>,
         cast: Vec<i32>,
     }
 
@@ -380,6 +423,9 @@ mod tests {
                     Value::Bool(fight.cell == "r2" && alive)
                 }
                 "combat.getSkillCooldownRemaining" => number(fight.cooldown()),
+                "combat.getConsumableSkillItem" => fight.slotted.map_or(Value::Null, |id| {
+                    row(&[("itemId", number(id)), ("ready", Value::Bool(true))])
+                }),
                 "combat.useSkill" => {
                     let Value::String(skill) = &args[0] else {
                         panic!("useSkill needs a skill: {args:?}");
@@ -391,6 +437,13 @@ mod tests {
                         fight.target = Some(selected(&args[1]));
                     }
                     fight.cast.push(skill.parse().unwrap());
+                    if let (Some(items), "5") = (fight.taken_on_cast, skill.as_str()) {
+                        publisher.publish(&Event::ExtensionResponse {
+                            packet: format!(
+                                r#"{{"type":"json","dataObj":{{"cmd":"turnIn","sItems":"{items}"}}}}"#
+                            ),
+                        });
+                    }
                     publisher.publish(&struck(1.0, 0));
                     let target = fight.target;
                     if let Some(monster) = fight.monsters.iter_mut().find(|m| Some(m.id) == target)
@@ -550,6 +603,10 @@ mod tests {
         assert_eq!(fight.target, None);
     }
 
+    fn turn_ins() -> Packets<TurnInPacket> {
+        Packets::subscribe(|wants| Events::default().subscribe(wants))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn waiting_until_ready_casts_once_the_cooldown_ends() {
         let cooldown = Duration::from_millis(2500);
@@ -562,11 +619,14 @@ mod tests {
         });
         let skill = Skill(2);
         assert_eq!(
-            use_skill(&loader, skill, None, false, false).await,
+            use_skill(&loader, turn_ins(), skill, None, false, false).await,
             Ok(false)
         );
         let started = Instant::now();
-        assert_eq!(use_skill(&loader, skill, None, false, true).await, Ok(true));
+        assert_eq!(
+            use_skill(&loader, turn_ins(), skill, None, false, true).await,
+            Ok(true)
+        );
         assert_eq!(started.elapsed(), cooldown);
         assert_eq!(fight.borrow().cast, [2]);
     }
@@ -582,7 +642,7 @@ mod tests {
             ..Fight::default()
         });
         assert_eq!(
-            use_skill(&loader, Skill(1), None, false, true).await,
+            use_skill(&loader, turn_ins(), Skill(1), None, false, true).await,
             Ok(false)
         );
         assert!(fight.borrow().cast.is_empty());
@@ -598,15 +658,45 @@ mod tests {
         let frogzard = named("Frogzard");
         let dragon = named("Dragon");
         assert_eq!(
-            use_skill(&loader, Skill(1), Some(&dragon), false, false).await,
+            use_skill(&loader, turn_ins(), Skill(1), Some(&dragon), false, false).await,
             Ok(false)
         );
         assert!(fight.borrow().cast.is_empty());
         assert_eq!(
-            use_skill(&loader, Skill(1), Some(&frogzard), false, false).await,
+            use_skill(&loader, turn_ins(), Skill(1), Some(&frogzard), false, false).await,
             Ok(true)
         );
         assert_eq!(fight.borrow().target, Some(2.0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_consumable_slot_finishes_when_the_server_takes_its_item() {
+        for (slotted, taken, expected, cast) in [
+            (Some(7539.0), Some("4:1,7539:1"), true, vec![5]),
+            (Some(7539.0), Some("4:1"), false, vec![5]),
+            (None, None, false, vec![]),
+        ] {
+            let (loader, fight, events) = fighting(Fight {
+                cell: "r2",
+                slotted,
+                taken_on_cast: taken,
+                ..Fight::default()
+            });
+            assert_eq!(
+                use_skill(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    Skill(5),
+                    None,
+                    false,
+                    false
+                )
+                .await,
+                Ok(expected),
+                "{slotted:?} {taken:?}"
+            );
+            assert_eq!(fight.borrow().cast, cast);
+        }
     }
 
     #[test]

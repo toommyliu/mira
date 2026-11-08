@@ -73,6 +73,7 @@ pub(super) async fn serve(
         } => json!(
             combat::use_skill(
                 loader,
+                Packets::subscribe(&subscribe),
                 skill,
                 target.as_ref(),
                 force.unwrap_or(false),
