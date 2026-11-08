@@ -11,6 +11,7 @@ use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
+    inventory::{Request as I, TempRequest as T},
     player::Request as P,
     runtime::Player,
     world::Request as W,
@@ -751,4 +752,114 @@ export default function* () {
         ]
         .map(Request::Combat)
     );
+}
+
+#[test]
+fn inventory_requests_reach_the_player_typed() {
+    use crate::domain::inventory::{ItemQuery, Pool};
+
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Inventory, TempInventory } from "lyra";
+
+export default function* () {
+  yield* Inventory.getItems();
+  yield* Inventory.getItem("Potion");
+  yield* Inventory.getQuantity({ itemId: 7 });
+  yield* Inventory.contains("Potion");
+  yield* Inventory.contains("Potion", 5);
+  yield* Inventory.isEquipped("Helm");
+  yield* Inventory.getSlots();
+  yield* Inventory.getUsedSlots();
+  yield* Inventory.getAvailableSlots("misc");
+  yield* Inventory.equip("Armor");
+  yield* Inventory.equip("Armor", { wear: true });
+  yield* Inventory.unequip("Helm");
+  yield* Inventory.wear({ itemId: 8 });
+  yield* Inventory.use("Tonic");
+  yield* TempInventory.getItems();
+  yield* TempInventory.getItem("Scale");
+  yield* TempInventory.getQuantity("Scale");
+  yield* TempInventory.contains("Scale", 10);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let name = |name: &str| ItemQuery::Name(name.into());
+    let id = |item_id: f64| ItemQuery::ItemId { item_id };
+    let mut expected: Vec<Request> = [
+        I::Items,
+        I::Item {
+            query: name("Potion"),
+        },
+        I::Quantity { query: id(7.0) },
+        I::Contains {
+            query: name("Potion"),
+            quantity: None,
+        },
+        I::Contains {
+            query: name("Potion"),
+            quantity: Some(5.0),
+        },
+        I::Equipped {
+            query: name("Helm"),
+        },
+        I::Slots,
+        I::UsedSlots {
+            pool: Some(Pool::Bag),
+        },
+        I::AvailableSlots {
+            pool: Some(Pool::Misc),
+        },
+        I::Equip {
+            query: name("Armor"),
+            wear: None,
+        },
+        I::Equip {
+            query: name("Armor"),
+            wear: Some(true),
+        },
+        I::Unequip {
+            query: name("Helm"),
+        },
+        I::Wear { query: id(8.0) },
+        I::Use {
+            query: name("Tonic"),
+        },
+    ]
+    .map(Request::Inventory)
+    .to_vec();
+    expected.extend(
+        [
+            T::Items,
+            T::Item {
+                query: name("Scale"),
+            },
+            T::Quantity {
+                query: name("Scale"),
+            },
+            T::Contains {
+                query: name("Scale"),
+                quantity: Some(10.0),
+            },
+        ]
+        .map(Request::TempInventory),
+    );
+    assert_eq!(requests, expected);
 }

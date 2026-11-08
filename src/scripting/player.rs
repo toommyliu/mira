@@ -452,7 +452,10 @@ mod tests {
                         }
                     }
                     let flag = wardrobe.equipped.contains(id);
-                    object(&[("bEquip", Value::Number(if flag { 1.0 } else { 0.0 }))])
+                    object(&[
+                        ("itemId", Value::Number(*id)),
+                        ("equipped", Value::Bool(flag)),
+                    ])
                 }
                 other => panic!("unexpected call {other}"),
             })

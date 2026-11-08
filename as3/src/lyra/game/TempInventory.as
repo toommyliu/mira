@@ -3,29 +3,29 @@ package lyra.game {
 
   [BridgeNamespace("tempInventory")]
   public class TempInventory {
+    private static function row(item:Object):Object {
+      return {
+        itemId: item.ItemID,
+        name: item.sName,
+        quantity: item.iQty,
+        maxStack: item.iStk
+      };
+    }
 
     [BridgeExport]
     public static function getItems():Array {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.tempitems;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function getItem(selector:Object):Object {
-      var game:Object = Main.Game;
-      return ItemLookup.find(game.world.myAvatar.tempitems, selector);
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function contains(selector:Object, quantity:int = 1):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj) {
-        return false;
+      var rows:Array = [];
+      for each (var item:Object in Main.Game.world.myAvatar.tempitems) {
+        rows.push(row(item));
       }
 
-      return itemObj.iQty >= quantity;
+      return rows;
+    }
+
+    [BridgeExport]
+    public static function getItem(selector:Object):Object {
+      var item:Object = ItemLookup.find(Main.Game.world.myAvatar.tempitems, selector);
+      return item ? row(item) : null;
     }
   }
 }

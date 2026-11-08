@@ -3,7 +3,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
 
-use super::{POLL, State, arrive, poll, wait_for_action, wait_until_ready, world};
+use super::{
+    POLL, State, arrive,
+    inventory::{self, ItemQuery},
+    poll, wait_for_action, wait_until_ready, world,
+};
 use crate::bridge::{self, CallError, Format, GameAction, Loader, Packet, Packets, Value};
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -272,16 +276,8 @@ pub(crate) async fn equip_outfit(
 }
 
 fn equipped(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
-    let selector = Value::Object([("itemId".to_owned(), Value::Number(id))].into());
-    let Value::Object(item) = bridge::inventory::get_item(loader, selector)? else {
-        return Ok(false);
-    };
-    Ok(match item.get("bEquip") {
-        Some(Value::Number(flag)) => *flag == 1.0,
-        Some(Value::String(flag)) => flag == "1",
-        Some(Value::Bool(flag)) => *flag,
-        _ => false,
-    })
+    Ok(inventory::item(loader, &ItemQuery::ItemId { item_id: id })?
+        .is_some_and(|item| item.equipped))
 }
 
 #[derive(Deserialize)]

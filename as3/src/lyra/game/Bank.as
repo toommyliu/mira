@@ -139,7 +139,7 @@ package lyra.game
     [BridgeExport]
     public static function deposit(selector:Object):Boolean
     {
-      var item:Object = Inventory.getItem(selector);
+      var item:Object = Inventory.find(selector);
       if (!item)
       {
         return false;
@@ -170,7 +170,7 @@ package lyra.game
     [BridgeExport]
     public static function swap(inventorySelector:Object, bankSelector:Object):Boolean
     {
-      var invItem:Object = Inventory.getItem(inventorySelector);
+      var invItem:Object = Inventory.find(inventorySelector);
       var bankItem:Object = getItem(bankSelector);
 
       if (!invItem || !bankItem)

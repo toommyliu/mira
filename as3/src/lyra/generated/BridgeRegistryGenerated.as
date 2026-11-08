@@ -73,14 +73,12 @@ package lyra.generated
       external.externalize("house.getItems", House.getItems);
       external.externalize("house.getSlots", House.getSlots);
       external.externalize("house.getUsedSlots", House.getUsedSlots);
-      external.externalize("inventory.contains", Inventory.contains);
       external.externalize("inventory.equip", Inventory.equip);
       external.externalize("inventory.getItem", Inventory.getItem);
       external.externalize("inventory.getItems", Inventory.getItems);
-      external.externalize("inventory.getMiscSlots", Inventory.getMiscSlots);
       external.externalize("inventory.getSlots", Inventory.getSlots);
       external.externalize("inventory.getUsedSlots", Inventory.getUsedSlots);
-      external.externalize("inventory.unequipConsumable", Inventory.unequipConsumable);
+      external.externalize("inventory.unequip", Inventory.unequip);
       external.externalize("inventory.use", Inventory.useItem);
       external.externalize("inventory.wear", Inventory.wear);
       external.externalize("outfits.equip", Outfits.equip);
@@ -153,7 +151,6 @@ package lyra.generated
       external.externalize("shops.loadArmorCustomize", Shops.loadArmorCustomize);
       external.externalize("shops.loadHairShop", Shops.loadHairShop);
       external.externalize("shops.sell", Shops.sell);
-      external.externalize("tempInventory.contains", TempInventory.contains);
       external.externalize("tempInventory.getItem", TempInventory.getItem);
       external.externalize("tempInventory.getItems", TempInventory.getItems);
       external.externalize("world.getAvailableMonsterMapIds", World.getAvailableMonsterMapIds);

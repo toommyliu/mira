@@ -22,6 +22,12 @@ const world = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const combat = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "combat", op, ...args });
 
+const inventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "inventory", op, ...args });
+
+const tempInventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "tempInventory", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -149,6 +155,73 @@ export const Combat = {
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
   kill: (query: MonsterQuery) => combat<boolean>("kill", { query }),
+};
+
+export type ItemQuery = string | { readonly itemId: number };
+export type InventoryPool = "bag" | "misc";
+export type ItemPool = InventoryPool | "class" | "house";
+export type Enhancement = {
+  readonly id: number;
+  readonly level: number;
+  readonly patternId: number | null;
+  readonly procId: number | null;
+  readonly dps: number | null;
+  readonly range: number | null;
+  readonly rarity: number | null;
+};
+export type Item = {
+  readonly itemId: number;
+  readonly charItemId: number | null;
+  readonly name: string;
+  readonly description: string;
+  readonly quantity: number;
+  readonly maxStack: number;
+  readonly category: string;
+  readonly slot: string;
+  readonly link: string;
+  readonly meta: string;
+  readonly file: string;
+  readonly equipped: boolean;
+  readonly wearable: boolean;
+  readonly worn: boolean;
+  readonly member: boolean;
+  readonly coins: boolean;
+  readonly pool: ItemPool;
+  readonly classRank: number | null;
+  readonly enhancement: Enhancement | null;
+};
+export type TempItem = {
+  readonly itemId: number;
+  readonly name: string;
+  readonly quantity: number;
+  readonly maxStack: number;
+};
+export type EquipOptions = { readonly wear?: boolean };
+
+export const Inventory = {
+  getItems: () => inventory<readonly Item[]>("items"),
+  getItem: (query: ItemQuery) => inventory<Item | null>("item", { query }),
+  getQuantity: (query: ItemQuery) => inventory<number>("quantity", { query }),
+  contains: (query: ItemQuery, quantity?: number) =>
+    inventory<boolean>("contains", { query, quantity }),
+  isEquipped: (query: ItemQuery) => inventory<boolean>("equipped", { query }),
+  /** Each pool has this many slots. */
+  getSlots: () => inventory<number>("slots"),
+  getUsedSlots: (pool: InventoryPool = "bag") => inventory<number>("usedSlots", { pool }),
+  getAvailableSlots: (pool: InventoryPool = "bag") => inventory<number>("availableSlots", { pool }),
+  equip: (query: ItemQuery, options: EquipOptions = {}) =>
+    inventory<boolean>("equip", { query, ...options }),
+  unequip: (query: ItemQuery) => inventory<boolean>("unequip", { query }),
+  wear: (query: ItemQuery) => inventory<boolean>("wear", { query }),
+  use: (query: ItemQuery) => inventory<boolean>("use", { query }),
+};
+
+export const TempInventory = {
+  getItems: () => tempInventory<readonly TempItem[]>("items"),
+  getItem: (query: ItemQuery) => tempInventory<TempItem | null>("item", { query }),
+  getQuantity: (query: ItemQuery) => tempInventory<number>("quantity", { query }),
+  contains: (query: ItemQuery, quantity?: number) =>
+    tempInventory<boolean>("contains", { query, quantity }),
 };
 
 export const Script = {

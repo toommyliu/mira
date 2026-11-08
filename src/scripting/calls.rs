@@ -3,9 +3,8 @@ use std::{collections::HashMap, sync::mpsc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{combat, player, runtime::Command, world};
-use crate::bridge::{self, Bridge, CallError, Loader, Value};
-use crate::domain::auth;
+use super::{combat, inventory, player, runtime::Command, world};
+use crate::bridge::{Bridge, CallError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(super) u64);
@@ -19,13 +18,8 @@ pub(crate) enum Request {
     Player(player::Request),
     World(world::Request),
     Combat(combat::Request),
-    Inventory(InventoryRequest),
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) enum InventoryRequest {
-    Count { item: String },
+    Inventory(inventory::Request),
+    TempInventory(inventory::TempRequest),
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -118,25 +112,11 @@ async fn serve(bridge: &Bridge, request: Request) -> Reply {
         Request::Combat(request) => {
             combat::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
-        Request::Inventory(InventoryRequest::Count { item }) => {
-            Ok(json!(if auth::in_game(bridge)? {
-                count(bridge, &item)?
-            } else {
-                0
-            }))
+        Request::Inventory(request) => {
+            inventory::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
+        Request::TempInventory(request) => inventory::serve_temp(bridge, request),
     }
-}
-
-fn count(loader: &impl Loader, item: &str) -> Result<u32, CallError> {
-    let name = Value::Object([("name".to_owned(), Value::String(item.to_owned()))].into());
-    let Value::Object(item) = bridge::inventory::get_item(loader, name)? else {
-        return Ok(0);
-    };
-    Ok(match item.get("iQty") {
-        Some(Value::Number(quantity)) if *quantity > 0.0 => *quantity as u32,
-        _ => 0,
-    })
 }
 
 pub(super) fn encode(reply: Reply) -> String {

@@ -1,5 +1,6 @@
 pub(crate) mod auth;
 pub(crate) mod combat;
+pub(crate) mod inventory;
 pub(crate) mod player;
 #[cfg(test)]
 pub(crate) mod testing;

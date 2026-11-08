@@ -3,131 +3,160 @@ package lyra.game {
 
   [BridgeNamespace("inventory")]
   public class Inventory {
+    private static const UNEQUIPPABLE_SLOTS:Array = ["Weapon", "ar"];
+    private static const UNENHANCED_SLOTS:Array = ["mi", "co", "pe", "am"];
+
+    private static function categories():Object {
+      return Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
+    }
+
+    private static function row(item:Object):Object {
+      return {
+        itemId: item.ItemID,
+        charItemId: item.CharItemID,
+        name: item.sName,
+        description: item.sDesc,
+        quantity: item.iQty,
+        maxStack: item.iStk,
+        category: item.sType,
+        slot: item.sES,
+        link: item.sLink,
+        meta: item.sMeta,
+        file: item.sFile,
+        equipped: item.bEquip == 1,
+        wearable: item.hasOwnProperty("bWear"),
+        worn: item.bWear == 1,
+        member: item.bUpg == 1,
+        coins: item.bCoins == 1,
+        pool: categories().poolOf(item),
+        classRank: item.sType == "Class" ? Main.Game.getRankFromPoints(item.iQty) : null,
+        enhId: item.EnhID,
+        enhLevel: item.EnhLvl,
+        enhPatternId: item.EnhPatternID,
+        enhProcId: item.ProcID,
+        enhDps: item.EnhDPS,
+        enhRange: item.EnhRng,
+        enhRarity: item.EnhRty
+      };
+    }
+
+    [BridgeIgnore]
+    public static function find(selector:Object):Object {
+      return ItemLookup.find(Main.Game.world.myAvatar.items, selector);
+    }
 
     [BridgeExport]
     public static function getItems():Array {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.items;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function getItem(selector:Object):Object {
-      var game:Object = Main.Game;
-      return ItemLookup.find(game.world.myAvatar.items, selector);
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function contains(selector:Object, quantity:int = 1):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj) {
-        return false;
+      var rows:Array = [];
+      for each (var item:Object in Main.Game.world.myAvatar.items) {
+        rows.push(row(item));
       }
 
-      return itemObj.iQty >= quantity;
+      return rows;
+    }
+
+    [BridgeExport]
+    public static function getItem(selector:Object):Object {
+      var item:Object = find(selector);
+      return item ? row(item) : null;
     }
 
     [BridgeExport]
     public static function getSlots():int {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.objData.iBagSlots;
+      return Main.Game.world.myAvatar.objData.iBagSlots;
     }
 
     [BridgeExport]
-    public static function getUsedSlots():int {
-      var game:Object = Main.Game;
-      var categories:Class = Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
-      return categories["countBag"](game.world.myAvatar.items);
+    public static function getUsedSlots(pool:String):int {
+      var items:Array = Main.Game.world.myAvatar.items;
+      return pool == "misc" ? categories().countMisc(items) : categories().countBag(items);
     }
 
-    [BridgeExport]
-    public static function getMiscSlots():int {
-      var categories:Class = Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
-      return categories["MISC_SLOTS"];
+    private static function isUsable(item:Object):Boolean {
+      return item.sType == "Item";
     }
 
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
+    private static function canChangeEquipment():Boolean {
+      var world:Object = Main.Game.world;
+      var leaf:Object = world.getUoLeafById(world.myAvatar.uid);
+      return leaf != null && leaf.intState == 1 && !world.bPvP;
+    }
+
+    // Mirrors the refusals in the client's Game.toggleItemEquip, without its message boxes.
     [BridgeExport]
     public static function equip(selector:Object):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj) {
+      var item:Object = find(selector);
+      var world:Object = Main.Game.world;
+      if (!item || (item.bEquip == 1 && !isUsable(item)) || !canChangeEquipment()) {
         return false;
       }
 
-      var game:Object = Main.Game;
-      if (itemObj.sType == "Item") {
-        if (!itemObj.ItemID || !itemObj.sDesc || !itemObj.sFile || !itemObj.sName) {
-          return false;
-        }
+      if ((item.bUpg == 1 && !world.myAvatar.isUpgraded()) || int(item.EnhLvl) > int(world.myAvatar.objData.intLevel)) {
+        return false;
+      }
 
-        game.world.equipUseableItem(itemObj);
+      if (isUsable(item)) {
+        world.equipUseableItem(item);
         return true;
       }
 
-      return game.world.sendEquipItemRequest({ItemID: itemObj.ItemID});
+      if (UNENHANCED_SLOTS.indexOf(item.sES) == -1 && item.EnhID <= 0) {
+        return false;
+      }
+
+      return world.sendEquipItemRequest(item);
     }
 
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
+    [BridgeExport]
+    public static function unequip(selector:Object):Boolean {
+      var item:Object = find(selector);
+      var world:Object = Main.Game.world;
+      if (!item || item.bEquip != 1 || !canChangeEquipment() || UNEQUIPPABLE_SLOTS.indexOf(item.sES) != -1) {
+        return false;
+      }
+
+      if (isUsable(item)) {
+        world.unequipUseableItem(item);
+        return true;
+      }
+
+      if (!world.coolDown("unequipItem")) {
+        return false;
+      }
+
+      Main.Game.sfc.sendXtMessage("zm", "unequipItem", [item.ItemID], "str", world.curRoom);
+      return true;
+    }
+
     [BridgeExport("use")]
     public static function useItem(selector:Object):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj) {
+      var item:Object = find(selector);
+      if (!item) {
         return false;
       }
 
-      var category:String = String(itemObj.sType).toLowerCase();
-      var link:String = String(itemObj.sLink).toLowerCase();
-      if (category != "serveruse" && link != "elixir" && link != "tonic") {
+      var link:String = String(item.sLink).toLowerCase();
+      if (String(item.sType).toLowerCase() != "serveruse" && link != "elixir" && link != "tonic") {
         return false;
       }
 
-      var game:Object = Main.Game;
-      game.world.sendUseItemRequest(itemObj);
+      Main.Game.world.sendUseItemRequest(item);
       return true;
     }
 
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
     [BridgeExport]
     public static function wear(selector:Object):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj || !itemObj.hasOwnProperty("bWear")) {
+      var item:Object = find(selector);
+      var world:Object = Main.Game.world;
+      if (!item || !item.hasOwnProperty("bWear") || item.bWear == 1) {
         return false;
       }
 
-      if (itemObj.bWear == 1) {
-        return true;
-      }
-
-      var game:Object = Main.Game;
-      if (!game.world.coolDown("wearItem")) {
+      if ((item.bUpg == 1 && !world.myAvatar.isUpgraded()) || !world.coolDown("wearItem")) {
         return false;
       }
 
-      game.sfc.sendXtMessage(
-        "zm",
-        "wearItem",
-        [itemObj.ItemID],
-        "str",
-        game.world.curRoom
-      );
-      return true;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function unequipConsumable(selector:Object):Boolean {
-      var itemObj:Object = getItem(selector);
-      if (!itemObj || itemObj.sType != "Item") {
-        return false;
-      }
-
-      if (itemObj.bEquip != 1) {
-        return true;
-      }
-
-      var game:Object = Main.Game;
-      game.world.unequipUseableItem(itemObj);
+      Main.Game.sfc.sendXtMessage("zm", "wearItem", [item.ItemID], "str", world.curRoom);
       return true;
     }
   }

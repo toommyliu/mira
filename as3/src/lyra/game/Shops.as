@@ -73,11 +73,11 @@ package lyra.game {
 
     private static function getInventoryItem(selector:Object):Object {
       if ("name" in selector) {
-        return Inventory.getItem(selector);
+        return Inventory.find(selector);
       }
 
       if ("itemId" in selector) {
-        return Inventory.getItem(selector);
+        return Inventory.find(selector);
       }
 
       return null;

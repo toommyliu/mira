@@ -475,16 +475,6 @@ pub(crate) mod house {
 pub(crate) mod inventory {
     use crate::bridge::{CallError, Loader, Value, decode};
 
-    pub(crate) fn contains(
-        loader: &impl Loader,
-        selector: Value,
-        quantity: Option<i32>,
-    ) -> Result<bool, CallError> {
-        let call_args = vec![selector, Value::Number(f64::from(quantity.unwrap_or(1)))];
-        let reply = loader.call("inventory.contains", call_args)?;
-        Ok(decode("inventory.contains", reply)?)
-    }
-
     pub(crate) fn equip(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
         let call_args = vec![selector];
         let reply = loader.call("inventory.equip", call_args)?;
@@ -503,31 +493,22 @@ pub(crate) mod inventory {
         Ok(decode("inventory.getItems", reply)?)
     }
 
-    pub(crate) fn get_misc_slots(loader: &impl Loader) -> Result<i32, CallError> {
-        let call_args = vec![];
-        let reply = loader.call("inventory.getMiscSlots", call_args)?;
-        Ok(decode("inventory.getMiscSlots", reply)?)
-    }
-
     pub(crate) fn get_slots(loader: &impl Loader) -> Result<i32, CallError> {
         let call_args = vec![];
         let reply = loader.call("inventory.getSlots", call_args)?;
         Ok(decode("inventory.getSlots", reply)?)
     }
 
-    pub(crate) fn get_used_slots(loader: &impl Loader) -> Result<i32, CallError> {
-        let call_args = vec![];
+    pub(crate) fn get_used_slots(loader: &impl Loader, pool: &str) -> Result<i32, CallError> {
+        let call_args = vec![Value::String(pool.to_owned())];
         let reply = loader.call("inventory.getUsedSlots", call_args)?;
         Ok(decode("inventory.getUsedSlots", reply)?)
     }
 
-    pub(crate) fn unequip_consumable(
-        loader: &impl Loader,
-        selector: Value,
-    ) -> Result<bool, CallError> {
+    pub(crate) fn unequip(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
         let call_args = vec![selector];
-        let reply = loader.call("inventory.unequipConsumable", call_args)?;
-        Ok(decode("inventory.unequipConsumable", reply)?)
+        let reply = loader.call("inventory.unequip", call_args)?;
+        Ok(decode("inventory.unequip", reply)?)
     }
 
     pub(crate) fn r#use(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
@@ -1079,16 +1060,6 @@ pub(crate) mod shops {
 
 pub(crate) mod temp_inventory {
     use crate::bridge::{CallError, Loader, Value, decode};
-
-    pub(crate) fn contains(
-        loader: &impl Loader,
-        selector: Value,
-        quantity: Option<i32>,
-    ) -> Result<bool, CallError> {
-        let call_args = vec![selector, Value::Number(f64::from(quantity.unwrap_or(1)))];
-        let reply = loader.call("tempInventory.contains", call_args)?;
-        Ok(decode("tempInventory.contains", reply)?)
-    }
 
     pub(crate) fn get_item(loader: &impl Loader, selector: Value) -> Result<Value, CallError> {
         let call_args = vec![selector];
