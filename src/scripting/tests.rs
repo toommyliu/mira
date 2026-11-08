@@ -367,6 +367,44 @@ fn an_abort_listener_removed_during_abort_does_not_run() {
 }
 
 #[test]
+fn stopping_aborts_the_script_signal_before_cleanup() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "lyra";
+
+export default function* () {
+  console.log(`running, aborted ${Script.signal.aborted}`);
+  Script.signal.addEventListener("abort", () => {
+    throw new Error("listener boom");
+  });
+  Script.signal.addEventListener("abort", () => console.log("abort event"));
+  yield* Effect.never.pipe(
+    Effect.ensuring(Effect.sync(() => console.log(`cleanup, aborted ${Script.signal.aborted}`))),
+  );
+}
+"#,
+    )]);
+    let finished = run_in(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        Some(Duration::from_millis(200)),
+    );
+    assert_eq!(finished.outcome, Outcome::Stopped);
+    let [running, thrown, event, cleanup] = finished.logs.as_slice() else {
+        panic!("logs were {:?}", finished.logs);
+    };
+    assert_eq!(running, "running, aborted false");
+    assert!(
+        thrown.starts_with("error: Error: listener boom"),
+        "{thrown}"
+    );
+    assert_eq!(event, "abort event");
+    assert_eq!(cleanup, "cleanup, aborted true");
+}
+
+#[test]
 fn stopping_runs_effect_finalizers() {
     let folder = Folder::new(&[(
         "main.ts",

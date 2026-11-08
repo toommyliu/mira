@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 
-import { failed } from "./handlers.ts";
+import { failed, stopping } from "./run.ts";
 
 type Settle = (
   outcome: "completed" | "failed" | "stopped",
@@ -30,6 +30,7 @@ export function start(exported: unknown, settle: Settle): () => void {
   }
   const fiber = Effect.runFork(Effect.scoped(Effect.raceFirst(root, Deferred.await(failed))));
   fiber.addObserver((exit) => {
+    stopping.abort();
     if (Exit.isSuccess(exit)) return settle("completed");
     if (Cause.hasInterruptsOnly(exit.cause)) return settle("stopped");
     const error = Cause.squash(exit.cause);
@@ -37,6 +38,7 @@ export function start(exported: unknown, settle: Settle): () => void {
     settle("failed", String(error), Cause.pretty(exit.cause));
   });
   return () => {
+    stopping.abort();
     Effect.runFork(Fiber.interrupt(fiber));
   };
 }

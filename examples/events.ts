@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Combat, Events, Packets, Player, Wait } from "lyra";
+import { Combat, Events, Packets, Player, Wait, Script } from "lyra";
 
 export default function* () {
   if (!(yield* Player.isReady())) {
@@ -11,7 +11,10 @@ export default function* () {
     Effect.sync(() => console.log(`${username} afk ${afk}`)),
   );
   yield* Events.on({ type: "afk", self: true, afk: true }, () =>
-    Packets.sendToServer("%xt%zm%afk%1%false%"),
+    Effect.gen(function* () {
+      yield* Effect.sleep("5 seconds");
+      yield* Packets.sendToServer("%xt%zm%afk%1%false%");
+    })
   );
   yield* Events.on({ type: "itemDrop" }, (drop) =>
     Effect.sync(() => console.log(`dropped ${drop.quantity} ${drop.name}`)),
@@ -36,4 +39,8 @@ export default function* () {
   );
   console.log(death === null ? "nothing died in time" : `monster ${death.monMapId} died`);
   yield* Effect.sleep("10 seconds");
+
+  while (!Script.signal.aborted) {
+    yield* Effect.sleep("1 second");
+  }
 }

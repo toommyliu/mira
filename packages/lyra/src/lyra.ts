@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
-import { failed } from "./handlers.ts";
+import { failed, stopping } from "./run.ts";
 import { send } from "./native.ts";
 
 declare const console: { readonly warn: (message: string) => void };
@@ -422,6 +422,8 @@ export const Shops = {
 
 export const Script = {
   sleep: (duration: Duration.Input) => Effect.sleep(duration),
+  /** Aborts when the script is stopped, before cleanup runs, or when it ends. */
+  signal: stopping.signal,
 };
 
 export type Subscription<A> = { readonly next: Effect.Effect<A> };
