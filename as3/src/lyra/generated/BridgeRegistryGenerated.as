@@ -117,12 +117,10 @@ package lyra.generated
       external.externalize("quests.get", Quests.get);
       external.externalize("quests.getAccepted", Quests.getAccepted);
       external.externalize("quests.getMaxTurnIns", Quests.getMaxTurnIns);
-      external.externalize("quests.getMultiple", Quests.getMultiple);
       external.externalize("quests.getTree", Quests.getTree);
       external.externalize("quests.isAvailable", Quests.isAvailable);
       external.externalize("quests.isInProgress", Quests.isInProgress);
       external.externalize("quests.load", Quests.load);
-      external.externalize("quests.loadMultiple", Quests.loadMultiple);
       external.externalize("settings.enemyMagnet", Settings.enemyMagnet);
       external.externalize("settings.infiniteRange", Settings.infiniteRange);
       external.externalize("settings.provokeCell", Settings.provokeCell);

@@ -747,21 +747,14 @@ pub(crate) mod player {
 pub(crate) mod quests {
     use crate::bridge::{CallError, Loader, Value, decode};
 
-    pub(crate) fn abandon(loader: &impl Loader, quest_id: i32) -> Result<(), CallError> {
+    pub(crate) fn abandon(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.abandon", call_args)?;
         Ok(decode("quests.abandon", reply)?)
     }
 
-    pub(crate) fn accept(
-        loader: &impl Loader,
-        quest_id: i32,
-        silent: Option<bool>,
-    ) -> Result<bool, CallError> {
-        let call_args = vec![
-            Value::Number(f64::from(quest_id)),
-            Value::Bool(silent.unwrap_or(false)),
-        ];
+    pub(crate) fn accept(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
+        let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.accept", call_args)?;
         Ok(decode("quests.accept", reply)?)
     }
@@ -775,21 +768,19 @@ pub(crate) mod quests {
     pub(crate) fn complete(
         loader: &impl Loader,
         quest_id: i32,
-        turn_ins: Option<i32>,
-        item_id: Option<i32>,
-        special: Option<bool>,
-    ) -> Result<(), CallError> {
+        turn_ins: i32,
+        reward_item_id: i32,
+    ) -> Result<bool, CallError> {
         let call_args = vec![
             Value::Number(f64::from(quest_id)),
-            Value::Number(f64::from(turn_ins.unwrap_or(1))),
-            Value::Number(f64::from(item_id.unwrap_or(-1))),
-            Value::Bool(special.unwrap_or(false)),
+            Value::Number(f64::from(turn_ins)),
+            Value::Number(f64::from(reward_item_id)),
         ];
         let reply = loader.call("quests.complete", call_args)?;
         Ok(decode("quests.complete", reply)?)
     }
 
-    pub(crate) fn get(loader: &impl Loader, quest_id: i32) -> Result<(), CallError> {
+    pub(crate) fn get(loader: &impl Loader, quest_id: i32) -> Result<Value, CallError> {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.get", call_args)?;
         Ok(decode("quests.get", reply)?)
@@ -805,12 +796,6 @@ pub(crate) mod quests {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.getMaxTurnIns", call_args)?;
         Ok(decode("quests.getMaxTurnIns", reply)?)
-    }
-
-    pub(crate) fn get_multiple(loader: &impl Loader, quest_ids: &str) -> Result<(), CallError> {
-        let call_args = vec![Value::String(quest_ids.to_owned())];
-        let reply = loader.call("quests.getMultiple", call_args)?;
-        Ok(decode("quests.getMultiple", reply)?)
     }
 
     pub(crate) fn get_tree(loader: &impl Loader) -> Result<Value, CallError> {
@@ -831,16 +816,14 @@ pub(crate) mod quests {
         Ok(decode("quests.isInProgress", reply)?)
     }
 
-    pub(crate) fn load(loader: &impl Loader, quest_id: i32) -> Result<(), CallError> {
-        let call_args = vec![Value::Number(f64::from(quest_id))];
+    pub(crate) fn load(
+        loader: &impl Loader,
+        quest_ids: &str,
+        silent: bool,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(quest_ids.to_owned()), Value::Bool(silent)];
         let reply = loader.call("quests.load", call_args)?;
         Ok(decode("quests.load", reply)?)
-    }
-
-    pub(crate) fn load_multiple(loader: &impl Loader, quest_ids: &str) -> Result<(), CallError> {
-        let call_args = vec![Value::String(quest_ids.to_owned())];
-        let reply = loader.call("quests.loadMultiple", call_args)?;
-        Ok(decode("quests.loadMultiple", reply)?)
     }
 }
 

@@ -3,6 +3,7 @@ pub(crate) mod bank;
 pub(crate) mod combat;
 pub(crate) mod inventory;
 pub(crate) mod player;
+pub(crate) mod quests;
 #[cfg(test)]
 pub(crate) mod testing;
 pub(crate) mod world;

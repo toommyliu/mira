@@ -110,24 +110,24 @@ pub(crate) struct TempItem {
     max_stack: f64,
 }
 
-struct Row(BTreeMap<String, Value>);
+pub(super) struct Row(pub(super) BTreeMap<String, Value>);
 
 impl Row {
-    fn number(&self, key: &str) -> Option<f64> {
+    pub(super) fn number(&self, key: &str) -> Option<f64> {
         match self.0.get(key) {
             Some(Value::Number(number)) if number.is_finite() => Some(*number),
             _ => None,
         }
     }
 
-    fn text(&self, key: &str) -> String {
+    pub(super) fn text(&self, key: &str) -> String {
         match self.0.get(key) {
             Some(Value::String(text)) => text.clone(),
             _ => String::new(),
         }
     }
 
-    fn flag(&self, key: &str) -> bool {
+    pub(super) fn flag(&self, key: &str) -> bool {
         matches!(self.0.get(key), Some(Value::Bool(true)))
     }
 
@@ -136,7 +136,7 @@ impl Row {
     }
 }
 
-fn row(value: Value) -> Option<Row> {
+pub(super) fn row(value: Value) -> Option<Row> {
     match value {
         Value::Object(fields) => Some(Row(fields)),
         _ => None,

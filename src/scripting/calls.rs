@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::mpsc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{bank, combat, inventory, player, runtime::Command, world};
+use super::{bank, combat, inventory, player, quests, runtime::Command, world};
 use crate::bridge::{Bridge, CallError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +21,7 @@ pub(crate) enum Request {
     Inventory(inventory::Request),
     TempInventory(inventory::TempRequest),
     Bank(bank::Request),
+    Quests(quests::Request),
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -119,6 +120,9 @@ async fn serve(bridge: &Bridge, request: Request) -> Reply {
         Request::TempInventory(request) => inventory::serve_temp(bridge, request),
         Request::Bank(request) => {
             bank::serve(bridge, |wants| bridge.subscribe(wants), request).await
+        }
+        Request::Quests(request) => {
+            quests::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
     }
 }

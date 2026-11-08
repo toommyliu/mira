@@ -1,110 +1,150 @@
-package lyra.game
-{
+package lyra.game {
   import lyra.Main;
   import flash.utils.ByteArray;
+  import flash.utils.getTimer;
 
   [BridgeNamespace("quests")]
-  public class Quests
-  {
-    private static function closeQuestFrame(game:Object):void
-    {
-      var questFrame:* = null;
-      try
-      {
-        questFrame = game.getInstanceFromModalStack("QFrameMC");
-        if (questFrame != null)
-        {
-          questFrame.fClose();
+  public class Quests {
+    private static const REWARD_GROUPS:Array = ["itemsS", "itemsC", "itemsR", "itemsrand"];
+    private static const REWARD_KINDS:Array = ["guaranteed", "choice", "roll", "random"];
+    private static const MAX_TURN_INS:int = 250;
+    private static const LOAD_SPACING:int = 1500;
+
+    private static var lastLoad:int = -LOAD_SPACING;
+
+    private static function find(questId:int):Object {
+      return Main.Game.world.questTree[questId];
+    }
+
+    private static function cadence(quest:Object):String {
+      if (quest.sField == null) {
+        return "none";
+      }
+
+      return quest.sField == "im0" ? "monthly" : quest.sField == "iw0" ? "weekly" : "daily";
+    }
+
+    private static function requirements(quest:Object):Array {
+      var rows:Array = [];
+      for each (var need:Object in quest.turnin) {
+        var item:Object = quest.oItems ? quest.oItems[need.ItemID] : null;
+        rows.push({itemId: need.ItemID, name: item ? item.sName : null, quantity: need.iQty});
+      }
+
+      return rows;
+    }
+
+    // Mirrors how the client's quest window labels each reward and its chance.
+    private static function rewards(quest:Object):Array {
+      var rows:Array = [];
+      for (var index:int = 0; index < REWARD_GROUPS.length; index++) {
+        var group:Object = quest.oRewards ? quest.oRewards[REWARD_GROUPS[index]] : null;
+        var items:Array = [];
+        for each (var item:Object in group) {
+          items.push(item);
+        }
+
+        for each (item in items) {
+          var chance:Number = 100;
+          if (REWARD_GROUPS[index] == "itemsrand") {
+            chance = 100 / items.length;
+          }
+          else {
+            for each (var rate:Object in quest.reward) {
+              if (rate.ItemID == item.ItemID && rate.iQty == item.iQty) {
+                chance = Number(rate.iRate);
+              }
+            }
+          }
+
+          rows.push({
+            itemId: item.ItemID,
+            name: item.sName,
+            quantity: item.iQty,
+            kind: REWARD_KINDS[index],
+            dropChance: chance
+          });
         }
       }
-      catch (error:Error)
-      {
-        if (questFrame != null && questFrame.parent != null)
-        {
-          questFrame.parent.removeChild(questFrame);
-        }
-      }
+
+      return rows;
     }
 
-    [BridgeExport]
-    public static function isInProgress(questId:int):Boolean
-    {
-      var game:Object = Main.Game;
-      return game.world.isQuestInProgress(questId);
+    private static function row(quest:Object):Object {
+      return {
+        id: quest.QuestID,
+        name: quest.sName,
+        cadence: cadence(quest),
+        once: quest.bOnce == 1,
+        requirements: requirements(quest),
+        rewards: rewards(quest)
+      };
     }
 
-    [BridgeExport]
-    public static function complete(questId:int, turnIns:int = 1, itemId:int = -1, special:Boolean = false /* idk */):void
-    {
-      var game:Object = Main.Game;
-      if (!game.world.coolDown("tryQuestComplete"))
-      {
-        return;
-      }
-
-      game.world.tryQuestComplete(questId, itemId, special, turnIns);
-    }
-
-    [BridgeExport]
-    public static function getMaxTurnIns(questId:int):int
-    {
-      var game:Object = Main.Game;
-      return int(game.world.maximumQuestTurnIns(questId));
-    }
-
-    [BridgeExport]
-    public static function accept(questId:int, silent:Boolean = false):Boolean
-    {
-      var game:Object = Main.Game;
-      if (!game.world.coolDown("acceptQuest"))
-      {
+    // Mirrors the quest window's accept button and the quests its list hides, without message boxes.
+    private static function canAccept(quest:Object):Boolean {
+      var world:Object = Main.Game.world;
+      if (quest.bOnce == 1 && (quest.iSlot < 0 || world.getQuestValue(quest.iSlot) >= quest.iValue)) {
         return false;
       }
 
-      if (silent)
-      {
-        closeQuestFrame(game);
+      if (quest.hasOwnProperty("sMeta") && String(quest.sMeta).indexOf("EmailConfirm") != -1 && world.myAvatar.objData.intActivationFlag < 5) {
+        return false;
       }
 
-      game.world.acceptQuest(questId);
-      return true;
+      return Main.Game.getQuestValidationString(quest) == "";
+    }
+
+    // World.maximumQuestTurnIns, without the message box it shows for equipped items.
+    private static function turnInsHeld(quest:Object):int {
+      var world:Object = Main.Game.world;
+      var most:int = -1;
+      for each (var need:Object in quest.turnin) {
+        var held:Object = world.invTree[need.ItemID];
+        if (!held || int(held.iQty) < int(need.iQty) || world.myAvatar.isItemEquipped(need.ItemID)) {
+          return 0;
+        }
+
+        var times:int = Math.floor(int(held.iQty) / int(need.iQty));
+        if (most == -1 || times < most) {
+          most = times;
+        }
+      }
+
+      return Math.min(most, MAX_TURN_INS);
+    }
+
+    // The quest window offers more than one turn-in only for repeatable quests.
+    private static function maxTurnIns(quest:Object):int {
+      var held:int = turnInsHeld(quest);
+      if (held == 0) {
+        return 0;
+      }
+
+      return quest.sField == null && quest.bOnce != 1 && held > 1 ? held : 1;
+    }
+
+    // World.coolDown posts a chat warning when the action is not ready yet, so it is only called once it is.
+    private static function ready(action:String):Boolean {
+      return World.isActionAvailable(action) && Main.Game.world.coolDown(action);
     }
 
     [BridgeExport]
-    public static function abandon(questId:int):void
-    {
-      var game:Object = Main.Game;
-      game.world.abandonQuest(questId);
+    public static function get(questId:int):Object {
+      var quest:Object = find(questId);
+      return quest ? row(quest) : null;
     }
 
     [BridgeExport]
-    public static function load(questId:int):void
-    {
-      var game:Object = Main.Game;
-      closeQuestFrame(game);
-      game.world.showQuests([questId], "q");
-    }
+    public static function getAccepted():Array {
+      var rows:Array = [];
+      for each (var quest:Object in Main.Game.world.questTree) {
+        if (quest && quest.status != null) {
+          rows.push(row(quest));
+        }
+      }
 
-    [BridgeExport]
-    public static function loadMultiple(questIds:String):void
-    {
-      var game:Object = Main.Game;
-      closeQuestFrame(game);
-      game.world.showQuests(questIds.split(","), "q");
-    }
-
-    [BridgeExport]
-    public static function get (questId:int):void
-    {
-      var game:Object = Main.Game;
-      game.world.getQuests([questId]);
-    }
-
-    [BridgeExport]
-    public static function getMultiple(questIds:String):void
-    {
-      var game:Object = Main.Game;
-      game.world.getQuests(questIds.split(","));
+      return rows;
     }
 
     [BridgeExport]
@@ -162,163 +202,120 @@ package lyra.game
       return quests;
     }
 
+
     [BridgeExport]
-    public static function getAccepted():Array
-    {
-      var game:Object = Main.Game;
-      var quests:Array = [];
-      // questTree is a {id:Object} map - we only want the ids
-      for (var id:String in game.world.questTree)
-      {
-        var questId:int = int(id);
-        if (isInProgress(questId))
-        {
-          quests.push(questId);
-        }
-      }
-      return quests;
+    public static function isInProgress(questId:int):Boolean {
+      return Main.Game.world.isQuestInProgress(questId);
     }
 
-    private static function getQuestValidationString(questObj:Object):String
-    {
-      var game:Object = Main.Game;
-      var _loc2_:int = 0;
-      var _loc3_:* = undefined;
-      var _loc4_:int = 0;
-      var _loc5_:* = undefined;
-      var _loc6_:* = null;
-      var _loc7_:int = 0;
-      var _loc8_:Object = null;
-      var _loc9_:int = 0;
-      var _loc10_:int = 0;
-      var _loc11_:* = undefined;
-      if (questObj.bOnce == 1 && (questObj.iSlot < 0 || game.world.getQuestValue(questObj.iSlot) >= questObj.iValue))
-      {
-        return "This quest can only be completed once.";
-      }
-      if (questObj.sField != null && game.world.getAchievement(questObj.sField, questObj.iIndex) != 0)
-      {
-        if (questObj.sField == "im0")
-        {
-          return "Monthly Quests are only available once per month.";
-        }
-        if (questObj.sField == "iw0")
-        {
-          return "Weekly Quests are only available once per week.";
-        }
-        return "Daily Quests are only available once per day.";
-      }
-      if (questObj.bUpg == 1 && !game.world.myAvatar.isUpgraded())
-      {
-        return "Upgrade is required for this quest!";
-      }
-      if (questObj.iSlot >= 0 && game.world.getQuestValue(questObj.iSlot) < questObj.iValue - 1)
-      {
-        return "Quest has not been unlocked!";
-      }
-      if (questObj.iLvl > game.world.myAvatar.objData.intLevel)
-      {
-        return "Unlocks at Level " + questObj.iLvl + ".";
-      }
-      if (questObj.iClass > 0 && game.world.myAvatar.getCPByID(questObj.iClass) < questObj.iReqCP)
-      {
-        _loc2_ = game.getRankFromPoints(questObj.iReqCP);
-        _loc3_ = questObj.iReqCP - game.arrRanks[_loc2_ - 1];
-        if (_loc3_ > 0)
-        {
-          return "Requires " + _loc3_ + " Class Points on " + questObj.sClass + ", Rank " + _loc2_ + ".";
-        }
-        return "Requires " + questObj.sClass + ", Rank " + _loc2_ + ".";
-      }
-      if (questObj.FactionID > 1 && game.world.myAvatar.getRep(questObj.FactionID) < questObj.iReqRep)
-      {
-        _loc4_ = game.getRankFromPoints(questObj.iReqRep);
-        _loc5_ = questObj.iReqRep - game.arrRanks[_loc4_ - 1];
-        if (_loc5_ > 0)
-        {
-          return "Requires " + _loc5_ + " Reputation for " + questObj.sFaction + ", Rank " + _loc4_ + ".";
-        }
-        return "Requires " + questObj.sFaction + ", Rank " + _loc4_ + ".";
-      }
-      if (questObj.reqd != null && !hasRequiredItemsForQuest(questObj))
-      {
-        _loc6_ = "Required Item(s): ";
-        _loc7_ = 0;
-        while (_loc7_ < questObj.reqd.length)
-        {
-          _loc8_ = game.world.invTree[questObj.reqd[_loc7_].ItemID];
-          _loc9_ = int(questObj.reqd[_loc7_].iQty);
-          if (_loc8_.sES == "ar")
-          {
-            _loc10_ = game.getRankFromPoints(_loc9_);
-            _loc11_ = _loc9_ - game.arrRanks[_loc10_ - 1];
-            if (_loc11_ > 0)
-            {
-              _loc6_ += _loc11_ + " Class Points on ";
-            }
-            _loc6_ += _loc8_.sName + ", Rank " + _loc10_;
-          }
-          else
-          {
-            _loc6_ += _loc8_.sName;
-            if (_loc9_ > 1)
-            {
-              _loc6_ += "x" + _loc9_;
-            }
-          }
-          _loc6_ += ", ";
-          _loc7_++;
-        }
-        return _loc6_.substr(0, _loc6_.length - 2) + ".";
-      }
-      return "";
+    [BridgeExport]
+    public static function isAvailable(questId:int):Boolean {
+      var quest:Object = find(questId);
+      return quest != null && canAccept(quest);
     }
 
-    private static function hasRequiredItemsForQuest(questObj:Object):Boolean
-    {
+    [BridgeExport]
+    public static function canComplete(questId:int):Boolean {
+      var quest:Object = find(questId);
+      return quest != null && isInProgress(questId) && maxTurnIns(quest) > 0;
+    }
+
+    [BridgeExport]
+    public static function getMaxTurnIns(questId:int):int {
+      var quest:Object = find(questId);
+      return quest ? maxTurnIns(quest) : 0;
+    }
+
+    // The server ignores a quest load sent too soon after the last one, so loads wait their turn here.
+    // The client's quest log does nothing while a greedy window is open.
+    [BridgeExport]
+    public static function load(questIds:String, silent:Boolean):String {
       var game:Object = Main.Game;
-      var _loc2_:int = 0;
-      var _loc3_:* = undefined;
-      var _loc4_:int = 0;
-      if (questObj.reqd != null && questObj.reqd.length > 0)
-      {
-        _loc2_ = 0;
-        while (_loc2_ < questObj.reqd.length)
-        {
-          _loc3_ = questObj.reqd[_loc2_].ItemID;
-          _loc4_ = int(questObj.reqd[_loc2_].iQty);
-          if (game.world.invTree[_loc3_] == null || int(game.world.invTree[_loc3_].iQty) < _loc4_)
-          {
-            return false;
-          }
-          _loc2_++;
+      if (!silent && game.isGreedyModalInStack()) {
+        return "blocked";
+      }
+
+      if (getTimer() - lastLoad < LOAD_SPACING) {
+        return "wait";
+      }
+
+      lastLoad = getTimer();
+      if (silent) {
+        game.world.getQuests(questIds.split(","));
+        return "sent";
+      }
+
+      closeQuestFrame(game);
+      game.world.showQuests(questIds, "q");
+      return "sent";
+    }
+
+    // A quest window that is still waiting for its quest data throws when closed, so it is removed instead.
+    private static function closeQuestFrame(game:Object):void {
+      var frame:Object = game.getInstanceFromModalStack("QFrameMC");
+      if (!frame) {
+        return;
+      }
+
+      try {
+        frame.fClose();
+      }
+      catch (error:Error) {
+        if (frame.parent) {
+          frame.parent.removeChild(frame);
         }
       }
+    }
+
+    [BridgeExport]
+    public static function accept(questId:int):Boolean {
+      var quest:Object = find(questId);
+      if (!quest || isInProgress(questId) || !canAccept(quest) || !ready("acceptQuest")) {
+        return false;
+      }
+
+      Main.Game.world.acceptQuest(questId);
+      return true;
+    }
+
+    // Mirrors the quest window's complete button, which requires a reward pick when the quest offers one.
+    [BridgeExport]
+    public static function complete(questId:int, turnIns:int, rewardItemId:int):Boolean {
+      var quest:Object = find(questId);
+      if (!quest || !isInProgress(questId) || turnIns < 1 || turnIns > maxTurnIns(quest)) {
+        return false;
+      }
+
+      var choices:Object = quest.oRewards ? quest.oRewards.itemsC : null;
+      var choice:int = -1;
+      if (choices != null) {
+        for each (var item:Object in choices) {
+          if (int(item.ItemID) == rewardItemId) {
+            choice = rewardItemId;
+          }
+        }
+
+        if (choice == -1) {
+          return false;
+        }
+      }
+
+      if (!ready("tryQuestComplete")) {
+        return false;
+      }
+
+      Main.Game.world.tryQuestComplete(questId, choice, false, turnIns);
       return true;
     }
 
     [BridgeExport]
-    public static function isAvailable(questId:int):Boolean
-    {
-      var game:Object = Main.Game;
-      var quest:Object = game.world.questTree[questId];
-
-      if (!quest)
+    public static function abandon(questId:int):Boolean {
+      if (!isInProgress(questId)) {
         return false;
+      }
 
-      return getQuestValidationString(quest) == "";
-    }
-
-    [BridgeExport]
-    public static function canComplete(questId:int):Boolean
-    {
-      var game:Object = Main.Game;
-      var quest:Object = game.world.questTree[questId];
-
-      if (!quest)
-        return false;
-
-      return game.world.canTurnInQuest(questId) && getQuestValidationString(quest) == "";
+      Main.Game.world.abandonQuest(questId);
+      return true;
     }
 
     private static function cloneObject(source:Object):Object

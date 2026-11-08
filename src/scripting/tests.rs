@@ -14,6 +14,7 @@ use super::{
     combat::Request as C,
     inventory::{Request as I, TempRequest as T},
     player::Request as P,
+    quests::Request as Q,
     runtime::Player,
     world::Request as W,
 };
@@ -900,4 +901,95 @@ export default function* () {
         .map(Request::Bank),
     );
     assert_eq!(requests, expected);
+}
+
+#[test]
+fn quest_requests_reach_the_player_typed() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Quests } from "lyra";
+
+export default function* () {
+  yield* Quests.load(6552);
+  yield* Quests.load(6553, { silent: true });
+  yield* Quests.loadBatch([8152, 8153], { silent: true });
+  yield* Quests.get(6552);
+  yield* Quests.getAccepted();
+  yield* Quests.isInProgress(6552);
+  yield* Quests.isAvailable(6552);
+  yield* Quests.canComplete(6552);
+  yield* Quests.getMaxTurnIns(6552);
+  yield* Quests.accept(6552);
+  yield* Quests.accept(6553, { silent: true });
+  yield* Quests.acceptBatch([8152, 8153]);
+  yield* Quests.complete(6552);
+  yield* Quests.complete(6552, { turnIns: 3, rewardItemId: 45230 });
+  yield* Quests.abandon(6552);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            Q::Load {
+                quest_id: 6552,
+                silent: None,
+            },
+            Q::Load {
+                quest_id: 6553,
+                silent: Some(true),
+            },
+            Q::LoadBatch {
+                quest_ids: vec![8152, 8153],
+                silent: Some(true),
+            },
+            Q::Get { quest_id: 6552 },
+            Q::Accepted,
+            Q::InProgress { quest_id: 6552 },
+            Q::Available { quest_id: 6552 },
+            Q::CanComplete { quest_id: 6552 },
+            Q::MaxTurnIns { quest_id: 6552 },
+            Q::Accept {
+                quest_id: 6552,
+                silent: None,
+            },
+            Q::Accept {
+                quest_id: 6553,
+                silent: Some(true),
+            },
+            Q::AcceptBatch {
+                quest_ids: vec![8152, 8153],
+                silent: None,
+            },
+            Q::Complete {
+                quest_id: 6552,
+                turn_ins: None,
+                reward_item_id: None,
+            },
+            Q::Complete {
+                quest_id: 6552,
+                turn_ins: Some(3),
+                reward_item_id: Some(45230),
+            },
+            Q::Abandon { quest_id: 6552 },
+        ]
+        .map(Request::Quests)
+    );
 }

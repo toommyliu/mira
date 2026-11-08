@@ -31,6 +31,9 @@ const tempInventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const bank = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "bank", op, ...args });
 
+const quests = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "quests", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -244,6 +247,55 @@ export const Bank = {
   withdraw: (query: ItemQuery) => bank<boolean>("withdraw", { query }),
   swap: (inventoryQuery: ItemQuery, bankQuery: ItemQuery) =>
     bank<boolean>("swap", { inventoryQuery, bankQuery }),
+};
+
+export type QuestCadence = "none" | "daily" | "weekly" | "monthly";
+export type QuestItem = {
+  readonly itemId: number;
+  readonly name: string;
+  readonly quantity: number;
+};
+/** `choice` rewards need `rewardItemId` when completing. `random` gives one of its group. */
+export type QuestRewardKind = "guaranteed" | "choice" | "roll" | "random";
+export type QuestReward = QuestItem & {
+  readonly kind: QuestRewardKind;
+  /** Percent. */
+  readonly dropChance: number;
+};
+export type Quest = {
+  readonly id: number;
+  readonly name: string;
+  readonly cadence: QuestCadence;
+  readonly once: boolean;
+  readonly requirements: readonly QuestItem[];
+  readonly rewards: readonly QuestReward[];
+};
+/** Quests load through the quest log unless `silent`. */
+export type QuestLoadOptions = { readonly silent?: boolean };
+export type CompleteOptions = { readonly turnIns?: number; readonly rewardItemId?: number };
+
+export const Quests = {
+  load: (questId: number, options: QuestLoadOptions = {}) =>
+    quests<boolean>("load", { questId, ...options }),
+  /** One result per quest, in order. Missing quests load together, up to 30 per request. */
+  loadBatch: (questIds: readonly number[], options: QuestLoadOptions = {}) =>
+    quests<readonly boolean[]>("loadBatch", { questIds, ...options }),
+  /** Reads see only loaded quests. */
+  get: (questId: number) => quests<Quest | null>("get", { questId }),
+  getAccepted: () => quests<readonly Quest[]>("accepted"),
+  isInProgress: (questId: number) => quests<boolean>("inProgress", { questId }),
+  isAvailable: (questId: number) => quests<boolean>("available", { questId }),
+  canComplete: (questId: number) => quests<boolean>("canComplete", { questId }),
+  getMaxTurnIns: (questId: number) => quests<number>("maxTurnIns", { questId }),
+  accept: (questId: number, options: QuestLoadOptions = {}) =>
+    quests<boolean>("accept", { questId, ...options }),
+  /** Loads the quests together, then accepts each in turn. One result per quest, in order. */
+  acceptBatch: (questIds: readonly number[], options: QuestLoadOptions = {}) =>
+    quests<readonly boolean[]>("acceptBatch", { questIds, ...options }),
+  /** Item rewards land in the drop list. */
+  complete: (questId: number, options: CompleteOptions = {}) =>
+    quests<boolean>("complete", { questId, ...options }),
+  abandon: (questId: number) => quests<boolean>("abandon", { questId }),
 };
 
 export const Script = {
