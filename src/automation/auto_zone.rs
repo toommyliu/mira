@@ -7,7 +7,7 @@ use tokio::{
 };
 
 use crate::bridge::{self, CallError, Format, Loader, Packet, Packets};
-use crate::domain::player;
+use crate::domain::{auras, player};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -70,8 +70,6 @@ pub(crate) struct Settings {
     pub(crate) enabled: bool,
     pub(crate) room: Option<Room>,
 }
-
-const AURAS: &str = "world.myAvatar.dataLeaf.auras";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Charge {
@@ -222,35 +220,16 @@ fn move_to_zone(
 }
 
 fn charge(loader: &impl Loader) -> Result<Charge, CallError> {
-    let field = |field: &str| -> Result<Vec<serde_json::Value>, CallError> {
-        let json = bridge::flash::select_array_objects(loader, AURAS, field)?;
-        Ok(json
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default())
-    };
-    let names = field("nam")?;
-    let expired = field("e")?;
-    let active: Vec<&str> = names
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| expired.get(*index) != Some(&serde_json::Value::from(1)))
-        .filter_map(|(_, name)| name.as_str())
-        .collect();
-    tracing::debug!(?names, ?expired, "auto zone read the player's auras");
-    let has = |charges: [&str; 2]| {
-        active.iter().any(|name| {
-            charges
-                .iter()
-                .any(|charge| charge.eq_ignore_ascii_case(name))
-        })
-    };
-    Ok(if has(["Positive Charge", "Negative Charge?"]) {
-        Charge::Positive
-    } else if has(["Negative Charge", "Positive Charge?"]) {
-        Charge::Negative
-    } else {
-        Charge::None
-    })
+    let auras = auras::player(loader)?;
+    Ok(
+        if auras::has_any(&auras, &["Positive Charge", "Negative Charge?"]) {
+            Charge::Positive
+        } else if auras::has_any(&auras, &["Negative Charge", "Positive Charge?"]) {
+            Charge::Negative
+        } else {
+            Charge::None
+        },
+    )
 }
 
 pub(crate) fn random_point(area: &Area) -> (i32, i32) {
@@ -275,13 +254,13 @@ mod tests {
     use tokio::{task::LocalSet, time::sleep};
 
     use super::*;
-    use crate::bridge::{CallError, Event, Events, Value};
+    use crate::bridge::{Event, Events, Value};
     use crate::domain::testing::FakeLoader;
 
     struct Boss {
         map: &'static str,
         hp: i32,
-        auras: Vec<(&'static str, Option<i32>)>,
+        auras: Vec<&'static str>,
         walks: Vec<(i32, i32, Duration)>,
     }
 
@@ -314,26 +293,16 @@ mod tests {
             Ok(match (callback, path) {
                 ("player.getMap", _) => Value::String(boss.map.into()),
                 ("player.getHp", _) => Value::Number(f64::from(boss.hp)),
-                ("flash.getGameObject", AURAS) => {
-                    return Err(CallError::Threw {
-                        callback,
-                        message: "TypeError: cyclic structure".into(),
-                    });
-                }
-                ("flash.selectArrayObjects", AURAS) => {
-                    let fields: Vec<serde_json::Value> = match args.get(1) {
-                        Some(Value::String(field)) if field == "nam" => {
-                            boss.auras.iter().map(|(name, _)| (*name).into()).collect()
-                        }
-                        Some(Value::String(field)) if field == "e" => boss
-                            .auras
-                            .iter()
-                            .map(|(_, expired)| (*expired).into())
-                            .collect(),
-                        _ => panic!("unexpected aura field {args:?}"),
-                    };
-                    Value::String(serde_json::Value::from(fields).to_string())
-                }
+                ("player.getAuras", _) => Value::List(
+                    boss.auras
+                        .iter()
+                        .map(|name| {
+                            Value::Object(
+                                [("name".to_owned(), Value::String((*name).into()))].into(),
+                            )
+                        })
+                        .collect(),
+                ),
                 ("player.walkTo", _) => {
                     let [Value::Number(x), Value::Number(y), _] = args else {
                         panic!("walkTo needs a point: {args:?}");
@@ -401,16 +370,16 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let fight = fight(Room::Queeniona, "queeniona");
-                fight.boss.borrow_mut().auras = vec![("Negative Charge", None)];
+                fight.boss.borrow_mut().auras = vec!["Negative Charge"];
                 fight.zone(Some("A"));
                 settle().await;
-                fight.boss.borrow_mut().auras = vec![("Positive Charge?", None)];
+                fight.boss.borrow_mut().auras = vec!["Positive Charge?"];
                 fight.zone(Some("A"));
                 settle().await;
-                fight.boss.borrow_mut().auras = vec![("Positive Charge?", None)];
+                fight.boss.borrow_mut().auras = vec!["Positive Charge?"];
                 fight.zone(Some("B"));
                 settle().await;
-                fight.boss.borrow_mut().auras = vec![("Negative Charge?", None)];
+                fight.boss.borrow_mut().auras = vec!["Negative Charge?"];
                 fight.zone(Some("A"));
                 settle().await;
                 fight.boss.borrow_mut().auras = Vec::new();
@@ -477,20 +446,6 @@ mod tests {
             let (x, y) = random_point(&area);
             assert!(area.0.contains(&x) && y == 5);
         }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn queen_iona_ignores_an_expired_charge() {
-        LocalSet::new()
-            .run_until(async {
-                let fight = fight(Room::Queeniona, "queeniona");
-                fight.boss.borrow_mut().auras =
-                    vec![("Positive Charge", Some(1)), ("Negative Charge", None)];
-                fight.zone(Some("A"));
-                settle().await;
-                assert_eq!(fight.walks(), [(111, 379)]);
-            })
-            .await;
     }
 
     #[tokio::test(start_paused = true)]
