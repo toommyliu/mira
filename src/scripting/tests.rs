@@ -13,6 +13,7 @@ use super::{
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
     drops::Request as D,
+    events::Request as EV,
     feeds::{FeedId, Request as F},
     house::Request as H,
     inventory::{Request as I, TempRequest as T},
@@ -24,7 +25,7 @@ use super::{
     shops::Request as S,
     world::Request as W,
 };
-use crate::bridge::CallError;
+use crate::{bridge::CallError, domain::events::Kind};
 
 struct Folder(PathBuf);
 
@@ -681,6 +682,120 @@ export default function* () {
         .filter(|seen| matches!(seen, Seen::Call(_, Request::Feeds(F::Next { .. }))))
         .count();
     assert_eq!(nexts, 1);
+}
+
+#[test]
+fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Packets, Wait } from "lyra";
+
+export default function* () {
+  const death = yield* Wait.forEvent(
+    { type: "monsterDeath", monMapId: 4 },
+    { trigger: Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
+  );
+  console.log(JSON.stringify(death));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| match request {
+            Request::Feeds(F::Next { .. }) => batch(json!([
+                { "type": "monsterDeath", "monMapId": 3 },
+                { "type": "monsterDeath", "monMapId": 4 },
+            ])),
+            Request::Packets(PK::SendToServer { .. }) => Some(Ok(json!(true))),
+            _ => Some(Ok(json!(null))),
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, [r#"{"type":"monsterDeath","monMapId":4}"#]);
+    assert_eq!(
+        player.seen()[..2],
+        [
+            Seen::Call(
+                1,
+                Request::Events(EV::Subscribe {
+                    id: FeedId(1),
+                    kind: Kind::MonsterDeath,
+                })
+            ),
+            Seen::Call(
+                2,
+                Request::Packets(PK::SendToServer {
+                    packet: "%xt%zm%aggroMon%1%4%".into()
+                })
+            ),
+        ]
+    );
+}
+
+#[test]
+fn event_handlers_run_until_the_script_returns() {
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Effect } from "effect";
+import { Events, Packets } from "lyra";
+
+export default function* () {
+  yield* Events.on({ type: "afk", afk: true }, () => Packets.sendToServer("%xt%zm%afk%1%false%"));
+  yield* Effect.sleep("50 millis");
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering({
+            let delivered = std::sync::atomic::AtomicBool::new(false);
+            move |request, _| match request {
+                Request::Feeds(F::Next { .. })
+                    if !delivered.swap(true, std::sync::atomic::Ordering::SeqCst) =>
+                {
+                    batch(json!([
+                        { "type": "afk", "afk": false },
+                        { "type": "afk", "afk": true },
+                    ]))
+                }
+                Request::Feeds(F::Next { .. }) => None,
+                Request::Packets(PK::SendToServer { .. }) => Some(Ok(json!(true))),
+                _ => Some(Ok(json!(null))),
+            }
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let seen = player.seen();
+    let sent: Vec<_> = seen
+        .iter()
+        .filter(|seen| {
+            matches!(
+                seen,
+                Seen::Call(_, Request::Packets(PK::SendToServer { .. }))
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [&Seen::Call(
+            3,
+            Request::Packets(PK::SendToServer {
+                packet: "%xt%zm%afk%1%false%".into()
+            })
+        )]
+    );
+    assert!(
+        seen.iter()
+            .any(|seen| matches!(seen, Seen::Call(_, Request::Feeds(F::Close { .. })))),
+        "{seen:?}"
+    );
 }
 
 #[test]

@@ -159,6 +159,17 @@ impl Packet for CtPacket {
 }
 
 impl CtPacket {
+    pub(crate) fn deaths(&self) -> Vec<i32> {
+        let mut deaths: Vec<i32> = self
+            .monsters
+            .iter()
+            .filter(|(_, monster)| monster.state == Some(0.0))
+            .filter_map(|(id, _)| id.parse().ok())
+            .collect();
+        deaths.sort_unstable();
+        deaths
+    }
+
     fn killed(&self, id: f64) -> bool {
         self.monsters
             .iter()

@@ -107,7 +107,7 @@ pub(crate) fn names(packet: &str, format: Format, cmd: &str) -> bool {
     })
 }
 
-fn decode<T: Packet>(packet: &str) -> Result<Option<T>, serde_json::Error> {
+pub(crate) fn decode<T: Packet>(packet: &str) -> Result<Option<T>, serde_json::Error> {
     #[derive(Deserialize)]
     struct Head<'a> {
         #[serde(rename = "type")]

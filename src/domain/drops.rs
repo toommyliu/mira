@@ -36,6 +36,27 @@ impl Packet for GetDropPacket {
     const CMD: &'static str = "getDrop";
 }
 
+#[derive(Deserialize)]
+pub(crate) struct DropItemPacket {
+    #[serde(default, deserialize_with = "wire::values")]
+    pub(crate) items: Vec<DroppedItem>,
+}
+
+impl Packet for DropItemPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "dropItem";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DroppedItem {
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    pub(crate) item_id: Option<i32>,
+    #[serde(rename = "sName", default, deserialize_with = "wire::text")]
+    pub(crate) name: String,
+    #[serde(rename = "iQty", default, deserialize_with = "wire::integer")]
+    pub(crate) quantity: Option<i32>,
+}
+
 pub(crate) async fn accept(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,

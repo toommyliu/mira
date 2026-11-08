@@ -57,6 +57,9 @@ const shops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const packets = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "packets", op, ...args });
 
+const events = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "events", op, ...args });
+
 const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "feeds", op, ...args });
 
@@ -463,17 +466,17 @@ export type PacketFor<F extends PacketFilter> = F extends { readonly from: "clie
 
 const lost: unique symbol = Symbol("lost");
 type Lost = typeof lost;
-type FeedItem =
-  | { readonly from: "client" | "server"; readonly packet: string }
-  | { readonly lost: true };
-type Batch = { readonly items: readonly FeedItem[]; readonly lagged: boolean };
-type Read<A> = (item: Exclude<FeedItem, { readonly lost: true }>) => A | undefined;
+type Batch<I> = {
+  readonly items: readonly (I | { readonly lost: true })[];
+  readonly lagged: boolean;
+};
+type Read<I, A> = (item: I) => A | undefined;
 
 let lastFeed = 0;
 
-const openFeed = <A>(
+const openFeed = <I extends object, A>(
   subscribe: (id: number) => Effect.Effect<unknown>,
-  read: Read<A>,
+  read: Read<I, A>,
 ): Effect.Effect<Subscription<A | Lost>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const id = ++lastFeed;
@@ -487,11 +490,11 @@ const openFeed = <A>(
     const scope = yield* Effect.scope;
     const buffer: (A | Lost)[] = [];
     let pulling: Deferred.Deferred<void> | undefined;
-    const pull = feeds<Batch>("next", { id }).pipe(
+    const pull = feeds<Batch<I>>("next", { id }).pipe(
       Effect.map(({ items, lagged }) => {
         if (lagged) console.warn("A subscription fell behind and dropped what it was holding.");
         for (const item of items) {
-          const value = "lost" in item ? lost : read(item);
+          const value = "lost" in item ? lost : read(item as I);
           if (value !== undefined) buffer.push(value);
         }
       }),
@@ -564,8 +567,10 @@ const waitFor = <A, E>(
     }),
   );
 
+type RawPacket = { readonly from: "client" | "server"; readonly packet: string };
+
 const readPacket =
-  (cmds: readonly string[] | undefined): Read<Packet> =>
+  (cmds: readonly string[] | undefined): Read<RawPacket, Packet> =>
   ({ from, packet }) => {
     const read = from === "client" ? readClient(packet) : readServer(packet);
     return read !== undefined && (cmds === undefined || cmds.includes(read.cmd)) ? read : undefined;
@@ -609,7 +614,7 @@ const openPackets = <F extends PacketFilter>(filter: F) => {
   const cmds = typeof filter.cmd === "string" ? [filter.cmd] : filter.cmd;
   return openFeed(
     (id) => packets("subscribe", { id, from: filter.from, cmds }),
-    readPacket(cmds) as Read<PacketFor<F>>,
+    readPacket(cmds) as Read<RawPacket, PacketFor<F>>,
   );
 };
 
@@ -628,6 +633,49 @@ export const Packets = {
   /** The game handles `data` as a json packet from the server. False when not in game. */
   sendToClient: (data: { readonly cmd: string; readonly [key: string]: unknown }) =>
     packets<boolean>("sendToClient", { data }),
+};
+
+export type GameEvent =
+  | { readonly type: "monsterDeath"; readonly monMapId: number }
+  | {
+      readonly type: "itemDrop";
+      readonly itemId: number;
+      readonly name: string;
+      /** The amount in this drop. */
+      readonly quantity: number;
+    }
+  /** You went AFK or came back. */
+  | { readonly type: "afk"; readonly afk: boolean }
+  /** `""` is the map's default zone. */
+  | { readonly type: "zone"; readonly zone: string };
+export type EventType = GameEvent["type"];
+export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
+/** `type` picks the event. Other fields must match exactly. */
+export type EventFilter<T extends EventType> = { readonly type: T } & Partial<
+  Omit<EventOf<T>, "type">
+>;
+
+const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
+  openFeed(
+    (id) => events("subscribe", { id, type: filter.type }),
+    (event: GameEvent) =>
+      Object.entries(filter).every(
+        ([key, value]) => (event as Record<string, unknown>)[key] === value,
+      )
+        ? (event as EventOf<T>)
+        : undefined,
+  );
+
+export const Events = {
+  subscribe: <const T extends EventType>(
+    filter: EventFilter<T>,
+  ): Effect.Effect<Subscription<EventOf<T>>, never, Scope.Scope> =>
+    Effect.map(openEvents(filter), skipLost),
+  on: <const T extends EventType>(
+    filter: EventFilter<T>,
+    handler: Handler<EventOf<T>>,
+  ): Effect.Effect<void, never, Scope.Scope> =>
+    Effect.flatMap(openEvents(filter), (feed) => listen(skipLost(feed).next, handler)),
 };
 
 export type UntilOptions = {
@@ -657,4 +705,9 @@ export const Wait = {
     filter: F,
     options: ForOptions<E> = {},
   ): Effect.Effect<PacketFor<F> | null, E> => waitFor(openPackets(filter), options),
+  /** Null if `trigger` returns false, the timeout passes, or the connection drops. */
+  forEvent: <const T extends EventType, E = never>(
+    filter: EventFilter<T>,
+    options: ForOptions<E> = {},
+  ): Effect.Effect<EventOf<T> | null, E> => waitFor(openEvents(filter), options),
 };

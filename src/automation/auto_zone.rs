@@ -6,8 +6,11 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::bridge::{self, CallError, Format, Loader, Packet, Packets};
-use crate::domain::{auras, player};
+use crate::bridge::{self, CallError, Loader, Packets};
+use crate::domain::{
+    auras, player,
+    world::{EventArgs, EventPacket},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -129,22 +132,6 @@ fn area(room: Room, zone: &str, charge: Charge) -> Option<Area> {
         _ => return None,
     };
     Some((x[0]..=x[1], y[0]..=y[1]))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EventPacket {
-    args: EventArgs,
-}
-
-#[derive(Deserialize)]
-struct EventArgs {
-    #[serde(rename = "zoneSet", default)]
-    zone_set: String,
-}
-
-impl Packet for EventPacket {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "event";
 }
 
 struct Pending {

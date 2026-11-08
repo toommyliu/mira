@@ -49,7 +49,11 @@ pub(super) fn serve(
 ) -> Reply {
     Ok(match request {
         Request::Subscribe { id, from, cmds } => {
-            feeds.open(id, Feed::new(subscribe(Box::new(wants(from, cmds))), read));
+            let events = subscribe(Box::new(wants(from, cmds)));
+            feeds.open(
+                id,
+                Feed::new(events, |event, items| items.extend(read(event))),
+            );
             Value::Null
         }
         Request::SendToServer { packet } => json!(packets::send_to_server(loader, &packet)?),

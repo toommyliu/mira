@@ -288,6 +288,22 @@ pub(crate) fn monster_from(value: Value) -> Option<Monster> {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct EventPacket {
+    pub(crate) args: EventArgs,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EventArgs {
+    #[serde(rename = "zoneSet", default)]
+    pub(crate) zone_set: String,
+}
+
+impl Packet for EventPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "event";
+}
+
+#[derive(Deserialize)]
 pub(crate) struct MonsterDropsPacket {
     #[serde(rename = "MonMapID", default, deserialize_with = "wire::number")]
     mon_map_id: Option<f64>,

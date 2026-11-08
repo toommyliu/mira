@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    bank, combat, drops,
+    bank, combat, drops, events,
     feeds::{self, Feeds},
     house, inventory, packets, player, players, quests,
     runtime::Command,
@@ -33,6 +33,7 @@ pub(crate) enum Request {
     Drops(drops::Request),
     Shops(shops::Request),
     Packets(packets::Request),
+    Events(events::Request),
     Feeds(feeds::Request),
 }
 
@@ -125,6 +126,9 @@ async fn serve(bridge: &Bridge, feeds: &Feeds, request: Request) -> Reply {
     match request {
         Request::Packets(request) => {
             packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
+        }
+        Request::Events(request) => {
+            events::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }
         Request::Feeds(request) => feeds::serve(feeds, request).await,
         Request::Player(request) => {

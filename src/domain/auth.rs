@@ -103,10 +103,14 @@ pub(crate) fn connection_dialog(loader: &impl Loader) -> Result<Option<String>, 
     Ok(bridge::flash::get_conn_mc_text(loader)?.filter(|text| text != "null"))
 }
 
-pub(crate) fn credentials(loader: &impl Loader) -> Result<Option<Credentials>, CallError> {
-    let username = game_class_string(loader, "loginInfo.strUsername")?
+pub(crate) fn username(loader: &impl Loader) -> Result<Option<String>, CallError> {
+    Ok(game_class_string(loader, "loginInfo.strUsername")?
         .map(|username| username.trim().to_owned())
-        .filter(|username| !username.is_empty());
+        .filter(|username| !username.is_empty()))
+}
+
+pub(crate) fn credentials(loader: &impl Loader) -> Result<Option<Credentials>, CallError> {
+    let username = username(loader)?;
     let password =
         game_class_string(loader, "loginInfo.strPassword")?.filter(|password| !password.is_empty());
     Ok(username

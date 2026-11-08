@@ -1,11 +1,64 @@
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
     State,
     auras::{self, Aura},
     inventory::{row, rows},
 };
-use crate::bridge::{self, CallError, Loader, Value};
+use crate::bridge::{self, CallError, Format, Loader, Packet, Value, packets::wire};
+
+#[derive(Deserialize)]
+pub(crate) struct PlayerUpdatePacket {
+    #[serde(rename = "unm", deserialize_with = "wire::text")]
+    pub(crate) username: String,
+    #[serde(rename = "o", default)]
+    update: PlayerUpdate,
+}
+
+#[derive(Default, Deserialize)]
+struct PlayerUpdate {
+    #[serde(default, deserialize_with = "flagged")]
+    afk: Option<bool>,
+}
+
+fn flagged<'de, D: Deserializer<'de>>(input: D) -> Result<Option<bool>, D::Error> {
+    wire::flag(input).map(Some)
+}
+
+impl Packet for PlayerUpdatePacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "uotls";
+}
+
+impl PlayerUpdatePacket {
+    pub(crate) fn afk(&self) -> Option<bool> {
+        self.update.afk
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PlayerUpdateLine {
+    _cmd: String,
+    _room: String,
+    pub(crate) username: String,
+    update: String,
+}
+
+impl Packet for PlayerUpdateLine {
+    const FORMAT: Format = Format::Str;
+    const CMD: &'static str = "uotls";
+}
+
+impl PlayerUpdateLine {
+    pub(crate) fn afk(&self) -> Option<bool> {
+        self.update
+            .split(',')
+            .find_map(|field| match field.split_once(':') {
+                Some(("afk", value)) => Some(value.trim() == "true"),
+                _ => None,
+            })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub(crate) struct Position {

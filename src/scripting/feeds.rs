@@ -22,19 +22,30 @@ pub(crate) enum Request {
     Close { id: FeedId },
 }
 
+type Read = Box<dyn Fn(Event, &mut Vec<Value>)>;
+
 pub(crate) struct Feed {
     events: Subscription,
-    read: fn(Event) -> Option<Value>,
+    read: Read,
 }
 
 impl Feed {
-    pub(super) fn new(events: Subscription, read: fn(Event) -> Option<Value>) -> Self {
-        Self { events, read }
+    pub(super) fn new(
+        events: Subscription,
+        read: impl Fn(Event, &mut Vec<Value>) + 'static,
+    ) -> Self {
+        Self {
+            events,
+            read: Box::new(read),
+        }
     }
 
     async fn next(&self) -> Value {
         let Drained { events, lagged } = self.events.drain().await;
-        let items: Vec<Value> = events.into_iter().filter_map(self.read).collect();
+        let mut items = Vec::new();
+        for event in events {
+            (self.read)(event, &mut items);
+        }
         json!({ "items": items, "lagged": lagged })
     }
 }
