@@ -9,6 +9,7 @@ pub(crate) mod view;
 
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,6 +27,7 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     automation::{auto_attack, auto_relogin, auto_zone},
     bridge::{Bridge, Packets},
+    domain::auth::Logins,
     scripting::{self, Calls, ToPlayer},
 };
 use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
@@ -197,11 +199,13 @@ fn run(
         .build();
     bridge.attach(&player);
     let phases = outputs.clone();
+    let logins = Rc::new(Logins::default());
     spawn_local(
         &inbox,
         &tasks,
         auto_relogin::run(
             bridge.clone(),
+            logins.clone(),
             bridge.subscribe(auto_relogin::wants),
             relogin,
             move |phase| {
@@ -258,7 +262,7 @@ fn run(
                 Some(Msg::Script(message)) => scripts.handle(message, |call, feeds| {
                     spawn(
                         &inbox,
-                        scripting::answer(scripts_bridge.clone(), feeds, call),
+                        scripting::answer(scripts_bridge.clone(), logins.clone(), feeds, call),
                     )
                 }),
                 Some(Msg::Frame) => {

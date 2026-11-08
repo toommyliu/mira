@@ -1,4 +1,4 @@
-use std::{cell::RefCell, time::Duration};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -7,7 +7,9 @@ use tokio::{
 };
 
 use crate::bridge::{self, CallError, Event, Lagged, Loader, Subscription};
-use crate::domain::auth::{self, ConnectError, Credentials, LoginError, LoginOutcome, Refusal};
+use crate::domain::auth::{
+    self, ConnectError, Credentials, LoginError, LoginOutcome, Logins, Refusal,
+};
 
 const DIALOG_POLL: Duration = Duration::from_secs(1);
 const STUCK_DIALOG: Duration = Duration::from_secs(30);
@@ -80,11 +82,6 @@ pub(crate) fn wants(event: &Event) -> bool {
     matches!(event, Event::Connection { .. })
 }
 
-struct Session {
-    credentials: Credentials,
-    server: String,
-}
-
 struct Dialog {
     text: String,
     since: Instant,
@@ -132,6 +129,7 @@ impl<F: Fn(Report)> Reporter<F> {
 
 pub(crate) async fn run(
     loader: impl Loader,
+    logins: Rc<Logins>,
     connections: Subscription,
     mut settings: watch::Receiver<Settings>,
     report: impl Fn(Report),
@@ -141,18 +139,17 @@ pub(crate) async fn run(
         phase: RefCell::default(),
     };
     let mut connected = bridge::auth::is_logged_in(&loader).unwrap_or(false);
-    let mut session: Option<Session> = None;
     let mut failure: Option<String> = None;
     let mut dialog: Option<Dialog> = None;
     loop {
         let current = settings.borrow_and_update().clone();
         let recovering = (current.enabled && !connected && failure.is_none())
-            .then_some(session.as_ref())
+            .then(|| logins.last())
             .flatten();
-        let wake = if let Some(session) = recovering {
-            let server = current.server.as_deref().unwrap_or(&session.server);
+        let wake = if let Some(last) = recovering {
+            let server = current.server.as_deref().unwrap_or(&last.server);
             let wake = tokio::select! {
-                result = recover(&loader, &session.credentials, server, &current, &reporter) => Wake::Recovered(result),
+                result = recover(&loader, &logins, &last.credentials, server, &current, &reporter) => Wake::Recovered(result),
                 changed = settings.changed() => Wake::Settings { open: changed.is_ok() },
             };
             connections.clear();
@@ -180,11 +177,13 @@ pub(crate) async fn run(
                     connected = true;
                     failure = None;
                     dialog = None;
-                    session = capture(&loader).or(session);
+                    logins.connected(&loader);
                     if let Ok(servers) = auth::servers(&loader)
                         && !servers.is_empty()
                     {
-                        (reporter.report)(Report::Servers(servers));
+                        (reporter.report)(Report::Servers(
+                            servers.into_iter().map(|server| server.name).collect(),
+                        ));
                     }
                 }
                 "OnConnectionLost" => {
@@ -226,17 +225,9 @@ pub(crate) async fn run(
     }
 }
 
-fn capture(loader: &impl Loader) -> Option<Session> {
-    let credentials = auth::credentials(loader).ok().flatten()?;
-    let server = auth::current_server(loader).ok().flatten()?;
-    Some(Session {
-        credentials,
-        server,
-    })
-}
-
 async fn recover<F: Fn(Report)>(
     loader: &impl Loader,
+    logins: &Logins,
     credentials: &Credentials,
     server: &str,
     settings: &Settings,
@@ -250,7 +241,10 @@ async fn recover<F: Fn(Report)>(
     let mut attempt = 1;
     loop {
         reporter.phase(Phase::Attempt { attempt, of });
-        match attempt_once(loader, credentials, server).await {
+        let turn = logins.turn().await;
+        let result = attempt_once(loader, credentials, server).await;
+        drop(turn);
+        match result {
             Ok(()) => return Ok(()),
             Err(error) if error.retryable() && attempt < of => {
                 tracing::warn!(%error, attempt, "auto relogin attempt failed");
@@ -454,21 +448,31 @@ mod tests {
 
     struct Running {
         world: World,
+        loader: Rc<FakeLoader>,
+        logins: Rc<Logins>,
         settings: watch::Sender<Settings>,
         reports: Rc<RefCell<Vec<Report>>>,
     }
 
     fn start(settings: Settings) -> Running {
         let (world, loader) = World::new();
+        let loader = Rc::new(loader);
+        let logins = Rc::new(Logins::default());
         let (sender, receiver) = watch::channel(settings);
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
         let connections = world.events.subscribe(wants);
-        tokio::task::spawn_local(run(loader, connections, receiver, move |report| {
-            seen.borrow_mut().push(report)
-        }));
+        tokio::task::spawn_local(run(
+            loader.clone(),
+            logins.clone(),
+            connections,
+            receiver,
+            move |report| seen.borrow_mut().push(report),
+        ));
         Running {
             world,
+            loader,
+            logins,
             settings: sender,
             reports,
         }
@@ -634,6 +638,27 @@ mod tests {
                 after(30).await;
                 let login = running.world.game.borrow().logins[0];
                 assert_eq!(login - changed_at, Duration::from_secs(2));
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_script_logs_back_in_to_another_server_with_the_captured_login() {
+        LocalSet::new()
+            .run_until(async {
+                let running = start(Settings::default());
+                running.world.connect();
+                after(1).await;
+                running.logins.log_out(&running.loader).await.unwrap();
+                assert_eq!(running.logins.log_in(&running.loader).await, Ok(true));
+                assert_eq!(
+                    running.logins.connect(&running.loader, " Yorumi ").await,
+                    Ok(())
+                );
+                let game = running.world.game.borrow();
+                assert_eq!(game.logins.len(), 1);
+                assert_eq!(game.connects, ["Yorumi"]);
+                assert!(game.connected);
             })
             .await;
     }

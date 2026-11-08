@@ -21,6 +21,9 @@ const call = <A>(request: object): Effect.Effect<A> =>
     return Effect.sync(cancel);
   });
 
+const auth = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "auth", op, ...args });
+
 const player = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "player", op, ...args });
 
@@ -62,6 +65,44 @@ const events = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 
 const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "feeds", op, ...args });
+
+export type Server = {
+  readonly name: string;
+  readonly players: number;
+  readonly maxPlayers: number;
+  readonly online: boolean;
+  readonly membersOnly: boolean;
+};
+
+export type ConnectResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "full"
+        | "offline"
+        | "notFound"
+        | "membersOnly"
+        | "chatRestricted"
+        | "emailUnconfirmed"
+        | "testClientOnly"
+        | "notReady"
+        | "timedOut"
+        | "other";
+      readonly message: string;
+    };
+
+export const Auth = {
+  isLoggedIn: () => auth<boolean>("loggedIn"),
+  getUsername: () => auth<string | null>("username"),
+  getServer: () => auth<string | null>("server"),
+  getServers: () => auth<readonly Server[]>("servers"),
+  /** Logs this account back in, after waiting out a temporary kick. */
+  login: () => auth<boolean>("login"),
+  /** Matches the server name exactly, ignoring case. */
+  connect: (server: string) => auth<ConnectResult>("connect", { server }),
+  logout: () => auth<void>("logout"),
+};
 
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };

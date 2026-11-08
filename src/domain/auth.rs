@@ -1,6 +1,10 @@
-use std::time::Duration;
+use std::{cell::RefCell, time::Duration};
 
-use tokio::time::{Instant, sleep};
+use serde::Serialize;
+use tokio::{
+    sync::{Mutex, MutexGuard},
+    time::{Instant, sleep},
+};
 
 use super::poll;
 use crate::bridge::{self, CallError, Loader, Value};
@@ -47,7 +51,8 @@ pub(crate) enum ConnectError {
     Call(#[from] CallError),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) enum Refusal {
     Full,
     Offline,
@@ -83,20 +88,45 @@ impl ConnectError {
     }
 }
 
-pub(crate) fn servers(loader: &impl Loader) -> Result<Vec<String>, CallError> {
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Server {
+    pub(crate) name: String,
+    players: f64,
+    max_players: f64,
+    online: bool,
+    members_only: bool,
+}
+
+impl Server {
+    fn parse(row: Value) -> Option<Self> {
+        let Value::Object(fields) = row else {
+            return None;
+        };
+        let name = match fields.get("sName") {
+            Some(Value::String(name)) if !name.trim().is_empty() => name.clone(),
+            _ => return None,
+        };
+        let number = |key: &str| match fields.get(key) {
+            Some(Value::Number(number)) => *number,
+            Some(Value::Bool(flag)) => f64::from(u8::from(*flag)),
+            _ => 0.0,
+        };
+        Some(Self {
+            name,
+            players: number("iCount"),
+            max_players: number("iMax"),
+            online: number("bOnline") != 0.0,
+            members_only: number("bUpg") != 0.0,
+        })
+    }
+}
+
+pub(crate) fn servers(loader: &impl Loader) -> Result<Vec<Server>, CallError> {
     let Value::List(rows) = bridge::auth::get_servers(loader)? else {
         return Ok(Vec::new());
     };
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| match row {
-            Value::Object(mut fields) => match fields.remove("sName") {
-                Some(Value::String(name)) if !name.trim().is_empty() => Some(name),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect())
+    Ok(rows.into_iter().filter_map(Server::parse).collect())
 }
 
 pub(crate) fn connection_dialog(loader: &impl Loader) -> Result<Option<String>, CallError> {
@@ -150,7 +180,7 @@ pub(crate) async fn login(
 pub(crate) async fn connect(loader: &impl Loader, server: &str) -> Result<(), ConnectError> {
     let deadline = Instant::now() + SELECTION_RETRY;
     loop {
-        match Selection::parse(bridge::auth::connect_to(loader, server)?) {
+        match Selection::parse(bridge::auth::connect_to(loader, server.trim())?) {
             Selection::Selected => break,
             Selection::NotReady if Instant::now() < deadline => sleep(POLL).await,
             Selection::NotReady => return Err(ConnectError::SelectionNotReady),
@@ -162,6 +192,68 @@ pub(crate) async fn connect(loader: &impl Loader, server: &str) -> Result<(), Co
     poll(POLL, PLAYER_READY, || Ok(in_game(loader)?.then_some(())))
         .await?
         .ok_or(ConnectError::PlayerUnready)
+}
+
+#[derive(Clone)]
+pub(crate) struct LastLogin {
+    pub(crate) credentials: Credentials,
+    pub(crate) server: String,
+}
+
+#[derive(Default)]
+pub(crate) struct Logins {
+    turn: Mutex<()>,
+    last: RefCell<Option<LastLogin>>,
+}
+
+impl Logins {
+    pub(crate) async fn turn(&self) -> MutexGuard<'_, ()> {
+        self.turn.lock().await
+    }
+
+    pub(crate) fn connected(&self, loader: &impl Loader) {
+        let credentials = credentials(loader).ok().flatten();
+        let server = current_server(loader).ok().flatten();
+        if let Some((credentials, server)) = credentials.zip(server) {
+            self.last.replace(Some(LastLogin {
+                credentials,
+                server,
+            }));
+        }
+    }
+
+    pub(crate) fn last(&self) -> Option<LastLogin> {
+        self.last.borrow().clone()
+    }
+
+    pub(crate) async fn log_out(&self, loader: &impl Loader) -> Result<(), CallError> {
+        let _turn = self.turn().await;
+        bridge::auth::logout(loader)
+    }
+
+    pub(crate) async fn log_in(&self, loader: &impl Loader) -> Result<bool, CallError> {
+        let _turn = self.turn().await;
+        if bridge::auth::is_logged_in(loader)? || server_selection_shown(loader)? {
+            return Ok(true);
+        }
+        let Some(last) = self.last() else {
+            return Ok(false);
+        };
+        match login(loader, &last.credentials).await {
+            Ok(_) => Ok(true),
+            Err(LoginError::Call(error)) => Err(error),
+            Err(LoginError::StillKicked | LoginError::NoServerSelection) => Ok(false),
+        }
+    }
+
+    pub(crate) async fn connect(
+        &self,
+        loader: &impl Loader,
+        server: &str,
+    ) -> Result<(), ConnectError> {
+        let _turn = self.turn().await;
+        connect(loader, server).await
+    }
 }
 
 async fn wait_out_kick(loader: &impl Loader) -> Result<(), LoginError> {
@@ -434,6 +526,45 @@ mod tests {
         assert_eq!(
             connect(&loader, "Twilly").await,
             Err(ConnectError::PlayerUnready)
+        );
+    }
+
+    #[test]
+    fn servers_report_their_population_and_access() {
+        let row = |fields: &[(&str, Value)]| {
+            Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                    .collect(),
+            )
+        };
+        let loader = FakeLoader::new(move |callback, _| {
+            assert_eq!(callback, "auth.getServers");
+            Ok(Value::List(vec![
+                row(&[
+                    ("sName", Value::from("Twilly".to_owned())),
+                    ("iCount", Value::Number(412.0)),
+                    ("iMax", Value::Number(1000.0)),
+                    ("bOnline", Value::Number(1.0)),
+                    ("bUpg", Value::Number(0.0)),
+                ]),
+                row(&[
+                    ("sName", Value::from("Yorumi".to_owned())),
+                    ("iCount", Value::Number(0.0)),
+                    ("iMax", Value::Number(500.0)),
+                    ("bOnline", Value::Number(0.0)),
+                    ("bUpg", Value::Number(1.0)),
+                ]),
+                row(&[("sName", Value::from(" ".to_owned()))]),
+            ]))
+        });
+        assert_eq!(
+            serde_json::to_value(servers(&loader).unwrap()).unwrap(),
+            serde_json::json!([
+                { "name": "Twilly", "players": 412.0, "maxPlayers": 1000.0, "online": true, "membersOnly": false },
+                { "name": "Yorumi", "players": 0.0, "maxPlayers": 500.0, "online": false, "membersOnly": true },
+            ])
         );
     }
 

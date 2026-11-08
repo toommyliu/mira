@@ -188,28 +188,12 @@ package lyra.game
       return label is String ? label : "";
     }
 
-    private static function rowMatches(row:*, normalizedServer:String, exact:Boolean):Boolean
-    {
-      var rowName:String = getServerName(row).toLowerCase();
-      if (rowName == "")
-      {
-        return false;
-      }
-
-      if (exact)
-      {
-        return rowName == normalizedServer;
-      }
-
-      return rowName.indexOf(normalizedServer) > -1;
-    }
-
-    private static function findServerRow(source:*, normalizedServer:String, exact:Boolean):*
+    private static function findServerRow(source:*, normalizedServer:String):*
     {
       for (var i:int = 0; i < source.numChildren; i++)
       {
         var row:* = source.getChildAt(i);
-        if (rowMatches(row, normalizedServer, exact))
+        if (getServerName(row).toLowerCase() == normalizedServer)
         {
           return row;
         }
@@ -290,13 +274,7 @@ package lyra.game
         return connectResult("not-ready", "server selection is not ready");
       }
 
-      server = server.toLowerCase();
-      var child:* = findServerRow(source, server, true);
-      if (child == null)
-      {
-        child = findServerRow(source, server, false);
-      }
-
+      var child:* = findServerRow(source, server.toLowerCase());
       if (child == null)
       {
         return connectResult("not-found", "server was not found");

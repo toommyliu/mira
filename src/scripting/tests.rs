@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
+    auth::Request as A,
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
@@ -1040,6 +1041,57 @@ fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
     .finish();
     assert_eq!(reading.outcome, Outcome::Completed);
     assert_eq!(reading.logs, ["battleon"]);
+}
+
+#[test]
+fn auth_requests_reach_the_player_typed() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Auth } from "lyra";
+
+export default function* () {
+  yield* Auth.isLoggedIn();
+  yield* Auth.getUsername();
+  yield* Auth.getServer();
+  yield* Auth.getServers();
+  yield* Auth.logout();
+  yield* Auth.login();
+  yield* Auth.connect("Twilly");
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            A::LoggedIn,
+            A::Username,
+            A::Server,
+            A::Servers,
+            A::Logout,
+            A::Login,
+            A::Connect {
+                server: "Twilly".into()
+            },
+        ]
+        .map(Request::Auth)
+    );
 }
 
 #[test]

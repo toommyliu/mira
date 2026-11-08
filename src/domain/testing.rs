@@ -28,6 +28,12 @@ impl FakeLoader {
     }
 }
 
+impl<L: Loader> Loader for std::rc::Rc<L> {
+    fn call(&self, callback: &'static str, args: Vec<Value>) -> Result<Value, CallError> {
+        (**self).call(callback, args)
+    }
+}
+
 impl Loader for FakeLoader {
     fn call(&self, callback: &'static str, args: Vec<Value>) -> Result<Value, CallError> {
         self.calls.borrow_mut().push(callback);

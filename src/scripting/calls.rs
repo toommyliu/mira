@@ -4,13 +4,16 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    bank, combat, drops, events,
+    auth, bank, combat, drops, events,
     feeds::{self, Feeds},
     house, inventory, packets, player, players, quests,
     runtime::Command,
     shops, world,
 };
-use crate::bridge::{Bridge, CallError};
+use crate::{
+    bridge::{Bridge, CallError},
+    domain::auth::Logins,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(super) u64);
@@ -21,6 +24,7 @@ pub(crate) struct CallId(pub(super) u64);
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
+    Auth(auth::Request),
     Player(player::Request),
     Players(players::Request),
     World(world::Request),
@@ -117,13 +121,14 @@ impl Calls {
     }
 }
 
-pub(crate) async fn answer(bridge: Bridge, feeds: Rc<Feeds>, call: Call) {
+pub(crate) async fn answer(bridge: Bridge, logins: Rc<Logins>, feeds: Rc<Feeds>, call: Call) {
     let Call { request, reply, .. } = call;
-    reply.send(serve(&bridge, &feeds, request).await);
+    reply.send(serve(&bridge, &logins, &feeds, request).await);
 }
 
-async fn serve(bridge: &Bridge, feeds: &Feeds, request: Request) -> Reply {
+async fn serve(bridge: &Bridge, logins: &Logins, feeds: &Feeds, request: Request) -> Reply {
     match request {
+        Request::Auth(request) => auth::serve(bridge, logins, request).await,
         Request::Packets(request) => {
             packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }
