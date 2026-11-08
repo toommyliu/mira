@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::{
     arrive,
-    inventory::{Row, reply, row, rows},
+    inventory::{ItemCount, Row, item_count, list, reply, row, rows},
     wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
@@ -35,17 +35,9 @@ pub(crate) enum RewardKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct QuestItem {
-    item_id: f64,
-    name: String,
-    quantity: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct QuestReward {
     #[serde(flatten)]
-    item: QuestItem,
+    item: ItemCount,
     kind: RewardKind,
     drop_chance: f64,
 }
@@ -57,29 +49,14 @@ pub(crate) struct Quest {
     name: String,
     cadence: Cadence,
     once: bool,
-    requirements: Vec<QuestItem>,
+    requirements: Vec<ItemCount>,
     rewards: Vec<QuestReward>,
-}
-
-fn list(fields: &mut BTreeMap<String, Value>, key: &str) -> Vec<Value> {
-    match fields.remove(key) {
-        Some(Value::List(values)) => values,
-        _ => Vec::new(),
-    }
-}
-
-fn quest_item(row: &Row) -> Option<QuestItem> {
-    Some(QuestItem {
-        item_id: row.number("itemId").filter(|id| *id > 0.0)?,
-        name: row.text("name"),
-        quantity: row.number("quantity").unwrap_or(1.0),
-    })
 }
 
 fn reward_from(value: Value) -> Option<QuestReward> {
     let row = row(value)?;
     Some(QuestReward {
-        item: quest_item(&row)?,
+        item: item_count(&row)?,
         kind: match row.text("kind").as_str() {
             "choice" => RewardKind::Choice,
             "roll" => RewardKind::Roll,
@@ -96,7 +73,7 @@ fn quest_from(value: Value) -> Option<Quest> {
     };
     let requirements = list(&mut fields, "requirements")
         .into_iter()
-        .filter_map(|value| quest_item(&row(value)?))
+        .filter_map(|value| item_count(&row(value)?))
         .collect();
     let rewards = list(&mut fields, "rewards")
         .into_iter()

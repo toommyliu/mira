@@ -5,6 +5,7 @@ pub(crate) mod drops;
 pub(crate) mod inventory;
 pub(crate) mod player;
 pub(crate) mod quests;
+pub(crate) mod shops;
 #[cfg(test)]
 pub(crate) mod testing;
 pub(crate) mod world;
@@ -18,7 +19,7 @@ use crate::bridge::{self, CallError, GameAction, Loader};
 
 const POLL: Duration = Duration::from_millis(100);
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
-const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
+const ACTION_TIMEOUT: Duration = Duration::from_millis(3_500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

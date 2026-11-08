@@ -8,6 +8,7 @@ mod modules;
 mod player;
 mod quests;
 mod runtime;
+mod shops;
 mod world;
 
 pub(crate) use calls::{Calls, ToPlayer, answer};

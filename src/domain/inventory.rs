@@ -54,7 +54,7 @@ pub(crate) enum ItemPool {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Item {
     pub(super) item_id: f64,
-    char_item_id: Option<f64>,
+    pub(super) char_item_id: Option<f64>,
     name: String,
     description: String,
     pub(crate) quantity: f64,
@@ -109,6 +109,14 @@ pub(crate) struct TempItem {
     max_stack: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ItemCount {
+    item_id: f64,
+    name: String,
+    quantity: f64,
+}
+
 pub(super) struct Row(pub(super) BTreeMap<String, Value>);
 
 impl Row {
@@ -140,6 +148,21 @@ pub(super) fn row(value: Value) -> Option<Row> {
         Value::Object(fields) => Some(Row(fields)),
         _ => None,
     }
+}
+
+pub(super) fn list(fields: &mut BTreeMap<String, Value>, key: &str) -> Vec<Value> {
+    match fields.remove(key) {
+        Some(Value::List(values)) => values,
+        _ => Vec::new(),
+    }
+}
+
+pub(super) fn item_count(row: &Row) -> Option<ItemCount> {
+    Some(ItemCount {
+        item_id: row.item_id()?,
+        name: row.text("name"),
+        quantity: row.number("quantity").unwrap_or(1.0),
+    })
 }
 
 pub(super) fn item_from(value: Value) -> Option<Item> {

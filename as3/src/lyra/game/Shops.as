@@ -9,45 +9,22 @@ package lyra.game {
       "HouseShop": true
     };
 
-    private static function getShopInfo():Object {
-      var game:Object = Main.Game;
-      return game.world.shopinfo;
+    private static function info():Object {
+      return Main.Game.world.shopinfo;
     }
 
-    private static function getShopItems():Array {
-      var info:Object = getShopInfo();
-      if (!info || !(info.items is Array)) {
-        return [];
-      }
-
-      return info.items;
+    private static function items():Array {
+      var shop:Object = info();
+      return shop && shop.items is Array ? shop.items : [];
     }
 
-    private static function getStringSelector(selector:Object, key:String):String {
-      var value:* = selector[key];
-      if (!(value is String)) {
-        return null;
+    private static function find(selector:Object):Object {
+      if (!selector || !("shopItemId" in selector)) {
+        return ItemLookup.find(items(), selector);
       }
 
-      return String(value);
-    }
-
-    private static function getNumberSelector(selector:Object, key:String):Number {
-      var value:* = selector[key];
-      if (!(value is Number) && !(value is int) && !(value is uint)) {
-        return NaN;
-      }
-
-      return Number(value);
-    }
-
-    private static function getItemByShopItemId(shopItemId:Number):Object {
-      if (isNaN(shopItemId) || shopItemId <= 0) {
-        return null;
-      }
-
-      for each (var item:Object in getShopItems()) {
-        if (item && "ShopItemID" in item && Number(item.ShopItemID) === shopItemId) {
+      for each (var item:Object in items()) {
+        if (Number(item.ShopItemID) === Number(selector.shopItemId)) {
           return item;
         }
       }
@@ -55,120 +32,76 @@ package lyra.game {
       return null;
     }
 
-    private static function getShopItem(selector:Object):Object {
-      if ("name" in selector) {
-        return ItemLookup.find(getShopItems(), selector);
+    private static function requirements(item:Object):Array {
+      var rows:Array = [];
+      for each (var need:Object in item.turnin) {
+        rows.push({itemId: need.ItemID, name: need.sName, quantity: need.iQty});
       }
 
-      if ("itemId" in selector) {
-        return ItemLookup.find(getShopItems(), selector);
-      }
-
-      if ("shopItemId" in selector) {
-        return getItemByShopItemId(getNumberSelector(selector, "shopItemId"));
-      }
-
-      return null;
+      return rows;
     }
 
-    private static function getInventoryItem(selector:Object):Object {
-      if ("name" in selector) {
-        return Inventory.find(selector);
-      }
-
-      if ("itemId" in selector) {
-        return Inventory.find(selector);
-      }
-
-      return null;
+    private static function row(item:Object):Object {
+      return {
+        shopItemId: item.ShopItemID,
+        itemId: item.ItemID,
+        name: item.sName,
+        description: item.sDesc,
+        category: item.sType,
+        quantity: item.iQty,
+        maxStack: item.iStk,
+        cost: item.iCost,
+        coins: item.bCoins == 1,
+        member: item.bUpg == 1,
+        level: item.iLvl,
+        faction: item.FactionID > 1 ? {id: item.FactionID, name: item.sFaction, rep: item.iReqRep} : null,
+        requirements: requirements(item)
+      };
     }
 
-    private static function sendBuy(item:Object, quantity:int):void {
-      var game:Object = Main.Game;
-      if (!game.world.coolDown("buyItem")) {
-        return;
-      }
-
-      game.world.shopBuyItem = item;
-      if (quantity === 1) {
-        game.sfc.sendXtMessage("zm", "buyItem", [
-          item.ItemID,
-          game.world.shopinfo.ShopID,
-          item.ShopItemID
-        ], "str", game.world.curRoom);
-        return;
-      }
-
-      game.sfc.sendXtMessage("zm", "buyItem", [
-        item.ItemID,
-        game.world.shopinfo.ShopID,
-        item.ShopItemID,
-        quantity
-      ], "str", game.world.curRoom);
-    }
-
-    private static function sendSell(item:Object, quantity:int):void {
-      var game:Object = Main.Game;
-      if (quantity === -1) {
-        game.world.sendSellItemRequest(item);
-        return;
-      }
-
-      game.world.sendSellItemRequestWithQuantity({
-        accept: 1,
-        iSel: item,
-        iQty: quantity
-      });
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.ShopItemSelector")]
     [BridgeExport]
-    public static function getItem(selector:Object):Object {
-      if (!selector) {
+    public static function getShop():Object {
+      var shop:Object = info();
+      if (!shop) {
         return null;
       }
 
-      return getShopItem(selector);
+      var rows:Array = [];
+      for each (var item:Object in items()) {
+        rows.push(row(item));
+      }
+
+      return {
+        id: shop.ShopID,
+        name: shop.sName,
+        merge: Main.Game.isMergeShop(shop),
+        limited: Boolean(shop.bLimited),
+        house: shop.bHouse == 1,
+        items: rows
+      };
     }
 
-    [BridgeTsParamType("selector: FlashTypes.ShopItemSelector")]
+    [BridgeExport]
+    public static function getItem(selector:Object):Object {
+      var item:Object = find(selector);
+      return item ? row(item) : null;
+    }
+
     [BridgeExport]
     public static function getMaxBuyQuantity(selector:Object):int {
-      if (!selector || !getShopInfo()) {
-        return 0;
-      }
-
-      var item:Object = getShopItem(selector);
-      if (!item) {
-        return 0;
-      }
-
-      var game:Object = Main.Game;
-      return game.world.maximumShopBuys(item);
-    }
-
-    private static function isShopPopupOpen():Boolean {
-      var game:Object = Main.Game;
-      var popup:* = game.ui.mcPopup;
-
-      return popup != null &&
-        popup.visible &&
-        SHOP_POPUP_LABELS[popup.currentLabel] === true;
-    }
-
-    private static function isEnhancement(item:Object):Boolean {
-      return item && "sType" in item && String(item.sType).toLowerCase() == "enhancement";
+      var item:Object = find(selector);
+      return item ? Main.Game.world.maximumShopBuys(item) : 0;
     }
 
     [BridgeExport]
     public static function isOpen(shopId:int = 0):Boolean {
-      var info:Object = getShopInfo();
-
-      if (!isShopPopupOpen() || info == null || !("ShopID" in info)) {
+      var popup:Object = Main.Game.ui.mcPopup;
+      var shop:Object = info();
+      if (!popup || !popup.visible || SHOP_POPUP_LABELS[popup.currentLabel] !== true || !shop) {
         return false;
       }
 
-      return shopId <= 0 || int(info.ShopID) == shopId;
+      return shopId <= 0 || int(shop.ShopID) == shopId;
     }
 
     [BridgeExport]
@@ -177,60 +110,68 @@ package lyra.game {
         return false;
       }
 
-      var game:Object = Main.Game;
-      game.ui.mcPopup.onClose();
+      Main.Game.ui.mcPopup.onClose();
       return true;
     }
 
-    private static function canBuyShopItem(item:Object, quantity:int = 1):Boolean {
+    [BridgeExport]
+    public static function load(shopId:int):void {
+      Main.Game.world.sendLoadShopRequest(shopId);
+    }
+
+    // Mirrors the refusals in the client's World.sendBuyItemRequest and sendBuyItemRequestWithQuantity, without their message boxes.
+    private static function canBuyShopItem(item:Object, quantity:int):Boolean {
       var game:Object = Main.Game;
-      var categories:Class = Class(Main.getInstance().getGameDomain().getDefinition("InvCat"));
-      if (item.bStaff == 1 && game.world.myAvatar.objData.intAccessLevel < 40) {
+      var world:Object = game.world;
+      var avatar:Object = world.myAvatar;
+      var shop:Object = info();
+      var categories:Object = Inventory.categories();
+      if (item.bStaff == 1 && avatar.objData.intAccessLevel < 40) {
         return false;
       }
-      else if (game.world.shopinfo.sField != "" && game.world.getAchievement(game.world.shopinfo.sField, game.world.shopinfo.iIndex) != 1) {
+      else if (shop.sField != "" && world.getAchievement(shop.sField, shop.iIndex) != 1) {
         return false;
       }
-      else if (item.bUpg == 1 && !game.world.myAvatar.isUpgraded()) {
+      else if (item.bUpg == 1 && !avatar.isUpgraded()) {
         return false;
       }
-      else if (int(item.iLvl) > int(game.world.myAvatar.objData.intLevel)) {
+      else if (int(item.iLvl) > int(avatar.objData.intLevel)) {
         return false;
       }
-      else if (item.FactionID > 1 && game.world.myAvatar.getRep(item.FactionID) < item.iReqRep) {
+      else if (item.FactionID > 1 && avatar.getRep(item.FactionID) < item.iReqRep) {
         return false;
       }
       else if (!validateArmor(item)) {
         return false;
       }
-      else if (item.iQSindex >= 0 && game.world.getQuestValue(item.iQSindex) < int(item.iQSvalue)) {
+      else if (item.iQSindex >= 0 && world.getQuestValue(item.iQSindex) < int(item.iQSvalue)) {
+        return false;
+      }
+      else if (categories.isToken(item) && categories.tokenHave(item, world) < categories.tokenNeed(item, quantity)) {
         return false;
       }
       else if (
-          (game.world.myAvatar.isItemInInventory(item.ItemID) || game.world.myAvatar.isItemInBank(item.ItemID)) &&
-          game.world.myAvatar.isItemStackMaxed(item.ItemID)
+          (avatar.isItemInInventory(item.ItemID) || avatar.isItemInBank(item.ItemID)) &&
+          avatar.isItemStackMaxed(item.ItemID)
         ) {
         return false;
       }
-      else if (item.bCoins == 0 && item.iCost > game.world.myAvatar.objData.intGold) {
+      else if (item.bCoins == 0 && item.iCost > avatar.objData.intGold) {
         return false;
       }
-      else if (item.bCoins == 1 && item.iCost > game.world.myAvatar.objData.intCoins) {
+      else if (item.bCoins == 1 && item.iCost > avatar.objData.intCoins) {
         return false;
       }
-      else if (
-          !game.isHouseItem(item) && categories["isFullFor"](
-            game.world.myAvatar.items,
-            item,
-            game.world.myAvatar.objData.iBagSlots,
-            categories["freedBy"](game.world.myAvatar.items, item, quantity)
-          ) ||
-          game.isHouseItem(item) && game.world.myAvatar.houseitems.length >= game.world.myAvatar.objData.iHouseSlots
-        ) {
-        return false;
+      else if (game.isHouseItem(item)) {
+        return avatar.houseitems.length < avatar.objData.iHouseSlots;
       }
 
-      return true;
+      return !categories.isFullFor(
+        avatar.items,
+        item,
+        avatar.objData.iBagSlots,
+        categories.freedBy(avatar.items, item, quantity)
+      );
     }
 
     private static function validateArmor(item:Object):Boolean {
@@ -300,122 +241,67 @@ package lyra.game {
       return !(Number(item.iClass) > 0 && game.world.myAvatar.getCPByID(item.iClass) < item.iReqCP);
     }
 
-    private static function canBuyQuantity(item:Object, quantity:int):Boolean {
-      if (!item || quantity <= 0) {
-        return false;
-      }
-
-      if (!canBuyShopItem(item, quantity)) {
-        return false;
-      }
-
-      var game:Object = Main.Game;
-      return game.world.maximumShopBuys(item) >= quantity;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.ShopItemSelector")]
-    [BridgeExport]
-    public static function enhance(selector:Object, itemId:int):Boolean {
-      if (!selector || itemId <= 0 || !getShopInfo()) {
-        return false;
-      }
-
-      var enhancement:Object = getShopItem(selector);
-      if (!isEnhancement(enhancement) || !canBuyShopItem(enhancement)) {
-        return false;
-      }
-
-      var game:Object = Main.Game;
-      if (!game.world.coolDown("buyItem")) {
-        return false;
-      }
-
-      game.world.enhItem = [itemId];
-      game.world.confirmSendEnhItemRequestShop({
-        accept: true,
-        enh: enhancement,
-        item: [itemId]
-      });
-      return true;
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.ShopItemSelector")]
-    [BridgeExport]
-    public static function buy(selector:Object, quantity:int = 1):void {
-      if (!selector || quantity <= 0) {
-        return;
-      }
-
-      var item:Object = getShopItem(selector);
-      if (!canBuyQuantity(item, quantity)) {
-        return;
-      }
-
-      sendBuy(item, quantity);
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
-    [BridgeExport]
-    public static function sell(selector:Object, quantity:int = -1):Boolean {
-      if (!selector || (quantity !== -1 && quantity <= 0)) {
-        return false;
-      }
-
-      var item:Object = getInventoryItem(selector);
-      if (!item) {
-        return false;
-      }
-
-      sendSell(item, quantity);
-      return true;
-    }
-
-    [BridgeExport]
-    public static function load(shopId:int):void {
-      var game:Object = Main.Game;
-      game.world.sendLoadShopRequest(shopId);
-    }
-
-    [BridgeExport]
-    public static function loadHairShop(shopId:int):void {
-      var game:Object = Main.Game;
-      game.world.sendLoadHairShopRequest(shopId);
-    }
-
-    [BridgeExport]
-    public static function loadArmorCustomize():void {
-      var game:Object = Main.Game;
-      game.openArmorCustomize();
-    }
-
-    [BridgeExport]
-    public static function isMergeShop():Boolean {
-      var info:Object = getShopInfo();
-      if (!info) {
-        return false;
-      }
-
-      var game:Object = Main.Game;
-      return game.isMergeShop(info);
-    }
-
-    [BridgeTsParamType("selector: FlashTypes.ShopItemSelector")]
     [BridgeExport]
     public static function canBuyItem(selector:Object, quantity:int = 1):Boolean {
-      if (!selector || !getShopInfo()) {
+      var item:Object = find(selector);
+      return item != null &&
+        quantity > 0 &&
+        canBuyShopItem(item, quantity) &&
+        Main.Game.world.maximumShopBuys(item) >= quantity;
+    }
+
+    [BridgeExport]
+    public static function buy(selector:Object, quantity:int = 1):Boolean {
+      var item:Object = find(selector);
+      var world:Object = Main.Game.world;
+      if (!canBuyItem(selector, quantity) || !world.coolDown("buyItem")) {
         return false;
       }
 
-      var item:Object = getShopItem(selector);
+      var args:Array = [item.ItemID, info().ShopID, item.ShopItemID];
+      if (quantity != 1) {
+        args.push(quantity);
+      }
+
+      world.shopBuyItem = item;
+      Main.Game.sfc.sendXtMessage("zm", "buyItem", args, "str", world.curRoom);
+      return true;
+    }
+
+    private static function canSell(item:Object, quantity:int):Boolean {
+      var favorites:Object = Main.getInstance().getGameDomain().getDefinition("liteAssets.draw.FavStore");
+      var placed:Boolean = item.sType == "Floor Item" || item.sType == "Wall Item";
+      if (quantity <= 0 || quantity > int(item.iQty) || favorites.has(item.ItemID)) {
+        return false;
+      }
+
+      if ((item.bEquip == 1 && !placed) || int(item.bEquip) >= int(item.iQty)) {
+        return false;
+      }
+
+      var bought:Boolean = item.iHrs != null || item.tPurchase != null;
+      if (item.bCoins == 1 && !bought && item.iCost != 0) {
+        return false;
+      }
+
+      return !(item.hasOwnProperty("sMeta") && String(item.sMeta).indexOf("NoSell") > -1);
+    }
+
+    [BridgeExport]
+    public static function sell(selector:Object, quantity:int = -1):Boolean {
+      var item:Object = Inventory.find(selector);
+      var world:Object = Main.Game.world;
       if (!item) {
         return false;
       }
 
-      if (isEnhancement(item)) {
-        return quantity === 1 && canBuyShopItem(item);
+      var amount:int = quantity == -1 ? int(item.iQty) : quantity;
+      if (!canSell(item, amount) || !world.coolDown("sellItem")) {
+        return false;
       }
 
-      return canBuyQuantity(item, quantity);
+      Main.Game.sfc.sendXtMessage("zm", "sellItem", [item.ItemID, amount, item.CharItemID], "str", world.curRoom);
+      return true;
     }
   }
 }

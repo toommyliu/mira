@@ -17,6 +17,7 @@ use super::{
     player::Request as P,
     quests::Request as Q,
     runtime::Player,
+    shops::Request as S,
     world::Request as W,
 };
 use crate::bridge::CallError;
@@ -759,11 +760,14 @@ export default function* () {
 
 #[test]
 fn item_requests_reach_the_player_typed() {
-    use crate::domain::inventory::{ItemQuery, Pool};
+    use crate::domain::{
+        inventory::{ItemQuery, Pool},
+        shops::ShopItemQuery,
+    };
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Bank, Drops, Inventory, TempInventory } from "lyra";
+        r#"import { Bank, Drops, Inventory, Shops, TempInventory } from "lyra";
 
 export default function* () {
   yield* Inventory.getItems();
@@ -802,6 +806,17 @@ export default function* () {
   yield* Drops.contains("Gem", 2);
   yield* Drops.accept("Gem");
   yield* Drops.reject({ itemId: 45230 });
+  yield* Shops.load(2114);
+  yield* Shops.getCurrent();
+  yield* Shops.getItems();
+  yield* Shops.getItem({ shopItemId: 9740 });
+  yield* Shops.isOpen();
+  yield* Shops.close(2114);
+  yield* Shops.canBuy("Gem", { quantity: 10 });
+  yield* Shops.getMaxBuyQuantity({ itemId: 11482 });
+  yield* Shops.buy({ shopItemId: 9740 });
+  yield* Shops.sell("Gem");
+  yield* Shops.sell({ itemId: 3 }, { quantity: 2 });
 }
 "#,
     )]);
@@ -918,6 +933,43 @@ export default function* () {
             D::Reject { query: id(45230.0) },
         ]
         .map(Request::Drops),
+    );
+    let listing = ShopItemQuery::ShopItemId {
+        shop_item_id: 9740.0,
+    };
+    expected.extend(
+        [
+            S::Load { shop_id: 2114 },
+            S::Current,
+            S::Items,
+            S::Item {
+                query: listing.clone(),
+            },
+            S::IsOpen { shop_id: None },
+            S::Close {
+                shop_id: Some(2114),
+            },
+            S::CanBuy {
+                query: ShopItemQuery::Item(name("Gem")),
+                quantity: Some(10),
+            },
+            S::MaxBuyQuantity {
+                query: ShopItemQuery::Item(id(11482.0)),
+            },
+            S::Buy {
+                query: listing,
+                quantity: None,
+            },
+            S::Sell {
+                query: name("Gem"),
+                quantity: None,
+            },
+            S::Sell {
+                query: id(3.0),
+                quantity: Some(2),
+            },
+        ]
+        .map(Request::Shops),
     );
     assert_eq!(requests, expected);
 }

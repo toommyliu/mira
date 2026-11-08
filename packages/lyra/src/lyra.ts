@@ -37,6 +37,9 @@ const quests = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const drops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "drops", op, ...args });
 
+const shops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "shops", op, ...args });
+
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
 export type Faction = {
@@ -253,14 +256,14 @@ export const Bank = {
 };
 
 export type QuestCadence = "none" | "daily" | "weekly" | "monthly";
-export type QuestItem = {
+export type ItemCount = {
   readonly itemId: number;
   readonly name: string;
   readonly quantity: number;
 };
 /** `choice` rewards need `rewardItemId` when completing. `random` gives one of its group. */
 export type QuestRewardKind = "guaranteed" | "choice" | "roll" | "random";
-export type QuestReward = QuestItem & {
+export type QuestReward = ItemCount & {
   readonly kind: QuestRewardKind;
   /** Percent. */
   readonly dropChance: number;
@@ -270,7 +273,7 @@ export type Quest = {
   readonly name: string;
   readonly cadence: QuestCadence;
   readonly once: boolean;
-  readonly requirements: readonly QuestItem[];
+  readonly requirements: readonly ItemCount[];
   readonly rewards: readonly QuestReward[];
 };
 /** Quests load through the quest log unless `silent`. */
@@ -310,6 +313,53 @@ export const Drops = {
   /** Also claims a drop the drop list lost or hides, if the client has seen the item. */
   accept: (query: ItemQuery) => drops<boolean>("accept", { query }),
   reject: (query: ItemQuery) => drops<boolean>("reject", { query }),
+};
+
+export type ShopItemQuery = ItemQuery | { readonly shopItemId: number };
+export type ShopItem = {
+  readonly shopItemId: number;
+  readonly itemId: number;
+  readonly name: string;
+  readonly description: string;
+  readonly category: string;
+  /** How many one purchase gives. */
+  readonly quantity: number;
+  readonly maxStack: number;
+  readonly cost: number;
+  /** `cost` is in ACs rather than gold. */
+  readonly coins: boolean;
+  readonly member: boolean;
+  readonly level: number;
+  /** Reputation needed with a faction, in the same units as `Faction.rep`. */
+  readonly faction: { readonly id: number; readonly name: string; readonly rep: number } | null;
+  /** Items a merge shop takes for each purchase. */
+  readonly requirements: readonly ItemCount[];
+};
+export type Shop = {
+  readonly id: number;
+  readonly name: string;
+  readonly merge: boolean;
+  readonly limited: boolean;
+  readonly house: boolean;
+  readonly items: readonly ShopItem[];
+};
+export type QuantityOptions = { readonly quantity?: number };
+
+export const Shops = {
+  load: (shopId: number) => shops<boolean>("load", { shopId }),
+  getCurrent: () => shops<Shop | null>("current"),
+  getItems: () => shops<readonly ShopItem[]>("items"),
+  getItem: (query: ShopItemQuery) => shops<ShopItem | null>("item", { query }),
+  isOpen: (shopId?: number) => shops<boolean>("isOpen", { shopId }),
+  close: (shopId?: number) => shops<boolean>("close", { shopId }),
+  canBuy: (query: ShopItemQuery, options: QuantityOptions = {}) =>
+    shops<boolean>("canBuy", { query, ...options }),
+  getMaxBuyQuantity: (query: ShopItemQuery) => shops<number>("maxBuyQuantity", { query }),
+  buy: (query: ShopItemQuery, options: QuantityOptions = {}) =>
+    shops<boolean>("buy", { query, ...options }),
+  /** Sells the whole stack unless `quantity` is given. */
+  sell: (query: ItemQuery, options: QuantityOptions = {}) =>
+    shops<boolean>("sell", { query, ...options }),
 };
 
 export const Script = {

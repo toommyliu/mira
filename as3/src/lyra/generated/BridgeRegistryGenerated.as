@@ -141,14 +141,11 @@ package lyra.generated
       external.externalize("shops.buy", Shops.buy);
       external.externalize("shops.canBuyItem", Shops.canBuyItem);
       external.externalize("shops.close", Shops.close);
-      external.externalize("shops.enhance", Shops.enhance);
       external.externalize("shops.getItem", Shops.getItem);
       external.externalize("shops.getMaxBuyQuantity", Shops.getMaxBuyQuantity);
-      external.externalize("shops.isMergeShop", Shops.isMergeShop);
+      external.externalize("shops.getShop", Shops.getShop);
       external.externalize("shops.isOpen", Shops.isOpen);
       external.externalize("shops.load", Shops.load);
-      external.externalize("shops.loadArmorCustomize", Shops.loadArmorCustomize);
-      external.externalize("shops.loadHairShop", Shops.loadHairShop);
       external.externalize("shops.sell", Shops.sell);
       external.externalize("tempInventory.getItem", TempInventory.getItem);
       external.externalize("tempInventory.getItems", TempInventory.getItems);

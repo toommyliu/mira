@@ -955,7 +955,7 @@ pub(crate) mod shops {
         loader: &impl Loader,
         selector: Value,
         quantity: Option<i32>,
-    ) -> Result<(), CallError> {
+    ) -> Result<bool, CallError> {
         let call_args = vec![selector, Value::Number(f64::from(quantity.unwrap_or(1)))];
         let reply = loader.call("shops.buy", call_args)?;
         Ok(decode("shops.buy", reply)?)
@@ -977,16 +977,6 @@ pub(crate) mod shops {
         Ok(decode("shops.close", reply)?)
     }
 
-    pub(crate) fn enhance(
-        loader: &impl Loader,
-        selector: Value,
-        item_id: i32,
-    ) -> Result<bool, CallError> {
-        let call_args = vec![selector, Value::Number(f64::from(item_id))];
-        let reply = loader.call("shops.enhance", call_args)?;
-        Ok(decode("shops.enhance", reply)?)
-    }
-
     pub(crate) fn get_item(loader: &impl Loader, selector: Value) -> Result<Value, CallError> {
         let call_args = vec![selector];
         let reply = loader.call("shops.getItem", call_args)?;
@@ -1002,10 +992,10 @@ pub(crate) mod shops {
         Ok(decode("shops.getMaxBuyQuantity", reply)?)
     }
 
-    pub(crate) fn is_merge_shop(loader: &impl Loader) -> Result<bool, CallError> {
+    pub(crate) fn get_shop(loader: &impl Loader) -> Result<Value, CallError> {
         let call_args = vec![];
-        let reply = loader.call("shops.isMergeShop", call_args)?;
-        Ok(decode("shops.isMergeShop", reply)?)
+        let reply = loader.call("shops.getShop", call_args)?;
+        Ok(decode("shops.getShop", reply)?)
     }
 
     pub(crate) fn is_open(loader: &impl Loader, shop_id: Option<i32>) -> Result<bool, CallError> {
@@ -1018,18 +1008,6 @@ pub(crate) mod shops {
         let call_args = vec![Value::Number(f64::from(shop_id))];
         let reply = loader.call("shops.load", call_args)?;
         Ok(decode("shops.load", reply)?)
-    }
-
-    pub(crate) fn load_armor_customize(loader: &impl Loader) -> Result<(), CallError> {
-        let call_args = vec![];
-        let reply = loader.call("shops.loadArmorCustomize", call_args)?;
-        Ok(decode("shops.loadArmorCustomize", reply)?)
-    }
-
-    pub(crate) fn load_hair_shop(loader: &impl Loader, shop_id: i32) -> Result<(), CallError> {
-        let call_args = vec![Value::Number(f64::from(shop_id))];
-        let reply = loader.call("shops.loadHairShop", call_args)?;
-        Ok(decode("shops.loadHairShop", reply)?)
     }
 
     pub(crate) fn sell(
