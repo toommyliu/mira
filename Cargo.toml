@@ -24,10 +24,10 @@ objc2-quartz-core = { version = "0.3", features = ["CALayer", "CAMetalLayer", "C
 raw-window-handle = "0.6"
 reqwest = { version = "0.12", default-features = false, features = ["cookies", "native-tls", "stream"] }
 rquickjs = { version = "0.14", features = ["loader"] }
-ruffle_core = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e", features = ["aac", "audio", "default_compatibility_rules", "default_font", "lzma", "mp3", "nellymoser", "stats"] }
-ruffle_frontend_utils = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e", default-features = false, features = ["cpal", "fs"] }
-ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
-ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
+ruffle_core = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565", features = ["aac", "audio", "default_compatibility_rules", "default_font", "lzma", "mp3", "nellymoser", "stats"] }
+ruffle_frontend_utils = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565", default-features = false, features = ["cpal", "fs"] }
+ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
+ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -37,14 +37,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 
 [dev-dependencies]
-swf = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
+swf = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
 tokio = { version = "1", features = ["test-util"] }
 
 [patch.crates-io]
-naga = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
-wgpu-core = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
-wgpu-hal = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
-wgpu-types = { git = "https://github.com/toommyliu/ruffle", rev = "a14a3285c9c56f54741e516724e3f1a690a63a8e" }
+naga = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
+wgpu-core = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
+wgpu-hal = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
+wgpu-types = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
 
 
 [profile.dev]
