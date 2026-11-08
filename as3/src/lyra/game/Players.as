@@ -5,6 +5,9 @@ package lyra.game {
   public class Players {
     [BridgeIgnore]
     public static function row(leaf:Object):Object {
+      var avatar:Object = Main.Game.world.avatars[leaf.entID];
+      var shown:Object = avatar && avatar.pMC && avatar.pMC.visible ? avatar.pMC : null;
+      var reported:Boolean = leaf.tx != 0 || leaf.ty != 0;
       return {
         hp: leaf.intHP,
         maxHp: leaf.intHPMax,
@@ -18,8 +21,8 @@ package lyra.game {
         username: leaf.strUsername,
         name: leaf.uoName,
         userId: leaf.entID,
-        x: leaf.tx,
-        y: leaf.ty,
+        x: shown ? shown.x : (reported ? leaf.tx : null),
+        y: shown ? shown.y : (reported ? leaf.ty : null),
         auras: Auras.rows(leaf)
       };
     }
