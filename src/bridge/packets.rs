@@ -202,6 +202,19 @@ pub(crate) mod wire {
         .filter(|number: &f64| number.is_finite()))
     }
 
+    pub(crate) fn integer<'de, D: Deserializer<'de>, T: TryFrom<i64>>(
+        input: D,
+    ) -> Result<Option<T>, D::Error> {
+        Ok(number(input)?.and_then(whole))
+    }
+
+    pub(crate) fn whole<T: TryFrom<i64>>(number: f64) -> Option<T> {
+        if number.fract() != 0.0 {
+            return None;
+        }
+        T::try_from(number as i64).ok()
+    }
+
     pub(crate) fn flag<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
         Ok(match serde_json::Value::deserialize(input)? {
             serde_json::Value::Bool(flag) => flag,
@@ -323,6 +336,26 @@ mod tests {
             .await;
         assert_eq!(answer, None);
         assert_eq!(started.elapsed(), Duration::ZERO);
+    }
+
+    #[test]
+    fn ids_read_whole_numbers_and_numeric_strings() {
+        #[derive(Deserialize)]
+        struct Reply {
+            #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+            item_id: Option<i32>,
+        }
+        let read = |id: serde_json::Value| {
+            serde_json::from_value::<Reply>(serde_json::json!({ "ItemID": id }))
+                .unwrap()
+                .item_id
+        };
+        assert_eq!(read(serde_json::json!(5)), Some(5));
+        assert_eq!(read(serde_json::json!(5.0)), Some(5));
+        assert_eq!(read(serde_json::json!(" 5 ")), Some(5));
+        assert_eq!(read(serde_json::json!(5.5)), None);
+        assert_eq!(read(serde_json::json!(3_000_000_000_u64)), None);
+        assert_eq!(read(serde_json::json!("five")), None);
     }
 
     #[tokio::test]

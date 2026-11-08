@@ -20,7 +20,7 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum ShopItemQuery {
     ShopItemId {
         #[serde(rename = "shopItemId")]
-        shop_item_id: f64,
+        shop_item_id: i32,
     },
     Item(ItemQuery),
 }
@@ -29,7 +29,7 @@ impl ShopItemQuery {
     fn selector(&self) -> Value {
         match self {
             ShopItemQuery::ShopItemId { shop_item_id } => {
-                selector("shopItemId", Value::Number(*shop_item_id))
+                selector("shopItemId", Value::Number(f64::from(*shop_item_id)))
             }
             ShopItemQuery::Item(query) => query.selector(),
         }
@@ -39,41 +39,37 @@ impl ShopItemQuery {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ShopItem {
-    shop_item_id: f64,
-    item_id: f64,
+    shop_item_id: i32,
+    item_id: i32,
     name: String,
     description: String,
     category: String,
-    quantity: f64,
-    max_stack: f64,
-    cost: f64,
+    quantity: i32,
+    max_stack: i32,
+    cost: i32,
     coins: bool,
     member: bool,
-    level: f64,
+    level: i32,
     faction: Option<FactionRequirement>,
     requirements: Vec<ItemCount>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct FactionRequirement {
-    id: f64,
+    id: i32,
     name: String,
-    rep: f64,
+    rep: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Shop {
-    id: f64,
+    id: i32,
     name: String,
     merge: bool,
     limited: bool,
     house: bool,
     pub(crate) items: Vec<ShopItem>,
-}
-
-fn positive(row: &Row, key: &str) -> Option<f64> {
-    row.number(key).filter(|number| *number > 0.0)
 }
 
 fn item_from(value: Value) -> Option<ShopItem> {
@@ -86,24 +82,24 @@ fn item_from(value: Value) -> Option<ShopItem> {
         .collect();
     let faction = fields.remove("faction").and_then(row).and_then(|faction| {
         Some(FactionRequirement {
-            id: positive(&faction, "id")?,
+            id: faction.positive("id")?,
             name: faction.text("name"),
-            rep: faction.number("rep").unwrap_or(0.0),
+            rep: faction.integer("rep").unwrap_or(0),
         })
     });
     let item = Row(fields);
     Some(ShopItem {
-        shop_item_id: positive(&item, "shopItemId")?,
-        item_id: positive(&item, "itemId")?,
+        shop_item_id: item.positive("shopItemId")?,
+        item_id: item.positive("itemId")?,
         name: item.text("name"),
         description: item.text("description"),
         category: item.text("category"),
-        quantity: item.number("quantity").unwrap_or(1.0),
-        max_stack: item.number("maxStack").unwrap_or(1.0),
-        cost: item.number("cost").unwrap_or(0.0),
+        quantity: item.integer("quantity").unwrap_or(1),
+        max_stack: item.integer("maxStack").unwrap_or(1),
+        cost: item.integer("cost").unwrap_or(0),
         coins: item.flag("coins"),
         member: item.flag("member"),
-        level: item.number("level").unwrap_or(0.0),
+        level: item.integer("level").unwrap_or(0),
         faction,
         requirements,
     })
@@ -119,7 +115,7 @@ fn shop_from(value: Value) -> Option<Shop> {
         .collect();
     let shop = Row(fields);
     Some(Shop {
-        id: positive(&shop, "id")?,
+        id: shop.positive("id")?,
         name: shop.text("name"),
         merge: shop.flag("merge"),
         limited: shop.flag("limited"),
@@ -179,8 +175,8 @@ pub(crate) async fn load(loader: &impl Loader, shop_id: i32) -> Result<bool, Cal
 
 #[derive(Deserialize)]
 pub(crate) struct BuyItemPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
     #[serde(rename = "bitSuccess", default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -192,8 +188,8 @@ impl Packet for BuyItemPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct SellItemPacket {
-    #[serde(rename = "CharItemID", default, deserialize_with = "wire::number")]
-    char_item_id: Option<f64>,
+    #[serde(rename = "CharItemID", default, deserialize_with = "wire::integer")]
+    char_item_id: Option<i64>,
 }
 
 impl Packet for SellItemPacket {
@@ -406,7 +402,7 @@ mod tests {
         assert_eq!(started.elapsed(), LOAD_TIMEOUT);
     }
 
-    fn by_shop_item(shop_item_id: f64) -> ShopItemQuery {
+    fn by_shop_item(shop_item_id: i32) -> ShopItemQuery {
         ShopItemQuery::ShopItemId { shop_item_id }
     }
 
@@ -430,7 +426,7 @@ mod tests {
             let (loader, events, _) = game(Some(2114), vec![other.clone(), bought.clone()]);
             let subscribe = |wants| events.subscribe(wants);
             assert_eq!(
-                buy(&loader, subscribe, &by_shop_item(9740.0), 1).await,
+                buy(&loader, subscribe, &by_shop_item(9740), 1).await,
                 Ok(expected),
                 "{bought}"
             );
@@ -439,19 +435,19 @@ mod tests {
         let (loader, events, _) = game(Some(2114), vec![other]);
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            buy(&loader, subscribe, &by_shop_item(9740.0), 1).await,
+            buy(&loader, subscribe, &by_shop_item(9740), 1).await,
             Ok(false)
         );
 
         let (loader, events, _) = game(Some(2114), Vec::new());
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            buy(&loader, subscribe, &by_shop_item(9740.0), 0).await,
+            buy(&loader, subscribe, &by_shop_item(9740), 0).await,
             Ok(false)
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            buy(&loader, subscribe, &by_shop_item(1.0), 1).await,
+            buy(&loader, subscribe, &by_shop_item(1), 1).await,
             Ok(false)
         );
         assert_eq!(loader.count("shops.buy"), 0);
@@ -523,17 +519,17 @@ mod tests {
         ]);
         assert_eq!(
             serde_json::to_value(shop_from(shop).unwrap()).unwrap(),
-            json!({ "id": 2114.0, "name": "Alchemy Merge", "merge": true, "limited": false,
+            json!({ "id": 2114, "name": "Alchemy Merge", "merge": true, "limited": false,
                     "house": false, "items": [{
-                        "shopItemId": 9740.0, "itemId": 11482.0, "name": "Dragon Scale",
-                        "description": "", "category": "", "quantity": 2.0, "maxStack": 1000.0,
-                        "cost": 0.0, "coins": false, "member": false, "level": 0.0, "faction": null,
-                        "requirements": [{ "itemId": 11475.0, "name": "Dragon Scape", "quantity": 1.0 }]
+                        "shopItemId": 9740, "itemId": 11482, "name": "Dragon Scale",
+                        "description": "", "category": "", "quantity": 2, "maxStack": 1000,
+                        "cost": 0, "coins": false, "member": false, "level": 0, "faction": null,
+                        "requirements": [{ "itemId": 11475, "name": "Dragon Scape", "quantity": 1 }]
                     }, {
-                        "shopItemId": 4721.0, "itemId": 5588.0, "name": "", "description": "",
-                        "category": "", "quantity": 1.0, "maxStack": 1.0, "cost": 0.0, "coins": false,
-                        "member": false, "level": 0.0,
-                        "faction": { "id": 20.0, "name": "Arcangrove", "rep": 302500.0 },
+                        "shopItemId": 4721, "itemId": 5588, "name": "", "description": "",
+                        "category": "", "quantity": 1, "maxStack": 1, "cost": 0, "coins": false,
+                        "member": false, "level": 0,
+                        "faction": { "id": 20, "name": "Arcangrove", "rep": 302500 },
                         "requirements": []
                     }] })
         );

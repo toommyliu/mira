@@ -27,7 +27,7 @@ pub(crate) enum Request {
     },
     Contains {
         query: ItemQuery,
-        quantity: Option<f64>,
+        quantity: Option<i32>,
     },
     Equipped {
         query: ItemQuery,
@@ -89,11 +89,11 @@ pub(super) async fn serve(
         Request::Items => json!(inventory::items(loader)?),
         Request::Item { query } => json!(inventory::item(loader, &query)?),
         Request::Quantity { query } => {
-            json!(inventory::item(loader, &query)?.map_or(0.0, |item| item.quantity))
+            json!(inventory::item(loader, &query)?.map_or(0, |item| item.quantity))
         }
         Request::Contains { query, quantity } => json!(
             inventory::item(loader, &query)?
-                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1.0).max(1.0))
+                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1).max(1))
         ),
         Request::Equipped { query } => {
             json!(inventory::item(loader, &query)?.is_some_and(|item| item.equipped))
@@ -128,7 +128,7 @@ pub(crate) enum TempRequest {
     },
     Contains {
         query: ItemQuery,
-        quantity: Option<f64>,
+        quantity: Option<i32>,
     },
 }
 
@@ -145,11 +145,11 @@ pub(super) fn serve_temp(loader: &impl Loader, request: TempRequest) -> Reply {
         TempRequest::Items => json!(inventory::temp_items(loader)?),
         TempRequest::Item { query } => json!(inventory::temp_item(loader, &query)?),
         TempRequest::Quantity { query } => {
-            json!(inventory::temp_item(loader, &query)?.map_or(0.0, |item| item.quantity))
+            json!(inventory::temp_item(loader, &query)?.map_or(0, |item| item.quantity))
         }
         TempRequest::Contains { query, quantity } => json!(
             inventory::temp_item(loader, &query)?
-                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1.0).max(1.0))
+                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1).max(1))
         ),
     })
 }
@@ -208,7 +208,7 @@ mod tests {
             (
                 TempRequest::Contains {
                     query: potion(),
-                    quantity: Some(2.0),
+                    quantity: Some(2),
                 },
                 json!(false),
             ),
@@ -241,12 +241,12 @@ mod tests {
         });
         let events = Events::default();
         let ask = |request| serve(&loader, |wants| events.subscribe(wants), request);
-        let item = || ItemQuery::ItemId { item_id: 9.0 };
+        let item = || ItemQuery::ItemId { item_id: 9 };
         for (quantity, expected) in [
             (None, true),
-            (Some(0.0), true),
-            (Some(3.0), true),
-            (Some(4.0), false),
+            (Some(0), true),
+            (Some(3), true),
+            (Some(4), false),
         ] {
             assert_eq!(
                 ask(Request::Contains {
@@ -269,10 +269,7 @@ mod tests {
                 "{quantity:?}"
             );
         }
-        assert_eq!(
-            ask(Request::Quantity { query: item() }).await,
-            Ok(json!(3.0))
-        );
+        assert_eq!(ask(Request::Quantity { query: item() }).await, Ok(json!(3)));
         assert_eq!(
             ask(Request::AvailableSlots {
                 pool: Some(Pool::Misc)

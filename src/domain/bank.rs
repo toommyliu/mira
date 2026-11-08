@@ -61,8 +61,8 @@ pub(crate) async fn open(loader: &impl Loader) -> Result<bool, CallError> {
 
 #[derive(Deserialize)]
 pub(crate) struct BankFromInvPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
     #[serde(rename = "bSuccess", default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -74,8 +74,8 @@ impl Packet for BankFromInvPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct BankToInvPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
 }
 
 impl Packet for BankToInvPacket {
@@ -85,10 +85,10 @@ impl Packet for BankToInvPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct BankSwapInvPacket {
-    #[serde(rename = "invItemID", default, deserialize_with = "wire::number")]
-    inventory_item_id: Option<f64>,
-    #[serde(rename = "bankItemID", default, deserialize_with = "wire::number")]
-    bank_item_id: Option<f64>,
+    #[serde(rename = "invItemID", default, deserialize_with = "wire::integer")]
+    inventory_item_id: Option<i32>,
+    #[serde(rename = "bankItemID", default, deserialize_with = "wire::integer")]
+    bank_item_id: Option<i32>,
 }
 
 impl Packet for BankSwapInvPacket {

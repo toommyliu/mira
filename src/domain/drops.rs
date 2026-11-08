@@ -25,8 +25,8 @@ pub(crate) fn reject(loader: &impl Loader, query: &ItemQuery) -> Result<bool, Ca
 
 #[derive(Deserialize)]
 pub(crate) struct GetDropPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
     #[serde(rename = "bSuccess", default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -50,7 +50,7 @@ pub(crate) async fn accept(
         return Ok(false);
     }
     Ok(reply(&replies, |packet| {
-        (packet.item_id == Some(f64::from(requested))).then_some(packet.success)
+        (packet.item_id == Some(requested)).then_some(packet.success)
     })
     .await)
 }

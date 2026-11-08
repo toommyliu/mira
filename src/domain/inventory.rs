@@ -16,7 +16,7 @@ pub(crate) enum ItemQuery {
     Name(String),
     ItemId {
         #[serde(rename = "itemId")]
-        item_id: f64,
+        item_id: i32,
     },
 }
 
@@ -29,8 +29,8 @@ impl ItemQuery {
     }
 }
 
-pub(super) fn by_id(item_id: f64) -> Value {
-    selector("itemId", Value::Number(item_id))
+pub(super) fn by_id(item_id: i32) -> Value {
+    selector("itemId", Value::Number(f64::from(item_id)))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -53,12 +53,12 @@ pub(crate) enum ItemPool {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Item {
-    pub(super) item_id: f64,
-    pub(super) char_item_id: Option<f64>,
+    pub(super) item_id: i32,
+    pub(super) char_item_id: Option<i64>,
     name: String,
     description: String,
-    pub(crate) quantity: f64,
-    max_stack: f64,
+    pub(crate) quantity: i32,
+    max_stack: i32,
     category: String,
     slot: String,
     link: String,
@@ -70,20 +70,20 @@ pub(crate) struct Item {
     member: bool,
     coins: bool,
     pool: ItemPool,
-    class_rank: Option<f64>,
+    class_rank: Option<i32>,
     enhancement: Option<Enhancement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Enhancement {
-    id: f64,
-    level: f64,
-    pattern_id: Option<f64>,
-    proc_id: Option<f64>,
-    dps: Option<f64>,
-    range: Option<f64>,
-    rarity: Option<f64>,
+    id: i32,
+    level: i32,
+    pattern_id: Option<i32>,
+    proc_id: Option<i32>,
+    dps: Option<i32>,
+    range: Option<i32>,
+    rarity: Option<i32>,
 }
 
 impl Item {
@@ -91,7 +91,7 @@ impl Item {
         self.category == "Item"
     }
 
-    fn consumable_action(&self) -> Option<f64> {
+    fn consumable_action(&self) -> Option<i32> {
         let link = self.link.trim().to_lowercase();
         if !self.usable() || matches!(link.as_str(), "" | "none" | "elixir" | "tonic") {
             return None;
@@ -103,18 +103,18 @@ impl Item {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TempItem {
-    item_id: f64,
+    item_id: i32,
     name: String,
-    pub(crate) quantity: f64,
-    max_stack: f64,
+    pub(crate) quantity: i32,
+    max_stack: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ItemCount {
-    item_id: f64,
+    item_id: i32,
     name: String,
-    quantity: f64,
+    quantity: i32,
 }
 
 pub(super) struct Row(pub(super) BTreeMap<String, Value>);
@@ -138,8 +138,16 @@ impl Row {
         matches!(self.0.get(key), Some(Value::Bool(true)))
     }
 
-    fn item_id(&self) -> Option<f64> {
-        self.number("itemId").filter(|id| *id > 0.0)
+    pub(super) fn integer<T: TryFrom<i64>>(&self, key: &str) -> Option<T> {
+        wire::whole(self.number(key)?)
+    }
+
+    pub(super) fn positive<T: TryFrom<i64> + PartialOrd + Default>(&self, key: &str) -> Option<T> {
+        self.integer(key).filter(|number| *number > T::default())
+    }
+
+    fn item_id(&self) -> Option<i32> {
+        self.positive("itemId")
     }
 }
 
@@ -161,20 +169,19 @@ pub(super) fn item_count(row: &Row) -> Option<ItemCount> {
     Some(ItemCount {
         item_id: row.item_id()?,
         name: row.text("name"),
-        quantity: row.number("quantity").unwrap_or(1.0),
+        quantity: row.integer("quantity").unwrap_or(1),
     })
 }
 
 pub(super) fn item_from(value: Value) -> Option<Item> {
     let row = row(value)?;
-    let positive = |key: &str| row.number(key).filter(|number| *number > 0.0);
     Some(Item {
         item_id: row.item_id()?,
-        char_item_id: positive("charItemId"),
+        char_item_id: row.positive("charItemId"),
         name: row.text("name"),
         description: row.text("description"),
-        quantity: row.number("quantity").unwrap_or(0.0),
-        max_stack: row.number("maxStack").unwrap_or(1.0),
+        quantity: row.integer("quantity").unwrap_or(0),
+        max_stack: row.integer("maxStack").unwrap_or(1),
         category: row.text("category"),
         slot: row.text("slot"),
         link: row.text("link"),
@@ -191,15 +198,15 @@ pub(super) fn item_from(value: Value) -> Option<Item> {
             "house" => ItemPool::House,
             _ => ItemPool::Bag,
         },
-        class_rank: row.number("classRank"),
-        enhancement: positive("enhId").map(|id| Enhancement {
+        class_rank: row.integer("classRank"),
+        enhancement: row.positive("enhId").map(|id| Enhancement {
             id,
-            level: row.number("enhLevel").unwrap_or(0.0),
-            pattern_id: positive("enhPatternId"),
-            proc_id: positive("enhProcId"),
-            dps: row.number("enhDps"),
-            range: row.number("enhRange"),
-            rarity: row.number("enhRarity"),
+            level: row.integer("enhLevel").unwrap_or(0),
+            pattern_id: row.positive("enhPatternId"),
+            proc_id: row.positive("enhProcId"),
+            dps: row.integer("enhDps"),
+            range: row.integer("enhRange"),
+            rarity: row.integer("enhRarity"),
         }),
     })
 }
@@ -209,8 +216,8 @@ fn temp_item_from(value: Value) -> Option<TempItem> {
     Some(TempItem {
         item_id: row.item_id()?,
         name: row.text("name"),
-        quantity: row.number("quantity").unwrap_or(0.0),
-        max_stack: row.number("maxStack").unwrap_or(1.0),
+        quantity: row.integer("quantity").unwrap_or(0),
+        max_stack: row.integer("maxStack").unwrap_or(1),
     })
 }
 
@@ -263,10 +270,10 @@ pub(crate) fn available_slots(loader: &impl Loader, pool: Pool) -> Result<i32, C
 
 #[derive(Deserialize)]
 pub(crate) struct EquipItemPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
-    #[serde(default, deserialize_with = "wire::number")]
-    uid: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
+    #[serde(default, deserialize_with = "wire::integer")]
+    uid: Option<i32>,
 }
 
 impl Packet for EquipItemPacket {
@@ -276,10 +283,10 @@ impl Packet for EquipItemPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct UnequipItemPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
-    #[serde(default, deserialize_with = "wire::number")]
-    uid: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
+    #[serde(default, deserialize_with = "wire::integer")]
+    uid: Option<i32>,
 }
 
 impl Packet for UnequipItemPacket {
@@ -289,10 +296,10 @@ impl Packet for UnequipItemPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct WearItemPacket {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
-    #[serde(default, deserialize_with = "wire::number")]
-    uid: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
+    #[serde(default, deserialize_with = "wire::integer")]
+    uid: Option<i32>,
     #[serde(default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -312,8 +319,8 @@ pub(crate) struct SeiaPacket {
 
 #[derive(Deserialize)]
 struct SeiaAction {
-    #[serde(default, deserialize_with = "wire::number")]
-    id: Option<f64>,
+    #[serde(default, deserialize_with = "wire::integer")]
+    id: Option<i32>,
 }
 
 impl Packet for SeiaPacket {
@@ -333,12 +340,12 @@ impl Packet for TurnInPacket {
 }
 
 impl TurnInPacket {
-    pub(crate) fn took(&self, item_id: f64) -> bool {
+    pub(crate) fn took(&self, item_id: i32) -> bool {
         self.items.split(',').any(|entry| {
             entry
                 .split(':')
                 .next()
-                .and_then(|id| id.trim().parse::<f64>().ok())
+                .and_then(|id| id.trim().parse::<i32>().ok())
                 == Some(item_id)
         })
     }
@@ -349,10 +356,6 @@ pub(super) async fn reply<T: Packet>(
     answer: impl FnMut(T) -> Option<bool>,
 ) -> bool {
     replies.answer(REPLY_TIMEOUT, answer).await.unwrap_or(false)
-}
-
-fn own_uid(loader: &impl Loader) -> Result<f64, CallError> {
-    Ok(f64::from(bridge::player::get_user_id(loader)?))
 }
 
 pub(super) async fn ready_item(
@@ -404,7 +407,7 @@ async fn equip_gear(
     if !bridge::inventory::equip(loader, by_id(item.item_id))? {
         return Ok(false);
     }
-    let uid = own_uid(loader)?;
+    let uid = bridge::player::get_user_id(loader)?;
     Ok(reply(&replies, |packet| {
         (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
     })
@@ -450,7 +453,7 @@ async fn wear_item(
     if !bridge::inventory::wear(loader, by_id(item.item_id))? {
         return Ok(false);
     }
-    let uid = own_uid(loader)?;
+    let uid = bridge::player::get_user_id(loader)?;
     Ok(reply(&replies, |packet| {
         (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(packet.success)
     })
@@ -490,7 +493,7 @@ pub(crate) async fn unequip(
     if !bridge::inventory::unequip(loader, by_id(item.item_id))? {
         return Ok(false);
     }
-    let uid = own_uid(loader)?;
+    let uid = bridge::player::get_user_id(loader)?;
     Ok(reply(&replies, |packet| {
         (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
     })
@@ -661,8 +664,8 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(item_from(Value::Object(potion)).unwrap()).unwrap(),
-            json!({ "itemId": 7539.0, "charItemId": 75390.0, "name": "Potion",
-                    "description": "Restores health.", "quantity": 3.0, "maxStack": 1.0,
+            json!({ "itemId": 7539, "charItemId": 75390, "name": "Potion",
+                    "description": "Restores health.", "quantity": 3, "maxStack": 1,
                     "category": "Item", "slot": "co", "link": "potion", "meta": "214", "file": "",
                     "equipped": false, "wearable": false, "worn": false, "member": false,
                     "coins": false, "pool": "misc", "classRank": null, "enhancement": null })
@@ -684,11 +687,11 @@ mod tests {
             ],
         );
         let class = serde_json::to_value(item_from(Value::Object(class)).unwrap()).unwrap();
-        assert_eq!(class["classRank"], json!(10.0));
+        assert_eq!(class["classRank"], json!(10));
         assert_eq!(
             class["enhancement"],
-            json!({ "id": 55.0, "level": 100.0, "patternId": null, "procId": 3.0,
-                    "dps": 100.0, "range": 10.0, "rarity": 9.0 })
+            json!({ "id": 55, "level": 100, "patternId": null, "procId": 3,
+                    "dps": 100, "range": 10, "rarity": 9 })
         );
     }
 

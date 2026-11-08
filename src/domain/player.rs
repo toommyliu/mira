@@ -5,7 +5,7 @@ use tokio::time::{Instant, timeout_at};
 
 use super::{
     POLL, State, arrive,
-    inventory::{self, ItemQuery},
+    inventory::{self, ItemQuery, Row},
     poll, wait_for_action, wait_until_ready, world,
 };
 use crate::bridge::{
@@ -256,12 +256,10 @@ pub(crate) async fn equip_outfit(
     let Value::Object(outfit) = bridge::outfits::get(loader, name)? else {
         return Ok(false);
     };
-    let items: Vec<f64> = OUTFIT_SLOTS
+    let outfit = Row(outfit);
+    let items: Vec<i32> = OUTFIT_SLOTS
         .iter()
-        .filter_map(|slot| match outfit.get(*slot) {
-            Some(Value::Number(id)) if *id > 0.0 => Some(*id),
-            _ => None,
-        })
+        .filter_map(|slot| outfit.positive(slot))
         .collect();
     if !wait_for_action(loader, GameAction::EquipLoadout).await?
         || !bridge::outfits::equip(loader, name, keep_colors)?
@@ -280,7 +278,7 @@ pub(crate) async fn equip_outfit(
     Ok(equipped.is_some())
 }
 
-fn equipped(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
+fn equipped(loader: &impl Loader, id: i32) -> Result<bool, CallError> {
     Ok(inventory::item(loader, &ItemQuery::ItemId { item_id: id })?
         .is_some_and(|item| item.equipped))
 }

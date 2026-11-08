@@ -21,7 +21,7 @@ pub(crate) enum Request {
     },
     Contains {
         query: ItemQuery,
-        quantity: Option<f64>,
+        quantity: Option<i32>,
     },
     Accept {
         query: ItemQuery,
@@ -53,7 +53,7 @@ pub(super) async fn serve(
         Request::Item { query } => json!(drops::item(loader, &query)?),
         Request::Contains { query, quantity } => json!(
             drops::item(loader, &query)?
-                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1.0).max(1.0))
+                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1).max(1))
         ),
         Request::Reject { query } => json!(drops::reject(loader, &query)?),
     })

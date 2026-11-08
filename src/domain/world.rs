@@ -51,9 +51,9 @@ pub(crate) struct Monster {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Drop {
-    item_id: f64,
+    item_id: i32,
     name: String,
-    quantity: f64,
+    quantity: i32,
     rate: Option<f64>,
     boosted_rate: Option<f64>,
     event_drop: bool,
@@ -293,12 +293,12 @@ impl Packet for MonsterDropsPacket {
 
 #[derive(Deserialize)]
 struct DropItem {
-    #[serde(rename = "ItemID", default, deserialize_with = "wire::number")]
-    item_id: Option<f64>,
+    #[serde(rename = "ItemID", default, deserialize_with = "wire::integer")]
+    item_id: Option<i32>,
     #[serde(rename = "sName", default, deserialize_with = "wire::text")]
     name: String,
-    #[serde(rename = "iQty", default, deserialize_with = "wire::number")]
-    quantity: Option<f64>,
+    #[serde(rename = "iQty", default, deserialize_with = "wire::integer")]
+    quantity: Option<i32>,
     #[serde(rename = "bVaryQty", default, deserialize_with = "wire::flag")]
     varies: bool,
     #[serde(rename = "iRate", default, deserialize_with = "wire::number")]
@@ -324,9 +324,13 @@ fn listed<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
 
 impl DropItem {
     fn into_drop(self) -> Option<Drop> {
-        let item_id = self.item_id.filter(|id| *id > 0.0)?;
-        let quantity = self.quantity.unwrap_or(1.0);
-        let divisor = if self.varies { quantity.max(1.0) } else { 1.0 };
+        let item_id = self.item_id.filter(|id| *id > 0)?;
+        let quantity = self.quantity.unwrap_or(1);
+        let divisor = if self.varies {
+            f64::from(quantity.max(1))
+        } else {
+            1.0
+        };
         let mut required_quest_ids: Vec<i64> = Vec::new();
         for part in self.required_quests.split(',') {
             if let Ok(id) = part.trim().parse::<i64>()
@@ -570,10 +574,10 @@ mod tests {
                 assert_eq!(
                     serde_json::to_value(&drops).unwrap(),
                     json!([
-                        { "itemId": 11.0, "name": "Frogzard Scale", "quantity": 4.0, "rate": 50.0,
+                        { "itemId": 11, "name": "Frogzard Scale", "quantity": 4, "rate": 50.0,
                           "boostedRate": 75.0, "eventDrop": false, "questGated": true,
                           "requiredQuestIds": [7, 3] },
-                        { "itemId": 12.0, "name": "Frog Hat", "quantity": 1.0, "rate": 2.5,
+                        { "itemId": 12, "name": "Frog Hat", "quantity": 1, "rate": 2.5,
                           "boostedRate": null, "eventDrop": true, "questGated": false,
                           "requiredQuestIds": [] },
                     ])

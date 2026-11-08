@@ -24,7 +24,7 @@ pub(crate) enum Request {
     },
     Contains {
         query: ItemQuery,
-        quantity: Option<f64>,
+        quantity: Option<i32>,
     },
     Slots,
     UsedSlots,
@@ -47,11 +47,11 @@ pub(super) fn serve(loader: &impl Loader, request: Request) -> Reply {
         Request::Items => json!(house::items(loader)?),
         Request::Item { query } => json!(house::item(loader, &query)?),
         Request::Quantity { query } => {
-            json!(house::item(loader, &query)?.map_or(0.0, |item| item.quantity))
+            json!(house::item(loader, &query)?.map_or(0, |item| item.quantity))
         }
         Request::Contains { query, quantity } => json!(
             house::item(loader, &query)?
-                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1.0).max(1.0))
+                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1).max(1))
         ),
         Request::Slots => json!(bridge::house::get_slots(loader)?),
         Request::UsedSlots => json!(bridge::house::get_used_slots(loader)?),

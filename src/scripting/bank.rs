@@ -25,7 +25,7 @@ pub(crate) enum Request {
     },
     Contains {
         query: ItemQuery,
-        quantity: Option<f64>,
+        quantity: Option<i32>,
     },
     Slots,
     UsedSlots,
@@ -57,13 +57,13 @@ pub(super) async fn serve(
             json!(
                 bank::item(loader, &query)
                     .await?
-                    .map_or(0.0, |item| item.quantity)
+                    .map_or(0, |item| item.quantity)
             )
         }
         Request::Contains { query, quantity } => json!(
             bank::item(loader, &query)
                 .await?
-                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1.0).max(1.0))
+                .is_some_and(|item| item.quantity >= quantity.unwrap_or(1).max(1))
         ),
         Request::Open => json!(bank::open(loader).await?),
         Request::Deposit { query } => json!(bank::deposit(loader, subscribe, &query).await?),
@@ -100,7 +100,7 @@ mod tests {
             (Request::Load, json!(false)),
             (Request::Items, json!([])),
             (Request::Item { query: gem() }, json!(null)),
-            (Request::Quantity { query: gem() }, json!(0.0)),
+            (Request::Quantity { query: gem() }, json!(0)),
             (
                 Request::Contains {
                     query: gem(),

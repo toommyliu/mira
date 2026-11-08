@@ -760,6 +760,42 @@ export default function* () {
 }
 
 #[test]
+fn fractional_item_ids_and_counts_never_reach_the_player() {
+    let folder = Folder::new(&[
+        (
+            "count.ts",
+            "import { Bank } from \"lyra\";\nexport default function* () { yield* Bank.contains(\"Gem\", 2.5); }\n",
+        ),
+        (
+            "id.ts",
+            "import { House } from \"lyra\";\nexport default function* () { yield* House.getItem({ itemId: 3.5 }); }\n",
+        ),
+    ]);
+    for entry in ["count.ts", "id.ts"] {
+        let player = FakePlayer::default();
+        let finished = start(
+            &folder,
+            entry,
+            Limits::default(),
+            player.answering(|_, _| Some(Ok(json!(null)))),
+        )
+        .finish();
+        assert!(
+            matches!(finished.outcome, Outcome::Failed { .. }),
+            "{entry}: {:?}",
+            finished.outcome
+        );
+        assert!(
+            !player
+                .seen()
+                .iter()
+                .any(|seen| matches!(seen, Seen::Call(..))),
+            "{entry}"
+        );
+    }
+}
+
+#[test]
 fn item_requests_reach_the_player_typed() {
     use crate::domain::{
         inventory::{ItemQuery, Pool},
@@ -846,20 +882,20 @@ export default function* () {
         })
         .collect();
     let name = |name: &str| ItemQuery::Name(name.into());
-    let id = |item_id: f64| ItemQuery::ItemId { item_id };
+    let id = |item_id: i32| ItemQuery::ItemId { item_id };
     let mut expected: Vec<Request> = [
         I::Items,
         I::Item {
             query: name("Potion"),
         },
-        I::Quantity { query: id(7.0) },
+        I::Quantity { query: id(7) },
         I::Contains {
             query: name("Potion"),
             quantity: None,
         },
         I::Contains {
             query: name("Potion"),
-            quantity: Some(5.0),
+            quantity: Some(5),
         },
         I::Equipped {
             query: name("Helm"),
@@ -882,7 +918,7 @@ export default function* () {
         I::Unequip {
             query: name("Helm"),
         },
-        I::Wear { query: id(8.0) },
+        I::Wear { query: id(8) },
         I::Use {
             query: name("Tonic"),
         },
@@ -900,7 +936,7 @@ export default function* () {
             },
             T::Contains {
                 query: name("Scale"),
-                quantity: Some(10.0),
+                quantity: Some(10),
             },
         ]
         .map(Request::TempInventory),
@@ -910,10 +946,10 @@ export default function* () {
             B::Load,
             B::Items,
             B::Item { query: name("Gem") },
-            B::Quantity { query: id(3.0) },
+            B::Quantity { query: id(3) },
             B::Contains {
                 query: name("Gem"),
-                quantity: Some(2.0),
+                quantity: Some(2),
             },
             B::Slots,
             B::UsedSlots,
@@ -921,7 +957,7 @@ export default function* () {
             B::IsOpen,
             B::Open,
             B::Deposit { query: name("Gem") },
-            B::Withdraw { query: id(3.0) },
+            B::Withdraw { query: id(3) },
             B::Swap {
                 inventory_query: name("Gem"),
                 bank_query: name("Ore"),
@@ -935,10 +971,10 @@ export default function* () {
             H::Item {
                 query: name("Chair"),
             },
-            H::Quantity { query: id(4.0) },
+            H::Quantity { query: id(4) },
             H::Contains {
                 query: name("Chair"),
-                quantity: Some(2.0),
+                quantity: Some(2),
             },
             H::Slots,
             H::UsedSlots,
@@ -949,19 +985,17 @@ export default function* () {
     expected.extend(
         [
             D::Items,
-            D::Item { query: id(45230.0) },
+            D::Item { query: id(45230) },
             D::Contains {
                 query: name("Gem"),
-                quantity: Some(2.0),
+                quantity: Some(2),
             },
             D::Accept { query: name("Gem") },
-            D::Reject { query: id(45230.0) },
+            D::Reject { query: id(45230) },
         ]
         .map(Request::Drops),
     );
-    let listing = ShopItemQuery::ShopItemId {
-        shop_item_id: 9740.0,
-    };
+    let listing = ShopItemQuery::ShopItemId { shop_item_id: 9740 };
     expected.extend(
         [
             S::Load { shop_id: 2114 },
@@ -979,7 +1013,7 @@ export default function* () {
                 quantity: Some(10),
             },
             S::MaxBuyQuantity {
-                query: ShopItemQuery::Item(id(11482.0)),
+                query: ShopItemQuery::Item(id(11482)),
             },
             S::Buy {
                 query: listing,
@@ -990,7 +1024,7 @@ export default function* () {
                 quantity: None,
             },
             S::Sell {
-                query: id(3.0),
+                query: id(3),
                 quantity: Some(2),
             },
         ]

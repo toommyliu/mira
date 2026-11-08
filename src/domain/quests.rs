@@ -45,7 +45,7 @@ pub(crate) struct QuestReward {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Quest {
-    id: f64,
+    id: i32,
     name: String,
     cadence: Cadence,
     once: bool,
@@ -81,7 +81,7 @@ fn quest_from(value: Value) -> Option<Quest> {
         .collect();
     let quest = Row(fields);
     Some(Quest {
-        id: quest.number("id").filter(|id| *id > 0.0)?,
+        id: quest.positive("id")?,
         name: quest.text("name"),
         cadence: match quest.text("cadence").as_str() {
             "daily" => Cadence::Daily,
@@ -172,8 +172,8 @@ pub(crate) async fn load(
 
 #[derive(Deserialize)]
 pub(crate) struct AcceptQuestPacket {
-    #[serde(rename = "QuestID", default, deserialize_with = "wire::number")]
-    quest_id: Option<f64>,
+    #[serde(rename = "QuestID", default, deserialize_with = "wire::integer")]
+    quest_id: Option<i32>,
     #[serde(rename = "bSuccess", default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -185,8 +185,8 @@ impl Packet for AcceptQuestPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct CompleteQuestPacket {
-    #[serde(rename = "QuestID", default, deserialize_with = "wire::number")]
-    quest_id: Option<f64>,
+    #[serde(rename = "QuestID", default, deserialize_with = "wire::integer")]
+    quest_id: Option<i32>,
     #[serde(rename = "bSuccess", default, deserialize_with = "wire::flag")]
     success: bool,
 }
@@ -216,7 +216,7 @@ pub(crate) async fn accept(
         return Ok(false);
     }
     Ok(reply(&replies, |packet| {
-        (packet.quest_id == Some(f64::from(quest_id))).then_some(packet.success)
+        (packet.quest_id == Some(quest_id)).then_some(packet.success)
     })
     .await)
 }
@@ -252,7 +252,7 @@ pub(crate) async fn complete(
         return Ok(false);
     }
     Ok(reply(&replies, |packet| {
-        (packet.quest_id == Some(f64::from(quest_id))).then_some(packet.success)
+        (packet.quest_id == Some(quest_id)).then_some(packet.success)
     })
     .await)
 }
@@ -400,12 +400,12 @@ mod tests {
         ]);
         assert_eq!(
             serde_json::to_value(quest_from(quest).unwrap()).unwrap(),
-            json!({ "id": 6552.0, "name": "Power UP!", "cadence": "daily", "once": false,
-                    "requirements": [{ "itemId": 45277.0, "name": "Arcane Energy", "quantity": 6.0 }],
+            json!({ "id": 6552, "name": "Power UP!", "cadence": "daily", "once": false,
+                    "requirements": [{ "itemId": 45277, "name": "Arcane Energy", "quantity": 6 }],
                     "rewards": [
-                        { "itemId": 45230.0, "name": "Shadowscythe Templar", "quantity": 1.0,
+                        { "itemId": 45230, "name": "Shadowscythe Templar", "quantity": 1,
                           "kind": "choice", "dropChance": 100.0 },
-                        { "itemId": 9.0, "name": "Gem", "quantity": 2.0,
+                        { "itemId": 9, "name": "Gem", "quantity": 2,
                           "kind": "random", "dropChance": 25.0 }
                     ] })
         );

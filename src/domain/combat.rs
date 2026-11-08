@@ -5,7 +5,7 @@ use tokio::{pin, select, time::sleep};
 
 use super::{
     State, auth, has_avatar,
-    inventory::TurnInPacket,
+    inventory::{self, TurnInPacket},
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
@@ -158,14 +158,11 @@ pub(crate) async fn use_skill(
         .is_some())
 }
 
-fn slotted_item(loader: &impl Loader) -> Result<Option<f64>, CallError> {
-    Ok(match bridge::combat::get_consumable_skill_item(loader)? {
-        Value::Object(fields) => match fields.get("itemId") {
-            Some(Value::Number(id)) if *id > 0.0 => Some(*id),
-            _ => None,
-        },
-        _ => None,
-    })
+fn slotted_item(loader: &impl Loader) -> Result<Option<i32>, CallError> {
+    Ok(
+        inventory::row(bridge::combat::get_consumable_skill_item(loader)?)
+            .and_then(|row| row.positive("itemId")),
+    )
 }
 
 async fn ready(loader: &impl Loader, skill: Skill) -> Result<bool, CallError> {
