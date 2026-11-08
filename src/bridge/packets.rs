@@ -1,11 +1,22 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Duration};
 
 use serde::{
     Deserialize, Deserializer,
     de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess},
 };
+use tokio::time::{Instant, timeout_at};
 
 use super::{Event, Lagged, Subscription};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Interruption {
+    Lagged,
+    Disconnected,
+}
+
+fn disconnected(event: &Event) -> bool {
+    matches!(event, Event::Connection { status } if status == "OnConnectionLost")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,7 +45,7 @@ impl<T: Packet> Packets<T> {
 
     pub(crate) fn wants(event: &Event) -> bool {
         let Event::ExtensionResponse { packet } = event else {
-            return false;
+            return disconnected(event);
         };
         let opening = match T::FORMAT {
             Format::Json => "\"cmd\":\"",
@@ -47,15 +58,42 @@ impl<T: Packet> Packets<T> {
         })
     }
 
-    pub(crate) async fn next(&self) -> Result<T, Lagged> {
+    pub(crate) async fn next(&self) -> Result<T, Interruption> {
         loop {
-            let Event::ExtensionResponse { packet } = self.events.next().await? else {
+            let event = self
+                .events
+                .next()
+                .await
+                .map_err(|Lagged| Interruption::Lagged)?;
+            let Event::ExtensionResponse { packet } = event else {
+                if disconnected(&event) {
+                    return Err(Interruption::Disconnected);
+                }
                 continue;
             };
             match decode(&packet) {
                 Ok(Some(decoded)) => return Ok(decoded),
                 Ok(None) => {}
                 Err(error) => tracing::debug!(cmd = T::CMD, %error, "skipped an unreadable packet"),
+            }
+        }
+    }
+
+    pub(crate) async fn answer<R>(
+        &self,
+        within: Duration,
+        mut answer: impl FnMut(T) -> Option<R>,
+    ) -> Option<R> {
+        let deadline = Instant::now() + within;
+        loop {
+            match timeout_at(deadline, self.next()).await {
+                Ok(Ok(packet)) => {
+                    if let Some(result) = answer(packet) {
+                        return Some(result);
+                    }
+                }
+                Ok(Err(Interruption::Lagged)) => {}
+                Ok(Err(Interruption::Disconnected)) | Err(_) => return None,
             }
         }
     }
@@ -258,6 +296,33 @@ mod tests {
             ],
         );
         assert_eq!(waves.next().await, Ok(WavePacket { size: 5 }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_connection_ends_the_wait_at_once() {
+        let events = Events::default();
+        let waves = Packets::<WavePacket>::subscribe(|wants| events.subscribe(wants));
+        let connection = |status: &str| Event::Connection {
+            status: status.into(),
+        };
+        events.publish(&connection("OnConnection"));
+        publish(
+            &events,
+            &[r#"{"type":"json","dataObj":{"cmd":"wave","size":1}}"#],
+        );
+        events.publish(&connection("OnConnectionLost"));
+        publish(
+            &events,
+            &[r#"{"type":"json","dataObj":{"cmd":"wave","size":2}}"#],
+        );
+        let started = tokio::time::Instant::now();
+        let answer = waves
+            .answer(Duration::from_secs(5), |wave| {
+                (wave.size == 2).then_some(())
+            })
+            .await;
+        assert_eq!(answer, None);
+        assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
     #[tokio::test]

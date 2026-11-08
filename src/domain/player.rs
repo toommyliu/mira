@@ -8,7 +8,9 @@ use super::{
     inventory::{self, ItemQuery},
     poll, wait_for_action, wait_until_ready, world,
 };
-use crate::bridge::{self, CallError, Format, GameAction, Loader, Packet, Packets, Value};
+use crate::bridge::{
+    self, CallError, Format, GameAction, Interruption, Loader, Packet, Packets, Value,
+};
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
 const JUMP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -137,7 +139,10 @@ pub(crate) async fn join(
     let deadline = Instant::now() + JOIN_TIMEOUT;
     moves.clear();
     bridge::player::join_map(loader, map, Some(cell), Some(pad))?;
-    if timeout_at(deadline, moves.next()).await.is_err() {
+    if !matches!(
+        timeout_at(deadline, moves.next()).await,
+        Ok(Ok(_) | Err(Interruption::Lagged))
+    ) {
         return Ok(false);
     }
     arrive(loader, deadline - Instant::now(), || {
@@ -306,16 +311,13 @@ pub(crate) async fn wear_outfit(
     if !bridge::outfits::wear(loader, name, keep_colors)? {
         return Ok(false);
     }
-    let uid = bridge::player::get_user_id(loader)?;
-    let deadline = Instant::now() + OUTFIT_TIMEOUT;
-    while let Ok(reply) = timeout_at(deadline, replies.next()).await {
-        if let Ok(packet) = reply
-            && packet.uid == i64::from(uid)
-        {
-            return Ok(packet.success);
-        }
-    }
-    Ok(false)
+    let uid = i64::from(bridge::player::get_user_id(loader)?);
+    Ok(replies
+        .answer(OUTFIT_TIMEOUT, |packet| {
+            (packet.uid == uid).then_some(packet.success)
+        })
+        .await
+        .unwrap_or(false))
 }
 
 #[cfg(test)]

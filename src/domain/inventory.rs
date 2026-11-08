@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::time::{Instant, timeout_at};
 
 use super::{combat::selector, wait_for_action, wait_until_ready};
 use crate::bridge::{
@@ -324,15 +323,9 @@ impl TurnInPacket {
 
 pub(super) async fn reply<T: Packet>(
     replies: &Packets<T>,
-    mut answer: impl FnMut(T) -> Option<bool>,
+    answer: impl FnMut(T) -> Option<bool>,
 ) -> bool {
-    let deadline = Instant::now() + REPLY_TIMEOUT;
-    while let Ok(reply) = timeout_at(deadline, replies.next()).await {
-        if let Some(result) = reply.ok().and_then(&mut answer) {
-            return result;
-        }
-    }
-    false
+    replies.answer(REPLY_TIMEOUT, answer).await.unwrap_or(false)
 }
 
 fn own_uid(loader: &impl Loader) -> Result<f64, CallError> {

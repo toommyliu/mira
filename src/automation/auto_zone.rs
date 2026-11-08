@@ -6,7 +6,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::bridge::{self, CallError, Format, Lagged, Loader, Packet, Packets};
+use crate::bridge::{self, CallError, Format, Loader, Packet, Packets};
 use crate::domain::player;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,7 +177,7 @@ pub(crate) async fn run(
                         pending = Some(Pending { room, zone, at: Instant::now() + room.settle() });
                     }
                 }
-                Err(Lagged) => {}
+                Err(_) => {}
             },
             changed = settings.changed() => if changed.is_err() {
                 return;

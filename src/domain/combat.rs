@@ -1,10 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::{
-    pin, select,
-    time::{Instant, sleep, timeout_at},
-};
+use tokio::{pin, select, time::sleep};
 
 use super::{
     State, auth, has_avatar,
@@ -12,7 +9,7 @@ use super::{
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
-    self, CallError, Format, Lagged, Loader, Packet, Packets, Value, packets::wire,
+    self, CallError, Format, Interruption, Loader, Packet, Packets, Value, packets::wire,
 };
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
@@ -153,13 +150,12 @@ pub(crate) async fn use_skill(
     let Some(item_id) = consumed else {
         return Ok(true);
     };
-    let deadline = Instant::now() + CONSUMED_TIMEOUT;
-    while let Ok(reply) = timeout_at(deadline, turn_ins.next()).await {
-        if reply.is_ok_and(|packet| packet.took(item_id)) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(turn_ins
+        .answer(CONSUMED_TIMEOUT, |packet| {
+            packet.took(item_id).then_some(())
+        })
+        .await
+        .is_some())
 }
 
 fn slotted_item(loader: &impl Loader) -> Result<Option<f64>, CallError> {
@@ -253,9 +249,10 @@ async fn fight(
                 event = fights.next() => match event {
                     Ok(packet) if packet.killed(id) => return Ok(true),
                     Ok(_) => {}
-                    Err(Lagged) => if !bridge::world::is_monster_available(loader, id)? {
+                    Err(Interruption::Lagged) => if !bridge::world::is_monster_available(loader, id)? {
                         return Ok(true);
                     },
+                    Err(Interruption::Disconnected) => return Ok(false),
                 },
                 () = &mut tick => break,
             }

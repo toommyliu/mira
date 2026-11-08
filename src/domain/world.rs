@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use tokio::time::{Instant, timeout_at};
 
 use super::{State, arrive, ready, wait_for_action, wait_until_ready};
 use crate::bridge::{
@@ -173,21 +172,17 @@ pub(crate) async fn monster_drops(
     if !bridge::world::request_monster_drops(loader, monster.mon_map_id)? {
         return Ok(None);
     }
-    let deadline = Instant::now() + DROPS_TIMEOUT;
-    while let Ok(reply) = timeout_at(deadline, replies.next()).await {
-        if let Ok(packet) = reply
-            && packet.mon_map_id == Some(monster.mon_map_id)
-        {
-            return Ok(Some(
+    Ok(replies
+        .answer(DROPS_TIMEOUT, |packet| {
+            (packet.mon_map_id == Some(monster.mon_map_id)).then(|| {
                 packet
                     .items
                     .into_iter()
                     .filter_map(DropItem::into_drop)
-                    .collect(),
-            ));
-        }
-    }
-    Ok(None)
+                    .collect()
+            })
+        })
+        .await)
 }
 
 pub(crate) async fn set_spawn_point(
