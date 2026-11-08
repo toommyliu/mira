@@ -3,30 +3,30 @@ package lyra.game {
 
   [BridgeNamespace("house")]
   public class House {
-
     [BridgeExport]
     public static function getItems():Array {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.houseitems;
+      var rows:Array = [];
+      for each (var item:Object in Main.Game.world.myAvatar.houseitems) {
+        rows.push(Inventory.row(item));
+      }
+
+      return rows;
     }
 
-    [BridgeTsParamType("selector: FlashTypes.InventoryItemSelector")]
     [BridgeExport]
     public static function getItem(selector:Object):Object {
-      var game:Object = Main.Game;
-      return ItemLookup.find(game.world.myAvatar.houseitems, selector);
+      var item:Object = ItemLookup.find(Main.Game.world.myAvatar.houseitems, selector);
+      return item ? Inventory.row(item) : null;
     }
 
     [BridgeExport]
     public static function getSlots():int {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.objData.iHouseSlots;
+      return Main.Game.world.myAvatar.objData.iHouseSlots;
     }
 
     [BridgeExport]
     public static function getUsedSlots():int {
-      var game:Object = Main.Game;
-      return game.world.myAvatar.houseitems.length;
+      return Main.Game.world.myAvatar.houseitems.length;
     }
   }
 }

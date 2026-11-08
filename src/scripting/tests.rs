@@ -13,6 +13,7 @@ use super::{
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
     drops::Request as D,
+    house::Request as H,
     inventory::{Request as I, TempRequest as T},
     player::Request as P,
     quests::Request as Q,
@@ -767,7 +768,7 @@ fn item_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Bank, Drops, Inventory, Shops, TempInventory } from "lyra";
+        r#"import { Bank, Drops, House, Inventory, Shops, TempInventory } from "lyra";
 
 export default function* () {
   yield* Inventory.getItems();
@@ -801,6 +802,13 @@ export default function* () {
   yield* Bank.deposit("Gem");
   yield* Bank.withdraw({ itemId: 3 });
   yield* Bank.swap("Gem", "Ore");
+  yield* House.getItems();
+  yield* House.getItem("Chair");
+  yield* House.getQuantity({ itemId: 4 });
+  yield* House.contains("Chair", 2);
+  yield* House.getSlots();
+  yield* House.getUsedSlots();
+  yield* House.getAvailableSlots();
   yield* Drops.getItems();
   yield* Drops.getItem({ itemId: 45230 });
   yield* Drops.contains("Gem", 2);
@@ -920,6 +928,23 @@ export default function* () {
             },
         ]
         .map(Request::Bank),
+    );
+    expected.extend(
+        [
+            H::Items,
+            H::Item {
+                query: name("Chair"),
+            },
+            H::Quantity { query: id(4.0) },
+            H::Contains {
+                query: name("Chair"),
+                quantity: Some(2.0),
+            },
+            H::Slots,
+            H::UsedSlots,
+            H::AvailableSlots,
+        ]
+        .map(Request::House),
     );
     expected.extend(
         [

@@ -31,6 +31,9 @@ const tempInventory = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const bank = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "bank", op, ...args });
 
+const house = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "house", op, ...args });
+
 const quests = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "quests", op, ...args });
 
@@ -253,6 +256,17 @@ export const Bank = {
   withdraw: (query: ItemQuery) => bank<boolean>("withdraw", { query }),
   swap: (inventoryQuery: ItemQuery, bankQuery: ItemQuery) =>
     bank<boolean>("swap", { inventoryQuery, bankQuery }),
+};
+
+export const House = {
+  getItems: () => house<readonly Item[]>("items"),
+  getItem: (query: ItemQuery) => house<Item | null>("item", { query }),
+  getQuantity: (query: ItemQuery) => house<number>("quantity", { query }),
+  contains: (query: ItemQuery, quantity?: number) =>
+    house<boolean>("contains", { query, quantity }),
+  getSlots: () => house<number>("slots"),
+  getUsedSlots: () => house<number>("usedSlots"),
+  getAvailableSlots: () => house<number>("availableSlots"),
 };
 
 export type QuestCadence = "none" | "daily" | "weekly" | "monthly";
