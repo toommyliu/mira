@@ -13,8 +13,10 @@ use super::{
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
     drops::Request as D,
+    feeds::{FeedId, Request as F},
     house::Request as H,
     inventory::{Request as I, TempRequest as T},
+    packets::{Request as PK, Sender},
     player::Request as P,
     players::Request as PL,
     quests::Request as Q,
@@ -479,6 +481,206 @@ export default function* () {
     assert_eq!(finished.outcome, Outcome::Completed);
     assert_eq!(finished.logs, ["true true 3 false"]);
     assert!(finished.elapsed >= Duration::from_millis(70));
+}
+
+fn batch(items: serde_json::Value) -> Option<Reply> {
+    Some(Ok(json!({ "items": items, "lagged": false })))
+}
+
+fn server(packet: serde_json::Value) -> serde_json::Value {
+    json!({ "from": "server", "packet": packet.to_string() })
+}
+
+#[test]
+fn waiting_for_a_packet_subscribes_before_the_trigger_and_returns_the_first_match() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Packets, Wait } from "lyra";
+
+export default function* () {
+  const reply = yield* Wait.forPacket(
+    { from: "server", cmd: "loadShop" },
+    { trigger: Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
+  );
+  console.log(JSON.stringify(reply));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| match request {
+            Request::Feeds(F::Next { .. }) => batch(json!([
+                server(json!({ "type": "json", "dataObj": { "cmd": "loadShops" } })),
+                server(json!({ "type": "json", "dataObj": { "cmd": "loadShop", "shopId": 5 } })),
+            ])),
+            Request::Packets(PK::SendToServer { .. }) => Some(Ok(json!(true))),
+            _ => Some(Ok(json!(null))),
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            r#"{"from":"server","format":"json","cmd":"loadShop","data":{"cmd":"loadShop","shopId":5}}"#
+        ]
+    );
+    assert_eq!(
+        player.seen(),
+        [
+            Seen::Call(
+                1,
+                Request::Packets(PK::Subscribe {
+                    id: FeedId(1),
+                    from: Some(Sender::Server),
+                    cmds: Some(vec!["loadShop".into()]),
+                })
+            ),
+            Seen::Call(
+                2,
+                Request::Packets(PK::SendToServer {
+                    packet: "%xt%zm%loadShop%1%5%".into()
+                })
+            ),
+            Seen::Call(3, Request::Feeds(F::Next { id: FeedId(1) })),
+            Seen::Call(4, Request::Feeds(F::Close { id: FeedId(1) })),
+            Seen::Ended,
+        ]
+    );
+}
+
+#[test]
+fn a_packet_wait_ends_empty_when_the_connection_drops_the_time_runs_out_or_the_trigger_fails() {
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Effect } from "effect";
+import { Wait } from "lyra";
+
+export default function* () {
+  const client = yield* Wait.forPacket({ from: "client", cmd: "afk" });
+  const str = yield* Wait.forPacket({ from: "server", cmd: "respawnMon" });
+  const dropped = yield* Wait.forPacket({ cmd: "ct" });
+  const late = yield* Wait.forPacket({ cmd: "ct" }, { timeout: "30 millis" });
+  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: Effect.succeed(false) });
+  console.log(JSON.stringify([client, str, dropped, late, skipped]));
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        FakePlayer::default().answering(|request, _| match request {
+            Request::Feeds(F::Next { id: FeedId(1) }) => batch(json!([
+                { "from": "client", "packet": "[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)" },
+            ])),
+            Request::Feeds(F::Next { id: FeedId(2) }) => batch(json!([server(
+                json!({ "type": "str", "dataObj": ["respawnMon", "-1", "2,3"] })
+            ),])),
+            Request::Feeds(F::Next { id: FeedId(3) }) => batch(json!([{ "lost": true }])),
+            Request::Feeds(F::Next { .. }) => None,
+            _ => Some(Ok(json!(null))),
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            r#"[{"from":"client","cmd":"afk","args":["true"]},{"from":"server","format":"str","cmd":"respawnMon","args":["2,3"]},null,null,null]"#
+        ]
+    );
+}
+
+#[test]
+fn a_failing_packet_handler_fails_the_script() {
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Effect } from "effect";
+import { Packets } from "lyra";
+
+export default function* () {
+  yield* Packets.on({ from: "server", cmd: "ct" }, function* (packet) {
+    console.log(packet.cmd);
+    if (packet.format === "json" && packet.data["boom"]) {
+      yield* Effect.fail(new Error("handler boom"));
+    }
+  });
+  yield* Effect.never;
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        FakePlayer::default().answering(|request, _| match request {
+            Request::Feeds(F::Next { .. }) => Some(Ok(json!({ "lagged": true, "items": [
+                server(json!({ "type": "json", "dataObj": { "cmd": "ct" } })),
+                server(json!({ "type": "json", "dataObj": { "cmd": "ct", "boom": true } })),
+            ] }))),
+            _ => Some(Ok(json!(null))),
+        }),
+    )
+    .finish();
+    assert_eq!(failure(&finished.outcome).0, "handler boom");
+    assert_eq!(
+        finished.logs,
+        [
+            "A subscription fell behind and dropped what it was holding.",
+            "ct",
+            "ct"
+        ]
+    );
+}
+
+#[test]
+fn a_subscription_keeps_packets_that_arrive_after_a_wait_on_it_gives_up() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Packets } from "lyra";
+
+export default function* () {
+  const subscription = yield* Packets.subscribe({ cmd: "ct" });
+  console.log((yield* Effect.timeoutOption(subscription.next, "30 millis"))._tag);
+  console.log((yield* subscription.next).cmd);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let started = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| match request {
+            Request::Feeds(F::Next { .. }) => None,
+            _ => Some(Ok(json!(null))),
+        }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while started.logs.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the first wait gave up");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for held in player.held.lock().unwrap().drain(..) {
+        held.reply.send(
+            batch(json!([server(
+                json!({ "type": "json", "dataObj": { "cmd": "ct" } })
+            )]))
+            .unwrap(),
+        );
+    }
+    let finished = started.finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["None", "ct"]);
+    let nexts = player
+        .seen()
+        .into_iter()
+        .filter(|seen| matches!(seen, Seen::Call(_, Request::Feeds(F::Next { .. }))))
+        .count();
+    assert_eq!(nexts, 1);
 }
 
 #[test]

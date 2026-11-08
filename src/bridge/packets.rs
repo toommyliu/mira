@@ -14,7 +14,7 @@ pub(crate) enum Interruption {
     Disconnected,
 }
 
-fn disconnected(event: &Event) -> bool {
+pub(crate) fn disconnected(event: &Event) -> bool {
     matches!(event, Event::Connection { status } if status == "OnConnectionLost")
 }
 
@@ -47,15 +47,7 @@ impl<T: Packet> Packets<T> {
         let Event::ExtensionResponse { packet } = event else {
             return disconnected(event);
         };
-        let opening = match T::FORMAT {
-            Format::Json => "\"cmd\":\"",
-            Format::Str => "\"dataObj\":[\"",
-        };
-        packet.match_indices(opening).any(|(at, key)| {
-            packet[at + key.len()..]
-                .strip_prefix(T::CMD)
-                .is_some_and(|rest| rest.starts_with('"'))
-        })
+        names(packet, T::FORMAT, T::CMD)
     }
 
     pub(crate) async fn next(&self) -> Result<T, Interruption> {
@@ -101,6 +93,18 @@ impl<T: Packet> Packets<T> {
     pub(crate) fn clear(&self) {
         self.events.clear();
     }
+}
+
+pub(crate) fn names(packet: &str, format: Format, cmd: &str) -> bool {
+    let opening = match format {
+        Format::Json => "\"cmd\":\"",
+        Format::Str => "\"dataObj\":[\"",
+    };
+    packet.match_indices(opening).any(|(at, key)| {
+        packet[at + key.len()..]
+            .strip_prefix(cmd)
+            .is_some_and(|rest| rest.starts_with('"'))
+    })
 }
 
 fn decode<T: Packet>(packet: &str) -> Result<Option<T>, serde_json::Error> {

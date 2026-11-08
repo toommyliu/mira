@@ -1,7 +1,10 @@
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+
+import { failed } from "./handlers.ts";
 
 type Settle = (
   outcome: "completed" | "failed" | "stopped",
@@ -25,7 +28,7 @@ export function start(exported: unknown, settle: Settle): () => void {
     settle("failed", "The default export must be a generator function or an Effect.");
     return () => {};
   }
-  const fiber = Effect.runFork(root);
+  const fiber = Effect.runFork(Effect.scoped(Effect.raceFirst(root, Deferred.await(failed))));
   fiber.addObserver((exit) => {
     if (Exit.isSuccess(exit)) return settle("completed");
     if (Cause.hasInterruptsOnly(exit.cause)) return settle("stopped");

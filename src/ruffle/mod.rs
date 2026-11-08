@@ -255,8 +255,11 @@ fn run(
                 Some(Msg::Poll(task)) => {
                     task.run();
                 }
-                Some(Msg::Script(message)) => scripts.handle(message, |call| {
-                    spawn(&inbox, scripting::answer(scripts_bridge.clone(), call))
+                Some(Msg::Script(message)) => scripts.handle(message, |call, feeds| {
+                    spawn(
+                        &inbox,
+                        scripting::answer(scripts_bridge.clone(), feeds, call),
+                    )
                 }),
                 Some(Msg::Frame) => {
                     inbox.frame_pending.store(false, Ordering::Relaxed);

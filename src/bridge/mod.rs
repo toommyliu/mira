@@ -42,6 +42,8 @@ pub(crate) enum CallError {
     Reentrant(&'static str),
     #[error("the player has stopped")]
     Stopped,
+    #[error("the subscription is closed")]
+    Closed,
     #[error(transparent)]
     Decode(#[from] DecodeError),
 }
@@ -174,11 +176,33 @@ impl Subscription {
         .await
     }
 
+    pub(crate) async fn drain(&self) -> Drained {
+        poll_fn(|cx| {
+            let mut state = self.0.state.borrow_mut();
+            let lagged = std::mem::take(&mut state.lagged);
+            if lagged || !state.events.is_empty() {
+                return Poll::Ready(Drained {
+                    events: state.events.drain(..).collect(),
+                    lagged,
+                });
+            }
+            state.waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+
     pub(crate) fn clear(&self) {
         let mut state = self.0.state.borrow_mut();
         state.events.clear();
         state.lagged = false;
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Drained {
+    pub(crate) events: Vec<Event>,
+    pub(crate) lagged: bool,
 }
 
 struct Mailbox {
@@ -521,6 +545,35 @@ mod tests {
         assert_eq!(ready(events.next()), None);
         bridge.call("probe.raise", vec!["new".into()]).unwrap();
         assert_eq!(ready(events.next()), Some(Ok(connection("new"))));
+    }
+
+    #[test]
+    fn draining_takes_everything_buffered_and_reports_a_fall_behind_once() {
+        let (_player, bridge) = fixture();
+        let events = bridge.subscribe(|_| true);
+        assert_eq!(ready(events.drain()), None);
+        for status in ["first", "second"] {
+            bridge.call("probe.raise", vec![status.into()]).unwrap();
+        }
+        assert_eq!(
+            ready(events.drain()),
+            Some(Drained {
+                events: vec![connection("first"), connection("second")],
+                lagged: false
+            })
+        );
+        for _ in 0..=MAILBOX_CAPACITY {
+            bridge.call("probe.raise", vec!["old".into()]).unwrap();
+        }
+        bridge.call("probe.raise", vec!["new".into()]).unwrap();
+        assert_eq!(
+            ready(events.drain()),
+            Some(Drained {
+                events: vec![connection("new")],
+                lagged: true
+            })
+        );
+        assert_eq!(ready(events.drain()), None);
     }
 
     #[test]

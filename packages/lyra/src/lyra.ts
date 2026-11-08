@@ -1,8 +1,15 @@
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 
+import { failed } from "./handlers.ts";
 import { send } from "./native.ts";
+
+declare const console: { readonly warn: (message: string) => void };
 
 const call = <A>(request: object): Effect.Effect<A> =>
   Effect.callback<A>((resume) => {
@@ -46,6 +53,12 @@ const drops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 
 const shops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "shops", op, ...args });
+
+const packets = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "packets", op, ...args });
+
+const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "feeds", op, ...args });
 
 export type State = "dead" | "idle" | "combat";
 export type Position = { readonly x: number; readonly y: number };
@@ -408,6 +421,215 @@ export const Script = {
   sleep: (duration: Duration.Input) => Effect.sleep(duration),
 };
 
+export type Subscription<A> = { readonly next: Effect.Effect<A> };
+
+/** A generator function or a function returning an Effect, like the default export. */
+export type Handler<A> = (value: A) => Effect.Effect<unknown, unknown> | HandlerGenerator;
+type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
+
+export type ClientPacket = {
+  readonly from: "client";
+  readonly cmd: string;
+  /** Excludes the room id. */
+  readonly args: readonly string[];
+};
+export type ServerPacket =
+  | {
+      readonly from: "server";
+      readonly format: "json";
+      readonly cmd: string;
+      /** The packet's `dataObj`, with `cmd`. */
+      readonly data: Readonly<Record<string, unknown>>;
+    }
+  | {
+      readonly from: "server";
+      readonly format: "str";
+      readonly cmd: string;
+      /** Excludes the room id. */
+      readonly args: readonly string[];
+    };
+export type Packet = ClientPacket | ServerPacket;
+
+/** Omitted fields match every packet. */
+export type PacketFilter = {
+  readonly from?: "client" | "server";
+  readonly cmd?: string | readonly string[];
+};
+export type PacketFor<F extends PacketFilter> = F extends { readonly from: "client" }
+  ? ClientPacket
+  : F extends { readonly from: "server" }
+    ? ServerPacket
+    : Packet;
+
+const lost: unique symbol = Symbol("lost");
+type Lost = typeof lost;
+type FeedItem =
+  | { readonly from: "client" | "server"; readonly packet: string }
+  | { readonly lost: true };
+type Batch = { readonly items: readonly FeedItem[]; readonly lagged: boolean };
+type Read<A> = (item: Exclude<FeedItem, { readonly lost: true }>) => A | undefined;
+
+let lastFeed = 0;
+
+const openFeed = <A>(
+  subscribe: (id: number) => Effect.Effect<unknown>,
+  read: Read<A>,
+): Effect.Effect<Subscription<A | Lost>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const id = ++lastFeed;
+    let closed = false;
+    yield* Effect.acquireRelease(subscribe(id), () =>
+      Effect.suspend(() => {
+        closed = true;
+        return feeds<null>("close", { id });
+      }),
+    );
+    const scope = yield* Effect.scope;
+    const buffer: (A | Lost)[] = [];
+    let pulling: Deferred.Deferred<void> | undefined;
+    const pull = feeds<Batch>("next", { id }).pipe(
+      Effect.map(({ items, lagged }) => {
+        if (lagged) console.warn("A subscription fell behind and dropped what it was holding.");
+        for (const item of items) {
+          const value = "lost" in item ? lost : read(item);
+          if (value !== undefined) buffer.push(value);
+        }
+      }),
+      Effect.ensuring(
+        Effect.sync(() => {
+          pulling = undefined;
+        }),
+      ),
+    );
+    const next: Effect.Effect<A | Lost> = Effect.suspend(() => {
+      if (closed) return Effect.die(new Error("the subscription is closed"));
+      if (buffer.length > 0) return Effect.succeed(buffer.shift() as A | Lost);
+      if (pulling !== undefined) return Effect.andThen(Deferred.await(pulling), next);
+      const done = Deferred.makeUnsafe<void>();
+      pulling = done;
+      return Effect.forkIn(pull.pipe(Deferred.into(done)), scope).pipe(
+        Effect.andThen(Deferred.await(done)),
+        Effect.andThen(next),
+      );
+    });
+    return { next };
+  });
+
+const skipLost = <A>({ next }: Subscription<A | Lost>): Subscription<A> => ({
+  next: Effect.gen(function* () {
+    while (true) {
+      const value = yield* next;
+      if (value !== lost) return value;
+    }
+  }),
+});
+
+const run = (
+  result: Effect.Effect<unknown, unknown> | HandlerGenerator,
+): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : Effect.gen(() => result));
+
+const listen = <A>(
+  next: Effect.Effect<A>,
+  handler: Handler<A>,
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.forkScoped(
+    Effect.forever(Effect.flatMap(next, (value) => Effect.suspend(() => run(handler(value))))).pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+          ? Deferred.failCause(failed, exit.cause)
+          : Effect.void,
+      ),
+    ),
+  ).pipe(Effect.asVoid);
+
+export type ForOptions<E> = {
+  /** Starts after `trigger` finishes. Waits forever when omitted. */
+  readonly timeout?: Duration.Input;
+  /** Runs once the subscription is open. Returning false skips the wait. */
+  readonly trigger?: Effect.Effect<boolean, E>;
+};
+
+const waitFor = <A, E>(
+  open: Effect.Effect<Subscription<A | Lost>, never, Scope.Scope>,
+  { timeout, trigger }: ForOptions<E>,
+): Effect.Effect<A | null, E> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { next } = yield* open;
+      if (trigger !== undefined && !(yield* trigger)) return null;
+      const first = Effect.map(next, (value) => (value === lost ? null : value));
+      return timeout === undefined
+        ? yield* first
+        : Option.getOrNull(yield* Effect.timeoutOption(first, timeout));
+    }),
+  );
+
+const readPacket =
+  (cmds: readonly string[] | undefined): Read<Packet> =>
+  ({ from, packet }) => {
+    const read = from === "client" ? readClient(packet) : readServer(packet);
+    return read !== undefined && (cmds === undefined || cmds.includes(read.cmd)) ? read : undefined;
+  };
+
+const readClient = (packet: string): ClientPacket | undefined => {
+  const start = packet.indexOf("%xt%");
+  if (start < 0) return undefined;
+  const parts = packet.slice(start + 1, packet.lastIndexOf("%")).split("%");
+  const cmd = parts[2];
+  return cmd === undefined ? undefined : { from: "client", cmd, args: parts.slice(4) };
+};
+
+const readServer = (packet: string): ServerPacket | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(packet);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { type, dataObj } = parsed as { readonly type?: unknown; readonly dataObj?: unknown };
+  if (
+    type === "json" &&
+    typeof dataObj === "object" &&
+    dataObj !== null &&
+    !Array.isArray(dataObj)
+  ) {
+    const data = dataObj as Readonly<Record<string, unknown>>;
+    return typeof data["cmd"] === "string"
+      ? { from: "server", format: "json", cmd: data["cmd"], data }
+      : undefined;
+  }
+  if (type === "str" && Array.isArray(dataObj) && typeof dataObj[0] === "string") {
+    return { from: "server", format: "str", cmd: dataObj[0], args: dataObj.slice(2).map(String) };
+  }
+  return undefined;
+};
+
+const openPackets = <F extends PacketFilter>(filter: F) => {
+  const cmds = typeof filter.cmd === "string" ? [filter.cmd] : filter.cmd;
+  return openFeed(
+    (id) => packets("subscribe", { id, from: filter.from, cmds }),
+    readPacket(cmds) as Read<PacketFor<F>>,
+  );
+};
+
+export const Packets = {
+  subscribe: <const F extends PacketFilter>(
+    filter: F = {} as F,
+  ): Effect.Effect<Subscription<PacketFor<F>>, never, Scope.Scope> =>
+    Effect.map(openPackets(filter), skipLost),
+  on: <const F extends PacketFilter>(
+    filter: F,
+    handler: Handler<PacketFor<F>>,
+  ): Effect.Effect<void, never, Scope.Scope> =>
+    Effect.flatMap(openPackets(filter), (feed) => listen(skipLost(feed).next, handler)),
+  /** A full `%xt%zm%cmd%room%...%` packet. False when not logged in. */
+  sendToServer: (packet: `%xt%zm%${string}%`) => packets<boolean>("sendToServer", { packet }),
+  /** The game handles `data` as a json packet from the server. False when not in game. */
+  sendToClient: (data: { readonly cmd: string; readonly [key: string]: unknown }) =>
+    packets<boolean>("sendToClient", { data }),
+};
+
 export type UntilOptions = {
   /** Defaults to 100 ms. */
   readonly interval?: Duration.Input;
@@ -430,4 +652,9 @@ export const Wait = {
     timeout === undefined
       ? poll(condition, interval)
       : poll(condition, interval).pipe(Effect.timeoutOption(timeout), Effect.map(Option.isSome)),
+  /** Null if `trigger` returns false, the timeout passes, or the connection drops. */
+  forPacket: <const F extends PacketFilter, E = never>(
+    filter: F,
+    options: ForOptions<E> = {},
+  ): Effect.Effect<PacketFor<F> | null, E> => waitFor(openPackets(filter), options),
 };

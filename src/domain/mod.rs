@@ -5,6 +5,7 @@ pub(crate) mod combat;
 pub(crate) mod drops;
 pub(crate) mod house;
 pub(crate) mod inventory;
+pub(crate) mod packets;
 pub(crate) mod player;
 pub(crate) mod players;
 pub(crate) mod quests;

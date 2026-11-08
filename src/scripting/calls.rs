@@ -1,10 +1,14 @@
-use std::{collections::HashMap, sync::mpsc};
+use std::{collections::HashMap, rc::Rc, sync::mpsc};
 
 use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    bank, combat, drops, house, inventory, player, players, quests, runtime::Command, shops, world,
+    bank, combat, drops,
+    feeds::{self, Feeds},
+    house, inventory, packets, player, players, quests,
+    runtime::Command,
+    shops, world,
 };
 use crate::bridge::{Bridge, CallError};
 
@@ -28,6 +32,8 @@ pub(crate) enum Request {
     Quests(quests::Request),
     Drops(drops::Request),
     Shops(shops::Request),
+    Packets(packets::Request),
+    Feeds(feeds::Request),
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -76,25 +82,31 @@ impl Drop for Replier {
 }
 
 #[derive(Default)]
-pub(crate) struct Calls(HashMap<RunId, HashMap<CallId, async_task::Task<()>>>);
+pub(crate) struct Calls(HashMap<RunId, RunCalls>);
+
+#[derive(Default)]
+struct RunCalls {
+    tasks: HashMap<CallId, async_task::Task<()>>,
+    feeds: Rc<Feeds>,
+}
 
 impl Calls {
     pub(crate) fn handle(
         &mut self,
         message: ToPlayer,
-        start: impl FnOnce(Call) -> async_task::Task<()>,
+        start: impl FnOnce(Call, Rc<Feeds>) -> async_task::Task<()>,
     ) {
         match message {
             ToPlayer::Call(call) => {
-                let (run, id) = (call.run, call.id);
-                let task = start(call);
-                let calls = self.0.entry(run).or_default();
-                calls.retain(|_, task| !task.is_finished());
-                calls.insert(id, task);
+                let run = self.0.entry(call.run).or_default();
+                run.tasks.retain(|_, task| !task.is_finished());
+                let id = call.id;
+                let task = start(call, run.feeds.clone());
+                run.tasks.insert(id, task);
             }
             ToPlayer::Cancel { run, id } => {
-                if let Some(calls) = self.0.get_mut(&run) {
-                    calls.remove(&id);
+                if let Some(run) = self.0.get_mut(&run) {
+                    run.tasks.remove(&id);
                 }
             }
             ToPlayer::Ended(run) => {
@@ -104,13 +116,17 @@ impl Calls {
     }
 }
 
-pub(crate) async fn answer(bridge: Bridge, call: Call) {
+pub(crate) async fn answer(bridge: Bridge, feeds: Rc<Feeds>, call: Call) {
     let Call { request, reply, .. } = call;
-    reply.send(serve(&bridge, request).await);
+    reply.send(serve(&bridge, &feeds, request).await);
 }
 
-async fn serve(bridge: &Bridge, request: Request) -> Reply {
+async fn serve(bridge: &Bridge, feeds: &Feeds, request: Request) -> Reply {
     match request {
+        Request::Packets(request) => {
+            packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
+        }
+        Request::Feeds(request) => feeds::serve(feeds, request).await,
         Request::Player(request) => {
             player::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
@@ -177,7 +193,7 @@ mod tests {
     fn start(calls: &mut Calls, message: ToPlayer) -> Rc<Cell<bool>> {
         let dropped = Rc::new(Cell::new(false));
         let guard = Dropped(dropped.clone());
-        calls.handle(message, |call| {
+        calls.handle(message, |call, _| {
             let (runnable, task) = async_task::spawn_local(
                 async move {
                     let _guard = guard;
@@ -203,10 +219,10 @@ mod tests {
                 run: RunId(1),
                 id: CallId(2),
             },
-            |_| unreachable!(),
+            |_, _| unreachable!(),
         );
         assert!(!first.get() && second.get() && !other.get());
-        calls.handle(ToPlayer::Ended(RunId(1)), |_| unreachable!());
+        calls.handle(ToPlayer::Ended(RunId(1)), |_, _| unreachable!());
         assert!(first.get() && !other.get());
     }
 
