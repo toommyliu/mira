@@ -9,41 +9,56 @@ use crate::{
 };
 
 #[derive(Default)]
-pub(super) enum Script {
-    #[default]
-    Idle,
-    Running {
-        run: Run,
-        name: SharedString,
-        stopping: bool,
-    },
-    Finished {
-        name: SharedString,
-        outcome: Outcome,
-    },
+pub(super) struct Script(Option<Loaded>);
+
+struct Loaded {
+    entry: PathBuf,
+    name: SharedString,
+    phase: Phase,
+}
+
+enum Phase {
+    Ready,
+    Running { run: Run, stopping: bool },
+    Finished(Outcome),
 }
 
 impl Script {
     pub(super) fn running(&self) -> bool {
-        matches!(self, Script::Running { .. })
+        matches!(
+            self.0,
+            Some(Loaded {
+                phase: Phase::Running { .. },
+                ..
+            })
+        )
     }
 
     pub(super) fn failed(&self) -> bool {
         matches!(
-            self,
-            Script::Finished {
-                outcome: Outcome::Failed { .. } | Outcome::Killed(_),
+            self.0,
+            Some(Loaded {
+                phase: Phase::Finished(Outcome::Failed { .. } | Outcome::Killed(_)),
                 ..
-            }
+            })
         )
     }
 
+    pub(super) fn loaded(&self) -> Option<&SharedString> {
+        self.0.as_ref().map(|loaded| &loaded.name)
+    }
+
     pub(super) fn label(&self) -> SharedString {
-        match self {
-            Script::Idle => "None".into(),
-            Script::Running { stopping: true, .. } => "Stopping".into(),
-            Script::Running { name, .. } => name.clone(),
-            Script::Finished { outcome, .. } => match outcome {
+        let Some(Loaded { name, phase, .. }) = &self.0 else {
+            return "None".into();
+        };
+        match phase {
+            Phase::Ready
+            | Phase::Running {
+                stopping: false, ..
+            } => name.clone(),
+            Phase::Running { stopping: true, .. } => "Stopping".into(),
+            Phase::Finished(outcome) => match outcome {
                 Outcome::Completed => "Finished".into(),
                 Outcome::Failed { .. } => "Failed".into(),
                 Outcome::Stopped | Outcome::Killed(_) => "Stopped".into(),
@@ -52,15 +67,14 @@ impl Script {
     }
 
     pub(super) fn status(&self) -> Option<String> {
-        match self {
-            Script::Idle => None,
-            Script::Running {
-                name,
-                stopping: false,
-                ..
+        let Loaded { name, phase, .. } = self.0.as_ref()?;
+        match phase {
+            Phase::Ready => None,
+            Phase::Running {
+                stopping: false, ..
             } => Some(format!("Running {name}")),
-            Script::Running { name, .. } => Some(format!("Stopping {name}")),
-            Script::Finished { name, outcome } => Some(match outcome {
+            Phase::Running { stopping: true, .. } => Some(format!("Stopping {name}")),
+            Phase::Finished(outcome) => Some(match outcome {
                 Outcome::Completed => format!("{name} finished"),
                 Outcome::Failed { message, .. } => format!("{name} failed: {message}"),
                 Outcome::Stopped => format!("{name} stopped"),
@@ -89,10 +103,25 @@ impl RuffleView {
                 return;
             };
             if let Some(entry) = paths.into_iter().next() {
-                let _ = this.update(cx, |this, cx| this.start_script(entry, cx));
+                let _ = this.update(cx, |this, cx| {
+                    if !this.script.running() {
+                        this.script = Script(Some(Loaded {
+                            name: super::account::file_name(&entry).into(),
+                            entry,
+                            phase: Phase::Ready,
+                        }));
+                        this.changed(cx);
+                    }
+                });
             }
         })
         .detach();
+    }
+
+    pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
+        if let Some(loaded) = &self.script.0 {
+            self.start_script(loaded.entry.clone(), cx);
+        }
     }
 
     pub(super) fn start_script(&mut self, entry: PathBuf, cx: &mut Context<Self>) {
@@ -103,7 +132,7 @@ impl RuffleView {
         let inbox = self.session.inbox();
         let (finished, outcome) = async_channel::bounded(1);
         let started = Run::start(
-            entry,
+            entry.clone(),
             Limits::default(),
             Box::new(|level, message| match level {
                 Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
@@ -119,13 +148,13 @@ impl RuffleView {
                 let _ = finished.try_send(outcome);
             },
         );
-        self.script = match started {
+        let phase = match started {
             Ok(run) => {
                 cx.spawn(async move |this, cx| {
                     if let Ok(outcome) = outcome.recv().await {
                         let _ = this.update(cx, |this, cx| {
-                            if let Script::Running { name, .. } = std::mem::take(&mut this.script) {
-                                this.script = Script::Finished { name, outcome };
+                            if let Some(loaded) = &mut this.script.0 {
+                                loaded.phase = Phase::Finished(outcome);
                             }
                             this.run_queued(cx);
                             this.changed(cx);
@@ -133,25 +162,26 @@ impl RuffleView {
                     }
                 })
                 .detach();
-                Script::Running {
+                Phase::Running {
                     run,
-                    name,
                     stopping: false,
                 }
             }
-            Err(error) => Script::Finished {
-                name,
-                outcome: Outcome::Failed {
-                    message: error.to_string(),
-                    stack: None,
-                },
-            },
+            Err(error) => Phase::Finished(Outcome::Failed {
+                message: error.to_string(),
+                stack: None,
+            }),
         };
+        self.script = Script(Some(Loaded { entry, name, phase }));
         self.changed(cx);
     }
 
     pub(super) fn stop_script(&mut self, cx: &mut Context<Self>) {
-        if let Script::Running { run, stopping, .. } = &mut self.script {
+        if let Some(Loaded {
+            phase: Phase::Running { run, stopping },
+            ..
+        }) = &mut self.script.0
+        {
             run.stop();
             *stopping = true;
             self.changed(cx);

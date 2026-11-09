@@ -282,7 +282,7 @@ impl RuffleView {
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(cx),
-                script: script::Script::Idle,
+                script: script::Script::default(),
                 account: None,
                 _subscriptions: subscriptions,
             }

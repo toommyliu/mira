@@ -875,22 +875,33 @@ fn options_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Di
 }
 
 fn script_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let action = if view.script.running() {
-        ui::pressable(ui::row("script-stop"))
-            .role(Role::MenuItem)
-            .child("Stop")
-            .on_click(cx.listener(|this, _, _, cx| this.stop_script(cx)))
-    } else {
-        ui::pressable(ui::row("script-load"))
-            .role(Role::MenuItem)
-            .child("Load script…")
-            .on_click(cx.listener(|this, _, window, cx| this.load_script(window, cx)))
-    };
-    ui::panel("script-panel", px(264.0))
+    let panel = ui::panel("script-panel", px(264.0))
         .when_some(view.script.status(), |panel, text| {
             panel.child(div().pt(px(6.0)).child(ui::status(text)))
+        });
+    if view.script.running() {
+        return panel.child(
+            ui::pressable(ui::row("script-stop"))
+                .role(Role::MenuItem)
+                .child("Stop")
+                .on_click(cx.listener(|this, _, _, cx| this.stop_script(cx))),
+        );
+    }
+    panel
+        .when_some(view.script.loaded(), |panel, name| {
+            panel.child(
+                ui::pressable(ui::row("script-start"))
+                    .role(Role::MenuItem)
+                    .child(format!("Start {name}"))
+                    .on_click(cx.listener(|this, _, _, cx| this.start_loaded_script(cx))),
+            )
         })
-        .child(action)
+        .child(
+            ui::pressable(ui::row("script-load"))
+                .role(Role::MenuItem)
+                .child("Load script…")
+                .on_click(cx.listener(|this, _, window, cx| this.load_script(window, cx))),
+        )
 }
 
 fn environment_value(view: &RuffleView) -> Option<SharedString> {
