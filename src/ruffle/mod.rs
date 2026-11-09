@@ -206,6 +206,11 @@ fn run(
         .with_letterbox(Letterbox::On)
         .with_movie(movie)
         .build();
+    // Ruffle clears to white until it reads the movie's background tag; a preset color replaces that tag.
+    player
+        .lock()
+        .unwrap()
+        .set_background_color(Some(ruffle_core::Color::BLACK));
     bridge.attach(&player);
     let phases = outputs.clone();
     let logins = Rc::new(Logins::default());

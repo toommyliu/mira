@@ -9,7 +9,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSView, NSWindow, NSWindowDidChangeOcclusionStateNotification, NSWindowOcclusionState,
+    NSColor, NSView, NSWindow, NSWindowDidChangeOcclusionStateNotification, NSWindowOcclusionState,
     NSWindowOrderingMode,
 };
 use objc2_core_graphics::CGColor;
@@ -69,6 +69,10 @@ impl NativeView {
         };
         let gpui_view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
         let content = unsafe { gpui_view.superview() }.ok_or(Error::NoContentView)?;
+        // GPUI's layer is transparent over the players, so any area no player covers shows the window background.
+        if let Some(window) = content.window() {
+            window.setBackgroundColor(Some(&NSColor::blackColor()));
+        }
         let mtm = MainThreadMarker::new().unwrap();
         let layer = CAMetalLayer::new();
         layer.setBackgroundColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, 1.0)));
