@@ -157,6 +157,9 @@ pub(super) enum Glyph {
     Down,
     Right,
     Check,
+    Plus,
+    Close,
+    Grid,
 }
 
 pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
@@ -164,18 +167,46 @@ pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
         |_, _, _| (),
         move |bounds, _, window, _| {
             let c = bounds.center();
-            let points: &[(f32, f32)] = match glyph {
-                Glyph::Down => &[(-3.5, -1.5), (0.0, 2.0), (3.5, -1.5)],
-                Glyph::Right => &[(-1.5, -3.5), (2.0, 0.0), (-1.5, 3.5)],
-                Glyph::Check => &[(-4.0, 0.0), (-1.25, 3.0), (4.0, -3.5)],
+            let strokes: &[&[(f32, f32)]] = match glyph {
+                Glyph::Down => &[&[(-3.5, -1.5), (0.0, 2.0), (3.5, -1.5)]],
+                Glyph::Right => &[&[(-1.5, -3.5), (2.0, 0.0), (-1.5, 3.5)]],
+                Glyph::Check => &[&[(-4.0, 0.0), (-1.25, 3.0), (4.0, -3.5)]],
+                Glyph::Plus => &[&[(-4.5, 0.0), (4.5, 0.0)], &[(0.0, -4.5), (0.0, 4.5)]],
+                Glyph::Close => &[&[(-3.0, -3.0), (3.0, 3.0)], &[(-3.0, 3.0), (3.0, -3.0)]],
+                Glyph::Grid => &[
+                    &[
+                        (-5.0, -5.0),
+                        (-1.0, -5.0),
+                        (-1.0, -1.0),
+                        (-5.0, -1.0),
+                        (-5.0, -5.0),
+                    ],
+                    &[
+                        (1.0, -5.0),
+                        (5.0, -5.0),
+                        (5.0, -1.0),
+                        (1.0, -1.0),
+                        (1.0, -5.0),
+                    ],
+                    &[
+                        (-5.0, 1.0),
+                        (-1.0, 1.0),
+                        (-1.0, 5.0),
+                        (-5.0, 5.0),
+                        (-5.0, 1.0),
+                    ],
+                    &[(1.0, 1.0), (5.0, 1.0), (5.0, 5.0), (1.0, 5.0), (1.0, 1.0)],
+                ],
             };
             let mut path = PathBuilder::stroke(px(1.5));
-            for (index, (x, y)) in points.iter().enumerate() {
-                let at = point(c.x + px(*x), c.y + px(*y));
-                if index == 0 {
-                    path.move_to(at);
-                } else {
-                    path.line_to(at);
+            for stroke in strokes {
+                for (index, (x, y)) in stroke.iter().enumerate() {
+                    let at = point(c.x + px(*x), c.y + px(*y));
+                    if index == 0 {
+                        path.move_to(at);
+                    } else {
+                        path.line_to(at);
+                    }
                 }
             }
             if let Ok(path) = path.build() {
@@ -185,6 +216,29 @@ pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
     )
     .flex_none()
     .size(px(12.0))
+}
+
+pub(super) struct Tooltip(SharedString);
+
+impl gpui::Render for Tooltip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(CONTROL_RADIUS)
+            .bg(panel_background())
+            .border_1()
+            .border_color(white(0.1))
+            .text_size(SMALL_TEXT_SIZE)
+            .text_color(text())
+            .child(self.0.clone())
+    }
+}
+
+pub(super) fn tooltip(
+    label: &'static str,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    move |_, cx| gpui::AppContext::new(cx, |_| Tooltip(label.into())).into()
 }
 
 pub(super) fn spinner() -> impl IntoElement {

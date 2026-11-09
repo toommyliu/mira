@@ -138,6 +138,13 @@ impl NativeView {
         self.occlusion_observer = Some(observer);
     }
 
+    pub(super) fn set_shown(&self, shown: bool) {
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        self.view.setHidden(!shown);
+        CATransaction::commit();
+    }
+
     pub(super) fn set_frame_clock(&self, enabled: bool) {
         if let Some(clock) = &self.frame_clock {
             clock.setPaused(!enabled);

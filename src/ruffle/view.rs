@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 use std::ops::Range;
+use std::time::Duration;
 
 use ruffle_core::events::{ImeEvent, MouseWheelDelta, TextControlCode};
 use ruffle_core::{PlayerEvent, ViewportDimensions};
@@ -25,6 +26,7 @@ pub enum ViewEvent {
     Ime(Ime),
     Focus(bool),
     Visible(bool),
+    Throttle(Option<Duration>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,6 +177,7 @@ pub(crate) enum Effect {
     Resize(Viewport),
     MouseInStage(bool),
     Visible(bool),
+    Throttle(Option<Duration>),
 }
 
 pub(crate) fn translate(event: ViewEvent, viewport: Viewport, out: &mut Vec<Effect>) {
@@ -193,6 +196,10 @@ pub(crate) fn translate(event: ViewEvent, viewport: Viewport, out: &mut Vec<Effe
         }
         ViewEvent::Visible(visible) => {
             out.push(Effect::Visible(visible));
+            return;
+        }
+        ViewEvent::Throttle(throttle) => {
+            out.push(Effect::Throttle(throttle));
             return;
         }
         ViewEvent::MouseMove(at) => {

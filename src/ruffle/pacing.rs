@@ -4,6 +4,7 @@ pub(super) struct Pacing {
     display_frames: bool,
     pub(super) visible: bool,
     pub(super) minimal: bool,
+    throttle: Option<Duration>,
     next_render: Instant,
 }
 
@@ -13,7 +14,15 @@ impl Pacing {
             display_frames,
             visible: true,
             minimal: false,
+            throttle: None,
             next_render: now,
+        }
+    }
+
+    pub(super) fn set_throttle(&mut self, throttle: Option<Duration>, now: Instant) {
+        if throttle != self.throttle {
+            self.throttle = throttle;
+            self.next_render = now;
         }
     }
 
@@ -22,7 +31,7 @@ impl Pacing {
     }
 
     pub(super) fn frame_clock(&self, interpolating: bool) -> bool {
-        self.display_frames && interpolating && self.presenting()
+        self.display_frames && interpolating && self.presenting() && self.throttle.is_none()
     }
 
     pub(super) fn draw(
@@ -32,14 +41,18 @@ impl Pacing {
         interpolating: bool,
         frame_due: bool,
     ) -> bool {
-        let paced = if self.display_frames {
+        let due = if self.throttle.is_some() {
+            now >= self.next_render
+        } else if !interpolating {
+            true
+        } else if self.display_frames {
             frame_due
         } else {
             now >= self.next_render
         };
-        let draw = self.presenting() && needs_render && (!interpolating || paced);
+        let draw = self.presenting() && needs_render && due;
         if draw {
-            self.next_render = now + Duration::from_secs_f64(1.0 / 60.0);
+            self.next_render = now + self.throttle.unwrap_or(Duration::from_secs_f64(1.0 / 60.0));
         }
         draw
     }
@@ -85,6 +98,43 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn throttled_view_draws_no_more_often_than_its_throttle() {
+        for (interval, per_second) in [(125, 8), (500, 2)] {
+            for (display_frames, interpolating) in MODES {
+                let start = Instant::now();
+                let mut pacing = Pacing::new(display_frames, start);
+                pacing.set_throttle(Some(Duration::from_millis(interval)), start);
+                let draws = (0..=24)
+                    .filter(|pass| {
+                        pacing.draw(start + STAGE_FRAME * *pass, true, interpolating, true)
+                    })
+                    .count();
+                assert!(
+                    (1..=per_second).contains(&draws),
+                    "{draws} draws at {interval} ms with display_frames={display_frames} interpolating={interpolating}"
+                );
+                assert!(!pacing.frame_clock(interpolating));
+            }
+        }
+    }
+
+    #[test]
+    fn removing_the_throttle_draws_on_the_next_pass() {
+        for (display_frames, interpolating) in MODES {
+            let start = Instant::now();
+            let mut pacing = Pacing::new(display_frames, start);
+            pacing.set_throttle(Some(Duration::from_millis(500)), start);
+            assert!(pacing.draw(start, true, interpolating, true));
+            let selected = start + STAGE_FRAME;
+            pacing.set_throttle(None, selected);
+            assert!(
+                pacing.draw(selected, true, interpolating, true),
+                "display_frames={display_frames} interpolating={interpolating}"
+            );
         }
     }
 

@@ -12,7 +12,7 @@ mod scripting;
 
 use gpui::{
     Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions, actions, px, size,
+    WindowOptions, actions, point, px, size,
 };
 
 actions!(lyra, [Quit]);
@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         })
         .detach();
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        ruffle_view::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.set_menus(vec![Menu {
             name: "Lyra".into(),
@@ -42,18 +43,23 @@ fn main() -> anyhow::Result<()> {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(960.0), px(550.0) + ruffle_view::BAR_HEIGHT),
+                size(
+                    px(960.0),
+                    px(550.0) + ruffle_view::BAR_HEIGHT + ruffle_view::STRIP_HEIGHT,
+                ),
                 cx,
             ))),
             titlebar: Some(TitlebarOptions {
                 title: Some("Lyra".into()),
-                ..Default::default()
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(12.0), px(11.0))),
             }),
             window_background: WindowBackgroundAppearance::Transparent,
+            app_owns_titlebar_drag: true,
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let view = ruffle_view::RuffleView::new(data, device, window, cx)
+            let view = ruffle_view::Client::new(data, device, window, cx)
                 .expect("create the AQW player view");
             window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
             view

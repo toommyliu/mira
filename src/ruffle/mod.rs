@@ -176,6 +176,9 @@ fn run(
         match rx.recv()? {
             Msg::View(ViewEvent::Resized(viewport)) => break viewport,
             Msg::View(ViewEvent::Visible(visible)) => pacing.visible = visible,
+            Msg::View(ViewEvent::Throttle(throttle)) => {
+                pacing.set_throttle(throttle, Instant::now())
+            }
             Msg::Stop => return Ok(()),
             _ => {}
         }
@@ -350,7 +353,10 @@ fn run(
                     if open_menu.is_some()
                         && !matches!(
                             event,
-                            ViewEvent::Resized(_) | ViewEvent::Focus(_) | ViewEvent::Visible(_)
+                            ViewEvent::Resized(_)
+                                | ViewEvent::Focus(_)
+                                | ViewEvent::Visible(_)
+                                | ViewEvent::Throttle(_)
                         ) => {}
                 Some(Msg::View(event)) => {
                     view::translate(event, viewport, &mut effects);
@@ -379,6 +385,9 @@ fn run(
                             }
                             Effect::Resize(_) => {}
                             Effect::Visible(visible) => pacing.visible = visible,
+                            Effect::Throttle(throttle) => {
+                                pacing.set_throttle(throttle, Instant::now())
+                            }
                         }
                     }
                 }

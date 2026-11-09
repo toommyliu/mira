@@ -1,3 +1,4 @@
+mod client;
 mod game_bar;
 mod input;
 mod menu;
@@ -28,12 +29,17 @@ use gpui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
+pub(crate) use client::{Client, STRIP_HEIGHT, bind_keys};
 pub(crate) use ui::BAR_HEIGHT;
+
+const INACTIVE_TILE_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
+const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub struct RuffleView {
     session: Runtime,
     error: Option<String>,
     loading: Loading,
+    tiled: bool,
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
     player_bounds: Bounds<Pixels>,
@@ -210,10 +216,21 @@ impl RuffleView {
             let subscriptions = [
                 cx.on_focus(&focus, window, |this: &mut Self, window, _| {
                     this.session
-                        .send(ViewEvent::Focus(window.is_window_active()))
+                        .send(ViewEvent::Focus(window.is_window_active()));
+                    let held = if window.is_window_active() {
+                        menu::modifiers()
+                    } else {
+                        Default::default()
+                    };
+                    for event in input::modifier_keys(this.modifiers, held) {
+                        this.session.send(event);
+                    }
+                    this.modifiers = held;
                 }),
                 cx.on_blur(&focus, window, |this: &mut Self, _, _| {
-                    this.session.send(ViewEvent::Focus(false))
+                    this.session.send(ViewEvent::Focus(false));
+                    this.session.release_keys();
+                    this.modifiers = Default::default();
                 }),
                 cx.observe_window_activation(window, |this: &mut Self, window, _| {
                     this.session.send(ViewEvent::Focus(
@@ -228,6 +245,7 @@ impl RuffleView {
                 session,
                 error: None,
                 loading: Loading::Started,
+                tiled: false,
                 stats: None,
                 stats_placement: stats::Placement::default(),
                 player_bounds: Bounds::default(),
@@ -246,6 +264,21 @@ impl RuffleView {
                 _subscriptions: subscriptions,
             }
         }))
+    }
+
+    fn present(&mut self, tiled: bool, active: bool, cx: &mut Context<Self>) {
+        self.native.set_shown(tiled || active);
+        self.session
+            .send(ViewEvent::Throttle(match (tiled, active) {
+                (_, true) => None,
+                (true, false) => Some(INACTIVE_TILE_FRAME),
+                (false, false) => Some(HIDDEN_TAB_FRAME),
+            }));
+        if tiled && !self.tiled {
+            self.dismiss_menu(cx);
+        }
+        self.tiled = tiled;
+        cx.notify();
     }
 
     fn layout(&mut self, bounds: Bounds<Pixels>, window: &Window) {
@@ -553,9 +586,9 @@ impl Render for RuffleView {
             .flex()
             .flex_col()
             .size_full()
-            .child(game_bar::bar(self, cx))
+            .when(!self.tiled, |root| root.child(game_bar::bar(self, cx)))
             .child(player)
-            .when_some(self.bar.open(), |root, menu| {
+            .when_some(self.bar.open().filter(|_| !self.tiled), |root, menu| {
                 root.child(game_bar::overlay(self, menu, cx))
             })
     }

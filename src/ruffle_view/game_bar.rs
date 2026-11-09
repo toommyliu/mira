@@ -270,10 +270,14 @@ impl RuffleView {
         cx.notify();
     }
 
-    pub(super) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn dismiss_menu(&mut self, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.bar.open = None;
         self.bar.submenu = None;
+    }
+
+    pub(super) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_menu(cx);
         window.focus(&self.focus, cx);
         self.restore_modifiers(window);
         cx.notify();
