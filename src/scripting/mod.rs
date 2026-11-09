@@ -1,3 +1,4 @@
+mod army;
 mod auth;
 mod automation;
 mod bank;
@@ -18,7 +19,7 @@ mod runtime;
 mod shops;
 mod world;
 
-pub(crate) use calls::{Calls, ToPlayer, answer};
+pub(crate) use calls::{Calls, RunId, ToPlayer, answer};
 pub(crate) use limits::Limits;
 pub(crate) use runtime::{Level, Limit, Outcome, Run};
 #[cfg(test)]

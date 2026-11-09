@@ -1,8 +1,9 @@
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
-import type * as Duration from "effect/Duration";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
@@ -10,6 +11,9 @@ import { failed, stopping } from "./run.ts";
 import { call } from "./call.ts";
 
 declare const console: { readonly warn: (message: string) => void };
+
+const army = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "army", op, ...args });
 
 const auth = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "auth", op, ...args });
@@ -645,17 +649,20 @@ const run = (
   result: Effect.Effect<unknown, unknown> | HandlerGenerator,
 ): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : Effect.gen(() => result));
 
+const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+  Effect.onExit(effect, (exit) =>
+    Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+      ? Deferred.failCause(failed, exit.cause)
+      : Effect.void,
+  );
+
 const listen = <A>(
   next: Effect.Effect<A>,
   handler: Handler<A>,
 ): Effect.Effect<void, never, Scope.Scope> =>
   Effect.forkScoped(
-    Effect.forever(Effect.flatMap(next, (value) => Effect.suspend(() => run(handler(value))))).pipe(
-      Effect.onExit((exit) =>
-        Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
-          ? Deferred.failCause(failed, exit.cause)
-          : Effect.void,
-      ),
+    failingTheScript(
+      Effect.forever(Effect.flatMap(next, (value) => Effect.suspend(() => run(handler(value))))),
     ),
   ).pipe(Effect.asVoid);
 
@@ -881,4 +888,200 @@ export const Wait = {
     filter: EventFilter<T>,
     options: ForOptions<E> = {},
   ): Effect.Effect<EventOf<T> | null, E> => waitFor(openEvents(filter), options),
+};
+
+export type Json =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly Json[]
+  | { readonly [key: string]: Json };
+
+export type ArmyInfo = {
+  readonly name: string;
+  /** Starts at 1 and follows the order of the config's `players`. */
+  readonly number: number;
+  readonly size: number;
+  readonly room: number;
+  readonly players: readonly string[];
+};
+
+export type ArmyStepOptions = {
+  /** If the other players haven't all arrived by then, the army ends. Without it, the step waits forever. */
+  readonly timeout?: Duration.Input | undefined;
+};
+
+export type ArmyUntilOptions = ArmyStepOptions & {
+  /** Rounds of `work` start at least this far apart. Defaults to 500 ms. */
+  readonly interval?: Duration.Input;
+};
+
+export type ArmyMapOptions = CellOptions & ArmyStepOptions;
+
+export type Body<A> = () =>
+  | Effect.Effect<A, unknown>
+  | Generator<Effect.Effect<unknown, unknown>, A, never>;
+
+export type ArmyUntil = {
+  readonly done: Body<boolean>;
+  readonly work: Body<unknown>;
+};
+
+export type ArmyTurns = {
+  readonly players: readonly number[];
+  readonly turn: Body<boolean>;
+};
+
+export type Rotation = { readonly stop: Effect.Effect<void> };
+
+type ArmyStart = {
+  (name: string): Effect.Effect<ArmyInfo>;
+  (name: string, options: { readonly timeout: Duration.Input }): Effect.Effect<ArmyInfo | null>;
+};
+
+// The game can leave the consumable slot broken after a class change. Equipping safeClass and
+// safePot first, then safePot again after class, is a workaround meant to restore it.
+const GEAR = [
+  "safeClass",
+  "safePot",
+  "class",
+  "safePot",
+  "weapon",
+  "cape",
+  "helm",
+  "armor",
+  "pet",
+] as const;
+
+type Gear = { readonly [Field in (typeof GEAR)[number] | "scroll"]: string | null } & {
+  readonly pots: readonly string[] | null;
+};
+
+let joined: ArmyInfo | undefined;
+
+const millis = (timeout: Duration.Input | undefined): number | undefined =>
+  timeout === undefined ? undefined : Math.ceil(Duration.toMillis(timeout));
+
+const perform = <A>(body: Body<A>): Effect.Effect<A> =>
+  Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));
+
+const start = ((name: string, { timeout }: { readonly timeout?: Duration.Input } = {}) =>
+  army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
+    Effect.map((info) => {
+      if (info !== null) joined = info;
+      return info;
+    }),
+  )) as ArmyStart;
+
+const sync = (label: string, { timeout }: ArmyStepOptions = {}): Effect.Effect<void> =>
+  Effect.asVoid(army<null>("sync", { label, timeoutMs: millis(timeout) }));
+
+const gather = <A extends Json>(
+  label: string,
+  value: A,
+  { timeout }: ArmyStepOptions = {},
+): Effect.Effect<readonly A[]> =>
+  army<readonly A[]>("gather", { label, value, timeoutMs: millis(timeout) });
+
+const until = (
+  label: string,
+  { done, work }: ArmyUntil,
+  { interval = "500 millis", timeout }: ArmyUntilOptions = {},
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    let last = yield* perform(done);
+    if (yield* army<boolean>("until", { label, done: last })) return;
+    const round = Effect.gen(function* () {
+      yield* Effect.all([perform(work), Effect.sleep(interval)], { concurrency: 2 });
+      const now = yield* perform(done);
+      if (now === last) return;
+      last = now;
+      yield* army<boolean>("report", { done: now });
+    });
+    yield* Effect.raceFirst(
+      army<null>("settle", { timeoutMs: millis(timeout) }),
+      Effect.forever(round),
+    );
+  });
+
+const joinMap = (map: string, { timeout, ...cell }: ArmyMapOptions = {}): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const label = `joinMap ${map}`;
+    yield* sync(label, { timeout });
+    const room = joined?.room;
+    const arrived =
+      room !== undefined &&
+      (yield* Player.joinMap(`${map}-${room}`, cell)) &&
+      (yield* World.getRoomNumber()) === room;
+    return (yield* gather(label, arrived, { timeout })).every(Boolean);
+  });
+
+const drink = (pot: string): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const item = yield* Inventory.getItem(pot);
+    if (item === null) return false;
+    if (["elixir", "tonic"].includes(item.link.trim().toLowerCase())) {
+      return yield* Inventory.use(pot);
+    }
+    if (!(yield* Inventory.equip(pot))) return false;
+    if (!(yield* Combat.useSkill(5, { force: true, waitUntilReady: true }))) return false;
+    return yield* Wait.until(
+      Effect.map(Inventory.getQuantity(pot), (left) => left < item.quantity),
+      { timeout: "5 seconds" },
+    );
+  });
+
+const equipSet = (name: string, { timeout }: ArmyStepOptions = {}): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const gear = yield* army<Gear>("gear", { name });
+    let equipped = true;
+    for (const field of GEAR) {
+      const item = gear[field];
+      if (item !== null) equipped = (yield* Inventory.equip(item)) && equipped;
+    }
+    for (const pot of gear.pots ?? []) equipped = (yield* drink(pot)) && equipped;
+    if (gear.scroll !== null) equipped = (yield* Inventory.equip(gear.scroll)) && equipped;
+    return (yield* gather(`equipSet ${name}`, equipped, { timeout })).every(Boolean);
+  });
+
+const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<Rotation> =>
+  Effect.gen(function* () {
+    if (!(yield* army<boolean>("rotate", { label, players }))) return { stop: Effect.void };
+    const taking = Effect.gen(function* () {
+      let acted: boolean | null = null;
+      while (true) {
+        yield* army<null>("turn", { label, acted });
+        acted = yield* perform(turn);
+      }
+    });
+    const fiber = yield* Effect.forkDetach(
+      failingTheScript(Effect.ensuring(taking, army<null>("leave", { label }))),
+    );
+    return { stop: Fiber.interrupt(fiber) };
+  });
+
+export const Army = {
+  /** Reads `~/Documents/Lyra/armies/<name>.yaml` and waits until every player in it has started. */
+  start,
+  sync,
+  /** Values come back in player order. */
+  gather,
+  /**
+   * Every player runs `work` in rounds until `done` is true for all of them at the same time.
+   * Players that are done keep working.
+   */
+  until,
+  /** Joins `<map>-<room>`. Every player gets false if any player didn't get into the room. */
+  joinMap,
+  /**
+   * Equips this player's gear for the set. Every player gets false if any player couldn't equip
+   * all of theirs.
+   */
+  equipSet,
+  /**
+   * Runs `turn` on one player at a time, in `players` order, until `stop` or the end of the
+   * script. `turn` returns whether it acted. Players not listed take no turns.
+   */
+  takeTurns,
 };

@@ -25,6 +25,7 @@ use ruffle_core::{
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
+    army::Armies,
     automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
     bridge::{Bridge, Event, Packets},
     domain::{
@@ -98,6 +99,7 @@ impl Runtime {
         outputs: async_channel::Sender<Output>,
         stats: tokio::sync::watch::Sender<Option<stats::Report>>,
         automation: Automation,
+        armies: Armies,
         display_frames: bool,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -118,6 +120,7 @@ impl Runtime {
                     outputs,
                     stats,
                     automation,
+                    armies,
                     display_frames,
                 ) {
                     tracing::error!(%error, "player failed");
@@ -169,6 +172,7 @@ fn run(
     outputs: async_channel::Sender<Output>,
     stats: tokio::sync::watch::Sender<Option<stats::Report>>,
     automation: Automation,
+    armies: Armies,
     display_frames: bool,
 ) -> anyhow::Result<()> {
     let mut pacing = pacing::Pacing::new(display_frames, Instant::now());
@@ -328,14 +332,15 @@ fn run(
                 Some(Msg::Poll(task)) => {
                     task.run();
                 }
-                Some(Msg::Script(message)) => scripts.handle(message, |call, feeds| {
+                Some(Msg::Script(message)) => scripts.handle(message, |call, state| {
                     spawn(
                         &inbox,
                         scripting::answer(
                             scripts_bridge.clone(),
                             logins.clone(),
                             automation.clone(),
-                            feeds,
+                            armies.clone(),
+                            state,
                             call,
                         ),
                     )

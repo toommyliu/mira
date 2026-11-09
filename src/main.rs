@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Lyra supports macOS only.");
 
+mod army;
 mod automation;
 mod bridge;
 mod domain;
@@ -24,6 +25,12 @@ fn main() -> anyhow::Result<()> {
         .join("Lyra");
     std::fs::create_dir_all(&data)?;
     let device = net::device_id(&data.join("device-id"))?;
+    let armies = army::Armies::new(
+        dirs::document_dir()
+            .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
+            .join("Lyra")
+            .join("armies"),
+    );
     gpui_platform::application().run(move |cx| {
         // AppKit termination does not unwind main's stack.
         let mut logging = Some(logging);
@@ -59,7 +66,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            let view = ruffle_view::Client::new(data, device, window, cx)
+            let view = ruffle_view::Client::new(data, device, armies, window, cx)
                 .expect("create the AQW player view");
             window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
             view

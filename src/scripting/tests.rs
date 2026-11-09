@@ -1731,3 +1731,505 @@ export default function* () {
         .map(Request::Quests)
     );
 }
+
+fn army_info() -> serde_json::Value {
+    json!({ "name": "ultras", "number": 2, "size": 2, "room": 4321, "players": ["player1", "player2"] })
+}
+
+fn army_requests(seen: Vec<Seen>) -> Vec<super::army::Request> {
+    seen.into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, Request::Army(request)) => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn army_requests_reach_the_player_typed() {
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army } from "lyra";
+
+export default function* () {
+  const army = yield* Army.start("ultras", { timeout: "2 seconds" });
+  console.log(`${army?.number} of ${army?.size} in ${army?.room}`);
+  yield* Army.sync("ready");
+  console.log(JSON.stringify(yield* Army.gather("count", { kills: 2 }, { timeout: "1.5 millis" })));
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Sync { .. }) => json!(null),
+                Request::Army(AY::Gather { .. }) => json!([{ "kills": 1 }, { "kills": 2 }]),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        ["2 of 2 in 4321", r#"[{"kills":1},{"kills":2}]"#]
+    );
+    assert_eq!(
+        army_requests(player.seen()),
+        [
+            AY::Start {
+                name: "ultras".into(),
+                timeout_ms: Some(2000)
+            },
+            AY::Sync {
+                label: "ready".into(),
+                timeout_ms: None
+            },
+            AY::Gather {
+                label: "count".into(),
+                value: json!({ "kills": 2 }),
+                timeout_ms: Some(2)
+            },
+        ]
+    );
+}
+
+#[test]
+fn until_works_in_rounds_and_reports_done_until_the_army_settles() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let kills = Arc::new(AtomicUsize::new(0));
+    let counted = kills.clone();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army, Combat, Inventory } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  yield* Army.until(
+    "trophy",
+    {
+      done: () => Inventory.contains("Trophy"),
+      work: function* () {
+        yield* Combat.kill("Boss");
+      },
+    },
+    { interval: "1 millis", timeout: "1 minute" },
+  );
+  console.log("settled");
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(move |request, held| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Until { .. }) => json!(false),
+                Request::Army(AY::Settle { .. }) => return None,
+                Request::Army(AY::Report { .. }) => {
+                    let settle = held
+                        .iter()
+                        .position(|call| matches!(call.request, Request::Army(AY::Settle { .. })))
+                        .expect("settle is waiting");
+                    held.remove(settle).reply.send(Ok(json!(null)));
+                    json!(true)
+                }
+                Request::Combat(C::Kill { .. }) => {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    json!(true)
+                }
+                Request::Inventory(I::Contains { .. }) => {
+                    json!(counted.load(Ordering::SeqCst) >= 2)
+                }
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["settled"]);
+    let seen = player.seen();
+    let position = |wanted: fn(&Request) -> bool| {
+        seen.iter()
+            .position(|seen| matches!(seen, Seen::Call(_, request) if wanted(request)))
+            .unwrap()
+    };
+    let until = position(|request| matches!(request, Request::Army(AY::Until { .. })));
+    let first_kill = position(|request| matches!(request, Request::Combat(C::Kill { .. })));
+    let report = position(|request| matches!(request, Request::Army(AY::Report { .. })));
+    assert!(until < first_kill && first_kill < report, "{seen:?}");
+    let kills_before_report = seen[..report]
+        .iter()
+        .filter(|seen| matches!(seen, Seen::Call(_, Request::Combat(C::Kill { .. }))))
+        .count();
+    assert_eq!(kills_before_report, 2);
+    assert_eq!(
+        army_requests(seen),
+        [
+            AY::Start {
+                name: "ultras".into(),
+                timeout_ms: None
+            },
+            AY::Until {
+                label: "trophy".into(),
+                done: false
+            },
+            AY::Settle {
+                timeout_ms: Some(60_000)
+            },
+            AY::Report { done: true },
+        ]
+    );
+}
+
+#[test]
+fn until_skips_the_work_when_the_army_is_already_done() {
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army, Combat, Inventory } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  yield* Army.until("trophy", {
+    done: () => Inventory.contains("Trophy"),
+    work: () => Combat.kill("Boss"),
+  });
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Until { .. }) => json!(true),
+                Request::Inventory(I::Contains { .. }) => json!(true),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        army_requests(player.seen()),
+        [
+            AY::Start {
+                name: "ultras".into(),
+                timeout_ms: None
+            },
+            AY::Until {
+                label: "trophy".into(),
+                done: true
+            },
+        ]
+    );
+}
+
+#[test]
+fn join_map_joins_the_army_room_and_agrees_on_the_result() {
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  console.log(yield* Army.joinMap("bossmap", { cell: "Enter", timeout: "1 second" }));
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Sync { .. }) => json!(null),
+                Request::Player(P::JoinMap { .. }) => json!(true),
+                Request::World(W::RoomNumber) => json!(4321),
+                Request::Army(AY::Gather { .. }) => json!([true, false]),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["false"]);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            Request::Army(AY::Start {
+                name: "ultras".into(),
+                timeout_ms: None
+            }),
+            Request::Army(AY::Sync {
+                label: "joinMap bossmap".into(),
+                timeout_ms: Some(1000)
+            }),
+            Request::Player(P::JoinMap {
+                map: "bossmap-4321".into(),
+                cell: Some("Enter".into()),
+                pad: None
+            }),
+            Request::World(W::RoomNumber),
+            Request::Army(AY::Gather {
+                label: "joinMap bossmap".into(),
+                value: json!(true),
+                timeout_ms: Some(1000)
+            }),
+        ]
+    );
+}
+
+#[test]
+fn equip_set_puts_on_the_gear_in_order_and_drinks_the_pots() {
+    use super::army::Request as AY;
+    use crate::domain::inventory::ItemQuery;
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  console.log(yield* Army.equipSet("boss"));
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            let item = |name: &str| ItemQuery::Name(name.into());
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Gear { .. }) => json!({
+                    "safeClass": "Safe Class",
+                    "safePot": "Safe Pot",
+                    "class": "Main Class",
+                    "weapon": "Sword",
+                    "cape": null,
+                    "helm": null,
+                    "armor": null,
+                    "pet": null,
+                    "pots": ["Potion", "Elixir"],
+                    "scroll": "Scroll",
+                }),
+                Request::Inventory(I::Equip { .. }) => json!(true),
+                Request::Inventory(I::Item { query }) if *query == item("Potion") => {
+                    json!({ "itemId": 1, "name": "Potion", "quantity": 3, "link": "" })
+                }
+                Request::Inventory(I::Item { query }) if *query == item("Elixir") => {
+                    json!({ "itemId": 2, "name": "Elixir", "quantity": 1, "link": "Elixir" })
+                }
+                Request::Combat(C::UseSkill { .. }) => json!(true),
+                Request::Inventory(I::Quantity { .. }) => json!(2),
+                Request::Inventory(I::Use { .. }) => json!(true),
+                Request::Army(AY::Gather { .. }) => json!([true, true]),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["true"]);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let item = |name: &str| ItemQuery::Name(name.into());
+    let equip = |name: &str| {
+        Request::Inventory(I::Equip {
+            query: item(name),
+            wear: None,
+        })
+    };
+    assert_eq!(
+        requests,
+        [
+            Request::Army(AY::Start {
+                name: "ultras".into(),
+                timeout_ms: None
+            }),
+            Request::Army(AY::Gear {
+                name: "boss".into()
+            }),
+            equip("Safe Class"),
+            equip("Safe Pot"),
+            equip("Main Class"),
+            equip("Safe Pot"),
+            equip("Sword"),
+            Request::Inventory(I::Item {
+                query: item("Potion")
+            }),
+            equip("Potion"),
+            Request::Combat(C::UseSkill {
+                skill: serde_json::from_value(json!(5)).unwrap(),
+                target: None,
+                force: Some(true),
+                wait_until_ready: Some(true),
+            }),
+            Request::Inventory(I::Quantity {
+                query: item("Potion")
+            }),
+            Request::Inventory(I::Item {
+                query: item("Elixir")
+            }),
+            Request::Inventory(I::Use {
+                query: item("Elixir")
+            }),
+            equip("Scroll"),
+            Request::Army(AY::Gather {
+                label: "equipSet boss".into(),
+                value: json!(true),
+                timeout_ms: None
+            }),
+        ]
+    );
+}
+
+#[test]
+fn take_turns_passes_each_turn_on_and_leaves_when_stopped() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let turns = AtomicUsize::new(0);
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army, Script } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  let turns = 0;
+  const rotation = yield* Army.takeTurns("taunt", {
+    players: [2, 1],
+    turn: function* () {
+      turns += 1;
+      return turns % 2 === 0;
+    },
+  });
+  yield* Script.sleep("50 millis");
+  yield* rotation.stop;
+  console.log(turns);
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(move |request, _| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Rotate { .. }) => json!(true),
+                Request::Army(AY::Turn { .. }) if turns.fetch_add(1, Ordering::SeqCst) < 3 => {
+                    json!(null)
+                }
+                Request::Army(AY::Turn { .. }) => return None,
+                Request::Army(AY::Leave { .. }) => json!(null),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["3"]);
+    let seen = player.seen();
+    let held = seen
+        .iter()
+        .rev()
+        .find_map(|seen| match seen {
+            Seen::Call(id, Request::Army(AY::Turn { .. })) => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    assert!(seen.contains(&Seen::Cancel(held)), "{seen:?}");
+    let turn = |acted: Option<bool>| AY::Turn {
+        label: "taunt".into(),
+        acted,
+    };
+    assert_eq!(
+        army_requests(seen),
+        [
+            AY::Start {
+                name: "ultras".into(),
+                timeout_ms: None
+            },
+            AY::Rotate {
+                label: "taunt".into(),
+                players: vec![2, 1]
+            },
+            turn(None),
+            turn(Some(false)),
+            turn(Some(true)),
+            turn(Some(false)),
+            AY::Leave {
+                label: "taunt".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_turn_that_fails_fails_the_script_and_leaves_the_rotation() {
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army, Script } from "lyra";
+
+export default function* () {
+  yield* Army.start("ultras");
+  yield* Army.takeTurns("taunt", {
+    players: [1, 2],
+    turn: function* () {
+      throw new Error("no scroll");
+    },
+  });
+  yield* Script.sleep("1 minute");
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::Rotate { .. }) => json!(true),
+                Request::Army(AY::Turn { .. } | AY::Leave { .. }) => json!(null),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(failure(&finished.outcome).0, "no scroll");
+    assert!(army_requests(player.seen()).contains(&AY::Leave {
+        label: "taunt".into()
+    }));
+}

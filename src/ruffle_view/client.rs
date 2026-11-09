@@ -12,7 +12,10 @@ use super::{
     RuffleView,
     ui::{self, Glyph},
 };
-use crate::ruffle::{Inbox, Msg};
+use crate::{
+    army::Armies,
+    ruffle::{Inbox, Msg},
+};
 
 actions!(
     lyra,
@@ -62,6 +65,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 pub struct Client {
     data: PathBuf,
     device: reqwest::header::HeaderValue,
+    armies: Armies,
     sessions: Vec<Session>,
     active: usize,
     layout: Layout,
@@ -96,12 +100,14 @@ impl Client {
     pub(crate) fn new(
         data: PathBuf,
         device: reqwest::header::HeaderValue,
+        armies: Armies,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Entity<Client>> {
         let client = cx.new(|cx| Client {
             data,
             device,
+            armies,
             sessions: Vec::new(),
             active: 0,
             layout: Layout::Tabs,
@@ -123,7 +129,13 @@ impl Client {
     }
 
     fn open_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<()> {
-        let view = RuffleView::new(self.data.clone(), self.device.clone(), window, cx)?;
+        let view = RuffleView::new(
+            self.data.clone(),
+            self.device.clone(),
+            self.armies.clone(),
+            window,
+            cx,
+        )?;
         let player = view.read(cx).session.inbox();
         self.numbered += 1;
         self.sessions.push(Session {

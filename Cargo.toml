@@ -29,6 +29,7 @@ ruffle_frontend_utils = { git = "https://github.com/toommyliu/ruffle", rev = "a5
 ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
 ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565" }
 serde = { version = "1", features = ["derive"] }
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync", "macros"] }

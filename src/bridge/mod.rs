@@ -46,6 +46,8 @@ pub(crate) enum CallError {
     Closed,
     #[error(transparent)]
     Decode(#[from] DecodeError),
+    #[error(transparent)]
+    Army(#[from] crate::army::ArmyError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

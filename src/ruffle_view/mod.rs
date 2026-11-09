@@ -62,6 +62,7 @@ impl RuffleView {
     pub fn new(
         data: std::path::PathBuf,
         device: reqwest::header::HeaderValue,
+        armies: crate::army::Armies,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Entity<RuffleView>> {
@@ -78,6 +79,7 @@ impl RuffleView {
             outputs_tx,
             stats_tx,
             Automation::clone(&automation),
+            armies,
             native.supports_display_frames(),
         )?;
         let inbox = session.inbox();

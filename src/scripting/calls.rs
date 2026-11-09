@@ -4,20 +4,21 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    auth, automation, bank, combat, drops, events,
+    army, auth, automation, bank, combat, drops, events,
     feeds::{self, Feeds},
     house, inventory, packets, player, players, quests,
     runtime::Command,
     shops, world,
 };
 use crate::{
+    army::Armies,
     automation::settings::Automation,
     bridge::{Bridge, CallError},
     domain::auth::Logins,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct RunId(pub(super) u64);
+pub(crate) struct RunId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CallId(pub(super) u64);
@@ -25,6 +26,7 @@ pub(crate) struct CallId(pub(super) u64);
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "domain", rename_all = "camelCase")]
 pub(crate) enum Request {
+    Army(army::Request),
     Auth(auth::Request),
     AutoRelogin(automation::ReloginRequest),
     AutoZone(automation::ZoneRequest),
@@ -96,21 +98,27 @@ pub(crate) struct Calls(HashMap<RunId, RunCalls>);
 #[derive(Default)]
 struct RunCalls {
     tasks: HashMap<CallId, async_task::Task<()>>,
-    feeds: Rc<Feeds>,
+    state: Rc<RunState>,
+}
+
+#[derive(Default)]
+pub(crate) struct RunState {
+    feeds: Feeds,
+    army: army::Membership,
 }
 
 impl Calls {
     pub(crate) fn handle(
         &mut self,
         message: ToPlayer,
-        start: impl FnOnce(Call, Rc<Feeds>) -> async_task::Task<()>,
+        start: impl FnOnce(Call, Rc<RunState>) -> async_task::Task<()>,
     ) {
         match message {
             ToPlayer::Call(call) => {
                 let run = self.0.entry(call.run).or_default();
                 run.tasks.retain(|_, task| !task.is_finished());
                 let id = call.id;
-                let task = start(call, run.feeds.clone());
+                let task = start(call, run.state.clone());
                 run.tasks.insert(id, task);
             }
             ToPlayer::Cancel { run, id } => {
@@ -129,21 +137,31 @@ pub(crate) async fn answer(
     bridge: Bridge,
     logins: Rc<Logins>,
     automation: Automation,
-    feeds: Rc<Feeds>,
+    armies: Armies,
+    state: Rc<RunState>,
     call: Call,
 ) {
-    let Call { request, reply, .. } = call;
-    reply.send(serve(&bridge, &logins, &automation, &feeds, request).await);
+    let Call {
+        run,
+        request,
+        reply,
+        ..
+    } = call;
+    reply.send(serve(&bridge, &logins, &automation, &armies, run, &state, request).await);
 }
 
 async fn serve(
     bridge: &Bridge,
     logins: &Logins,
     automation: &Automation,
-    feeds: &Feeds,
+    armies: &Armies,
+    run: RunId,
+    state: &RunState,
     request: Request,
 ) -> Reply {
+    let feeds = &state.feeds;
     match request {
+        Request::Army(request) => army::serve(armies, bridge, run, &state.army, request).await,
         Request::Auth(request) => auth::serve(bridge, logins, request).await,
         Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
         Request::AutoZone(request) => automation::serve_zone(automation, request),
