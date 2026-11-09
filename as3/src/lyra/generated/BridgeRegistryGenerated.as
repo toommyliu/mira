@@ -132,11 +132,11 @@ package lyra.generated
       external.externalize("settings.provokeCell", Settings.provokeCell);
       external.externalize("settings.resetCustomGuild", Settings.resetCustomGuild);
       external.externalize("settings.resetCustomName", Settings.resetCustomName);
+      external.externalize("settings.setAdsVisible", Settings.setAdsVisible);
       external.externalize("settings.setAnimationsEnabled", Settings.setAnimationsEnabled);
       external.externalize("settings.setCollisionsEnabled", Settings.setCollisionsEnabled);
       external.externalize("settings.setCustomGuild", Settings.setCustomGuild);
       external.externalize("settings.setCustomName", Settings.setCustomName);
-      external.externalize("settings.setDeathAdsVisible", Settings.setDeathAdsVisible);
       external.externalize("settings.setFrameRate", Settings.setFrameRate);
       external.externalize("settings.setLagKillerEnabled", Settings.setLagKillerEnabled);
       external.externalize("settings.setOtherPlayersVisible", Settings.setOtherPlayersVisible);

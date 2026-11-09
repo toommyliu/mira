@@ -48,6 +48,7 @@ package lyra.module {
 			registerModule(new HidePlayers());
 			registerModule(new DisableCollisions());
 			registerModule(new AnimationLimiter());
+			registerModule(new HideAds());
 
 			var customName:CustomName = CustomName.instance;
 			customName.enabled = true;

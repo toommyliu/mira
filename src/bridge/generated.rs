@@ -5,6 +5,7 @@ use super::{DecodeError, Value, arg, decode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Event {
+    AdHidden { ad: String, by: String },
     Connection { status: String },
     Debug { message: String },
     ExtensionResponse { packet: String },
@@ -17,6 +18,10 @@ pub(crate) enum Event {
 impl Event {
     pub(crate) fn parse(name: &str, args: &[Value]) -> Result<Option<Self>, DecodeError> {
         Ok(Some(match name {
+            "onAdHidden" => Self::AdHidden {
+                ad: decode("onAdHidden", arg(args, 0))?,
+                by: decode("onAdHidden", arg(args, 1))?,
+            },
             "onConnection" => Self::Connection {
                 status: decode("onConnection", arg(args, 0))?,
             },
@@ -894,6 +899,12 @@ pub(crate) mod settings {
         Ok(decode("settings.resetCustomName", reply)?)
     }
 
+    pub(crate) fn set_ads_visible(loader: &impl Loader, visible: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(visible)];
+        let reply = loader.call("settings.setAdsVisible", call_args)?;
+        Ok(decode("settings.setAdsVisible", reply)?)
+    }
+
     pub(crate) fn set_animations_enabled(
         loader: &impl Loader,
         enabled: bool,
@@ -922,15 +933,6 @@ pub(crate) mod settings {
         let call_args = vec![Value::String(name.to_owned())];
         let reply = loader.call("settings.setCustomName", call_args)?;
         Ok(decode("settings.setCustomName", reply)?)
-    }
-
-    pub(crate) fn set_death_ads_visible(
-        loader: &impl Loader,
-        visible: bool,
-    ) -> Result<(), CallError> {
-        let call_args = vec![Value::Bool(visible)];
-        let reply = loader.call("settings.setDeathAdsVisible", call_args)?;
-        Ok(decode("settings.setDeathAdsVisible", reply)?)
     }
 
     pub(crate) fn set_frame_rate(loader: &impl Loader, fps: i32) -> Result<(), CallError> {

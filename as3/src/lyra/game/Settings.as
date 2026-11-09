@@ -84,8 +84,8 @@ package lyra.game {
     }
 
     [BridgeExport]
-    public static function setDeathAdsVisible(visible:Boolean):void {
-      Main.Game.userPreference.data.bDeathAd = visible;
+    public static function setAdsVisible(visible:Boolean):void {
+      setModuleEnabled("HideAds", !visible);
     }
 
     [BridgeExport]
