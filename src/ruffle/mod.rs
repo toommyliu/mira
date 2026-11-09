@@ -25,7 +25,7 @@ use ruffle_core::{
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
-    automation::{auto_attack, auto_relogin, auto_zone, settings::Automation},
+    automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
     bridge::{Bridge, Packets},
     domain::auth::Logins,
     scripting::{self, Calls, ToPlayer},
@@ -221,6 +221,16 @@ fn run(
         &inbox,
         &tasks,
         auto_attack::run(bridge.clone(), automation.watch_auto_attack()),
+    );
+    spawn_local(
+        &inbox,
+        &tasks,
+        game_settings::run(bridge.clone(), automation.watch_game_settings()),
+    );
+    spawn_local(
+        &inbox,
+        &tasks,
+        game_settings::log_hidden_ads(bridge.subscribe(game_settings::wants)),
     );
     let smooth_motion = preferences::BoolPreference::new(data.join("smooth-motion"));
     match smooth_motion.load() {

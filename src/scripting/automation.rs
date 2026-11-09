@@ -15,6 +15,33 @@ use crate::automation::{
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+pub(crate) enum SettingsRequest {
+    Get,
+    Update {
+        infinite_range: Option<bool>,
+        provoke_cell: Option<bool>,
+        enemy_magnet: Option<bool>,
+        skip_cutscenes: Option<bool>,
+        hide_players: Option<bool>,
+        lag_killer: Option<bool>,
+        animations: Option<bool>,
+        collisions: Option<bool>,
+        ads: Option<bool>,
+        walk_speed: Option<u32>,
+        #[serde(default, deserialize_with = "present")]
+        custom_name: Option<Option<String>>,
+        #[serde(default, deserialize_with = "present")]
+        custom_guild: Option<Option<String>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(
+    tag = "op",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub(crate) enum ReloginRequest {
     Get,
     Update {
@@ -81,6 +108,40 @@ pub(super) fn serve_zone(automation: &Automation, request: ZoneRequest) -> Reply
         }),
     };
     Ok(zone(settings))
+}
+
+pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) -> Reply {
+    let settings = match request {
+        SettingsRequest::Get => automation.game_settings(),
+        SettingsRequest::Update {
+            infinite_range,
+            provoke_cell,
+            enemy_magnet,
+            skip_cutscenes,
+            hide_players,
+            lag_killer,
+            animations,
+            collisions,
+            ads,
+            walk_speed,
+            custom_name,
+            custom_guild,
+        } => automation.update_game_settings(|settings| {
+            apply(&mut settings.infinite_range, infinite_range);
+            apply(&mut settings.provoke_cell, provoke_cell);
+            apply(&mut settings.enemy_magnet, enemy_magnet);
+            apply(&mut settings.skip_cutscenes, skip_cutscenes);
+            apply(&mut settings.hide_players, hide_players);
+            apply(&mut settings.lag_killer, lag_killer);
+            apply(&mut settings.animations, animations);
+            apply(&mut settings.collisions, collisions);
+            apply(&mut settings.ads, ads);
+            apply(&mut settings.walk_speed, walk_speed);
+            apply(&mut settings.custom_name, custom_name);
+            apply(&mut settings.custom_guild, custom_guild);
+        }),
+    };
+    Ok(json!(settings))
 }
 
 fn apply<T>(field: &mut T, value: Option<T>) {
@@ -167,6 +228,41 @@ mod tests {
             serve_zone(&automation, clear),
             Ok(json!({ "enabled": true, "map": null }))
         );
+    }
+
+    #[test]
+    fn a_settings_update_returns_every_setting_as_stored() {
+        let automation = Automation::default();
+        let update = serde_json::from_value(json!({
+            "op": "update",
+            "hidePlayers": true,
+            "walkSpeed": 500,
+            "customName": "  player1  ",
+        }))
+        .unwrap();
+        assert_eq!(
+            serve_settings(&automation, update),
+            Ok(json!({
+                "infiniteRange": false,
+                "provokeCell": false,
+                "enemyMagnet": false,
+                "skipCutscenes": false,
+                "hidePlayers": true,
+                "lagKiller": false,
+                "animations": true,
+                "collisions": true,
+                "ads": true,
+                "walkSpeed": 99,
+                "customName": "player1",
+                "customGuild": null,
+            }))
+        );
+        let clear = serde_json::from_value(json!({ "op": "update", "customName": null })).unwrap();
+        assert_eq!(
+            serve_settings(&automation, clear).unwrap()["customName"],
+            json!(null)
+        );
+        assert!(automation.game_settings().hide_players);
     }
 
     #[test]

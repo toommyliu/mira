@@ -53,6 +53,9 @@ const packets = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const events = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "events", op, ...args });
 
+const settings = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "settings", op, ...args });
+
 const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "feeds", op, ...args });
 
@@ -449,6 +452,32 @@ export const Shops = {
   /** Sells the whole stack unless `quantity` is given. */
   sell: (query: ItemQuery, options: QuantityOptions = {}) =>
     shops<boolean>("sell", { query, ...options }),
+};
+
+export type GameSettings = {
+  readonly infiniteRange: boolean;
+  readonly provokeCell: boolean;
+  readonly enemyMagnet: boolean;
+  readonly skipCutscenes: boolean;
+  readonly hidePlayers: boolean;
+  /** Hides the map and everyone in it, leaving the interface. */
+  readonly lagKiller: boolean;
+  readonly animations: boolean;
+  readonly collisions: boolean;
+  /** `false` hides the death screen ad and keeps the Game Menu's news carousel from opening on its own. */
+  readonly ads: boolean;
+  /** From 1 to 99. The game's own speed is 8. */
+  readonly walkSpeed: number;
+  /** Shown only to this client. `null` restores the character's own name. */
+  readonly customName: string | null;
+  /** Shown only to this client. `null` restores the character's own guild. */
+  readonly customGuild: string | null;
+};
+
+export const Settings = {
+  get: () => settings<GameSettings>("get"),
+  /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
+  update: (patch: Partial<GameSettings>) => settings<GameSettings>("update", patch),
 };
 
 export const Script = {

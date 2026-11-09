@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
     auth::Request as A,
-    automation::{ReloginRequest as AR, ZoneRequest as AZ},
+    automation::{ReloginRequest as AR, SettingsRequest as GS, ZoneRequest as AZ},
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
@@ -1106,7 +1106,8 @@ fn automation_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import * as AutoRelogin from "lyra/autorelogin";
+        r#"import { Settings } from "lyra";
+import * as AutoRelogin from "lyra/autorelogin";
 import * as AutoZone from "lyra/autozone";
 
 export default function* () {
@@ -1114,6 +1115,8 @@ export default function* () {
   yield* AutoRelogin.update({ enabled: true, server: null, delaySeconds: 10 });
   yield* AutoZone.get();
   yield* AutoZone.update({ map: "queeniona" });
+  yield* Settings.get();
+  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null });
 }
 "#,
     )]);
@@ -1150,6 +1153,21 @@ export default function* () {
             Request::AutoZone(AZ::Update {
                 enabled: None,
                 map: Some(Some(Room::Queeniona)),
+            }),
+            Request::Settings(GS::Get),
+            Request::Settings(GS::Update {
+                infinite_range: None,
+                provoke_cell: None,
+                enemy_magnet: None,
+                skip_cutscenes: None,
+                hide_players: Some(true),
+                lag_killer: None,
+                animations: None,
+                collisions: None,
+                ads: None,
+                walk_speed: Some(12),
+                custom_name: None,
+                custom_guild: Some(None),
             }),
         ]
     );

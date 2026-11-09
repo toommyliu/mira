@@ -28,6 +28,7 @@ pub(crate) enum Request {
     Auth(auth::Request),
     AutoRelogin(automation::ReloginRequest),
     AutoZone(automation::ZoneRequest),
+    Settings(automation::SettingsRequest),
     Player(player::Request),
     Players(players::Request),
     World(world::Request),
@@ -146,6 +147,7 @@ async fn serve(
         Request::Auth(request) => auth::serve(bridge, logins, request).await,
         Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
         Request::AutoZone(request) => automation::serve_zone(automation, request),
+        Request::Settings(request) => automation::serve_settings(automation, request),
         Request::Packets(request) => {
             packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }

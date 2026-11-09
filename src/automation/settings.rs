@@ -3,7 +3,7 @@ use std::{fs, io, ops::Deref, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use super::{auto_attack, auto_relogin, auto_zone};
+use super::{auto_attack, auto_relogin, auto_zone, game_settings};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -18,6 +18,7 @@ pub(crate) struct Automation {
     relogin: watch::Sender<auto_relogin::Settings>,
     zone: watch::Sender<auto_zone::Settings>,
     attack: watch::Sender<auto_attack::Settings>,
+    game: watch::Sender<game_settings::Settings>,
 }
 
 impl Automation {
@@ -26,6 +27,7 @@ impl Automation {
             relogin: watch::Sender::new(settings.auto_relogin.normalized()),
             zone: watch::Sender::new(settings.auto_zone),
             attack: watch::Sender::new(settings.auto_attack),
+            game: watch::Sender::new(game_settings::Settings::default()),
         }
     }
 
@@ -83,6 +85,24 @@ impl Automation {
         change: impl FnOnce(&mut auto_attack::Settings),
     ) -> auto_attack::Settings {
         update(&self.attack, change)
+    }
+
+    pub(crate) fn game_settings(&self) -> game_settings::Settings {
+        self.game.borrow().clone()
+    }
+
+    pub(crate) fn watch_game_settings(&self) -> watch::Receiver<game_settings::Settings> {
+        self.game.subscribe()
+    }
+
+    pub(crate) fn update_game_settings(
+        &self,
+        change: impl FnOnce(&mut game_settings::Settings),
+    ) -> game_settings::Settings {
+        update(&self.game, |settings| {
+            change(settings);
+            *settings = std::mem::take(settings).normalized();
+        })
     }
 }
 
