@@ -12,6 +12,7 @@ use super::{
     RuffleView,
     ui::{self, Glyph},
 };
+use crate::ruffle::{Inbox, Msg};
 
 actions!(
     lyra,
@@ -77,6 +78,7 @@ pub struct Client {
 struct Session {
     number: usize,
     view: Entity<RuffleView>,
+    player: Inbox,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,10 +124,12 @@ impl Client {
 
     fn open_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<()> {
         let view = RuffleView::new(self.data.clone(), self.device.clone(), window, cx)?;
+        let player = view.read(cx).session.inbox();
         self.numbered += 1;
         self.sessions.push(Session {
             number: self.numbered,
             view,
+            player,
         });
         self.active = self.sessions.len() - 1;
         self.show(window, cx);
@@ -697,6 +701,15 @@ impl Render for Client {
             .when_some(self.tab_list.clone(), |root, focus| {
                 root.child(self.tab_list(&focus, cx))
             })
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        // Each session's view waits for its player thread when dropped; stopping every player first lets those teardowns overlap.
+        for session in &self.sessions {
+            session.player.post(Msg::Stop);
+        }
     }
 }
 
