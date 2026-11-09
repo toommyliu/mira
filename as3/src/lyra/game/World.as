@@ -62,6 +62,22 @@ public class World
       return false;
     }
 
+    // Players in the cell exist before their retrieveUserDatas reply sets objData, and the
+    // game's testAction reads objData from every player in the cell.
+    private static function hasCellUserData(world:Object):Boolean
+    {
+      var frame:String = world.myAvatar.dataLeaf.strFrame;
+      for each (var avatar:Object in world.avatars)
+      {
+        if (avatar.dataLeaf != null && avatar.dataLeaf.strFrame == frame && avatar.objData == null)
+        {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
     /** Reports whether AQW has finished initializing the requested cell. */
     [BridgeExport]
     public static function isCellReady(cell:String, pad:String = null):Boolean
@@ -91,7 +107,8 @@ public class World
           !world.map.isPlaying &&
           Boolean(world.bitWalk) &&
           Boolean(world.myAvatar.pMC.stage) &&
-          world.CHARS.contains(world.myAvatar.pMC)
+          world.CHARS.contains(world.myAvatar.pMC) &&
+          hasCellUserData(world)
         );
       }
       catch (e:Error)
