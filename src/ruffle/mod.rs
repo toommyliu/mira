@@ -27,7 +27,8 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     army::Armies,
     automation::{
-        auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation, sign_in,
+        auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests,
+        settings::Automation, sign_in,
     },
     bridge::{Bridge, Event, Packets},
     domain::{
@@ -266,6 +267,37 @@ fn run(
         &inbox,
         &tasks,
         auto_attack::run(bridge.clone(), automation.watch_auto_attack()),
+    );
+    let subscriber = bridge.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        quests::run(
+            bridge.clone(),
+            move |wants| subscriber.subscribe(wants),
+            automation.watch_quests(),
+        ),
+    );
+    let subscriber = bridge.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        drops::run(
+            bridge.clone(),
+            move |wants| subscriber.subscribe(wants),
+            automation.watch_drops(),
+            automation.watch_quests(),
+        ),
+    );
+    let subscriber = bridge.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        boosts::run(
+            bridge.clone(),
+            move |wants| subscriber.subscribe(wants),
+            automation.watch_boosts(),
+        ),
     );
     let located = outputs.clone();
     spawn_local(

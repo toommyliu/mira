@@ -3,7 +3,7 @@ use std::{fs, io, ops::Deref, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use super::{auto_attack, auto_relogin, auto_zone, game_settings};
+use super::{auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -20,6 +20,9 @@ pub(crate) struct Automation {
     attack: watch::Sender<auto_attack::Settings>,
     game: watch::Sender<game_settings::Settings>,
     frame_rate: watch::Sender<Option<game_settings::FrameRate>>,
+    quests: watch::Sender<quests::State>,
+    drops: watch::Sender<drops::State>,
+    boosts: watch::Sender<boosts::State>,
 }
 
 impl Automation {
@@ -30,6 +33,9 @@ impl Automation {
             attack: watch::Sender::new(settings.auto_attack),
             game: watch::Sender::new(game_settings::Settings::default()),
             frame_rate: watch::Sender::new(None),
+            quests: watch::Sender::default(),
+            drops: watch::Sender::default(),
+            boosts: watch::Sender::default(),
         }
     }
 
@@ -105,6 +111,42 @@ impl Automation {
             change(settings);
             *settings = std::mem::take(settings).normalized();
         })
+    }
+
+    pub(crate) fn quests(&self) -> quests::State {
+        self.quests.borrow().clone()
+    }
+
+    pub(crate) fn watch_quests(&self) -> watch::Receiver<quests::State> {
+        self.quests.subscribe()
+    }
+
+    pub(crate) fn update_quests(&self, change: impl FnOnce(&mut quests::State)) -> quests::State {
+        update(&self.quests, change)
+    }
+
+    pub(crate) fn drops(&self) -> drops::State {
+        self.drops.borrow().clone()
+    }
+
+    pub(crate) fn watch_drops(&self) -> watch::Receiver<drops::State> {
+        self.drops.subscribe()
+    }
+
+    pub(crate) fn update_drops(&self, change: impl FnOnce(&mut drops::State)) -> drops::State {
+        update(&self.drops, change)
+    }
+
+    pub(crate) fn boosts(&self) -> boosts::State {
+        self.boosts.borrow().clone()
+    }
+
+    pub(crate) fn watch_boosts(&self) -> watch::Receiver<boosts::State> {
+        self.boosts.subscribe()
+    }
+
+    pub(crate) fn update_boosts(&self, change: impl FnOnce(&mut boosts::State)) -> boosts::State {
+        update(&self.boosts, change)
     }
 
     pub(crate) fn frame_rate(&self) -> Option<u32> {

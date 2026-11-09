@@ -23,7 +23,7 @@ export default function* () {
     console.log(`faction ${faction.name}: rank ${faction.rank}, ${faction.rep} rep`);
   }
   for (const kind of ["gold", "xp", "rep", "classPoints"] as const) {
-    console.log(`${kind} boost ${yield* Player.hasBoost(kind)}`);
+    console.log(`${kind} boost ${yield* Player.boosts.isActive(kind)}`);
   }
 
   console.log(

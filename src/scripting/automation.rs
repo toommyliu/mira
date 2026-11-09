@@ -158,7 +158,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
     Ok(reply)
 }
 
-fn apply<T>(field: &mut T, value: Option<T>) {
+pub(super) fn apply<T>(field: &mut T, value: Option<T>) {
     if let Some(value) = value {
         *field = value;
     }

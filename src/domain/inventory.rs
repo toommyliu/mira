@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     combat::selector,
     enhancements::{self, Kind, Slot},
+    player::Boost,
     retry_after_combat, wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
@@ -14,7 +15,7 @@ use crate::bridge::{
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum ItemQuery {
     Name(String),
@@ -31,6 +32,28 @@ impl ItemQuery {
             ItemQuery::ItemId { item_id } => by_id(*item_id),
         }
     }
+
+    pub(crate) fn normalized(self) -> Option<Self> {
+        match self {
+            ItemQuery::Name(name) => {
+                let name = name.trim();
+                (!name.is_empty()).then(|| ItemQuery::Name(name.to_owned()))
+            }
+            ItemQuery::ItemId { item_id } => (item_id > 0).then_some(self),
+        }
+    }
+
+    pub(crate) fn same(&self, other: &ItemQuery) -> bool {
+        match (self, other) {
+            (ItemQuery::Name(a), ItemQuery::Name(b)) => same_name(a, b),
+            (ItemQuery::ItemId { item_id: a }, ItemQuery::ItemId { item_id: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
 pub(super) fn by_id(item_id: i32) -> Value {
@@ -91,6 +114,41 @@ pub(crate) struct Enhancement {
 }
 
 impl Item {
+    pub(crate) fn query(&self) -> ItemQuery {
+        ItemQuery::ItemId {
+            item_id: self.item_id,
+        }
+    }
+
+    pub(crate) fn matches(&self, query: &ItemQuery) -> bool {
+        match query {
+            ItemQuery::Name(name) => same_name(&self.name, name),
+            ItemQuery::ItemId { item_id } => self.item_id == *item_id,
+        }
+    }
+
+    pub(crate) fn coins(&self) -> bool {
+        self.coins
+    }
+
+    pub(crate) fn member(&self) -> bool {
+        self.member
+    }
+
+    pub(crate) fn boost(&self) -> Option<Boost> {
+        if !self.category.eq_ignore_ascii_case("ServerUse") {
+            return None;
+        }
+        let link = self.link.to_lowercase();
+        match link.split("::").next()?.trim() {
+            "xpboost" => Some(Boost::Xp),
+            "gboost" => Some(Boost::Gold),
+            "repboost" => Some(Boost::Rep),
+            "cpboost" => Some(Boost::ClassPoints),
+            _ => None,
+        }
+    }
+
     fn usable(&self) -> bool {
         self.category == "Item"
     }
@@ -135,6 +193,12 @@ pub(crate) struct ItemCount {
     item_id: i32,
     name: String,
     quantity: i32,
+}
+
+impl ItemCount {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 pub(super) struct Row(pub(super) BTreeMap<String, Value>);

@@ -5,6 +5,7 @@ mod bank;
 mod calls;
 mod combat;
 mod drops;
+mod environment;
 mod events;
 mod feeds;
 mod house;

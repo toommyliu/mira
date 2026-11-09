@@ -53,6 +53,22 @@ pub(crate) struct Quest {
     rewards: Vec<QuestReward>,
 }
 
+impl Quest {
+    pub(crate) fn needs_reward_choice(&self) -> bool {
+        self.rewards
+            .iter()
+            .any(|reward| reward.kind == RewardKind::Choice)
+    }
+
+    pub(crate) fn reward_names(&self) -> impl Iterator<Item = &str> {
+        self.rewards.iter().map(|reward| reward.item.name())
+    }
+
+    pub(crate) fn requirement_names(&self) -> impl Iterator<Item = &str> {
+        self.requirements.iter().map(ItemCount::name)
+    }
+}
+
 fn reward_from(value: Value) -> Option<QuestReward> {
     let row = row(value)?;
     Some(QuestReward {

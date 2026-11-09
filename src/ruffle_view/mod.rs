@@ -96,7 +96,13 @@ impl RuffleView {
         let zone_changes = automation.watch_auto_zone();
         let game_changes = automation.watch_game_settings();
         let frame_rate_changes = automation.watch_frame_rate();
+        let quest_changes = automation.watch_quests();
+        let drop_changes = automation.watch_drops();
+        let boost_changes = automation.watch_boosts();
         Ok(cx.new(|cx| {
+            notify_on_change(quest_changes, cx);
+            notify_on_change(drop_changes, cx);
+            notify_on_change(boost_changes, cx);
             notify_on_change(relogin_changes, cx);
             notify_on_change(zone_changes, cx);
             notify_on_change(game_changes, cx);

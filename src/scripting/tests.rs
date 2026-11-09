@@ -15,6 +15,7 @@ use super::{
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
     drops::Request as D,
+    environment::{BoostRequest as BR, DropRequest as DR, QuestRequest as QR},
     events::Request as EV,
     feeds::{FeedId, Request as F},
     house::Request as H,
@@ -1169,6 +1170,112 @@ export default function* () {
                 frame_rate: None,
                 custom_name: None,
                 custom_guild: Some(None),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn environment_requests_reach_the_player_typed() {
+    use crate::{automation::quests::Registered, domain::inventory::ItemQuery};
+
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Drops, Player, Quests } from "mira";
+
+export default function* () {
+  yield* Quests.register([4432, { questId: 4433, rewardItemId: 50 }]);
+  yield* Quests.unregister([4432]);
+  yield* Quests.unregisterAll();
+  yield* Quests.getRegistered();
+  yield* Quests.getConfig();
+  yield* Quests.configure({ acceptRewards: true });
+  yield* Drops.register(["Gem", { itemId: 5 }]);
+  yield* Drops.unregister(["Gem"]);
+  yield* Drops.unregisterAll();
+  yield* Drops.getRegistered();
+  yield* Drops.getConfig();
+  yield* Drops.configure({ acceptAc: true, rejectOthers: true });
+  yield* Player.boosts.isActive("xp");
+  yield* Player.boosts.register(["XP Boost"]);
+  yield* Player.boosts.unregister(["XP Boost"]);
+  yield* Player.boosts.unregisterAll();
+  yield* Player.boosts.getRegistered();
+  yield* Player.boosts.getConfig();
+  yield* Player.boosts.configure({ enabled: false });
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let gem = || ItemQuery::Name("Gem".into());
+    let boost = || vec![ItemQuery::Name("XP Boost".into())];
+    assert_eq!(
+        requests,
+        [
+            Request::QuestRegistry(QR::Register {
+                quests: vec![
+                    Registered {
+                        quest_id: 4432,
+                        reward_item_id: None,
+                    },
+                    Registered {
+                        quest_id: 4433,
+                        reward_item_id: Some(50),
+                    },
+                ],
+            }),
+            Request::QuestRegistry(QR::Unregister {
+                quest_ids: vec![4432],
+            }),
+            Request::QuestRegistry(QR::UnregisterAll),
+            Request::QuestRegistry(QR::Registered),
+            Request::QuestRegistry(QR::Config),
+            Request::QuestRegistry(QR::Configure {
+                enabled: None,
+                accept_rewards: Some(true),
+                accept_requirements: None,
+            }),
+            Request::DropRegistry(DR::Register {
+                items: vec![gem(), ItemQuery::ItemId { item_id: 5 }],
+            }),
+            Request::DropRegistry(DR::Unregister { items: vec![gem()] }),
+            Request::DropRegistry(DR::UnregisterAll),
+            Request::DropRegistry(DR::Registered),
+            Request::DropRegistry(DR::Config),
+            Request::DropRegistry(DR::Configure {
+                enabled: None,
+                accept_ac: Some(true),
+                accept_ac_member_only: None,
+                accept_non_ac: None,
+                accept_non_ac_member_only: None,
+                reject_others: Some(true),
+            }),
+            Request::Player(P::HasBoost {
+                kind: crate::domain::player::Boost::Xp,
+            }),
+            Request::BoostRegistry(BR::Register { items: boost() }),
+            Request::BoostRegistry(BR::Unregister { items: boost() }),
+            Request::BoostRegistry(BR::UnregisterAll),
+            Request::BoostRegistry(BR::Registered),
+            Request::BoostRegistry(BR::Config),
+            Request::BoostRegistry(BR::Configure {
+                enabled: Some(false),
             }),
         ]
     );

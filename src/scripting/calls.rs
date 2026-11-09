@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    army, auth, automation, bank, combat, drops, events,
+    army, auth, automation, bank, combat, drops, environment, events,
     feeds::{self, Feeds},
     house, inventory, packets, player, players, quests,
     runtime::Command,
@@ -31,6 +31,9 @@ pub(crate) enum Request {
     AutoRelogin(automation::ReloginRequest),
     AutoZone(automation::ZoneRequest),
     Settings(automation::SettingsRequest),
+    QuestRegistry(environment::QuestRequest),
+    DropRegistry(environment::DropRequest),
+    BoostRegistry(environment::BoostRequest),
     Player(player::Request),
     Players(players::Request),
     World(world::Request),
@@ -166,6 +169,9 @@ async fn serve(
         Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
         Request::AutoZone(request) => automation::serve_zone(automation, request),
         Request::Settings(request) => automation::serve_settings(automation, request),
+        Request::QuestRegistry(request) => environment::serve_quests(automation, request),
+        Request::DropRegistry(request) => environment::serve_drops(automation, request),
+        Request::BoostRegistry(request) => environment::serve_boosts(automation, request),
         Request::Packets(request) => {
             packets::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }

@@ -15,16 +15,25 @@ use crate::{
     automation::{
         auto_relogin::Phase,
         auto_zone::Room,
+        drops::Config as DropConfig,
         game_settings::{RenderingMode, Settings as GameSettings},
+        quests::{Config as QuestConfig, Registered},
+        register_items,
         settings::Automation,
+        unregister_items,
     },
-    domain::world::{Location, PADS},
+    domain::{
+        inventory::ItemQuery,
+        world::{Location, PADS},
+    },
     ruffle::Command,
 };
 
 const LAST_SERVER: &str = "Last server";
 const MAX_DIGITS: usize = 3;
+const MAX_QUEST_DIGITS: usize = 6;
 const MAX_TEXT: usize = 32;
+const MAX_ITEM_NAME: usize = 64;
 const SUBMENU_WIDTH: Pixels = px(200.0);
 const SUBMENU_MAX_HEIGHT: Pixels = px(360.0);
 const SUBMENU_OVERLAP: Pixels = px(2.0);
@@ -38,6 +47,7 @@ pub(super) enum BarMenu {
     Script,
     Cell,
     Pad,
+    Environment,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +63,7 @@ impl BarMenu {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
             BarMenu::Options => Some(Submenu::Rendering),
-            BarMenu::Script | BarMenu::Cell | BarMenu::Pad => None,
+            BarMenu::Script | BarMenu::Cell | BarMenu::Pad | BarMenu::Environment => None,
         }
     }
 }
@@ -68,6 +78,9 @@ enum Field {
     FrameRate,
     CustomName,
     CustomGuild,
+    AddQuest,
+    AddDrop,
+    AddBoost,
 }
 
 impl Field {
@@ -79,6 +92,7 @@ impl Field {
     ];
     const MOVEMENT: [Field; 2] = [Field::WalkSpeed, Field::FrameRate];
     const IDENTITY: [Field; 2] = [Field::CustomName, Field::CustomGuild];
+    const ADD: [Field; 3] = [Field::AddQuest, Field::AddDrop, Field::AddBoost];
 
     fn label(self) -> &'static str {
         match self {
@@ -90,6 +104,9 @@ impl Field {
             Field::FrameRate => "Frame rate",
             Field::CustomName => "Name",
             Field::CustomGuild => "Guild",
+            Field::AddQuest => "Add quest ID",
+            Field::AddDrop => "Add drop",
+            Field::AddBoost => "Add boost",
         }
     }
 
@@ -104,12 +121,29 @@ impl Field {
         match self {
             Field::CustomName => "Own name",
             Field::CustomGuild => "Own guild",
+            Field::AddDrop | Field::AddBoost => "Item name",
             _ => "",
         }
     }
 
     fn is_text(self) -> bool {
-        matches!(self, Field::CustomName | Field::CustomGuild)
+        matches!(
+            self,
+            Field::CustomName | Field::CustomGuild | Field::AddDrop | Field::AddBoost
+        )
+    }
+
+    fn steps(self) -> bool {
+        !self.is_text() && self != Field::AddQuest
+    }
+
+    fn max_len(self) -> usize {
+        match self {
+            Field::AddQuest => MAX_QUEST_DIGITS,
+            Field::AddDrop | Field::AddBoost => MAX_ITEM_NAME,
+            _ if self.is_text() => MAX_TEXT,
+            _ => MAX_DIGITS,
+        }
     }
 
     fn value(self, automation: &Automation) -> String {
@@ -127,6 +161,7 @@ impl Field {
                 .unwrap_or_default(),
             Field::CustomName => game().custom_name.unwrap_or_default(),
             Field::CustomGuild => game().custom_guild.unwrap_or_default(),
+            Field::AddQuest | Field::AddDrop | Field::AddBoost => String::new(),
         }
     }
 
@@ -138,6 +173,18 @@ impl Field {
             Field::CustomGuild => {
                 return view
                     .change_game_settings(|settings| settings.custom_guild = Some(text), cx);
+            }
+            Field::AddDrop => {
+                view.automation.update_drops(|state| {
+                    register_items(&mut state.items, vec![ItemQuery::Name(text)])
+                });
+                return cx.notify();
+            }
+            Field::AddBoost => {
+                view.automation.update_boosts(|state| {
+                    register_items(&mut state.items, vec![ItemQuery::Name(text)])
+                });
+                return cx.notify();
             }
             _ => {}
         }
@@ -160,7 +207,16 @@ impl Field {
                 view.automation.set_frame_rate(value);
                 cx.notify();
             }
-            Field::CustomName | Field::CustomGuild => {}
+            Field::AddQuest => {
+                view.automation.update_quests(|state| {
+                    state.register([Registered {
+                        quest_id: value as i32,
+                        reward_item_id: None,
+                    }])
+                });
+                cx.notify();
+            }
+            Field::CustomName | Field::CustomGuild | Field::AddDrop | Field::AddBoost => {}
         }
     }
 
@@ -171,6 +227,7 @@ impl Field {
     fn after(self, backwards: bool, automation: &Automation) -> Field {
         let group: &[Field] = match self {
             Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
+            Field::AddQuest | Field::AddDrop | Field::AddBoost => &Field::ADD,
             _ => &[
                 Field::WalkSpeed,
                 Field::FrameRate,
@@ -227,7 +284,7 @@ pub(super) struct BarState {
     edit: Option<Edit>,
     location: Option<Location>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 6]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 7]>>,
     submenu_rows: Rc<Cell<[Bounds<Pixels>; 3]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -332,7 +389,7 @@ impl RuffleView {
                 self.commit_edit(cx);
                 self.start_edit(field.after(shift, &self.automation));
             }
-            "up" | "down" if !field.is_text() => {
+            "up" | "down" if field.steps() => {
                 let stored = field.value(&self.automation).parse().unwrap_or(0);
                 let edit = self.bar.edit.as_mut().unwrap();
                 let step = if shift { 10 } else { 1 };
@@ -368,7 +425,7 @@ impl RuffleView {
                     edit.text.clear();
                     edit.fresh = false;
                 }
-                if edit.text.chars().count() + typed.chars().count() <= MAX_TEXT {
+                if edit.text.chars().count() + typed.chars().count() <= field.max_len() {
                     edit.text.push_str(typed);
                 }
             }
@@ -378,7 +435,7 @@ impl RuffleView {
                     edit.text.clear();
                     edit.fresh = false;
                 }
-                if edit.text.len() < MAX_DIGITS {
+                if edit.text.len() < field.max_len() {
                     edit.text.push_str(digit);
                 }
             }
@@ -570,6 +627,13 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
         )
         .child(trigger(
             view,
+            BarMenu::Environment,
+            "Environment",
+            environment_value(view),
+            cx,
+        ))
+        .child(trigger(
+            view,
             BarMenu::Cell,
             "Cell",
             place(view, |location| &location.cell),
@@ -631,6 +695,7 @@ fn trigger(
         BarMenu::Script => "script",
         BarMenu::Cell => "cell",
         BarMenu::Pad => "pad",
+        BarMenu::Environment => "environment",
     };
     div()
         .on_children_prepainted(move |bounds, _, _| {
@@ -670,6 +735,7 @@ pub(super) fn overlay(
         BarMenu::AutoRelogin => relogin_panel(view, cx),
         BarMenu::Script => script_panel(view, cx),
         BarMenu::Cell | BarMenu::Pad => travel_panel(view, menu, cx),
+        BarMenu::Environment => environment_panel(view, cx),
     }
     .track_focus(&view.bar.focus)
     .on_key_down(cx.listener(RuffleView::panel_key_down))
@@ -825,6 +891,282 @@ fn script_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div
             panel.child(div().pt(px(6.0)).child(ui::status(text)))
         })
         .child(action)
+}
+
+fn environment_value(view: &RuffleView) -> Option<SharedString> {
+    let (quests, drops, boosts) = (
+        view.automation.quests(),
+        view.automation.drops(),
+        view.automation.boosts(),
+    );
+    let registered = quests.quests.len() + drops.items.len() + boosts.items.len();
+    let rules = DropConfig {
+        enabled: drops.config.enabled,
+        ..DropConfig::default()
+    } != drops.config;
+    match (registered, rules) {
+        (0, false) => None,
+        (0, true) => Some("Drop rules".into()),
+        (count, _) => Some(format!("{count} registered").into()),
+    }
+}
+
+type QuestToggle = (
+    &'static str,
+    &'static str,
+    fn(&mut QuestConfig) -> &mut bool,
+);
+type DropToggle = (&'static str, &'static str, fn(&mut DropConfig) -> &mut bool);
+
+const DROP_KINDS: [DropToggle; 4] = [
+    ("drops-ac", "AC", |c| &mut c.accept_ac),
+    ("drops-ac-member", "AC, members only", |c| {
+        &mut c.accept_ac_member_only
+    }),
+    ("drops-non-ac", "Non-AC", |c| &mut c.accept_non_ac),
+    ("drops-non-ac-member", "Non-AC, members only", |c| {
+        &mut c.accept_non_ac_member_only
+    }),
+];
+
+const QUEST_DROPS: [QuestToggle; 2] = [
+    ("quests-rewards", "Accept rewards", |c| {
+        &mut c.accept_rewards
+    }),
+    ("quests-requirements", "Accept requirements", |c| {
+        &mut c.accept_requirements
+    }),
+];
+
+fn item_label(query: &ItemQuery) -> SharedString {
+    match query {
+        ItemQuery::Name(name) => name.clone().into(),
+        ItemQuery::ItemId { item_id } => format!("Item {item_id}").into(),
+    }
+}
+
+fn registered_row(
+    (kind, index): (&'static str, usize),
+    label: SharedString,
+    detail: Option<SharedString>,
+    remove: impl Fn(&mut RuffleView, &mut Context<RuffleView>) + 'static,
+    cx: &mut Context<RuffleView>,
+) -> Stateful<Div> {
+    ui::row((kind, index))
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(6.0))
+                .overflow_hidden()
+                .child(div().truncate().child(label.clone()))
+                .children(
+                    detail.map(|detail| div().text_color(ui::secondary_text()).child(detail)),
+                ),
+        )
+        .child(
+            div()
+                .id(gpui::ElementId::named_usize(
+                    format!("{kind}-remove"),
+                    index,
+                ))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(20.0))
+                .rounded(ui::CONTROL_RADIUS)
+                .cursor_pointer()
+                .hover(|style| style.bg(ui::hover()))
+                .active(|style| style.bg(ui::pressed()))
+                .role(Role::Button)
+                .aria_label(SharedString::from(format!("Unregister {label}")))
+                .child(ui::glyph(Glyph::Close, ui::secondary_text()))
+                .on_click(cx.listener(move |this, _, _, cx| remove(this, cx))),
+        )
+}
+
+fn unregister_all_row(
+    id: &'static str,
+    clear: fn(&Automation),
+    cx: &mut Context<RuffleView>,
+) -> Stateful<Div> {
+    ui::pressable(ui::row(id))
+        .role(Role::MenuItem)
+        .text_color(ui::secondary_text())
+        .child("Unregister all")
+        .on_click(cx.listener(move |this, _, _, cx| {
+            clear(&this.automation);
+            cx.notify();
+        }))
+}
+
+fn environment_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
+    let quests = view.automation.quests();
+    let drops = view.automation.drops();
+    let boosts = view.automation.boosts();
+    ui::panel("environment-panel", px(392.0))
+        .max_h(px(560.0))
+        .overflow_y_scroll()
+        .child(ui::section("Quests"))
+        .child(
+            toggle_row(
+                "quests-enabled",
+                "Accept and complete",
+                quests.config.enabled,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.automation
+                    .update_quests(|state| state.config.enabled = !state.config.enabled);
+                cx.notify();
+            })),
+        )
+        .child(
+            div()
+                .grid()
+                .grid_cols(2)
+                .children(QUEST_DROPS.map(|(id, label, setting)| {
+                    let mut config = quests.config;
+                    toggle_row(id, label, *setting(&mut config)).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.automation.update_quests(|state| {
+                                let on = setting(&mut state.config);
+                                *on = !*on;
+                            });
+                            cx.notify();
+                        },
+                    ))
+                })),
+        )
+        .children(quests.quests.iter().enumerate().map(|(index, registered)| {
+            let quest_id = registered.quest_id;
+            registered_row(
+                ("quest", index),
+                format!("Quest {quest_id}").into(),
+                registered
+                    .reward_item_id
+                    .map(|reward| format!("reward {reward}").into()),
+                move |this, cx| {
+                    this.automation
+                        .update_quests(|state| state.unregister(&[quest_id]));
+                    cx.notify();
+                },
+                cx,
+            )
+        }))
+        .child(field_row(view, Field::AddQuest, cx))
+        .when(!quests.quests.is_empty(), |panel| {
+            panel.child(unregister_all_row(
+                "quests-clear",
+                |automation| {
+                    automation.update_quests(|state| state.quests.clear());
+                },
+                cx,
+            ))
+        })
+        .child(ui::separator())
+        .child(ui::section("Drops"))
+        .child(
+            toggle_row("drops-enabled", "Accept and reject", drops.config.enabled).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.automation
+                        .update_drops(|state| state.config.enabled = !state.config.enabled);
+                    cx.notify();
+                }),
+            ),
+        )
+        .children(drops.items.iter().enumerate().map(|(index, query)| {
+            let removed = query.clone();
+            registered_row(
+                ("drop", index),
+                item_label(query),
+                None,
+                move |this, cx| {
+                    this.automation.update_drops(|state| {
+                        unregister_items(&mut state.items, std::slice::from_ref(&removed))
+                    });
+                    cx.notify();
+                },
+                cx,
+            )
+        }))
+        .child(field_row(view, Field::AddDrop, cx))
+        .when(!drops.items.is_empty(), |panel| {
+            panel.child(unregister_all_row(
+                "drops-clear",
+                |automation| {
+                    automation.update_drops(|state| state.items.clear());
+                },
+                cx,
+            ))
+        })
+        .child(ui::section("Accept unregistered drops"))
+        .child(
+            div()
+                .grid()
+                .grid_cols(2)
+                .children(DROP_KINDS.map(|(id, label, setting)| {
+                    let mut config = drops.config;
+                    toggle_row(id, label, *setting(&mut config)).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.automation.update_drops(|state| {
+                                let on = setting(&mut state.config);
+                                *on = !*on;
+                            });
+                            cx.notify();
+                        },
+                    ))
+                })),
+        )
+        .child(
+            toggle_row(
+                "drops-reject",
+                "Reject everything else",
+                drops.config.reject_others,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.automation
+                    .update_drops(|state| state.config.reject_others = !state.config.reject_others);
+                cx.notify();
+            })),
+        )
+        .child(ui::separator())
+        .child(ui::section("Boosts"))
+        .child(
+            toggle_row("boosts-enabled", "Use boosts", boosts.config.enabled).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.automation
+                        .update_boosts(|state| state.config.enabled = !state.config.enabled);
+                    cx.notify();
+                }),
+            ),
+        )
+        .children(boosts.items.iter().enumerate().map(|(index, query)| {
+            let removed = query.clone();
+            registered_row(
+                ("boost", index),
+                item_label(query),
+                None,
+                move |this, cx| {
+                    this.automation.update_boosts(|state| {
+                        unregister_items(&mut state.items, std::slice::from_ref(&removed))
+                    });
+                    cx.notify();
+                },
+                cx,
+            )
+        }))
+        .child(field_row(view, Field::AddBoost, cx))
+        .when(!boosts.items.is_empty(), |panel| {
+            panel.child(unregister_all_row(
+                "boosts-clear",
+                |automation| {
+                    automation.update_boosts(|state| state.items.clear());
+                },
+                cx,
+            ))
+        })
 }
 
 fn place(view: &RuffleView, part: fn(&Location) -> &String) -> Option<SharedString> {

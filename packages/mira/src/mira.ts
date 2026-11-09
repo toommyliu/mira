@@ -48,6 +48,15 @@ const quests = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const drops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "drops", op, ...args });
 
+const questRegistry = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "questRegistry", op, ...args });
+
+const dropRegistry = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "dropRegistry", op, ...args });
+
+const boostRegistry = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "boostRegistry", op, ...args });
+
 const shops = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "shops", op, ...args });
 
@@ -110,6 +119,10 @@ export type Faction = {
   readonly rep: number;
 };
 export type Boost = "gold" | "xp" | "rep" | "classPoints";
+export type BoostConfig = {
+  /** False pauses using boosts. Registrations stay. */
+  readonly enabled: boolean;
+};
 export type CellOptions = { readonly cell?: string; readonly pad?: string };
 export type PadOptions = { readonly pad?: string };
 export type WalkOptions = { readonly speed?: number };
@@ -148,7 +161,6 @@ export const Player = {
   isMember: () => player<boolean>("member"),
   isAfk: () => player<boolean>("afk"),
   getFactions: () => player<readonly Faction[]>("factions"),
-  hasBoost: (kind: Boost) => player<boolean>("hasBoost", { kind }),
   getAuras: () => player<readonly Aura[]>("auras"),
   getAura: (name: string) => player<Aura | null>("aura", { name }),
   hasAura: (name: string) => player<boolean>("hasAura", { name }),
@@ -159,6 +171,21 @@ export const Player = {
   walkTo: (x: number, y: number, options: WalkOptions = {}) =>
     player<boolean>("walkTo", { x, y, ...options }),
   rest: (options: RestOptions = {}) => player<boolean>("rest", options),
+  /** Registrations and config last until the session closes, after scripts end. */
+  boosts: {
+    isActive: (kind: Boost) => player<boolean>("hasBoost", { kind }),
+    /**
+     * Uses a registered item from the inventory whenever its kind of boost isn't active. Items of
+     * the same kind are used in the order they were registered.
+     */
+    register: (items: readonly ItemQuery[]) => boostRegistry<void>("register", { items }),
+    unregister: (items: readonly ItemQuery[]) => boostRegistry<void>("unregister", { items }),
+    unregisterAll: () => boostRegistry<void>("unregisterAll"),
+    getRegistered: () => boostRegistry<readonly ItemQuery[]>("registered"),
+    getConfig: () => boostRegistry<BoostConfig>("config"),
+    /** Changes only the given fields and returns the config as stored. */
+    configure: (changes: Partial<BoostConfig>) => boostRegistry<BoostConfig>("configure", changes),
+  },
   outfits: {
     getNames: () => player<readonly string[]>("outfits"),
     equip: (name: string, options: OutfitOptions = {}) =>
@@ -403,6 +430,18 @@ export type Quest = {
 /** Quests load through the quest log unless `silent`. */
 export type QuestLoadOptions = { readonly silent?: boolean };
 export type CompleteOptions = { readonly turnIns?: number; readonly rewardItemId?: number };
+export type QuestRegistration =
+  | number
+  | { readonly questId: number; readonly rewardItemId?: number };
+export type RegisteredQuest = { readonly questId: number; readonly rewardItemId: number | null };
+export type QuestConfig = {
+  /** False pauses accepting and completing. Registrations stay. */
+  readonly enabled: boolean;
+  /** Registered quests' rewards count as registered drops. */
+  readonly acceptRewards: boolean;
+  /** Registered quests' requirements count as registered drops. */
+  readonly acceptRequirements: boolean;
+};
 
 export const Quests = {
   load: (questId: number, options: QuestLoadOptions = {}) =>
@@ -426,6 +465,34 @@ export const Quests = {
   complete: (questId: number, options: CompleteOptions = {}) =>
     quests<boolean>("complete", { questId, ...options }),
   abandon: (questId: number) => quests<boolean>("abandon", { questId }),
+  /**
+   * Accepts each quest whenever it's available and completes it with as many turn-ins as the items
+   * allow. Registering a quest again replaces its `rewardItemId`; a quest with `choice` rewards
+   * isn't completed without one. Registrations and config last until the session closes, after
+   * scripts end.
+   */
+  register: (quests: readonly QuestRegistration[]) =>
+    questRegistry<void>("register", {
+      quests: quests.map((quest) => (typeof quest === "number" ? { questId: quest } : quest)),
+    }),
+  unregister: (questIds: readonly number[]) => questRegistry<void>("unregister", { questIds }),
+  unregisterAll: () => questRegistry<void>("unregisterAll"),
+  getRegistered: () => questRegistry<readonly RegisteredQuest[]>("registered"),
+  getConfig: () => questRegistry<QuestConfig>("config"),
+  /** Changes only the given fields and returns the config as stored. */
+  configure: (changes: Partial<QuestConfig>) => questRegistry<QuestConfig>("configure", changes),
+};
+
+/** Rules for drops that aren't registered. `Ac` matches an `Item`'s `coins`, `MemberOnly` its `member`. */
+export type DropConfig = {
+  /** False pauses accepting and rejecting. Registrations stay. */
+  readonly enabled: boolean;
+  readonly acceptAc: boolean;
+  readonly acceptAcMemberOnly: boolean;
+  readonly acceptNonAc: boolean;
+  readonly acceptNonAcMemberOnly: boolean;
+  /** Rejects every drop that isn't registered or accepted above. */
+  readonly rejectOthers: boolean;
 };
 
 /** Items waiting in the drop list, with `quantity` as the amount waiting. */
@@ -437,6 +504,17 @@ export const Drops = {
   /** Also claims a drop the drop list lost or hides, if the client has seen the item. */
   accept: (query: ItemQuery) => drops<boolean>("accept", { query }),
   reject: (query: ItemQuery) => drops<boolean>("reject", { query }),
+  /**
+   * Accepts these items whenever they're in the drop list. Registrations and config last until the
+   * session closes, after scripts end.
+   */
+  register: (items: readonly ItemQuery[]) => dropRegistry<void>("register", { items }),
+  unregister: (items: readonly ItemQuery[]) => dropRegistry<void>("unregister", { items }),
+  unregisterAll: () => dropRegistry<void>("unregisterAll"),
+  getRegistered: () => dropRegistry<readonly ItemQuery[]>("registered"),
+  getConfig: () => dropRegistry<DropConfig>("config"),
+  /** Changes only the given fields and returns the config as stored. */
+  configure: (changes: Partial<DropConfig>) => dropRegistry<DropConfig>("configure", changes),
 };
 
 export type ShopItemQuery = ItemQuery | { readonly shopItemId: number };
