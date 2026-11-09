@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use tracing_subscriber::util::SubscriberInitExt as _;
+
 use crate::bridge::{CallError, Loader, Value};
 
 type Handler = Box<dyn FnMut(&'static str, &[Value]) -> Result<Value, CallError>>;
@@ -38,5 +40,24 @@ impl Loader for FakeLoader {
     fn call(&self, callback: &'static str, args: Vec<Value>) -> Result<Value, CallError> {
         self.calls.borrow_mut().push(callback);
         (self.handler.borrow_mut())(callback, &args)
+    }
+}
+
+pub(crate) struct DebugLogs {
+    _guard: tracing::subscriber::DefaultGuard,
+    _other: tracing::Dispatch,
+}
+
+// With a single dispatcher registered, tracing-core caches a callsite's interest from the
+// default subscriber of whichever thread reaches it first, so a parallel test without
+// this subscriber can turn this test's debug callsites off. A second registered
+// dispatcher makes tracing-core ask every registered dispatcher instead.
+pub(crate) fn debug_logs() -> DebugLogs {
+    DebugLogs {
+        _other: tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()),
+        _guard: tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .set_default(),
     }
 }

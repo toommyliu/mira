@@ -552,12 +552,11 @@ mod tests {
 
     use serde_json::json;
     use tokio::task::LocalSet;
-    use tracing_subscriber::util::SubscriberInitExt as _;
 
     use super::*;
     use crate::{
         bridge::{Event, Events},
-        domain::testing::FakeLoader,
+        domain::testing::{FakeLoader, debug_logs},
     };
 
     fn monster_row(mon_map_id: f64, name: &str, cell: &str, state: f64, available: bool) -> Value {
@@ -922,10 +921,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_failed_diagnostic_never_changes_a_failed_loads_result() {
-        let _debug = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_test_writer()
-            .set_default();
+        let _debug = debug_logs();
         let loaded = Rc::new(std::cell::Cell::new(true));
         let state = loaded.clone();
         let loader = FakeLoader::new(move |callback, _| match callback {

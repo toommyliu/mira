@@ -331,8 +331,7 @@ mod tests {
 
     use super::*;
     use crate::bridge::{Event, Events, Value};
-    use crate::domain::testing::FakeLoader;
-    use tracing_subscriber::util::SubscriberInitExt as _;
+    use crate::domain::testing::{FakeLoader, debug_logs};
 
     fn player(hp: i32) -> (FakeLoader, Rc<RefCell<Vec<(f64, f64)>>>) {
         let walks = Rc::new(RefCell::new(Vec::new()));
@@ -635,10 +634,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_failed_diagnostic_never_changes_a_failed_jumps_result() {
-        let _debug = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_test_writer()
-            .set_default();
+        let _debug = debug_logs();
         let loader = FakeLoader::new(|callback, _| match callback {
             "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Ok(Value::Bool(true)),
             "world.getCells" => Ok(Value::List(vec![Value::String("r2".into())])),
