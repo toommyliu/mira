@@ -255,11 +255,24 @@ pub(crate) fn available_mon_map_id(
     loader: &impl Loader,
     query: &MonsterQuery,
 ) -> Result<Option<f64>, CallError> {
+    first_available_mon_map_id(loader, std::slice::from_ref(query))
+}
+
+pub(crate) fn first_available_mon_map_id(
+    loader: &impl Loader,
+    queries: &[MonsterQuery],
+) -> Result<Option<f64>, CallError> {
+    if queries.is_empty() {
+        return Ok(None);
+    }
     let cell = bridge::player::get_cell(loader)?.unwrap_or_default();
-    Ok(monsters(loader, Some(&cell))?
-        .into_iter()
-        .find(|monster| monster.available && query.matches(monster))
-        .map(|monster| monster.mon_map_id))
+    let monsters = monsters(loader, Some(&cell))?;
+    Ok(queries.iter().find_map(|query| {
+        monsters
+            .iter()
+            .find(|monster| monster.available && query.matches(monster))
+            .map(|monster| monster.mon_map_id)
+    }))
 }
 
 pub(crate) async fn monster_drops(

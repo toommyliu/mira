@@ -15,7 +15,7 @@ use crate::bridge::{
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
 const CONSUMED_TIMEOUT: Duration = Duration::from_secs(5);
-const SKILLS: [i32; 4] = [1, 2, 3, 4];
+pub(crate) const DEFAULT_ROTATION: [Skill; 4] = [Skill(1), Skill(2), Skill(3), Skill(4)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u8")]
@@ -213,6 +213,8 @@ pub(crate) async fn kill(
     loader: &impl Loader,
     fights: Packets<CtPacket>,
     query: &MonsterQuery,
+    skills: &[Skill],
+    priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     if !auth::in_game(loader)? {
         return Ok(false);
@@ -221,11 +223,12 @@ pub(crate) async fn kill(
         return Ok(false);
     };
     fights.clear();
-    if !attack_id(loader, id)? {
+    let first = world::first_available_mon_map_id(loader, priority)?.unwrap_or(id);
+    if !attack_id(loader, first)? {
         return Ok(false);
     }
     let engaged = Engaged(loader);
-    let killed = fight(loader, &fights, id).await;
+    let killed = fight(loader, &fights, id, skills, priority).await;
     std::mem::forget(engaged);
     killed
 }
@@ -234,6 +237,8 @@ async fn fight(
     loader: &impl Loader,
     fights: &Packets<CtPacket>,
     id: f64,
+    skills: &[Skill],
+    priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     let cell = bridge::player::get_cell(loader)?;
     let mut next = 0;
@@ -241,10 +246,12 @@ async fn fight(
         if !auth::in_game(loader)? || bridge::player::get_cell(loader)? != cell {
             return Ok(false);
         }
-        if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == id) {
-            attack_id(loader, id)?;
+        let wanted = world::first_available_mon_map_id(loader, priority)?.unwrap_or(id);
+        if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == wanted)
+        {
+            attack_id(loader, wanted)?;
         }
-        use_next_skill(loader, &mut next)?;
+        use_next_skill(loader, skills, &mut next)?;
         let tick = sleep(TICK);
         pin!(tick);
         loop {
@@ -273,15 +280,19 @@ impl<L: Loader> Drop for Engaged<'_, L> {
     }
 }
 
-pub(crate) fn use_next_skill(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
-    for offset in 0..SKILLS.len() {
-        let index = (*next + offset) % SKILLS.len();
-        let skill = SKILLS[index];
+pub(crate) fn use_next_skill(
+    loader: &impl Loader,
+    skills: &[Skill],
+    next: &mut usize,
+) -> Result<(), CallError> {
+    for offset in 0..skills.len() {
+        let index = (*next + offset) % skills.len();
+        let skill = skills[index].index();
         if bridge::combat::get_skill_cooldown_remaining(loader, skill)? > 0 {
             continue;
         }
         if bridge::combat::use_skill(loader, &skill.to_string(), None, None)? {
-            *next = (index + 1) % SKILLS.len();
+            *next = (index + 1) % skills.len();
             break;
         }
     }
@@ -323,6 +334,7 @@ mod tests {
         slotted: Option<f64>,
         taken_on_cast: Option<&'static str>,
         cast: Vec<i32>,
+        attacked: Vec<f64>,
     }
 
     impl Fight {
@@ -398,6 +410,7 @@ mod tests {
                 ),
                 "combat.attackMonster" => {
                     let id = selected(&args[0]);
+                    fight.attacked.push(id);
                     let alive = fight.monsters.iter().any(|m| m.id == id && m.hp > 0);
                     if alive {
                         fight.target = Some(id);
@@ -509,7 +522,9 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
-                &named("frogzard")
+                &named("frogzard"),
+                &DEFAULT_ROTATION,
+                &[],
             )
             .await,
             Ok(true)
@@ -520,6 +535,30 @@ mod tests {
         assert_eq!(fight.monsters[2].hp, 5);
         assert_eq!(loader.count("combat.cancelTarget"), 0);
         assert_eq!(loader.count("world.isMonsterAvailable"), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_fights_priority_targets_first_with_the_given_skills() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        assert_eq!(
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &named("Frogzard"),
+                &[Skill(3), Skill(1)],
+                &[named("Dragon"), named("Slime")],
+            )
+            .await,
+            Ok(true)
+        );
+        let fight = fight.borrow();
+        assert_eq!(fight.attacked, [3.0, 2.0]);
+        assert_eq!(fight.cast, [3, 1, 3, 1, 3, 1, 3, 1]);
+        assert_eq!((fight.monsters[1].hp, fight.monsters[2].hp), (0, 0));
     }
 
     #[tokio::test(start_paused = true)]
@@ -537,6 +576,8 @@ mod tests {
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &frogzard,
+                &DEFAULT_ROTATION,
+                &[],
             ),
         );
         assert_eq!(killed.await, Ok(Ok(true)));
@@ -554,7 +595,9 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
-                &named("Dragon")
+                &named("Dragon"),
+                &DEFAULT_ROTATION,
+                &[],
             )
             .await,
             Ok(false)
@@ -574,7 +617,9 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
-                &named("Frogzard")
+                &named("Frogzard"),
+                &DEFAULT_ROTATION,
+                &[],
             )
             .await,
             Ok(false)
@@ -595,6 +640,8 @@ mod tests {
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &MonsterQuery::MonMapId { mon_map_id: 3.0 },
+                &DEFAULT_ROTATION,
+                &[],
             ),
         );
         assert!(interrupted.await.is_err());

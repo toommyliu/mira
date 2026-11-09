@@ -230,6 +230,12 @@ export type SkillOptions = {
   readonly force?: boolean;
   readonly waitUntilReady?: boolean;
 };
+export type KillOptions = {
+  /** Used in this order, skipping any on cooldown. Defaults to `[1, 2, 3, 4]`. */
+  readonly skills?: readonly Skill[];
+  /** Attacked first, in this order, while any is alive in the cell. The kill still ends when its own target dies. */
+  readonly targetPriority?: readonly MonsterQuery[];
+};
 
 export const Players = {
   getAll: () => players<readonly RoomPlayer[]>("all"),
@@ -247,7 +253,8 @@ export const Combat = {
   getSkillCooldown: (skill: Skill) => combat<number>("skillCooldown", { skill }),
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
-  kill: (query: MonsterQuery) => combat<boolean>("kill", { query }),
+  kill: (query: MonsterQuery, options: KillOptions = {}) =>
+    combat<boolean>("kill", { query, ...options }),
 };
 
 export type ItemQuery = string | { readonly itemId: number };

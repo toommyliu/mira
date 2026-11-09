@@ -40,6 +40,8 @@ pub(crate) enum Request {
     CancelAutoAttack,
     Kill {
         query: MonsterQuery,
+        skills: Option<Vec<Skill>>,
+        target_priority: Option<Vec<MonsterQuery>>,
     },
 }
 
@@ -81,9 +83,20 @@ pub(super) async fn serve(
             )
             .await?
         ),
-        Request::Kill { query } => {
-            json!(combat::kill(loader, Packets::subscribe(&subscribe), &query).await?)
-        }
+        Request::Kill {
+            query,
+            skills,
+            target_priority,
+        } => json!(
+            combat::kill(
+                loader,
+                Packets::subscribe(&subscribe),
+                &query,
+                skills.as_deref().unwrap_or(&combat::DEFAULT_ROTATION),
+                target_priority.as_deref().unwrap_or_default(),
+            )
+            .await?
+        ),
         request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Target => json!(combat::target(loader)?),
         Request::HasTarget => json!(bridge::combat::has_target(loader)?),
@@ -133,7 +146,14 @@ mod tests {
             (Request::SkillCooldown { skill: skill() }, json!(0)),
             (Request::CancelTarget, json!(null)),
             (Request::CancelAutoAttack, json!(null)),
-            (Request::Kill { query: frogzard() }, json!(false)),
+            (
+                Request::Kill {
+                    query: frogzard(),
+                    skills: None,
+                    target_priority: None,
+                },
+                json!(false),
+            ),
         ] {
             assert_eq!(
                 serve(&loader, |wants| events.subscribe(wants), request.clone()).await,

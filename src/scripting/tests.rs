@@ -1263,6 +1263,7 @@ export default function* () {
   yield* Combat.cancelTarget();
   yield* Combat.cancelAutoAttack();
   yield* Combat.kill("*");
+  yield* Combat.kill("Boss", { skills: [3, 1, 5], targetPriority: [{ monMapId: 1 }, "Orb"] });
   yield* Player.getAuras();
   yield* Player.getAura("Spirit Power");
   yield* Player.hasAura("Spirit Power");
@@ -1307,6 +1308,16 @@ export default function* () {
         C::CancelAutoAttack,
         C::Kill {
             query: MonsterQuery::Name("*".into()),
+            skills: None,
+            target_priority: None,
+        },
+        C::Kill {
+            query: MonsterQuery::Name("Boss".into()),
+            skills: Some(vec![skill(3), skill(1), skill(5)]),
+            target_priority: Some(vec![
+                MonsterQuery::MonMapId { mon_map_id: 1.0 },
+                MonsterQuery::Name("Orb".into()),
+            ]),
         },
     ]
     .map(Request::Combat)

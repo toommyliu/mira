@@ -4,7 +4,7 @@ use tokio::{sync::watch, time::sleep};
 use crate::bridge::{self, CallError, Loader, Value};
 use crate::domain::{
     auth,
-    combat::{TICK, selector, use_next_skill},
+    combat::{DEFAULT_ROTATION, TICK, selector, use_next_skill},
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +37,7 @@ fn attack(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
     if !bridge::combat::has_target(loader)? && !target_any_monster(loader)? {
         return Ok(());
     }
-    use_next_skill(loader, next)
+    use_next_skill(loader, &DEFAULT_ROTATION, next)
 }
 
 fn target_any_monster(loader: &impl Loader) -> Result<bool, CallError> {
