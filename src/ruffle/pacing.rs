@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 pub(super) struct Pacing {
     display_frames: bool,
     pub(super) visible: bool,
+    pub(super) minimal: bool,
     next_render: Instant,
 }
 
@@ -11,12 +12,17 @@ impl Pacing {
         Self {
             display_frames,
             visible: true,
+            minimal: false,
             next_render: now,
         }
     }
 
+    fn presenting(&self) -> bool {
+        self.visible && !self.minimal
+    }
+
     pub(super) fn frame_clock(&self, interpolating: bool) -> bool {
-        self.display_frames && interpolating && self.visible
+        self.display_frames && interpolating && self.presenting()
     }
 
     pub(super) fn draw(
@@ -31,7 +37,7 @@ impl Pacing {
         } else {
             now >= self.next_render
         };
-        let draw = self.visible && needs_render && (!interpolating || paced);
+        let draw = self.presenting() && needs_render && (!interpolating || paced);
         if draw {
             self.next_render = now + Duration::from_secs_f64(1.0 / 60.0);
         }
@@ -44,7 +50,7 @@ impl Pacing {
         interpolating: bool,
         until_next_frame: Duration,
     ) -> Duration {
-        if interpolating && !self.display_frames && self.visible {
+        if interpolating && !self.display_frames && self.presenting() {
             until_next_frame.min(self.next_render.saturating_duration_since(now))
         } else {
             until_next_frame
@@ -59,18 +65,25 @@ mod tests {
     const MODES: [(bool, bool); 4] = [(false, false), (false, true), (true, false), (true, true)];
     const STAGE_FRAME: Duration = Duration::from_millis(41);
 
+    const HIDE: [(&str, fn(&mut Pacing, bool)); 2] = [
+        ("occluded", |pacing, hidden| pacing.visible = !hidden),
+        ("minimal", |pacing, hidden| pacing.minimal = hidden),
+    ];
+
     #[test]
     fn hidden_window_is_never_drawn() {
         for (display_frames, interpolating) in MODES {
-            let start = Instant::now();
-            let mut pacing = Pacing::new(display_frames, start);
-            pacing.visible = false;
-            for pass in 0..240 {
-                let now = start + STAGE_FRAME * pass;
-                assert!(
-                    !pacing.draw(now, true, interpolating, true),
-                    "display_frames={display_frames} interpolating={interpolating} pass={pass}"
-                );
+            for (cause, hide) in HIDE {
+                let start = Instant::now();
+                let mut pacing = Pacing::new(display_frames, start);
+                hide(&mut pacing, true);
+                for pass in 0..240 {
+                    let now = start + STAGE_FRAME * pass;
+                    assert!(
+                        !pacing.draw(now, true, interpolating, true),
+                        "{cause} display_frames={display_frames} interpolating={interpolating} pass={pass}"
+                    );
+                }
             }
         }
     }
@@ -78,18 +91,20 @@ mod tests {
     #[test]
     fn shown_window_draws_on_its_first_pass() {
         for (display_frames, interpolating) in MODES {
-            let start = Instant::now();
-            let mut pacing = Pacing::new(display_frames, start);
-            assert!(pacing.draw(start, true, interpolating, true));
-            pacing.visible = false;
-            for pass in 1..10 {
-                pacing.draw(start + STAGE_FRAME * pass, true, interpolating, true);
+            for (cause, hide) in HIDE {
+                let start = Instant::now();
+                let mut pacing = Pacing::new(display_frames, start);
+                assert!(pacing.draw(start, true, interpolating, true));
+                hide(&mut pacing, true);
+                for pass in 1..10 {
+                    pacing.draw(start + STAGE_FRAME * pass, true, interpolating, true);
+                }
+                hide(&mut pacing, false);
+                assert!(
+                    pacing.draw(start + STAGE_FRAME * 10, true, interpolating, true),
+                    "{cause} display_frames={display_frames} interpolating={interpolating}"
+                );
             }
-            pacing.visible = true;
-            assert!(
-                pacing.draw(start + STAGE_FRAME * 10, true, interpolating, true),
-                "display_frames={display_frames} interpolating={interpolating}"
-            );
         }
     }
 
@@ -123,13 +138,15 @@ mod tests {
 
     #[test]
     fn display_link_runs_only_while_smooth_motion_is_on_and_the_window_is_visible() {
-        let mut pacing = Pacing::new(true, Instant::now());
-        assert!(pacing.frame_clock(true));
-        assert!(!pacing.frame_clock(false));
-        pacing.visible = false;
-        assert!(!pacing.frame_clock(true));
-        pacing.visible = true;
-        assert!(pacing.frame_clock(true));
+        for (cause, hide) in HIDE {
+            let mut pacing = Pacing::new(true, Instant::now());
+            assert!(pacing.frame_clock(true));
+            assert!(!pacing.frame_clock(false));
+            hide(&mut pacing, true);
+            assert!(!pacing.frame_clock(true), "{cause}");
+            hide(&mut pacing, false);
+            assert!(pacing.frame_clock(true), "{cause}");
+        }
     }
 
     #[test]

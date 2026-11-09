@@ -454,8 +454,11 @@ export const Shops = {
     shops<boolean>("sell", { query, ...options }),
 };
 
-/** `"interface-only"` hides the map and everyone in it, leaving the interface. */
-export type RenderingMode = "full" | "interface-only";
+/**
+ * `"interface-only"` leaves only the interface visible while hiding the map and everyone in it.
+ * `"minimal"` also stops drawing the game and holds it at 2 FPS; the game and scripts keep running.
+ */
+export type RenderingMode = "full" | "interface-only" | "minimal";
 
 export type GameSettings = {
   readonly infiniteRange: boolean;
@@ -474,6 +477,7 @@ export type GameSettings = {
    * The game's current frame rate, from 1 to 60, or `null` before the game loads.
    * Setting 30, 48, 60 or the game's own rate also changes its Max FPS option;
    * other rates last until the game or Lyra changes it again.
+   * While rendering is `"minimal"` this reads 2 and setting it has no effect.
    */
   readonly frameRate: number | null;
   /** Shown only to this client. `null` restores the character's own name. */

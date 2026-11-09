@@ -12,6 +12,7 @@ use crate::{
 };
 
 const TICK: Duration = Duration::from_millis(500);
+const MINIMAL_FPS: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -19,16 +20,60 @@ pub(crate) enum RenderingMode {
     #[default]
     Full,
     InterfaceOnly,
+    Minimal,
 }
 
 impl RenderingMode {
-    pub(crate) const ALL: [RenderingMode; 2] = [RenderingMode::Full, RenderingMode::InterfaceOnly];
+    pub(crate) const ALL: [RenderingMode; 3] = [
+        RenderingMode::Full,
+        RenderingMode::InterfaceOnly,
+        RenderingMode::Minimal,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             RenderingMode::Full => "Full",
             RenderingMode::InterfaceOnly => "Interface only",
+            RenderingMode::Minimal => "Minimal",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(into = "RenderingMode")]
+pub(crate) struct Rendering {
+    mode: RenderingMode,
+    resume: RenderingMode,
+}
+
+impl Rendering {
+    pub(crate) fn mode(self) -> RenderingMode {
+        self.mode
+    }
+
+    pub(crate) fn set(&mut self, mode: RenderingMode) {
+        if mode != RenderingMode::Minimal {
+            self.resume = mode;
+        }
+        self.mode = mode;
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.mode = self.resume;
+    }
+
+    pub(crate) fn minimal(self) -> bool {
+        self.mode == RenderingMode::Minimal
+    }
+
+    fn shows_world(self) -> bool {
+        self.mode == RenderingMode::Full
+    }
+}
+
+impl From<Rendering> for RenderingMode {
+    fn from(rendering: Rendering) -> Self {
+        rendering.mode()
     }
 }
 
@@ -40,7 +85,7 @@ pub(crate) struct Settings {
     pub(crate) enemy_magnet: bool,
     pub(crate) skip_cutscenes: bool,
     pub(crate) hide_players: bool,
-    pub(crate) rendering: RenderingMode,
+    pub(crate) rendering: Rendering,
     pub(crate) animations: bool,
     pub(crate) collisions: bool,
     pub(crate) ads: bool,
@@ -73,7 +118,7 @@ impl Default for Settings {
             enemy_magnet: false,
             skip_cutscenes: false,
             hide_players: false,
-            rendering: RenderingMode::Full,
+            rendering: Rendering::default(),
             animations: true,
             collisions: true,
             ads: true,
@@ -108,8 +153,7 @@ impl Settings {
     }
 
     fn overrides_the_game(&self) -> bool {
-        let default = Self::default();
-        self.rendering != default.rendering || self.walk_speed != default.walk_speed
+        !self.rendering.shows_world() || self.walk_speed != Self::default().walk_speed
     }
 }
 
@@ -120,13 +164,15 @@ pub(crate) async fn run(
 ) {
     let mut desired = settings.borrow_and_update().clone();
     let mut applied = Settings::default();
-    let mut requested = requested_by_lyra(*frame_rate.borrow_and_update());
+    let mut stage = Stage::default();
+    stage.observe(*frame_rate.borrow_and_update());
+    stage.set_minimal(desired.rendering.minimal(), *frame_rate.borrow());
     let mut next_tick = None;
     loop {
         let ticking = desired != applied
             || desired.acts()
             || desired.overrides_the_game()
-            || requested.is_some();
+            || stage.send.is_some();
         next_tick = ticking.then(|| next_tick.unwrap_or_else(|| Instant::now() + TICK));
         tokio::select! {
             changed = settings.changed() => {
@@ -135,27 +181,61 @@ pub(crate) async fn run(
                 }
                 desired = settings.borrow_and_update().clone();
                 step(&loader, &desired, &mut applied, false);
+                stage.set_minimal(desired.rendering.minimal(), *frame_rate.borrow());
+                apply_frame_rate(&loader, &mut stage.send);
             }
             changed = frame_rate.changed() => {
                 if changed.is_err() {
                     return;
                 }
-                requested = requested_by_lyra(*frame_rate.borrow_and_update());
-                apply_frame_rate(&loader, &mut requested);
+                stage.observe(*frame_rate.borrow_and_update());
+                apply_frame_rate(&loader, &mut stage.send);
             }
             () = sleep_until(next_tick.unwrap_or_else(Instant::now)), if ticking => {
                 next_tick = None;
                 step(&loader, &desired, &mut applied, true);
-                apply_frame_rate(&loader, &mut requested);
+                apply_frame_rate(&loader, &mut stage.send);
             }
         }
     }
 }
 
-fn requested_by_lyra(frame_rate: Option<FrameRate>) -> Option<u32> {
-    frame_rate
-        .filter(|rate| rate.by == Writer::Lyra)
-        .map(|rate| rate.fps)
+#[derive(Default)]
+struct Stage {
+    send: Option<u32>,
+    minimal: bool,
+    resume: Option<u32>,
+}
+
+impl Stage {
+    fn observe(&mut self, rate: Option<FrameRate>) {
+        let Some(FrameRate { fps, by }) = rate else {
+            return;
+        };
+        match (self.minimal, by) {
+            (false, Writer::Lyra) => self.send = Some(fps),
+            (false, Writer::Game) => {}
+            (true, Writer::Lyra) => self.resume = Some(fps),
+            (true, Writer::Game) if fps != MINIMAL_FPS => {
+                self.resume = Some(fps);
+                self.send = Some(MINIMAL_FPS);
+            }
+            (true, Writer::Game) => {}
+        }
+    }
+
+    fn set_minimal(&mut self, minimal: bool, current: Option<FrameRate>) {
+        if minimal == self.minimal {
+            return;
+        }
+        self.minimal = minimal;
+        if minimal {
+            self.resume = current.map(|rate| rate.fps);
+            self.send = self.resume.map(|_| MINIMAL_FPS);
+        } else {
+            self.send = self.resume.take();
+        }
+    }
 }
 
 fn apply_frame_rate(loader: &impl Loader, requested: &mut Option<u32>) {
@@ -226,8 +306,8 @@ fn step(loader: &impl Loader, desired: &Settings, applied: &mut Settings, tick: 
     sync(
         &desired.rendering,
         &mut applied.rendering,
-        tick && desired.rendering != default.rendering,
-        |mode| settings::set_world_visible(loader, *mode == RenderingMode::Full),
+        tick && !desired.rendering.shows_world(),
+        |rendering| settings::set_world_visible(loader, rendering.shows_world()),
     );
     sync(
         &desired.walk_speed,
@@ -449,6 +529,90 @@ mod tests {
                 assert_eq!(drain(&sent), [set(15.0)]);
             })
             .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn minimal_rendering_holds_two_fps_then_restores_the_rate_it_replaced() {
+        LocalSet::new()
+            .run_until(async {
+                let (sent, _loader, settings, frame_rate) =
+                    start(Rc::new(RefCell::new(true)), Settings::default());
+                let rate = |fps, by| Some(FrameRate { fps, by });
+                let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
+                let world = |visible| ("settings.setWorldVisible", vec![Value::Bool(visible)]);
+                frame_rate.send_replace(rate(24, Writer::Game));
+                tokio::task::yield_now().await;
+                settings.send_modify(|settings| settings.rendering.set(RenderingMode::Minimal));
+                ticks(2).await;
+                assert_eq!(
+                    drain(&sent),
+                    [world(false), set(2.0), world(false), world(false)]
+                );
+                frame_rate.send_replace(rate(2, Writer::Game));
+                frame_rate.send_replace(rate(30, Writer::Game));
+                tokio::task::yield_now().await;
+                frame_rate.send_replace(rate(48, Writer::Lyra));
+                tokio::task::yield_now().await;
+                assert_eq!(drain(&sent), [set(2.0)]);
+                settings.send_modify(|settings| settings.rendering.resume());
+                ticks(2).await;
+                assert_eq!(drain(&sent), [world(true), set(48.0)]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frame_rates_set_during_minimal_rendering_are_ignored() {
+        LocalSet::new()
+            .run_until(async {
+                let sent = Sent::default();
+                let log = sent.clone();
+                let loader = Rc::new(FakeLoader::new(move |callback, args| {
+                    if callback == "settings.setFrameRate" {
+                        log.borrow_mut().push((callback, args.to_vec()));
+                    }
+                    Ok(Value::Bool(true))
+                }));
+                let automation = crate::automation::settings::Automation::default();
+                tokio::task::spawn_local(run(
+                    loader,
+                    automation.watch_game_settings(),
+                    automation.watch_frame_rate(),
+                ));
+                automation.observe_frame_rate(48.0);
+                tokio::task::yield_now().await;
+                automation.update_game_settings(|settings| {
+                    settings.rendering.set(RenderingMode::Minimal)
+                });
+                ticks(1).await;
+                automation.observe_frame_rate(2.0);
+                assert_eq!(automation.set_frame_rate(30), Some(2));
+                assert_eq!(automation.frame_rate(), Some(2));
+                tokio::task::yield_now().await;
+                automation.update_game_settings(|settings| settings.rendering.resume());
+                ticks(1).await;
+                let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
+                assert_eq!(drain(&sent), [set(2.0), set(48.0)]);
+            })
+            .await;
+    }
+
+    #[test]
+    fn resuming_from_minimal_returns_to_the_mode_it_paused() {
+        for mode in [RenderingMode::Full, RenderingMode::InterfaceOnly] {
+            let mut rendering = Rendering::default();
+            rendering.set(mode);
+            rendering.set(RenderingMode::Minimal);
+            assert_eq!(serde_json::to_value(rendering).unwrap(), "minimal");
+            rendering.resume();
+            assert_eq!(rendering.mode(), mode);
+        }
+        let mut rendering = Rendering::default();
+        rendering.set(RenderingMode::InterfaceOnly);
+        rendering.set(RenderingMode::Minimal);
+        rendering.set(RenderingMode::Full);
+        rendering.resume();
+        assert_eq!(rendering.mode(), RenderingMode::Full);
     }
 
     #[tokio::test(start_paused = true)]

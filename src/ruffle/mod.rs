@@ -255,6 +255,8 @@ fn run(
     let mut last_tick = Instant::now();
     let mut frame_clock_enabled = false;
     let mut frame_rate = f64::NAN;
+    let mut rendering = automation.watch_game_settings();
+    rendering.mark_changed();
     let mut wait = Duration::ZERO;
     let mut effects = Vec::new();
     'running: loop {
@@ -360,6 +362,9 @@ fn run(
         if player.frame_rate() != frame_rate {
             frame_rate = player.frame_rate();
             automation.observe_frame_rate(frame_rate);
+        }
+        if rendering.has_changed().unwrap_or(false) {
+            pacing.minimal = rendering.borrow_and_update().rendering.minimal();
         }
         let interpolating = player.interpolating();
         let frame_clock = pacing.frame_clock(interpolating);

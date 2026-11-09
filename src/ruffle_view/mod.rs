@@ -22,8 +22,8 @@ use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
     Focusable, Hitbox, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
     KeyUpEvent, ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Pixels, Render, ScrollWheelEvent, Styled as _, Subscription, Window,
-    canvas, div, prelude::FluentBuilder as _,
+    ParentElement as _, Pixels, Render, Role, ScrollWheelEvent, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, canvas, div, prelude::FluentBuilder as _, px,
 };
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
@@ -395,6 +395,53 @@ fn paint(this: Entity<RuffleView>, hitbox: Hitbox, window: &mut Window, cx: &mut
     });
 }
 
+fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
+    div()
+        .id("minimal-rendering")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(6.0))
+        .bg(ui::bar_background())
+        .text_size(ui::TEXT_SIZE)
+        .text_color(ui::text())
+        .child(
+            div()
+                .text_size(px(15.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("Minimal rendering"),
+        )
+        .child(
+            div()
+                .text_color(ui::secondary_text())
+                .child("The game and scripts keep running while using fewer resources."),
+        )
+        .child(
+            ui::pressable(
+                div()
+                    .id("resume-rendering")
+                    .flex()
+                    .items_center()
+                    .mt(px(8.0))
+                    .h(ui::ROW_HEIGHT)
+                    .px(px(12.0))
+                    .rounded(ui::CONTROL_RADIUS)
+                    .border_1()
+                    .border_color(ui::hairline())
+                    .font_weight(gpui::FontWeight::MEDIUM),
+            )
+            .role(Role::Button)
+            .child("Resume rendering")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.change_game_settings(|settings| settings.rendering.resume(), cx)
+            })),
+        )
+}
+
 impl Render for RuffleView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity();
@@ -423,6 +470,10 @@ impl Render for RuffleView {
                     paint(this, hitbox, window, cx)
                 })
                 .size_full(),
+            )
+            .when(
+                self.automation.game_settings().rendering.minimal(),
+                |view| view.child(minimal_rendering(cx)),
             )
             .when_some(self.stats, |view, stats| {
                 view.child(stats::overlay(

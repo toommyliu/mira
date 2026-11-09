@@ -115,14 +115,17 @@ impl Automation {
         self.frame_rate.subscribe()
     }
 
-    pub(crate) fn set_frame_rate(&self, fps: u32) -> u32 {
+    pub(crate) fn set_frame_rate(&self, fps: u32) -> Option<u32> {
+        if self.game.borrow().rendering.minimal() {
+            return self.frame_rate();
+        }
         let (min, max) = game_settings::FrameRate::RANGE;
         let fps = fps.clamp(min, max);
         self.frame_rate.send_replace(Some(game_settings::FrameRate {
             fps,
             by: game_settings::Writer::Lyra,
         }));
-        fps
+        Some(fps)
     }
 
     pub(crate) fn observe_frame_rate(&self, fps: f64) {

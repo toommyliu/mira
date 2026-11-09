@@ -52,7 +52,7 @@ impl BarMenu {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Delay,
     Retries,
@@ -158,7 +158,11 @@ impl Field {
         }
     }
 
-    fn after(self, backwards: bool) -> Field {
+    fn editable(self, automation: &Automation) -> bool {
+        self != Field::FrameRate || !automation.game_settings().rendering.minimal()
+    }
+
+    fn after(self, backwards: bool, automation: &Automation) -> Field {
         let group: &[Field] = match self {
             Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
             _ => &[
@@ -170,11 +174,16 @@ impl Field {
         };
         let index = group.iter().position(|field| *field == self).unwrap();
         let count = group.len();
-        group[if backwards {
-            (index + count - 1) % count
-        } else {
-            (index + 1) % count
-        }]
+        (1..count)
+            .map(|step| {
+                group[if backwards {
+                    (index + count - step) % count
+                } else {
+                    (index + step) % count
+                }]
+            })
+            .find(|field| field.editable(automation))
+            .unwrap_or(self)
     }
 }
 
@@ -305,7 +314,7 @@ impl RuffleView {
             "enter" => self.commit_edit(cx),
             "tab" => {
                 self.commit_edit(cx);
-                self.start_edit(field.after(shift));
+                self.start_edit(field.after(shift, &self.automation));
             }
             "up" | "down" if !field.is_text() => {
                 let stored = field.value(&self.automation).parse().unwrap_or(0);
@@ -364,6 +373,10 @@ impl RuffleView {
     }
 
     fn start_edit(&mut self, field: Field) {
+        if !field.editable(&self.automation) {
+            self.bar.edit = None;
+            return;
+        }
         self.bar.edit = Some(Edit {
             field,
             text: field.value(&self.automation),
@@ -741,7 +754,7 @@ fn options_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Di
             view,
             Submenu::Rendering,
             "Rendering",
-            settings.rendering.label().into(),
+            settings.rendering.mode().label().into(),
             cx,
         ))
         .children(Field::MOVEMENT.map(|field| field_row(view, field, cx)))
@@ -814,7 +827,13 @@ fn field_row(
         ui::text_field(id, text, field.placeholder(), editing, fresh).role(Role::TextInput)
     } else {
         ui::number_field(id, text, editing, fresh).role(Role::SpinButton)
-    };
+    }
+    .when(!field.editable(&view.automation), |input| {
+        input
+            .text_color(ui::tertiary_text())
+            .cursor_default()
+            .aria_description("Minimal rendering holds the frame rate at 2")
+    });
     ui::row(SharedString::from(format!("{name}-row")))
         .child(name)
         .child(
@@ -863,11 +882,11 @@ fn submenu_panel(
         }
         Submenu::Servers => servers(view, panel, cx),
         Submenu::Rendering => {
-            let selected = view.automation.game_settings().rendering;
+            let selected = view.automation.game_settings().rendering.mode();
             panel.children(RenderingMode::ALL.map(|mode| {
                 choice_row(mode.label(), mode.label(), selected == mode).on_click(cx.listener(
                     move |this, _, _, cx| {
-                        this.change_game_settings(|settings| settings.rendering = mode, cx);
+                        this.change_game_settings(|settings| settings.rendering.set(mode), cx);
                         this.close_submenu();
                     },
                 ))
@@ -925,6 +944,19 @@ fn servers(view: &RuffleView, panel: Stateful<Div>, cx: &mut Context<RuffleView>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::game_settings::RenderingMode;
+
+    #[test]
+    fn tab_skips_the_frame_rate_while_minimal_rendering_holds_it() {
+        let automation = Automation::default();
+        assert_eq!(Field::WalkSpeed.after(false, &automation), Field::FrameRate);
+        automation.update_game_settings(|settings| settings.rendering.set(RenderingMode::Minimal));
+        assert_eq!(
+            Field::WalkSpeed.after(false, &automation),
+            Field::CustomName
+        );
+        assert_eq!(Field::CustomName.after(true, &automation), Field::WalkSpeed);
+    }
 
     #[test]
     fn moving_toward_the_submenu_keeps_it_open() {

@@ -136,7 +136,9 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.enemy_magnet, enemy_magnet);
                 apply(&mut settings.skip_cutscenes, skip_cutscenes);
                 apply(&mut settings.hide_players, hide_players);
-                apply(&mut settings.rendering, rendering);
+                if let Some(mode) = rendering {
+                    settings.rendering.set(mode);
+                }
                 apply(&mut settings.animations, animations);
                 apply(&mut settings.collisions, collisions);
                 apply(&mut settings.ads, ads);
@@ -145,7 +147,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.custom_guild, custom_guild);
             });
             let frame_rate = match frame_rate {
-                Some(fps) => Some(automation.set_frame_rate(fps)),
+                Some(fps) => automation.set_frame_rate(fps),
                 None => automation.frame_rate(),
             };
             (settings, frame_rate)
