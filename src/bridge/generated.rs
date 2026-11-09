@@ -992,10 +992,26 @@ pub(crate) mod shops {
         Ok(decode("shops.canBuyItem", reply)?)
     }
 
+    pub(crate) fn can_enhance(loader: &impl Loader, selector: Value) -> Result<bool, CallError> {
+        let call_args = vec![selector];
+        let reply = loader.call("shops.canEnhance", call_args)?;
+        Ok(decode("shops.canEnhance", reply)?)
+    }
+
     pub(crate) fn close(loader: &impl Loader, shop_id: Option<i32>) -> Result<bool, CallError> {
         let call_args = vec![Value::Number(f64::from(shop_id.unwrap_or(0)))];
         let reply = loader.call("shops.close", call_args)?;
         Ok(decode("shops.close", reply)?)
+    }
+
+    pub(crate) fn enhance(
+        loader: &impl Loader,
+        selector: Value,
+        item_id: i32,
+    ) -> Result<bool, CallError> {
+        let call_args = vec![selector, Value::Number(f64::from(item_id))];
+        let reply = loader.call("shops.enhance", call_args)?;
+        Ok(decode("shops.enhance", reply)?)
     }
 
     pub(crate) fn get_item(loader: &impl Loader, selector: Value) -> Result<Value, CallError> {

@@ -304,6 +304,14 @@ export type TempItem = {
   readonly maxStack: number;
 };
 export type EquipOptions = { readonly wear?: boolean };
+/**
+ * `enhancement` is the first label the game shows, such as `"lucky"` or `"forge"`, and `special` the
+ * second, such as `"spiral carve"`. Labels ignore case and accept common shortcuts like `"dtl"`.
+ * A trait unique to one enhancement, like `"dauntless"` or `"vim"`, works on its own.
+ */
+export type EnhancementSelector = { readonly enhancement: string; readonly special?: string };
+export type EnhancementSlot = "weapon" | "class" | "helm" | "cape";
+export type EquipEnhancementSelector = EnhancementSelector & { readonly slot?: EnhancementSlot };
 
 export const Inventory = {
   getItems: () => inventory<readonly Item[]>("items"),
@@ -318,6 +326,12 @@ export const Inventory = {
   getAvailableSlots: (pool: InventoryPool = "bag") => inventory<number>("availableSlots", { pool }),
   equip: (query: ItemQuery, options: EquipOptions = {}) =>
     inventory<boolean>("equip", { query, ...options }),
+  /**
+   * Equips the highest-level item already carrying the enhancement. A bare `"forge"` needs `slot` or
+   * `special`, since every Forge slot shares it.
+   */
+  equipByEnhancement: (selector: EquipEnhancementSelector, options: EquipOptions = {}) =>
+    inventory<boolean>("equipByEnhancement", { ...selector, ...options }),
   unequip: (query: ItemQuery) => inventory<boolean>("unequip", { query }),
   wear: (query: ItemQuery) => inventory<boolean>("wear", { query }),
   use: (query: ItemQuery) => inventory<boolean>("use", { query }),
@@ -466,6 +480,14 @@ export const Shops = {
   /** Sells the whole stack unless `quantity` is given. */
   sell: (query: ItemQuery, options: QuantityOptions = {}) =>
     shops<boolean>("sell", { query, ...options }),
+  /**
+   * Opens the shop that sells the enhancement, joining /forge or /museum first when the shop is
+   * there, and applies the highest level the player can buy, skipping listings locked by level,
+   * membership, quest, faction rep, or gold. Returns true without buying when the item already has
+   * that enhancement at the best level on offer.
+   */
+  enhanceItem: (query: ItemQuery, selector: EnhancementSelector) =>
+    shops<boolean>("enhanceItem", { query, ...selector }),
 };
 
 /**

@@ -3,6 +3,7 @@ pub(crate) mod auth;
 pub(crate) mod bank;
 pub(crate) mod combat;
 pub(crate) mod drops;
+pub(crate) mod enhancements;
 pub(crate) mod events;
 pub(crate) mod house;
 pub(crate) mod inventory;

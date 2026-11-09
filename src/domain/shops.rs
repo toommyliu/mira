@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     arrive,
     combat::selector,
+    enhancements::{self, Kind, Slot},
     inventory::{ItemCount, ItemQuery, Row, by_id, item_count, list, ready_item, reply, row},
-    wait_for_action, wait_until_ready,
+    player, wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
     self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
@@ -52,6 +53,8 @@ pub(crate) struct ShopItem {
     level: i32,
     faction: Option<FactionRequirement>,
     requirements: Vec<ItemCount>,
+    #[serde(skip)]
+    enhancement: Option<(Slot, Kind)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -88,12 +91,26 @@ fn item_from(value: Value) -> Option<ShopItem> {
         })
     });
     let item = Row(fields);
+    let category = item.text("category");
+    let enhancement = if category.eq_ignore_ascii_case("enhancement") {
+        Slot::of(&item.text("slot")).map(|slot| {
+            (
+                slot,
+                Kind {
+                    pattern_id: item.integer("patternId").unwrap_or(0),
+                    proc_id: item.integer("procId").unwrap_or(0),
+                },
+            )
+        })
+    } else {
+        None
+    };
     Some(ShopItem {
         shop_item_id: item.positive("shopItemId")?,
         item_id: item.positive("itemId")?,
         name: item.text("name"),
         description: item.text("description"),
-        category: item.text("category"),
+        category,
         quantity: item.integer("quantity").unwrap_or(1),
         max_stack: item.integer("maxStack").unwrap_or(1),
         cost: item.integer("cost").unwrap_or(0),
@@ -102,6 +119,7 @@ fn item_from(value: Value) -> Option<ShopItem> {
         level: item.integer("level").unwrap_or(0),
         faction,
         requirements,
+        enhancement,
     })
 }
 
@@ -253,6 +271,106 @@ pub(crate) async fn sell(
     }
     Ok(reply(&replies, |packet| {
         (packet.char_item_id == Some(char_item_id)).then_some(true)
+    })
+    .await)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EnhanceItemPacket {
+    #[serde(rename = "ItemIDs", default)]
+    item_ids: Vec<serde_json::Value>,
+    #[serde(rename = "EnhPID", default, deserialize_with = "wire::integer")]
+    pattern_id: Option<i32>,
+    #[serde(rename = "ProcID", default, deserialize_with = "wire::integer")]
+    proc_id: Option<i32>,
+}
+
+impl Packet for EnhanceItemPacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "enhanceItemShop";
+}
+
+pub(crate) async fn enhance_item(
+    loader: &impl Loader,
+    subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    query: &ItemQuery,
+    enhancement: &str,
+    special: Option<&str>,
+) -> Result<bool, CallError> {
+    let Some(item) = ready_item(loader, query).await? else {
+        return Ok(false);
+    };
+    let Some(slot) = item.enhancement_slot() else {
+        return Ok(false);
+    };
+    let Some(strategy) = enhancements::resolve(slot, enhancement, special) else {
+        return Ok(false);
+    };
+    let level = bridge::player::get_level(loader)?;
+    let applied = item.enhancement_level(strategy.kind);
+    if applied.is_some_and(|applied| applied >= level) {
+        return Ok(true);
+    }
+    if let Some(map) = strategy.map()
+        && !bridge::player::get_map(loader)?.is_some_and(|here| here.eq_ignore_ascii_case(map))
+        && !player::join(loader, Packets::subscribe(&subscribe), map, None, None).await?
+    {
+        return Ok(false);
+    }
+    if !load(loader, strategy.shop_id(level)).await? {
+        return Ok(false);
+    }
+    let member = bridge::player::is_member(loader)?;
+    let mut candidates: Vec<ShopItem> = current(loader)?
+        .map_or_else(Vec::new, |shop| shop.items)
+        .into_iter()
+        .filter(|listing| {
+            listing.enhancement == Some((slot, strategy.kind))
+                && (member || !listing.member)
+                && listing.level <= level
+        })
+        .collect();
+    candidates.sort_by_key(|listing| {
+        (
+            std::cmp::Reverse(listing.level),
+            std::cmp::Reverse(listing.member),
+            listing.shop_item_id,
+        )
+    });
+    let mut chosen = None;
+    for listing in candidates {
+        if applied.is_some_and(|applied| applied >= listing.level) {
+            return Ok(true);
+        }
+        let query = ShopItemQuery::ShopItemId {
+            shop_item_id: listing.shop_item_id,
+        };
+        if bridge::shops::can_enhance(loader, query.selector())? {
+            chosen = Some(query);
+            break;
+        }
+    }
+    let Some(listing) = chosen else {
+        return Ok(false);
+    };
+    if !wait_for_action(loader, GameAction::BuyItem).await? {
+        return Ok(false);
+    }
+    let replies = Packets::<EnhanceItemPacket>::subscribe(&subscribe);
+    if !bridge::shops::enhance(loader, listing.selector(), item.item_id)? {
+        return Ok(false);
+    }
+    Ok(reply(&replies, |packet| {
+        packet
+            .item_ids
+            .iter()
+            .any(|id| id.as_f64() == Some(f64::from(item.item_id)))
+            .then(|| {
+                Kind {
+                    pattern_id: packet.pattern_id.unwrap_or(0),
+                    proc_id: packet.proc_id.unwrap_or(0),
+                } == strategy.kind
+            })
     })
     .await)
 }
@@ -469,6 +587,121 @@ mod tests {
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(sell(&loader, subscribe, &gem, Some(0)).await, Ok(false));
         assert_eq!(loader.count("shops.sell"), 0);
+    }
+
+    fn enhancer(
+        level: f64,
+        listings: Vec<Value>,
+        replies: Vec<serde_json::Value>,
+    ) -> (FakeLoader, Rc<Events>, Rc<RefCell<Vec<Value>>>) {
+        let events = Rc::new(Events::default());
+        let applied = Rc::new(RefCell::new(Vec::new()));
+        let (publisher, sent) = (events.clone(), applied.clone());
+        let loader = FakeLoader::new(move |callback, args| {
+            Ok(match callback {
+                "auth.isLoggedIn"
+                | "world.isLoaded"
+                | "player.isLoaded"
+                | "world.isActionAvailable" => Value::Bool(true),
+                "shops.isOpen" => Value::Bool(shop_id(args) == 763),
+                "inventory.getItem" => object(&[
+                    ("itemId", Value::Number(5.0)),
+                    ("slot", Value::String("Weapon".into())),
+                    ("enhId", Value::Number(1.0)),
+                    ("enhLevel", Value::Number(level)),
+                    ("enhPatternId", Value::Number(9.0)),
+                ]),
+                "player.getLevel" => Value::Number(100.0),
+                "player.isMember" => Value::Bool(false),
+                "shops.canEnhance" => {
+                    let Value::Object(selector) = &args[0] else {
+                        panic!("canEnhance needs a selector: {args:?}");
+                    };
+                    Value::Bool(selector.get("shopItemId") != Some(&Value::Number(2.0)))
+                }
+                "shops.getShop" => object(&[
+                    ("id", Value::Number(763.0)),
+                    ("items", Value::List(listings.clone())),
+                ]),
+                "shops.enhance" => {
+                    assert_eq!(args[1], Value::Number(5.0));
+                    sent.borrow_mut().push(args[0].clone());
+                    for reply in &replies {
+                        publisher.publish(&packet(reply.clone()));
+                    }
+                    Value::Bool(true)
+                }
+                other => panic!("unexpected call {other} {args:?}"),
+            })
+        });
+        (loader, events, applied)
+    }
+
+    fn enhancement_listing(
+        shop_item_id: i32,
+        slot: &str,
+        pattern_id: i32,
+        level: i32,
+        member: bool,
+    ) -> Value {
+        object(&[
+            ("shopItemId", Value::Number(f64::from(shop_item_id))),
+            ("itemId", Value::Number(f64::from(shop_item_id + 1000))),
+            ("category", Value::String("Enhancement".into())),
+            ("slot", Value::String(slot.into())),
+            ("patternId", Value::Number(f64::from(pattern_id))),
+            ("level", Value::Number(f64::from(level))),
+            ("member", Value::Bool(member)),
+        ])
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn enhancing_applies_the_best_listing_the_player_can_buy() {
+        let listings = || {
+            vec![
+                enhancement_listing(1, "Weapon", 9, 100, true),
+                enhancement_listing(2, "Weapon", 9, 95, false),
+                enhancement_listing(3, "Weapon", 2, 100, false),
+                enhancement_listing(4, "ar", 9, 100, false),
+                enhancement_listing(6, "Weapon", 9, 80, false),
+                enhancement_listing(5, "Weapon", 9, 90, false),
+            ]
+        };
+        let lucky = |item_id: u32, pattern_id: u32| json!({ "cmd": "enhanceItemShop", "ItemIDs": [item_id], "EnhPID": pattern_id, "ProcID": 0, "EnhLvl": 90 });
+        let sword = ItemQuery::Name("Sword".into());
+        for (replies, expected) in [
+            (vec![lucky(7, 9), lucky(5, 9)], true),
+            (vec![lucky(5, 2)], false),
+            (vec![lucky(7, 9)], false),
+        ] {
+            let (loader, events, applied) = enhancer(40.0, listings(), replies.clone());
+            let subscribe = |wants| events.subscribe(wants);
+            assert_eq!(
+                enhance_item(&loader, subscribe, &sword, "Lucky", None).await,
+                Ok(expected),
+                "{replies:?}"
+            );
+            assert_eq!(*applied.borrow(), [by_shop_item(5).selector()]);
+        }
+
+        for level in [90.0, 100.0] {
+            let (loader, events, applied) = enhancer(level, listings(), Vec::new());
+            let subscribe = |wants| events.subscribe(wants);
+            assert_eq!(
+                enhance_item(&loader, subscribe, &sword, "lucky", None).await,
+                Ok(true)
+            );
+            assert!(applied.borrow().is_empty());
+        }
+
+        let (loader, events, applied) = enhancer(40.0, listings(), Vec::new());
+        let subscribe = |wants| events.subscribe(wants);
+        assert_eq!(
+            enhance_item(&loader, subscribe, &sword, "lucky", Some("dauntless")).await,
+            Ok(false)
+        );
+        assert!(applied.borrow().is_empty());
+        assert_eq!(loader.count("shops.getShop"), 0);
     }
 
     #[test]

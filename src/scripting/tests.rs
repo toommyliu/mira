@@ -1392,6 +1392,7 @@ fn fractional_item_ids_and_counts_never_reach_the_player() {
 #[test]
 fn item_requests_reach_the_player_typed() {
     use crate::domain::{
+        enhancements::Slot,
         inventory::{ItemQuery, Pool},
         shops::ShopItemQuery,
     };
@@ -1412,6 +1413,7 @@ export default function* () {
   yield* Inventory.getAvailableSlots("misc");
   yield* Inventory.equip("Armor");
   yield* Inventory.equip("Armor", { wear: true });
+  yield* Inventory.equipByEnhancement({ enhancement: "forge", slot: "helm" }, { wear: true });
   yield* Inventory.unequip("Helm");
   yield* Inventory.wear({ itemId: 8 });
   yield* Inventory.use("Tonic");
@@ -1455,6 +1457,7 @@ export default function* () {
   yield* Shops.buy({ shopItemId: 9740 });
   yield* Shops.sell("Gem");
   yield* Shops.sell({ itemId: 3 }, { quantity: 2 });
+  yield* Shops.enhanceItem("Sword", { enhancement: "lucky", special: "spiral carve" });
 }
 "#,
     )]);
@@ -1507,6 +1510,12 @@ export default function* () {
         },
         I::Equip {
             query: name("Armor"),
+            wear: Some(true),
+        },
+        I::EquipByEnhancement {
+            enhancement: "forge".into(),
+            special: None,
+            slot: Some(Slot::Helm),
             wear: Some(true),
         },
         I::Unequip {
@@ -1620,6 +1629,11 @@ export default function* () {
             S::Sell {
                 query: id(3),
                 quantity: Some(2),
+            },
+            S::EnhanceItem {
+                query: name("Sword"),
+                enhancement: "lucky".into(),
+                special: Some("spiral carve".into()),
             },
         ]
         .map(Request::Shops),

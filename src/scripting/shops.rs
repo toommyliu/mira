@@ -48,6 +48,11 @@ pub(crate) enum Request {
         query: ItemQuery,
         quantity: Option<i32>,
     },
+    EnhanceItem {
+        query: ItemQuery,
+        enhancement: String,
+        special: Option<String>,
+    },
 }
 
 impl Request {
@@ -74,6 +79,14 @@ pub(super) async fn serve(
         Request::Sell { query, quantity } => {
             json!(shops::sell(loader, subscribe, &query, quantity).await?)
         }
+        Request::EnhanceItem {
+            query,
+            enhancement,
+            special,
+        } => json!(
+            shops::enhance_item(loader, subscribe, &query, &enhancement, special.as_deref())
+                .await?
+        ),
         request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Current => json!(shops::current(loader)?),
         Request::Items => json!(shops::current(loader)?.map_or_else(Vec::new, |shop| shop.items)),
@@ -129,6 +142,14 @@ mod tests {
                 Request::Sell {
                     query: ItemQuery::Name("Gem".into()),
                     quantity: None,
+                },
+                json!(false),
+            ),
+            (
+                Request::EnhanceItem {
+                    query: ItemQuery::Name("Sword".into()),
+                    enhancement: "lucky".into(),
+                    special: None,
                 },
                 json!(false),
             ),

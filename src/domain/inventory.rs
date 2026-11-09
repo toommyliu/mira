@@ -2,7 +2,11 @@ use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use super::{combat::selector, wait_for_action, wait_until_ready};
+use super::{
+    combat::selector,
+    enhancements::{self, Kind, Slot},
+    wait_for_action, wait_until_ready,
+};
 use crate::bridge::{
     self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
     packets::wire,
@@ -97,6 +101,22 @@ impl Item {
             return None;
         }
         self.meta.trim().parse().ok()
+    }
+
+    pub(super) fn enhancement_slot(&self) -> Option<Slot> {
+        Slot::of(&self.slot)
+    }
+
+    pub(super) fn enhancement_level(&self, kind: Kind) -> Option<i32> {
+        self.enhancement
+            .as_ref()
+            .filter(|enhancement| {
+                kind == Kind {
+                    pattern_id: enhancement.pattern_id.unwrap_or(0),
+                    proc_id: enhancement.proc_id.unwrap_or(0),
+                }
+            })
+            .map(|enhancement| enhancement.level)
     }
 }
 
@@ -418,6 +438,37 @@ pub(crate) async fn equip(
     Ok(true)
 }
 
+pub(crate) async fn equip_by_enhancement(
+    loader: &impl Loader,
+    subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    enhancement: &str,
+    special: Option<&str>,
+    slot: Option<Slot>,
+    wear: bool,
+) -> Result<bool, CallError> {
+    if (slot.is_none() && enhancements::is_plain_forge(enhancement, special))
+        || !wait_until_ready(loader).await?
+    {
+        return Ok(false);
+    }
+    let best = items(loader)?
+        .into_iter()
+        .filter_map(|item| {
+            let item_slot = item.enhancement_slot()?;
+            if slot.is_some_and(|slot| slot != item_slot) {
+                return None;
+            }
+            let strategy = enhancements::resolve(item_slot, enhancement, special)?;
+            let level = item.enhancement_level(strategy.kind)?;
+            Some((item.item_id, level))
+        })
+        .min_by_key(|(_, level)| std::cmp::Reverse(*level));
+    let Some((item_id, _)) = best else {
+        return Ok(false);
+    };
+    equip(loader, subscribe, &ItemQuery::ItemId { item_id }, wear).await
+}
+
 async fn equip_gear(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
@@ -645,6 +696,9 @@ mod tests {
                 | "player.isLoaded"
                 | "world.isActionAvailable" => Value::Bool(true),
                 "player.getUserId" => Value::Number(UID),
+                "inventory.getItems" => {
+                    Value::List(bag.items.iter().cloned().map(Value::Object).collect())
+                }
                 "inventory.getItem" => selected(&bag)
                     .map_or(Value::Null, |index| Value::Object(bag.items[index].clone())),
                 "inventory.equip" | "inventory.unequip" | "inventory.wear" | "inventory.use" => {
@@ -738,6 +792,65 @@ mod tests {
             equip(&loader, subscribe, &by_name("Armor"), false).await,
             Ok(false)
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn equipping_by_enhancement_picks_the_highest_level_match() {
+        let gear = |id: f64, slot: &str, level: f64, pattern_id: f64, proc_id: f64| {
+            with(
+                item(id, "Gear", "Gear"),
+                &[
+                    ("slot", text(slot)),
+                    ("enhId", Value::Number(1.0)),
+                    ("enhLevel", Value::Number(level)),
+                    ("enhPatternId", Value::Number(pattern_id)),
+                    ("enhProcId", Value::Number(proc_id)),
+                ],
+            )
+        };
+        let items = || {
+            vec![
+                gear(1.0, "Weapon", 80.0, 9.0, 0.0),
+                gear(2.0, "Weapon", 100.0, 9.0, 0.0),
+                gear(3.0, "he", 100.0, 10.0, 0.0),
+                gear(4.0, "ba", 90.0, 10.0, 0.0),
+                gear(5.0, "Weapon", 100.0, 9.0, 2.0),
+                gear(6.0, "he", 100.0, 9.0, 0.0),
+            ]
+        };
+        for (enhancement, special, slot, expected) in [
+            ("lucky", None, None, Some(2)),
+            ("lucky", None, Some(Slot::Helm), Some(6)),
+            ("forge", None, Some(Slot::Cape), Some(4)),
+            ("forge", Some("vim"), None, None),
+            ("lucky", Some("spiral carve"), None, Some(5)),
+            ("forge", None, None, None),
+        ] {
+            let replies = expected.map_or_else(Vec::new, |id: u32| {
+                vec![(
+                    "inventory.equip",
+                    vec![json!({ "cmd": "equipItem", "ItemID": id, "uid": UID })],
+                )]
+            });
+            let (loader, events, bag) = bag(items(), replies);
+            let subscribe = |wants| events.subscribe(wants);
+            assert_eq!(
+                equip_by_enhancement(&loader, subscribe, enhancement, special, slot, false).await,
+                Ok(expected.is_some()),
+                "{enhancement} {special:?} {slot:?}"
+            );
+            let equipped: Vec<u32> = bag
+                .borrow()
+                .items
+                .iter()
+                .filter(|row| row.get("equipped") == Some(&Value::Bool(true)))
+                .filter_map(|row| match row.get("itemId") {
+                    Some(Value::Number(id)) => Some(*id as u32),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(equipped, expected.into_iter().collect::<Vec<_>>());
+        }
     }
 
     #[tokio::test(start_paused = true)]

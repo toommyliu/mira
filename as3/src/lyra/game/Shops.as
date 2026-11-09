@@ -48,6 +48,9 @@ package lyra.game {
         name: item.sName,
         description: item.sDesc,
         category: item.sType,
+        slot: item.sES,
+        patternId: item.PatternID,
+        procId: item.ItemProcID,
         quantity: item.iQty,
         maxStack: item.iStk,
         cost: item.iCost,
@@ -119,8 +122,12 @@ package lyra.game {
       Main.Game.world.sendLoadShopRequest(shopId);
     }
 
+    private static function isEnhancement(item:Object):Boolean {
+      return String(item.sType).toLowerCase() == "enhancement";
+    }
+
     // Mirrors the refusals in the client's World.sendBuyItemRequest and sendBuyItemRequestWithQuantity, without their message boxes.
-    private static function canBuyShopItem(item:Object, quantity:int):Boolean {
+    private static function canBuyShopItem(item:Object, quantity:int, needsSpace:Boolean = true):Boolean {
       var game:Object = Main.Game;
       var world:Object = game.world;
       var avatar:Object = world.myAvatar;
@@ -161,6 +168,9 @@ package lyra.game {
       }
       else if (item.bCoins == 1 && item.iCost > avatar.objData.intCoins) {
         return false;
+      }
+      else if (!needsSpace) {
+        return true;
       }
       else if (game.isHouseItem(item)) {
         return avatar.houseitems.length < avatar.objData.iHouseSlots;
@@ -265,6 +275,31 @@ package lyra.game {
 
       world.shopBuyItem = item;
       Main.Game.sfc.sendXtMessage("zm", "buyItem", args, "str", world.curRoom);
+      return true;
+    }
+
+    // Applying an enhancement adds nothing to the bag, so bag space never blocks it.
+    [BridgeExport]
+    public static function canEnhance(selector:Object):Boolean {
+      var enhancement:Object = find(selector);
+      return enhancement != null && isEnhancement(enhancement) && canBuyShopItem(enhancement, 1, false);
+    }
+
+    // Mirrors the refusals in the client's World.sendEnhItemRequestShop, without its message box and confirmation.
+    [BridgeExport]
+    public static function enhance(selector:Object, itemId:int):Boolean {
+      var enhancement:Object = find(selector);
+      var world:Object = Main.Game.world;
+      if (!enhancement || !isEnhancement(enhancement) || !Inventory.find({itemId: itemId})) {
+        return false;
+      }
+
+      if (world.myAvatar.objData.intGold < enhancement.iCost || !world.coolDown("buyItem")) {
+        return false;
+      }
+
+      world.enhItem = [itemId];
+      world.confirmSendEnhItemRequestShop({accept: true, enh: enhancement, item: [itemId]});
       return true;
     }
 

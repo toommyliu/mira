@@ -144,7 +144,9 @@ package lyra.generated
       external.externalize("settings.skipCutscenes", Settings.skipCutscenes);
       external.externalize("shops.buy", Shops.buy);
       external.externalize("shops.canBuyItem", Shops.canBuyItem);
+      external.externalize("shops.canEnhance", Shops.canEnhance);
       external.externalize("shops.close", Shops.close);
+      external.externalize("shops.enhance", Shops.enhance);
       external.externalize("shops.getItem", Shops.getItem);
       external.externalize("shops.getMaxBuyQuantity", Shops.getMaxBuyQuantity);
       external.externalize("shops.getShop", Shops.getShop);

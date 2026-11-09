@@ -6,6 +6,7 @@ use crate::{
     bridge::{self, Event, Loader, Subscription},
     domain::{
         self,
+        enhancements::Slot,
         inventory::{self, ItemQuery, Pool},
     },
 };
@@ -43,6 +44,12 @@ pub(crate) enum Request {
         query: ItemQuery,
         wear: Option<bool>,
     },
+    EquipByEnhancement {
+        enhancement: String,
+        special: Option<String>,
+        slot: Option<Slot>,
+        wear: Option<bool>,
+    },
     Unequip {
         query: ItemQuery,
     },
@@ -66,6 +73,7 @@ impl Request {
             Request::Contains { .. }
             | Request::Equipped { .. }
             | Request::Equip { .. }
+            | Request::EquipByEnhancement { .. }
             | Request::Unequip { .. }
             | Request::Wear { .. }
             | Request::Use { .. } => json!(false),
@@ -82,6 +90,22 @@ pub(super) async fn serve(
         Request::Equip { query, wear } => {
             json!(inventory::equip(loader, subscribe, &query, wear.unwrap_or(false)).await?)
         }
+        Request::EquipByEnhancement {
+            enhancement,
+            special,
+            slot,
+            wear,
+        } => json!(
+            inventory::equip_by_enhancement(
+                loader,
+                subscribe,
+                &enhancement,
+                special.as_deref(),
+                slot,
+                wear.unwrap_or(false)
+            )
+            .await?
+        ),
         Request::Unequip { query } => json!(inventory::unequip(loader, subscribe, &query).await?),
         Request::Wear { query } => json!(inventory::wear(loader, subscribe, &query).await?),
         Request::Use { query } => json!(inventory::use_item(loader, subscribe, &query).await?),
@@ -188,6 +212,15 @@ mod tests {
                 Request::Equip {
                     query: potion(),
                     wear: Some(true),
+                },
+                json!(false),
+            ),
+            (
+                Request::EquipByEnhancement {
+                    enhancement: "lucky".into(),
+                    special: None,
+                    slot: None,
+                    wear: None,
                 },
                 json!(false),
             ),
