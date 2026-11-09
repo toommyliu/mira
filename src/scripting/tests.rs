@@ -1371,6 +1371,7 @@ export default function* () {
   yield* Combat.cancelAutoAttack();
   yield* Combat.kill("*");
   yield* Combat.kill("Boss", { skills: [3, 1, 5], targetPriority: [{ monMapId: 1 }, "Orb"] });
+  yield* Combat.kill("Boss", { skillInterval: "1.5 seconds" });
   yield* Combat.hunt("Frogzard");
   yield* Combat.hunt({ monMapId: 4 }, { preferMostMatches: true });
   yield* Player.getAuras();
@@ -1419,15 +1420,23 @@ export default function* () {
         C::Kill {
             query: MonsterQuery::Name("*".into()),
             skills: None,
+            skill_interval_ms: None,
             target_priority: None,
         },
         C::Kill {
             query: MonsterQuery::Name("Boss".into()),
             skills: Some(vec![skill(3), skill(1), skill(5)]),
+            skill_interval_ms: None,
             target_priority: Some(vec![
                 MonsterQuery::MonMapId { mon_map_id: 1.0 },
                 MonsterQuery::Name("Orb".into()),
             ]),
+        },
+        C::Kill {
+            query: MonsterQuery::Name("Boss".into()),
+            skills: None,
+            skill_interval_ms: Some(1500),
+            target_priority: None,
         },
         C::Hunt {
             query: MonsterQuery::Name("Frogzard".into()),

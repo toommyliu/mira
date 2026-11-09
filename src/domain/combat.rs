@@ -15,6 +15,7 @@ use crate::bridge::{
 };
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
+pub(crate) const MIN_SKILL_INTERVAL: Duration = Duration::from_millis(50);
 const CONSUMED_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const DEFAULT_ROTATION: [Skill; 4] = [Skill(1), Skill(2), Skill(3), Skill(4)];
 
@@ -229,6 +230,7 @@ pub(crate) async fn kill(
     fights: Packets<CtPacket>,
     query: &MonsterQuery,
     skills: &[Skill],
+    interval: Duration,
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     if !auth::in_game(loader)? {
@@ -243,7 +245,7 @@ pub(crate) async fn kill(
         return Ok(false);
     }
     let engaged = Engaged(loader);
-    let killed = fight(loader, &fights, id, skills, priority).await;
+    let killed = fight(loader, &fights, id, skills, interval, priority).await;
     std::mem::forget(engaged);
     killed
 }
@@ -253,6 +255,7 @@ async fn fight(
     fights: &Packets<CtPacket>,
     id: f64,
     skills: &[Skill],
+    interval: Duration,
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     let cell = bridge::player::get_cell(loader)?;
@@ -267,7 +270,7 @@ async fn fight(
             attack_id(loader, wanted)?;
         }
         use_next_skill(loader, skills, &mut next)?;
-        let tick = sleep(TICK);
+        let tick = sleep(interval);
         pin!(tick);
         loop {
             select! {
@@ -533,17 +536,20 @@ mod tests {
             drop_target_after_first_cast: true,
             ..Fight::default()
         });
+        let started = Instant::now();
         assert_eq!(
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &named("frogzard"),
                 &DEFAULT_ROTATION,
+                Duration::from_millis(700),
                 &[],
             )
             .await,
             Ok(true)
         );
+        assert_eq!(started.elapsed(), Duration::from_millis(1400));
         let fight = fight.borrow();
         assert_eq!(fight.cast, [1, 2, 3]);
         assert_eq!(fight.monsters[1].hp, 0);
@@ -565,6 +571,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &named("Frogzard"),
                 &[Skill(3), Skill(1)],
+                TICK,
                 &[named("Dragon"), named("Slime")],
             )
             .await,
@@ -592,6 +599,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &frogzard,
                 &DEFAULT_ROTATION,
+                TICK,
                 &[],
             ),
         );
@@ -612,6 +620,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &named("Dragon"),
                 &DEFAULT_ROTATION,
+                TICK,
                 &[],
             )
             .await,
@@ -634,6 +643,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &named("Frogzard"),
                 &DEFAULT_ROTATION,
+                TICK,
                 &[],
             )
             .await,
@@ -656,6 +666,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &MonsterQuery::MonMapId { mon_map_id: 3.0 },
                 &DEFAULT_ROTATION,
+                TICK,
                 &[],
             ),
         );

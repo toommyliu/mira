@@ -72,6 +72,9 @@ const settings = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "feeds", op, ...args });
 
+const millis = (duration: Duration.Input | undefined): number | undefined =>
+  duration === undefined ? undefined : Math.ceil(Duration.toMillis(duration));
+
 export type Server = {
   readonly name: string;
   readonly players: number;
@@ -266,6 +269,8 @@ export type SkillOptions = {
 export type KillOptions = {
   /** Used in this order, skipping any on cooldown. Defaults to `[1, 2, 3, 4]`. */
   readonly skills?: readonly Skill[];
+  /** Time between skill attempts. Defaults to 200 ms, and anything under 50 ms counts as 50 ms. */
+  readonly skillInterval?: Duration.Input;
   /** Attacked first, in this order, while any is alive in the cell. The kill still ends when its own target dies. */
   readonly targetPriority?: readonly MonsterQuery[];
 };
@@ -291,8 +296,8 @@ export const Combat = {
   getSkillCooldown: (skill: Skill) => combat<number>("skillCooldown", { skill }),
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
-  kill: (query: MonsterQuery, options: KillOptions = {}) =>
-    combat<boolean>("kill", { query, ...options }),
+  kill: (query: MonsterQuery, { skillInterval, ...options }: KillOptions = {}) =>
+    combat<boolean>("kill", { query, ...options, skillIntervalMs: millis(skillInterval) }),
   hunt: (query: MonsterQuery, options: HuntOptions = {}) =>
     combat<Monster | null>("hunt", { query, ...options }),
 };
@@ -1039,9 +1044,6 @@ type Gear = { readonly [Field in (typeof GEAR)[number] | "scroll"]: string | nul
 };
 
 let joined: ArmyInfo | undefined;
-
-const millis = (timeout: Duration.Input | undefined): number | undefined =>
-  timeout === undefined ? undefined : Math.ceil(Duration.toMillis(timeout));
 
 const perform = <A>(body: Body<A>): Effect.Effect<A> =>
   Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));

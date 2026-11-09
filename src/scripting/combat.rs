@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -41,6 +43,7 @@ pub(crate) enum Request {
     Kill {
         query: MonsterQuery,
         skills: Option<Vec<Skill>>,
+        skill_interval_ms: Option<u64>,
         target_priority: Option<Vec<MonsterQuery>>,
     },
     Hunt {
@@ -91,6 +94,7 @@ pub(super) async fn serve(
         Request::Kill {
             query,
             skills,
+            skill_interval_ms,
             target_priority,
         } => json!(
             combat::kill(
@@ -98,6 +102,9 @@ pub(super) async fn serve(
                 Packets::subscribe(&subscribe),
                 &query,
                 skills.as_deref().unwrap_or(&combat::DEFAULT_ROTATION),
+                skill_interval_ms.map_or(combat::TICK, |ms| {
+                    Duration::from_millis(ms).max(combat::MIN_SKILL_INTERVAL)
+                }),
                 target_priority.as_deref().unwrap_or_default(),
             )
             .await?
@@ -159,6 +166,7 @@ mod tests {
                 Request::Kill {
                     query: frogzard(),
                     skills: None,
+                    skill_interval_ms: None,
                     target_priority: None,
                 },
                 json!(false),
