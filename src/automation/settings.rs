@@ -19,6 +19,7 @@ pub(crate) struct Automation {
     zone: watch::Sender<auto_zone::Settings>,
     attack: watch::Sender<auto_attack::Settings>,
     game: watch::Sender<game_settings::Settings>,
+    frame_rate: watch::Sender<Option<game_settings::FrameRate>>,
 }
 
 impl Automation {
@@ -28,6 +29,7 @@ impl Automation {
             zone: watch::Sender::new(settings.auto_zone),
             attack: watch::Sender::new(settings.auto_attack),
             game: watch::Sender::new(game_settings::Settings::default()),
+            frame_rate: watch::Sender::new(None),
         }
     }
 
@@ -103,6 +105,38 @@ impl Automation {
             change(settings);
             *settings = std::mem::take(settings).normalized();
         })
+    }
+
+    pub(crate) fn frame_rate(&self) -> Option<u32> {
+        self.frame_rate.borrow().map(|rate| rate.fps)
+    }
+
+    pub(crate) fn watch_frame_rate(&self) -> watch::Receiver<Option<game_settings::FrameRate>> {
+        self.frame_rate.subscribe()
+    }
+
+    pub(crate) fn set_frame_rate(&self, fps: u32) -> u32 {
+        let (min, max) = game_settings::FrameRate::RANGE;
+        let fps = fps.clamp(min, max);
+        self.frame_rate.send_replace(Some(game_settings::FrameRate {
+            fps,
+            by: game_settings::Writer::Lyra,
+        }));
+        fps
+    }
+
+    pub(crate) fn observe_frame_rate(&self, fps: f64) {
+        let fps = fps.round() as u32;
+        self.frame_rate.send_if_modified(|current| {
+            if current.is_some_and(|rate| rate.fps == fps) {
+                return false;
+            }
+            *current = Some(game_settings::FrameRate {
+                fps,
+                by: game_settings::Writer::Game,
+            });
+            true
+        });
     }
 }
 

@@ -28,6 +28,7 @@ pub(crate) enum SettingsRequest {
         collisions: Option<bool>,
         ads: Option<bool>,
         walk_speed: Option<u32>,
+        frame_rate: Option<u32>,
         #[serde(default, deserialize_with = "present")]
         custom_name: Option<Option<String>>,
         #[serde(default, deserialize_with = "present")]
@@ -111,8 +112,8 @@ pub(super) fn serve_zone(automation: &Automation, request: ZoneRequest) -> Reply
 }
 
 pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) -> Reply {
-    let settings = match request {
-        SettingsRequest::Get => automation.game_settings(),
+    let (settings, frame_rate) = match request {
+        SettingsRequest::Get => (automation.game_settings(), automation.frame_rate()),
         SettingsRequest::Update {
             infinite_range,
             provoke_cell,
@@ -124,24 +125,34 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
             collisions,
             ads,
             walk_speed,
+            frame_rate,
             custom_name,
             custom_guild,
-        } => automation.update_game_settings(|settings| {
-            apply(&mut settings.infinite_range, infinite_range);
-            apply(&mut settings.provoke_cell, provoke_cell);
-            apply(&mut settings.enemy_magnet, enemy_magnet);
-            apply(&mut settings.skip_cutscenes, skip_cutscenes);
-            apply(&mut settings.hide_players, hide_players);
-            apply(&mut settings.lag_killer, lag_killer);
-            apply(&mut settings.animations, animations);
-            apply(&mut settings.collisions, collisions);
-            apply(&mut settings.ads, ads);
-            apply(&mut settings.walk_speed, walk_speed);
-            apply(&mut settings.custom_name, custom_name);
-            apply(&mut settings.custom_guild, custom_guild);
-        }),
+        } => {
+            let settings = automation.update_game_settings(|settings| {
+                apply(&mut settings.infinite_range, infinite_range);
+                apply(&mut settings.provoke_cell, provoke_cell);
+                apply(&mut settings.enemy_magnet, enemy_magnet);
+                apply(&mut settings.skip_cutscenes, skip_cutscenes);
+                apply(&mut settings.hide_players, hide_players);
+                apply(&mut settings.lag_killer, lag_killer);
+                apply(&mut settings.animations, animations);
+                apply(&mut settings.collisions, collisions);
+                apply(&mut settings.ads, ads);
+                apply(&mut settings.walk_speed, walk_speed);
+                apply(&mut settings.custom_name, custom_name);
+                apply(&mut settings.custom_guild, custom_guild);
+            });
+            let frame_rate = match frame_rate {
+                Some(fps) => Some(automation.set_frame_rate(fps)),
+                None => automation.frame_rate(),
+            };
+            (settings, frame_rate)
+        }
     };
-    Ok(json!(settings))
+    let mut reply = json!(settings);
+    reply["frameRate"] = json!(frame_rate);
+    Ok(reply)
 }
 
 fn apply<T>(field: &mut T, value: Option<T>) {
@@ -237,6 +248,7 @@ mod tests {
             "op": "update",
             "hidePlayers": true,
             "walkSpeed": 500,
+            "frameRate": 500,
             "customName": "  player1  ",
         }))
         .unwrap();
@@ -253,6 +265,7 @@ mod tests {
                 "collisions": true,
                 "ads": true,
                 "walkSpeed": 99,
+                "frameRate": 60,
                 "customName": "player1",
                 "customGuild": null,
             }))

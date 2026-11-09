@@ -468,16 +468,26 @@ export type GameSettings = {
   readonly ads: boolean;
   /** From 1 to 99. The game's own speed is 8. */
   readonly walkSpeed: number;
+  /**
+   * The game's current frame rate, from 1 to 60, or `null` before the game loads.
+   * Setting 30, 48, 60 or the game's own rate also changes its Max FPS option;
+   * other rates last until the game or Lyra changes it again.
+   */
+  readonly frameRate: number | null;
   /** Shown only to this client. `null` restores the character's own name. */
   readonly customName: string | null;
   /** Shown only to this client. `null` restores the character's own guild. */
   readonly customGuild: string | null;
 };
 
+export type SettingsPatch = Partial<Omit<GameSettings, "frameRate">> & {
+  readonly frameRate?: number;
+};
+
 export const Settings = {
   get: () => settings<GameSettings>("get"),
   /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
-  update: (patch: Partial<GameSettings>) => settings<GameSettings>("update", patch),
+  update: (patch: SettingsPatch) => settings<GameSettings>("update", patch),
 };
 
 export const Script = {

@@ -30,6 +30,22 @@ pub(crate) struct Settings {
     pub(crate) custom_guild: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Writer {
+    Game,
+    Lyra,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameRate {
+    pub(crate) fps: u32,
+    pub(crate) by: Writer,
+}
+
+impl FrameRate {
+    pub(crate) const RANGE: (u32, u32) = (1, 60);
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -78,12 +94,20 @@ impl Settings {
     }
 }
 
-pub(crate) async fn run(loader: impl Loader, mut settings: watch::Receiver<Settings>) {
+pub(crate) async fn run(
+    loader: impl Loader,
+    mut settings: watch::Receiver<Settings>,
+    mut frame_rate: watch::Receiver<Option<FrameRate>>,
+) {
     let mut desired = settings.borrow_and_update().clone();
     let mut applied = Settings::default();
+    let mut requested = requested_by_lyra(*frame_rate.borrow_and_update());
     let mut next_tick = None;
     loop {
-        let ticking = desired != applied || desired.acts() || desired.overrides_the_game();
+        let ticking = desired != applied
+            || desired.acts()
+            || desired.overrides_the_game()
+            || requested.is_some();
         next_tick = ticking.then(|| next_tick.unwrap_or_else(|| Instant::now() + TICK));
         tokio::select! {
             changed = settings.changed() => {
@@ -93,11 +117,35 @@ pub(crate) async fn run(loader: impl Loader, mut settings: watch::Receiver<Setti
                 desired = settings.borrow_and_update().clone();
                 step(&loader, &desired, &mut applied, false);
             }
+            changed = frame_rate.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                requested = requested_by_lyra(*frame_rate.borrow_and_update());
+                apply_frame_rate(&loader, &mut requested);
+            }
             () = sleep_until(next_tick.unwrap_or_else(Instant::now)), if ticking => {
                 next_tick = None;
                 step(&loader, &desired, &mut applied, true);
+                apply_frame_rate(&loader, &mut requested);
             }
         }
+    }
+}
+
+fn requested_by_lyra(frame_rate: Option<FrameRate>) -> Option<u32> {
+    frame_rate
+        .filter(|rate| rate.by == Writer::Lyra)
+        .map(|rate| rate.fps)
+}
+
+fn apply_frame_rate(loader: &impl Loader, requested: &mut Option<u32>) {
+    let Some(fps) = *requested else {
+        return;
+    };
+    match settings::set_frame_rate(loader, whole(fps)) {
+        Ok(()) => *requested = None,
+        Err(error) => tracing::debug!(%error, "couldn't apply the frame rate"),
     }
 }
 
@@ -217,7 +265,12 @@ mod tests {
     fn start(
         in_game: Rc<RefCell<bool>>,
         settings: Settings,
-    ) -> (Sent, Rc<FakeLoader>, watch::Sender<Settings>) {
+    ) -> (
+        Sent,
+        Rc<FakeLoader>,
+        watch::Sender<Settings>,
+        watch::Sender<Option<FrameRate>>,
+    ) {
         let sent = Sent::default();
         let log = sent.clone();
         let loader = Rc::new(FakeLoader::new(move |callback, args| {
@@ -230,8 +283,9 @@ mod tests {
             })
         }));
         let (sender, receiver) = watch::channel(settings);
-        tokio::task::spawn_local(run(loader.clone(), receiver));
-        (sent, loader, sender)
+        let (frame_rate, frame_rates) = watch::channel(None);
+        tokio::task::spawn_local(run(loader.clone(), receiver, frame_rates));
+        (sent, loader, sender, frame_rate)
     }
 
     async fn ticks(count: u32) {
@@ -246,7 +300,7 @@ mod tests {
     async fn the_defaults_leave_the_game_alone() {
         LocalSet::new()
             .run_until(async {
-                let (sent, loader, _settings) =
+                let (sent, loader, _settings, _frame_rate) =
                     start(Rc::new(RefCell::new(true)), Settings::default());
                 ticks(4).await;
                 assert!(drain(&sent).is_empty());
@@ -259,7 +313,7 @@ mod tests {
     async fn a_loader_setting_is_sent_once_per_change() {
         LocalSet::new()
             .run_until(async {
-                let (sent, _loader, settings) =
+                let (sent, _loader, settings, _frame_rate) =
                     start(Rc::new(RefCell::new(true)), Settings::default());
                 tokio::task::yield_now().await;
                 settings.send_modify(|settings| settings.hide_players = true);
@@ -291,7 +345,7 @@ mod tests {
     async fn a_value_the_game_owns_is_reapplied_until_set_back_to_its_default() {
         LocalSet::new()
             .run_until(async {
-                let (sent, _loader, settings) =
+                let (sent, _loader, settings, _frame_rate) =
                     start(Rc::new(RefCell::new(true)), Settings::default());
                 tokio::task::yield_now().await;
                 settings.send_modify(|settings| settings.walk_speed = 20);
@@ -316,7 +370,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let in_game = Rc::new(RefCell::new(false));
-                let (sent, _loader, _settings) = start(
+                let (sent, _loader, _settings, _frame_rate) = start(
                     in_game.clone(),
                     Settings {
                         provoke_cell: true,
@@ -349,10 +403,40 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_frame_rate_from_lyra_is_applied_once_and_the_game_can_take_over() {
+        LocalSet::new()
+            .run_until(async {
+                let (sent, _loader, _settings, frame_rate) =
+                    start(Rc::new(RefCell::new(true)), Settings::default());
+                tokio::task::yield_now().await;
+                let lyra = |fps| {
+                    Some(FrameRate {
+                        fps,
+                        by: Writer::Lyra,
+                    })
+                };
+                let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
+                frame_rate.send_replace(lyra(15));
+                ticks(3).await;
+                assert_eq!(drain(&sent), [set(15.0)]);
+                frame_rate.send_replace(Some(FrameRate {
+                    fps: 60,
+                    by: Writer::Game,
+                }));
+                ticks(2).await;
+                assert!(drain(&sent).is_empty());
+                frame_rate.send_replace(lyra(15));
+                ticks(1).await;
+                assert_eq!(drain(&sent), [set(15.0)]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn changes_arriving_faster_than_a_tick_do_not_postpone_actions() {
         LocalSet::new()
             .run_until(async {
-                let (sent, _loader, settings) = start(
+                let (sent, _loader, settings, _frame_rate) = start(
                     Rc::new(RefCell::new(true)),
                     Settings {
                         provoke_cell: true,

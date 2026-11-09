@@ -225,7 +225,11 @@ fn run(
     spawn_local(
         &inbox,
         &tasks,
-        game_settings::run(bridge.clone(), automation.watch_game_settings()),
+        game_settings::run(
+            bridge.clone(),
+            automation.watch_game_settings(),
+            automation.watch_frame_rate(),
+        ),
     );
     spawn_local(
         &inbox,
@@ -250,6 +254,7 @@ fn run(
     stats.set_enabled(&mut player.lock().unwrap(), stats_enabled);
     let mut last_tick = Instant::now();
     let mut frame_clock_enabled = false;
+    let mut frame_rate = f64::NAN;
     let mut wait = Duration::ZERO;
     let mut effects = Vec::new();
     'running: loop {
@@ -352,6 +357,10 @@ fn run(
         let mut player = player.lock().unwrap();
         player.tick(FloatDuration::from_std(now - last_tick));
         last_tick = now;
+        if player.frame_rate() != frame_rate {
+            frame_rate = player.frame_rate();
+            automation.observe_frame_rate(frame_rate);
+        }
         let interpolating = player.interpolating();
         let frame_clock = pacing.frame_clock(interpolating);
         if frame_clock != frame_clock_enabled {

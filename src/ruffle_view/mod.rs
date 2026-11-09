@@ -81,10 +81,12 @@ impl RuffleView {
         let relogin_changes = automation.watch_auto_relogin();
         let zone_changes = automation.watch_auto_zone();
         let game_changes = automation.watch_game_settings();
+        let frame_rate_changes = automation.watch_frame_rate();
         Ok(cx.new(|cx| {
             notify_on_change(relogin_changes, cx);
             notify_on_change(zone_changes, cx);
             notify_on_change(game_changes, cx);
+            notify_on_change(frame_rate_changes, cx);
             cx.spawn(async move |this, cx| {
                 while stats.changed().await.is_ok() {
                     let report = *stats.borrow_and_update();

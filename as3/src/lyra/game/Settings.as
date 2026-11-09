@@ -5,8 +5,6 @@ package lyra.game {
 
   [BridgeNamespace("settings")]
   public class Settings {
-    private static const MIN_FRAME_RATE:int = 1;
-    private static const MAX_FRAME_RATE:int = 60;
     private static var lagKillerEnabled:Boolean = false;
 
     private static function sanitizeText(value:String):String {
@@ -20,10 +18,6 @@ package lyra.game {
       else {
         Modules.disable(moduleName);
       }
-    }
-
-    private static function clamp(value:int, min:int, max:int):int {
-      return Math.max(min, Math.min(value, max));
     }
 
     private static function applyWorldVisibility():void {
@@ -84,6 +78,23 @@ package lyra.game {
     }
 
     [BridgeExport]
+    public static function setFrameRate(fps:int):void {
+      var game:* = Main.Game;
+      var preference:* = game && game.litePreference ? game.litePreference.data : null;
+      if (preference) {
+        // The client's Max FPS option saves only 30, 48, 60, or 0 for the rate the stage had
+        // when the client loaded, which is the loader's own frame rate. Game.defaultFPS is private.
+        var own:int = Main.getInstance().loaderInfo.frameRate;
+        var option:int = fps == 30 || fps == 48 || fps == 60 ? fps : (fps == own ? 0 : -1);
+        if (option >= 0 && preference.nMaxFPS != option) {
+          preference.nMaxFPS = option;
+          game.litePreference.flush();
+        }
+      }
+      Main.getInstance().getStage().frameRate = fps;
+    }
+
+    [BridgeExport]
     public static function setAdsVisible(visible:Boolean):void {
       setModuleEnabled("HideAds", !visible);
     }
@@ -107,11 +118,6 @@ package lyra.game {
     public static function setLagKillerEnabled(enabled:Boolean):void {
       lagKillerEnabled = enabled;
       applyWorldVisibility();
-    }
-
-    [BridgeExport]
-    public static function setFrameRate(fps:int):void {
-      Main.getInstance().getStage().frameRate = clamp(fps, MIN_FRAME_RATE, MAX_FRAME_RATE);
     }
   }
 }

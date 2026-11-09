@@ -1166,6 +1166,7 @@ export default function* () {
                 collisions: None,
                 ads: None,
                 walk_speed: Some(12),
+                frame_rate: None,
                 custom_name: None,
                 custom_guild: Some(None),
             }),

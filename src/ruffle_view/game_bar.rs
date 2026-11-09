@@ -55,6 +55,7 @@ enum Field {
     Backoff,
     BackoffCap,
     WalkSpeed,
+    FrameRate,
     CustomName,
     CustomGuild,
 }
@@ -66,7 +67,7 @@ impl Field {
         Field::Backoff,
         Field::BackoffCap,
     ];
-    const MOVEMENT: [Field; 1] = [Field::WalkSpeed];
+    const MOVEMENT: [Field; 2] = [Field::WalkSpeed, Field::FrameRate];
     const IDENTITY: [Field; 2] = [Field::CustomName, Field::CustomGuild];
 
     fn label(self) -> &'static str {
@@ -76,6 +77,7 @@ impl Field {
             Field::Backoff => "Backoff",
             Field::BackoffCap => "Backoff cap",
             Field::WalkSpeed => "Walk speed",
+            Field::FrameRate => "Frame rate",
             Field::CustomName => "Name",
             Field::CustomGuild => "Guild",
         }
@@ -109,6 +111,10 @@ impl Field {
             Field::Backoff => relogin().backoff_seconds.to_string(),
             Field::BackoffCap => relogin().backoff_cap_seconds.to_string(),
             Field::WalkSpeed => game().walk_speed.to_string(),
+            Field::FrameRate => automation
+                .frame_rate()
+                .map(|fps| fps.to_string())
+                .unwrap_or_default(),
             Field::CustomName => game().custom_name.unwrap_or_default(),
             Field::CustomGuild => game().custom_guild.unwrap_or_default(),
         }
@@ -140,6 +146,10 @@ impl Field {
             Field::WalkSpeed => {
                 view.change_game_settings(|settings| settings.walk_speed = value, cx)
             }
+            Field::FrameRate => {
+                view.automation.set_frame_rate(value);
+                cx.notify();
+            }
             Field::CustomName | Field::CustomGuild => {}
         }
     }
@@ -147,7 +157,12 @@ impl Field {
     fn after(self, backwards: bool) -> Field {
         let group: &[Field] = match self {
             Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
-            _ => &[Field::WalkSpeed, Field::CustomName, Field::CustomGuild],
+            _ => &[
+                Field::WalkSpeed,
+                Field::FrameRate,
+                Field::CustomName,
+                Field::CustomGuild,
+            ],
         };
         let index = group.iter().position(|field| *field == self).unwrap();
         let count = group.len();
