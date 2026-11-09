@@ -1,6 +1,7 @@
 package lyra.module {
-  import lyra.game.World;
+  import flash.events.Event;
   import lyra.Main;
+  import lyra.util.SFSEvent;
 
   public class CustomName extends Module {
 
@@ -14,53 +15,76 @@ package lyra.module {
 
     public var customGuild:* = null;
 
+    public function attach(game:*):void {
+      game.stage.addEventListener(Event.RENDER, onRender);
+      game.sfc.addEventListener(SFSEvent.onExtensionResponse, invalidate);
+    }
+
     public function resetName():void {
       customName = null;
-      if (!World.isLoaded()) {
+      var game:* = Main.Game;
+      var avatar:* = shownAvatar(game);
+      if (avatar == null) {
         return;
       }
 
-      var game:* = Main.Game;
-      var avatar:* = game.world.myAvatar;
-      avatar.objData.strUsername = avatar.pnm;
-      avatar.pMC.pAV.objData.strUsername = avatar.pnm;
       avatar.pMC.updateName();
-      game.ui.mcPortrait.strName.text = String(avatar.pnm).toUpperCase();
+      game.world.updatePortrait(avatar);
     }
 
     public function resetGuild():void {
       customGuild = null;
-      if (!World.isLoaded()) {
+      var avatar:* = shownAvatar(Main.Game);
+      if (avatar == null) {
         return;
       }
 
-      var avatar:* = Main.Game.world.myAvatar;
       avatar.pMC.pname.tg.text = avatar.objData.guild == null
         ? ""
         : "< " + String(avatar.objData.guild.Name) + " >";
     }
 
     override public function onToggle(game:*):void {
-      if (!World.isLoaded()) {
+      var avatar:* = shownAvatar(game);
+      if (avatar == null) {
         return;
       }
 
       if (customName !== null) {
-        game.world.myAvatar.pMC.pname.ti.text = customName;
+        avatar.pMC.pname.ti.text = customName;
         game.ui.mcPortrait.strName.text = String(customName).toUpperCase();
-        game.world.myAvatar.objData.strUsername = customName;
-        game.world.myAvatar.pMC.pAV.objData.strUsername = customName;
+        if (avatar.target == avatar) {
+          game.ui.mcPortraitTarget.strName.text = String(customName).toUpperCase();
+        }
       }
 
       if (customGuild !== null) {
-        game.world.myAvatar.pMC.pname.tg.text = customGuild == ""
+        avatar.pMC.pname.tg.text = customGuild == ""
           ? ""
           : "< " + String(customGuild) + " >";
       }
     }
 
     override public function onFrame(game:*):void {
-      onToggle(game);
+      game.stage.invalidate();
+    }
+
+    private function invalidate(event:*):void {
+      Main.Game.stage.invalidate();
+    }
+
+    private function onRender(event:Event):void {
+      if (enabled) {
+        onToggle(Main.Game);
+      }
+    }
+
+    private static function shownAvatar(game:*):* {
+      var avatar:* = game && game.world ? game.world.myAvatar : null;
+      if (avatar == null || avatar.objData == null || avatar.pMC == null || game.ui == null) {
+        return null;
+      }
+      return avatar;
     }
   }
 

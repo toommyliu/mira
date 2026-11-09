@@ -51,6 +51,7 @@ package lyra.module {
 
 			var customName:CustomName = CustomName.instance;
 			customName.enabled = true;
+			customName.attach(Main.Game);
 			registerModule(customName);
 		}
 	}
