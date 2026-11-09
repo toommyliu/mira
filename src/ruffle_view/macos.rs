@@ -158,10 +158,9 @@ impl NativeView {
         let y = content.bounds().size.height - f64::from(f32::from(bounds.origin.y)) - height;
         CATransaction::begin();
         CATransaction::setDisableActions(true);
-        self.view
-            .setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
-        self.layer
-            .setFrame(NSRect::new(NSPoint::ZERO, NSSize::new(width, height)));
+        let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
+        self.view.setFrame(frame);
+        self.layer.setFrame(frame);
         self.layer.setContentsScale(scale.into());
         CATransaction::commit();
     }
