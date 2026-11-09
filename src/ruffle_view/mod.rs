@@ -33,6 +33,7 @@ pub(crate) use ui::BAR_HEIGHT;
 pub struct RuffleView {
     session: Runtime,
     error: Option<String>,
+    loading: Loading,
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
     player_bounds: Bounds<Pixels>,
@@ -136,6 +137,22 @@ impl RuffleView {
                             }
                             continue;
                         }
+                        Output::Loading(_) | Output::Loaded => {
+                            let loading = match output {
+                                Output::Loading(percent) => Loading::Percent(percent),
+                                _ => Loading::Done,
+                            };
+                            if this
+                                .update(cx, |this: &mut Self, cx| {
+                                    this.loading = loading;
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                         Output::Location(location) => {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
@@ -210,6 +227,7 @@ impl RuffleView {
             Self {
                 session,
                 error: None,
+                loading: Loading::Started,
                 stats: None,
                 stats_placement: stats::Placement::default(),
                 player_bounds: Bounds::default(),
@@ -407,6 +425,38 @@ fn paint(this: Entity<RuffleView>, hitbox: Hitbox, window: &mut Window, cx: &mut
     });
 }
 
+#[derive(Clone, Copy)]
+enum Loading {
+    Started,
+    Percent(u8),
+    Done,
+}
+
+fn loading(loading: Loading) -> impl IntoElement {
+    let label: gpui::SharedString = match loading {
+        Loading::Percent(percent) => format!("Loading {percent}%").into(),
+        Loading::Started | Loading::Done => "Loading".into(),
+    };
+    div()
+        .id("loading")
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(14.0))
+        .role(Role::ProgressIndicator)
+        .aria_label(label.clone())
+        .child(ui::spinner())
+        .child(
+            div()
+                .text_size(ui::SMALL_TEXT_SIZE)
+                .text_color(ui::secondary_text())
+                .child(label),
+        )
+}
+
 fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
     div()
         .id("minimal-rendering")
@@ -482,6 +532,10 @@ impl Render for RuffleView {
                     paint(this, hitbox, window, cx)
                 })
                 .size_full(),
+            )
+            .when(
+                !matches!(self.loading, Loading::Done) && self.error.is_none(),
+                |view| view.child(loading(self.loading)),
             )
             .when(
                 self.automation.game_settings().rendering.minimal(),

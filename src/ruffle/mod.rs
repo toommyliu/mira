@@ -26,7 +26,7 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
     automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
-    bridge::{Bridge, Packets},
+    bridge::{Bridge, Event, Packets},
     domain::{
         auth::Logins,
         bank, player,
@@ -56,6 +56,8 @@ pub(crate) enum Output {
     AutoRelogin(auto_relogin::Report),
     FrameClock(bool),
     Cursor(MouseCursor),
+    Loading(u8),
+    Loaded,
     Location(Option<Location>),
 }
 
@@ -268,6 +270,22 @@ fn run(
         &tasks,
         game_settings::log_hidden_ads(bridge.subscribe(game_settings::wants)),
     );
+    let loading = bridge.subscribe(|event| matches!(event, Event::Progress { .. } | Event::Loaded));
+    let loading_bridge = bridge.clone();
+    let loading_outputs = outputs.clone();
+    spawn_local(&inbox, &tasks, async move {
+        loop {
+            match loading.next().await {
+                Ok(Event::Progress { percent }) => {
+                    let _ = loading_outputs.try_send(Output::Loading(percent.clamp(0, 100) as u8));
+                }
+                Ok(_) => break,
+                Err(_) if loading_bridge.loaded() => break,
+                Err(_) => {}
+            }
+        }
+        let _ = loading_outputs.try_send(Output::Loaded);
+    });
     let smooth_motion = preferences::BoolPreference::new(data.join("smooth-motion"));
     match smooth_motion.load() {
         Ok(enabled) => player.lock().unwrap().set_frame_interpolation(enabled),

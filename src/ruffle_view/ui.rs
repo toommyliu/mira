@@ -1,7 +1,13 @@
+use std::{
+    f32::consts::{PI, TAU},
+    time::Duration,
+};
+
 use gpui::{
-    BoxShadow, Canvas, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    PathBuilder, Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    canvas, div, hsla, point, prelude::FluentBuilder as _, px,
+    Animation, AnimationExt as _, Bounds, BoxShadow, Canvas, Div, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, PathBuilder, Pixels, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, canvas, div, fill, hsla, point,
+    prelude::FluentBuilder as _, px, size,
 };
 
 pub(crate) const BAR_HEIGHT: Pixels = px(36.0);
@@ -179,6 +185,53 @@ pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
     )
     .flex_none()
     .size(px(12.0))
+}
+
+pub(super) fn spinner() -> impl IntoElement {
+    div().size(px(24.0)).with_animation(
+        "spinner",
+        Animation::new(Duration::from_millis(1000)).repeat(),
+        |spinner, turn| {
+            spinner.child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let width = 2.0;
+                        let radius = f32::from(bounds.size.width) / 2.0 - width / 2.0;
+                        let radii = point(px(radius), px(radius));
+                        let center = bounds.center();
+                        let at = |angle: f32| {
+                            point(
+                                center.x + px(radius * angle.cos()),
+                                center.y + px(radius * angle.sin()),
+                            )
+                        };
+                        let mut track = PathBuilder::stroke(px(width));
+                        track.move_to(at(0.0));
+                        track.arc_to(radii, px(0.0), false, true, at(PI));
+                        track.arc_to(radii, px(0.0), false, true, at(0.0));
+                        if let Ok(path) = track.build() {
+                            window.paint_path(path, hsla(0.0, 0.0, 0.2, 1.0));
+                        }
+                        let start = turn * TAU;
+                        let end = start + TAU / 4.0;
+                        let color = hsla(0.0, 0.0, 0.85, 1.0);
+                        let mut arc = PathBuilder::stroke(px(width));
+                        arc.move_to(at(start));
+                        arc.arc_to(radii, px(0.0), false, true, at(end));
+                        if let Ok(path) = arc.build() {
+                            window.paint_path(path, color);
+                        }
+                        for angle in [start, end] {
+                            let cap = Bounds::centered_at(at(angle), size(px(width), px(width)));
+                            window.paint_quad(fill(cap, color).corner_radii(px(width / 2.0)));
+                        }
+                    },
+                )
+                .size_full(),
+            )
+        },
+    )
 }
 
 pub(super) fn number_field(
