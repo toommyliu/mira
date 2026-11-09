@@ -569,6 +569,57 @@ export default function* () {
     assert!(finished.elapsed >= Duration::from_millis(70));
 }
 
+#[test]
+fn a_bank_batch_moves_one_item_at_a_time_like_the_game() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Bank } from "mira";
+
+export default function* () {
+  console.log(JSON.stringify(yield* Bank.depositBatch(["Gem", "Ore", { itemId: 3 }])));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let sends = sent.clone();
+    let started = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(move |request, _| match request {
+            Request::Bank(B::Deposit { query }) => {
+                let mut sent = sends.lock().unwrap();
+                sent.push(Instant::now());
+                (sent.len() > 1).then(|| {
+                    Ok(json!(
+                        *query != crate::domain::inventory::ItemQuery::Name("Ore".into())
+                    ))
+                })
+            }
+            _ => Some(Ok(json!(null))),
+        }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while player.held.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the first deposit never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let first = player.held.lock().unwrap().pop().unwrap();
+    let answered = Instant::now();
+    first.reply.send(Ok(json!(true)));
+    let finished = started.finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["[true,false,true]"]);
+    let sent = sent.lock().unwrap();
+    let [_, second, third] = sent.as_slice() else {
+        panic!("deposits were sent {} times", sent.len());
+    };
+    assert!(*second >= answered + Duration::from_millis(150));
+    assert!(*third >= *second + Duration::from_millis(150));
+}
+
 fn batch(items: serde_json::Value) -> Option<Reply> {
     Some(Ok(json!({ "items": items, "lagged": false })))
 }
@@ -1554,6 +1605,8 @@ export default function* () {
   yield* Bank.deposit("Gem");
   yield* Bank.withdraw({ itemId: 3 });
   yield* Bank.swap("Gem", "Ore");
+  yield* Bank.depositBatch(["Gem", { itemId: 3 }]);
+  yield* Bank.withdrawBatch(["Ore"]);
   yield* House.getItems();
   yield* House.getItem("Chair");
   yield* House.getQuantity({ itemId: 4 });
@@ -1685,6 +1738,9 @@ export default function* () {
                 inventory_query: name("Gem"),
                 bank_query: name("Ore"),
             },
+            B::Deposit { query: name("Gem") },
+            B::Deposit { query: id(3) },
+            B::Withdraw { query: name("Ore") },
         ]
         .map(Request::Bank),
     );

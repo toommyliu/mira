@@ -383,6 +383,12 @@ export const TempInventory = {
     tempInventory<boolean>("contains", { query, quantity }),
 };
 
+const moveEach = (op: "deposit" | "withdraw", queries: readonly ItemQuery[]) =>
+  Effect.forEach(queries, (query, index) => {
+    const moved = bank<boolean>(op, { query });
+    return index === 0 ? moved : Effect.andThen(Effect.sleep("150 millis"), moved);
+  });
+
 export const Bank = {
   /** Reads load the bank on first use too. Returns false if it doesn't load. */
   load: () => bank<boolean>("load"),
@@ -398,6 +404,10 @@ export const Bank = {
   open: () => bank<boolean>("open"),
   deposit: (query: ItemQuery) => bank<boolean>("deposit", { query }),
   withdraw: (query: ItemQuery) => bank<boolean>("withdraw", { query }),
+  /** Deposits each item in turn, even after one fails. One result per item, in order. */
+  depositBatch: (queries: readonly ItemQuery[]) => moveEach("deposit", queries),
+  /** Withdraws each item in turn, even after one fails. One result per item, in order. */
+  withdrawBatch: (queries: readonly ItemQuery[]) => moveEach("withdraw", queries),
   swap: (inventoryQuery: ItemQuery, bankQuery: ItemQuery) =>
     bank<boolean>("swap", { inventoryQuery, bankQuery }),
 };
