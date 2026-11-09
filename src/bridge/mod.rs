@@ -454,7 +454,7 @@ mod tests {
     fn fixture() -> (Arc<Mutex<Player>>, Bridge) {
         let movie = SwfMovie::from_data(
             &fixture_swf(),
-            "file:///lyra/fixture.swf".into(),
+            "file:///mira/fixture.swf".into(),
             None,
             None,
         )

@@ -86,7 +86,7 @@ impl Run {
         let clock = Clock::new();
         let shared = clock.clone();
         let thread = thread::Builder::new()
-            .name("lyra-script".into())
+            .name("mira-script".into())
             .spawn(move || {
                 let link = Link {
                     run,
@@ -394,7 +394,7 @@ fn setup<'js>(
             ctx.clone(),
             move |ctx: Ctx<'js>, id: u64, request: String| -> rquickjs::Result<()> {
                 let request: Request = serde_json::from_str(&request).map_err(|error| {
-                    Exception::throw_type(&ctx, &format!("Lyra can't send {request}: {error}"))
+                    Exception::throw_type(&ctx, &format!("Mira can't send {request}: {error}"))
                 })?;
                 let id = CallId(id);
                 (calling.player)(ToPlayer::Call(Call {

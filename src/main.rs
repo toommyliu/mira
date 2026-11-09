@@ -1,5 +1,5 @@
 #[cfg(not(target_os = "macos"))]
-compile_error!("Lyra supports macOS only.");
+compile_error!("Mira supports macOS only.");
 
 mod army;
 mod automation;
@@ -16,19 +16,19 @@ use gpui::{
     WindowOptions, actions, point, px, size,
 };
 
-actions!(lyra, [Quit]);
+actions!(mira, [Quit]);
 
 fn main() -> anyhow::Result<()> {
     let logging = logging::init();
     let data = dirs::data_dir()
         .ok_or_else(|| anyhow::anyhow!("No application data directory"))?
-        .join("Lyra");
+        .join("Mira");
     std::fs::create_dir_all(&data)?;
     let device = net::device_id(&data.join("device-id"))?;
     let armies = army::Armies::new(
         dirs::document_dir()
             .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
-            .join("Lyra")
+            .join("Mira")
             .join("armies"),
     );
     gpui_platform::application().run(move |cx| {
@@ -43,9 +43,9 @@ fn main() -> anyhow::Result<()> {
         ruffle_view::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.set_menus(vec![Menu {
-            name: "Lyra".into(),
+            name: "Mira".into(),
             disabled: false,
-            items: vec![MenuItem::action("Quit Lyra", Quit)],
+            items: vec![MenuItem::action("Quit Mira", Quit)],
         }]);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
                 cx,
             ))),
             titlebar: Some(TitlebarOptions {
-                title: Some("Lyra".into()),
+                title: Some("Mira".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.0), px(11.0))),
             }),
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
             view
         });
         if let Err(error) = opened {
-            tracing::error!(%error, "couldn't open Lyra");
+            tracing::error!(%error, "couldn't open Mira");
             cx.quit();
         }
         cx.on_window_closed(|cx, _| {

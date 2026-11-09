@@ -183,7 +183,7 @@ mod tests {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let folder =
-            std::env::temp_dir().join(format!("lyra-army-calls-{:x}", u64::from_ne_bytes(random)));
+            std::env::temp_dir().join(format!("mira-army-calls-{:x}", u64::from_ne_bytes(random)));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("solo.yaml"), "players: [player1]\nroom: 7\n").unwrap();
         let armies = Armies::new(folder.clone());

@@ -37,7 +37,7 @@ pub(super) struct NativeView {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "LyraCallback"]
+    #[name = "MiraCallback"]
     #[ivars = Box<dyn Fn()>]
     struct Callback;
 

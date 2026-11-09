@@ -1,4 +1,4 @@
-import { Combat, Player, Script } from "lyra";
+import { Combat, Player, Script } from "mira";
 
 const MONSTER = "Frogzard";
 const KILLS = 5;

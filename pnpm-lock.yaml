@@ -45,7 +45,7 @@ importers:
         specifier: 'catalog:'
         version: 1.90.0
 
-  packages/lyra:
+  packages/mira:
     dependencies:
       effect:
         specifier: 'catalog:'

@@ -1,6 +1,6 @@
-import { Auth, Player } from "lyra";
-import * as AutoRelogin from "lyra/autorelogin";
-import * as AutoZone from "lyra/autozone";
+import { Auth, Player } from "mira";
+import * as AutoRelogin from "mira/autorelogin";
+import * as AutoZone from "mira/autozone";
 
 export default function* () {
   const server = yield* Auth.getServer();

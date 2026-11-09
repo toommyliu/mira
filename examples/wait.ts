@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Player, Wait } from "lyra";
+import { Player, Wait } from "mira";
 
 export default function* () {
   console.log("Log in within 30 seconds.");

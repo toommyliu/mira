@@ -3959,44 +3959,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lyra"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "async-channel",
- "async-task",
- "block2 0.6.2",
- "dirs",
- "encoding_rs",
- "getrandom 0.2.17",
- "gpui",
- "gpui_platform",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-core-graphics",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
- "oxc",
- "raw-window-handle",
- "reqwest",
- "rquickjs",
- "ruffle_core",
- "ruffle_frontend_utils",
- "ruffle_render",
- "ruffle_render_wgpu",
- "serde",
- "serde-saphyr",
- "serde_json",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a5b8bc8c8f16b39121417577a261625eceee2565)",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "lzma-rs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4157,6 +4119,44 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mira"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-channel",
+ "async-task",
+ "block2 0.6.2",
+ "dirs",
+ "encoding_rs",
+ "getrandom 0.2.17",
+ "gpui",
+ "gpui_platform",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "oxc",
+ "raw-window-handle",
+ "reqwest",
+ "rquickjs",
+ "ruffle_core",
+ "ruffle_frontend_utils",
+ "ruffle_render",
+ "ruffle_render_wgpu",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a5b8bc8c8f16b39121417577a261625eceee2565)",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

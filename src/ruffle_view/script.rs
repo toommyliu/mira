@@ -102,15 +102,15 @@ impl RuffleView {
             entry,
             Limits::default(),
             Box::new(|level, message| match level {
-                Level::Debug => tracing::debug!(target: "lyra::script", "{message}"),
-                Level::Info => tracing::info!(target: "lyra::script", "{message}"),
-                Level::Warn => tracing::warn!(target: "lyra::script", "{message}"),
-                Level::Error => tracing::error!(target: "lyra::script", "{message}"),
+                Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
+                Level::Info => tracing::info!(target: "mira::script", "{message}"),
+                Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
+                Level::Error => tracing::error!(target: "mira::script", "{message}"),
             }),
             Box::new(move |message| inbox.post(Msg::Script(message))),
             move |outcome| {
                 if let Outcome::Failed { message, stack } = &outcome {
-                    tracing::warn!(target: "lyra::script", stack = stack.as_deref().unwrap_or(""), "{message}");
+                    tracing::warn!(target: "mira::script", stack = stack.as_deref().unwrap_or(""), "{message}");
                 }
                 let _ = finished.try_send(outcome);
             },

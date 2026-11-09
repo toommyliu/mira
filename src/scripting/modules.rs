@@ -23,8 +23,8 @@ use rquickjs::{
 include!(concat!(env!("OUT_DIR"), "/runtime_assets.rs"));
 
 pub(super) const INTERNAL: &str = "internal:/";
-pub(super) const PRELUDE: &str = "internal:/lyra/prelude.js";
-pub(super) const BOOTSTRAP: &str = "internal:/lyra/bootstrap.js";
+pub(super) const PRELUDE: &str = "internal:/mira/prelude.js";
+pub(super) const BOOTSTRAP: &str = "internal:/mira/bootstrap.js";
 
 const SCRIPT_EXTENSIONS: [&str; 4] = ["ts", "mts", "js", "mjs"];
 
@@ -92,7 +92,7 @@ impl Modules {
                 );
                 asset(&joined)
                     .map(|_| format!("{INTERNAL}{joined}"))
-                    .ok_or_else(|| format!("{name} isn't part of Lyra's runtime"))
+                    .ok_or_else(|| format!("{name} isn't part of Mira's runtime"))
             } else {
                 package(name)
             };
@@ -118,7 +118,7 @@ impl Modules {
         if let Some(internal) = name.strip_prefix(INTERNAL) {
             return asset(internal)
                 .map(str::to_owned)
-                .ok_or_else(|| format!("{name} isn't part of Lyra's runtime"));
+                .ok_or_else(|| format!("{name} isn't part of Mira's runtime"));
         }
         let path = Path::new(name);
         let text = fs::read_to_string(path)
@@ -174,8 +174,8 @@ impl Modules {
 
 fn package(name: &str) -> std::result::Result<String, String> {
     match name {
-        "lyra" => return Ok(format!("{INTERNAL}lyra/index.js")),
-        "lyra/autorelogin" | "lyra/autozone" => return Ok(format!("{INTERNAL}{name}.js")),
+        "mira" => return Ok(format!("{INTERNAL}mira/index.js")),
+        "mira/autorelogin" | "mira/autozone" => return Ok(format!("{INTERNAL}{name}.js")),
         _ => {}
     }
     let path = match name.strip_prefix("effect") {
@@ -185,7 +185,7 @@ fn package(name: &str) -> std::result::Result<String, String> {
         }
         _ => {
             return Err(format!(
-                "{name} can't be imported; scripts can import lyra, lyra/autorelogin, lyra/autozone, effect, effect/<Module> and their own files"
+                "{name} can't be imported; scripts can import mira, mira/autorelogin, mira/autozone, effect, effect/<Module> and their own files"
             ));
         }
     };

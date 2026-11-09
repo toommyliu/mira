@@ -18,12 +18,12 @@ use crate::{
 };
 
 actions!(
-    lyra,
+    mira,
     [NewSession, CloseSession, NextSession, PreviousSession]
 );
 
 #[derive(Clone, PartialEq, gpui::Action)]
-#[action(namespace = lyra, no_json)]
+#[action(namespace = mira, no_json)]
 struct SelectSession(usize);
 
 pub(crate) const STRIP_HEIGHT: Pixels = px(36.0);

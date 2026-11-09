@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const runtime = join(root, "packages", "lyra");
+const runtime = join(root, "packages", "mira");
 const effect = join(runtime, "node_modules", "effect");
 
 async function effectModules(): Promise<string[]> {
@@ -45,11 +45,11 @@ async function main(): Promise<void> {
     entryPoints: [
       { in: "effect", out: "effect/index" },
       ...modules.map((module) => ({ in: `effect/${module}`, out: `effect/${module}` })),
-      { in: "./src/prelude.ts", out: "lyra/prelude" },
-      { in: "./src/bootstrap.ts", out: "lyra/bootstrap" },
-      { in: "./src/lyra.ts", out: "lyra/index" },
-      { in: "./src/autorelogin.ts", out: "lyra/autorelogin" },
-      { in: "./src/autozone.ts", out: "lyra/autozone" },
+      { in: "./src/prelude.ts", out: "mira/prelude" },
+      { in: "./src/bootstrap.ts", out: "mira/bootstrap" },
+      { in: "./src/mira.ts", out: "mira/index" },
+      { in: "./src/autorelogin.ts", out: "mira/autorelogin" },
+      { in: "./src/autozone.ts", out: "mira/autozone" },
     ],
     outdir,
     bundle: true,

@@ -1,4 +1,4 @@
-import { Army, Combat, Player } from "lyra";
+import { Army, Combat, Player } from "mira";
 
 export default function* () {
   const army = yield* Army.start("example");

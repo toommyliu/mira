@@ -109,7 +109,7 @@ impl Runtime {
         };
         let outbox = inbox.clone();
         let thread = thread::Builder::new()
-            .name("lyra-player".into())
+            .name("mira-player".into())
             .spawn(move || {
                 if let Err(error) = run(
                     surface,
@@ -196,7 +196,7 @@ fn run(
     let tasks = Tasks::default();
     let movie = SwfMovie::from_data(
         include_bytes!("../../assets/loader.swf"),
-        "file:///lyra/loader.swf".into(),
+        "file:///mira/loader.swf".into(),
         None,
         None,
     )?;

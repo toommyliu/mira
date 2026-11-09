@@ -1,4 +1,4 @@
-import { Player, World } from "lyra";
+import { Player, World } from "mira";
 
 const MAP_ITEM_ID = 0;
 const MAP_SWF = "";

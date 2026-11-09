@@ -78,7 +78,7 @@ mod tests {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let path =
-            std::env::temp_dir().join(format!("lyra-device-{:x}", u64::from_ne_bytes(random)));
+            std::env::temp_dir().join(format!("mira-device-{:x}", u64::from_ne_bytes(random)));
         let first = device_id(&path).unwrap();
         assert_eq!(first, device_id(&path).unwrap());
         fs::write(&path, "invalid").unwrap();

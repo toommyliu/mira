@@ -1,4 +1,4 @@
-import { Bank, Inventory, Player } from "lyra";
+import { Bank, Inventory, Player } from "mira";
 
 const DEPOSIT = "crag & bamboozle";
 const SWAP_FOR = "beetle general pet";

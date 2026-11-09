@@ -1,11 +1,11 @@
 {
-  "name": "lyra",
+  "name": "mira",
   "private": true,
   "type": "module",
   "scripts": {
     "gen:bridge": "node scripts/gen-bridge.ts",
     "check:bridge": "node scripts/gen-bridge.ts --check",
-    "build:runtime": "node scripts/build-runtime.ts --outdir target/lyra-runtime",
+    "build:runtime": "node scripts/build-runtime.ts --outdir target/mira-runtime",
     "test": "node --test scripts/*.test.ts",
     "typecheck": "effect-tsgo tsrs --noEmit && pnpm -r typecheck",
     "lint": "oxlint scripts && pnpm -r lint",

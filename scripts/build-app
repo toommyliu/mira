@@ -12,16 +12,16 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 cargo build --profile "$profile" --locked
-bundle=target/Lyra.app/Contents
+bundle=target/Mira.app/Contents
 mkdir -p "$bundle/MacOS"
-cp "target/$directory/lyra" "$bundle/MacOS/lyra"
+cp "target/$directory/mira" "$bundle/MacOS/mira"
 cat > "$bundle/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-    <key>CFBundleName</key><string>Lyra</string>
-    <key>CFBundleIdentifier</key><string>local.lyra.app</string>
-    <key>CFBundleExecutable</key><string>lyra</string>
+    <key>CFBundleName</key><string>Mira</string>
+    <key>CFBundleIdentifier</key><string>local.mira.app</string>
+    <key>CFBundleExecutable</key><string>mira</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>NSHighResolutionCapable</key><true/>

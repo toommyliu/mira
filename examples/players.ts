@@ -1,4 +1,4 @@
-import { Player, Players } from "lyra";
+import { Player, Players } from "mira";
 
 const FIND = "";
 

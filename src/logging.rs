@@ -17,8 +17,8 @@ use tracing_subscriber::{
     util::SubscriberInitExt as _,
 };
 
-const FILE_FILTER: &str = "info,lyra=debug";
-const LOG_FILE: &str = "~/Library/Logs/Lyra/lyra.log";
+const FILE_FILTER: &str = "info,mira=debug";
+const LOG_FILE: &str = "~/Library/Logs/Mira/mira.log";
 
 pub(crate) struct Logging(Vec<Arc<Mutex<Output>>>);
 
@@ -56,15 +56,15 @@ pub(crate) fn init() -> Logging {
 fn log_file() -> io::Result<File> {
     let directory = dirs::home_dir()
         .ok_or_else(|| io::Error::other("no home directory"))?
-        .join("Library/Logs/Lyra");
+        .join("Library/Logs/Mira");
     log_file_in(&directory)
 }
 
 fn log_file_in(directory: &Path) -> io::Result<File> {
     fs::create_dir_all(directory)?;
-    let path = directory.join("lyra.log");
+    let path = directory.join("mira.log");
     if path.exists() {
-        fs::rename(&path, directory.join("lyra.previous.log"))?;
+        fs::rename(&path, directory.join("mira.previous.log"))?;
     }
     File::create(path)
 }
@@ -194,8 +194,8 @@ mod tests {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let directory =
-            std::env::temp_dir().join(format!("lyra-logs-{:x}", u64::from_ne_bytes(random)));
-        let path = directory.join("lyra.log");
+            std::env::temp_dir().join(format!("mira-logs-{:x}", u64::from_ne_bytes(random)));
+        let path = directory.join("mira.log");
         let mut first = log_file_in(&directory).unwrap();
         writeln!(first, "first run").unwrap();
         drop(first);
@@ -204,7 +204,7 @@ mod tests {
         drop(second);
         assert_eq!(fs::read_to_string(&path).unwrap(), "second run\n");
         assert_eq!(
-            fs::read_to_string(directory.join("lyra.previous.log")).unwrap(),
+            fs::read_to_string(directory.join("mira.previous.log")).unwrap(),
             "first run\n"
         );
         fs::remove_dir_all(directory).unwrap();

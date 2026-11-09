@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { parseBridge, renderAs3, renderRust } from "./gen-bridge.ts";
 
 const world = (body: string) => ({
-  path: "as3/src/lyra/game/World.as",
-  text: `package lyra.game
+  path: "as3/src/mira/game/World.as",
+  text: `package mira.game
 {
   [BridgeNamespace("world")]
   public class World
@@ -29,10 +29,10 @@ test("exports register under their namespace, sorted by name", () => {
   assert.equal(
     renderAs3(parseBridge([source])),
     `// AUTO-GENERATED FILE. DO NOT EDIT.
-package lyra.generated
+package mira.generated
 {
-  import lyra.Externalizer;
-  import lyra.game.World;
+  import mira.Externalizer;
+  import mira.game.World;
 
   public class BridgeRegistryGenerated
   {

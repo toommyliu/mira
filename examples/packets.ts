@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Packets, Player, Wait } from "lyra";
+import { Packets, Player, Wait } from "mira";
 
 export default function* () {
   if (!(yield* Player.isReady())) {

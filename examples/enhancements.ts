@@ -1,4 +1,4 @@
-import { Inventory, Player, type EnhancementSelector, type EnhancementSlot, type Item } from "lyra";
+import { Inventory, Player, type EnhancementSelector, type EnhancementSlot, type Item } from "mira";
 
 type Known = {
   readonly slot: EnhancementSlot;

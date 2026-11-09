@@ -22,5 +22,5 @@
     "verbose-stacktraces": false,
     "static-link-runtime-shared-libraries": true
   },
-  "files": ["src/lyra/Main.as"]
+  "files": ["src/mira/Main.as"]
 }

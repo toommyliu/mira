@@ -1,4 +1,4 @@
-import { Drops, Inventory, Player } from "lyra";
+import { Drops, Inventory, Player } from "mira";
 
 const ACCEPT = "";
 const REJECT = "";

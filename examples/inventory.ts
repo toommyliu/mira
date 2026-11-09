@@ -1,4 +1,4 @@
-import { Inventory, Player, TempInventory } from "lyra";
+import { Inventory, Player, TempInventory } from "mira";
 
 const HELM = "unidentified 9";
 const CONSUMABLE = "potent soul potion";

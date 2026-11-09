@@ -1,4 +1,4 @@
-import { Player, Quests } from "lyra";
+import { Player, Quests } from "mira";
 
 const QUEST = 6552;
 const SILENT = false;

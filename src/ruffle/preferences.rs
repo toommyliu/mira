@@ -37,7 +37,7 @@ mod tests {
         getrandom::getrandom(&mut random).unwrap();
         for name in ["smooth-motion", "show-stats"] {
             let path =
-                std::env::temp_dir().join(format!("lyra-{name}-{:x}", u64::from_ne_bytes(random)));
+                std::env::temp_dir().join(format!("mira-{name}-{:x}", u64::from_ne_bytes(random)));
             let preferences = BoolPreference::new(path.clone());
             assert!(!preferences.load().unwrap());
             for enabled in [true, false] {

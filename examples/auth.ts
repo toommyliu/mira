@@ -1,4 +1,4 @@
-import { Auth, Player } from "lyra";
+import { Auth, Player } from "mira";
 
 export default function* () {
   if (!(yield* Player.isReady())) {

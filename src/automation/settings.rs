@@ -123,7 +123,7 @@ impl Automation {
         let fps = fps.clamp(min, max);
         self.frame_rate.send_replace(Some(game_settings::FrameRate {
             fps,
-            by: game_settings::Writer::Lyra,
+            by: game_settings::Writer::Mira,
         }));
         Some(fps)
     }
@@ -219,7 +219,7 @@ mod tests {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         std::env::temp_dir().join(format!(
-            "lyra-automation-{:x}.json",
+            "mira-automation-{:x}.json",
             u64::from_ne_bytes(random)
         ))
     }

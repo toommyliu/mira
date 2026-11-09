@@ -36,7 +36,7 @@ impl Folder {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let root =
-            std::env::temp_dir().join(format!("lyra-script-{:x}", u64::from_ne_bytes(random)));
+            std::env::temp_dir().join(format!("mira-script-{:x}", u64::from_ne_bytes(random)));
         for (path, text) in files {
             let path = root.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -273,11 +273,11 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
         ),
         (
             "script/internal.ts",
-            "import \"internal:/lyra/prelude.js\";\nexport default function* () {}\n",
+            "import \"internal:/mira/prelude.js\";\nexport default function* () {}\n",
         ),
         (
             "script/runtime.ts",
-            "import \"lyra/prelude\";\nexport default function* () {}\n",
+            "import \"mira/prelude\";\nexport default function* () {}\n",
         ),
         (
             "script/platform.ts",
@@ -378,7 +378,7 @@ fn stopping_aborts_the_script_signal_before_cleanup() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Effect } from "effect";
-import { Script } from "lyra";
+import { Script } from "mira";
 
 export default function* () {
   console.log(`running, aborted ${Script.signal.aborted}`);
@@ -552,7 +552,7 @@ fn waiting_until_a_condition_holds_checks_it_right_away_and_then_on_each_interva
     let finished = run(&[(
         "main.ts",
         r#"import { Effect } from "effect";
-import { Wait } from "lyra";
+import { Wait } from "mira";
 
 export default function* () {
   const already = yield* Wait.until(Effect.succeed(true), { interval: "1 hour" });
@@ -580,7 +580,7 @@ fn server(packet: serde_json::Value) -> serde_json::Value {
 fn waiting_for_a_packet_subscribes_before_the_trigger_and_returns_the_first_match() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Packets, Wait } from "lyra";
+        r#"import { Packets, Wait } from "mira";
 
 export default function* () {
   const reply = yield* Wait.forPacket(
@@ -643,7 +643,7 @@ fn a_packet_wait_ends_empty_when_the_connection_drops_the_time_runs_out_or_the_t
         &Folder::new(&[(
             "main.ts",
             r#"import { Effect } from "effect";
-import { Wait } from "lyra";
+import { Wait } from "mira";
 
 export default function* () {
   const client = yield* Wait.forPacket({ from: "client", cmd: "afk" });
@@ -685,7 +685,7 @@ fn a_failing_packet_handler_fails_the_script() {
         &Folder::new(&[(
             "main.ts",
             r#"import { Effect } from "effect";
-import { Packets } from "lyra";
+import { Packets } from "mira";
 
 export default function* () {
   yield* Packets.on({ from: "server", cmd: "ct" }, function* (packet) {
@@ -725,7 +725,7 @@ fn a_subscription_keeps_packets_that_arrive_after_a_wait_on_it_gives_up() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Effect } from "effect";
-import { Packets } from "lyra";
+import { Packets } from "mira";
 
 export default function* () {
   const subscription = yield* Packets.subscribe({ cmd: "ct" });
@@ -772,7 +772,7 @@ export default function* () {
 fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Packets, Wait } from "lyra";
+        r#"import { Packets, Wait } from "mira";
 
 export default function* () {
   const death = yield* Wait.forEvent(
@@ -827,7 +827,7 @@ fn event_handlers_run_until_the_script_returns() {
         &Folder::new(&[(
             "main.ts",
             r#"import { Effect } from "effect";
-import { Events, Packets } from "lyra";
+import { Events, Packets } from "mira";
 
 export default function* () {
   yield* Events.on({ type: "afk", self: true, afk: true }, () =>
@@ -886,10 +886,10 @@ export default function* () {
 }
 
 #[test]
-fn a_script_drives_the_game_through_the_lyra_module() {
+fn a_script_drives_the_game_through_the_mira_module() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Player } from "lyra";
+        r#"import { Player } from "mira";
 
 export default function* () {
   yield* Player.joinMap("battleon", { cell: "r2" });
@@ -938,7 +938,7 @@ export default function* () {
 fn a_failed_loader_call_ends_the_script_with_its_message() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Player } from "lyra";
+        r#"import { Player } from "mira";
 
 export default function* () {
   console.log(String(yield* Player.jumpToCell("r2")));
@@ -971,7 +971,7 @@ fn interrupting_a_fiber_cancels_its_pending_call() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Effect } from "effect";
-import { Player } from "lyra";
+import { Player } from "mira";
 
 export default function* () {
   const result = yield* Player.joinMap("yulgar").pipe(Effect.timeoutOption("50 millis"));
@@ -1011,11 +1011,11 @@ fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
     let folder = Folder::new(&[
         (
             "travel.ts",
-            "import { Player } from \"lyra\";\nexport default function* () { yield* Player.joinMap(\"yulgar\"); }\n",
+            "import { Player } from \"mira\";\nexport default function* () { yield* Player.joinMap(\"yulgar\"); }\n",
         ),
         (
             "read.ts",
-            "import { Player } from \"lyra\";\nexport default function* () { console.log(yield* Player.getMap()); }\n",
+            "import { Player } from \"mira\";\nexport default function* () { console.log(yield* Player.getMap()); }\n",
         ),
     ]);
     let player = FakePlayer::default();
@@ -1053,7 +1053,7 @@ fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
 fn auth_requests_reach_the_player_typed() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Auth } from "lyra";
+        r#"import { Auth } from "mira";
 
 export default function* () {
   yield* Auth.isLoggedIn();
@@ -1106,9 +1106,9 @@ fn automation_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Settings } from "lyra";
-import * as AutoRelogin from "lyra/autorelogin";
-import * as AutoZone from "lyra/autozone";
+        r#"import { Settings } from "mira";
+import * as AutoRelogin from "mira/autorelogin";
+import * as AutoZone from "mira/autozone";
 
 export default function* () {
   yield* AutoRelogin.get();
@@ -1180,7 +1180,7 @@ fn world_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { World } from "lyra";
+        r#"import { World } from "mira";
 
 export default function* () {
   yield* World.getAreaId();
@@ -1251,7 +1251,7 @@ fn combat_player_and_aura_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Combat, Player, Players } from "lyra";
+        r#"import { Combat, Player, Players } from "mira";
 
 export default function* () {
   yield* Combat.getTarget();
@@ -1358,11 +1358,11 @@ fn fractional_item_ids_and_counts_never_reach_the_player() {
     let folder = Folder::new(&[
         (
             "count.ts",
-            "import { Bank } from \"lyra\";\nexport default function* () { yield* Bank.contains(\"Gem\", 2.5); }\n",
+            "import { Bank } from \"mira\";\nexport default function* () { yield* Bank.contains(\"Gem\", 2.5); }\n",
         ),
         (
             "id.ts",
-            "import { House } from \"lyra\";\nexport default function* () { yield* House.getItem({ itemId: 3.5 }); }\n",
+            "import { House } from \"mira\";\nexport default function* () { yield* House.getItem({ itemId: 3.5 }); }\n",
         ),
     ]);
     for entry in ["count.ts", "id.ts"] {
@@ -1399,7 +1399,7 @@ fn item_requests_reach_the_player_typed() {
 
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Bank, Drops, House, Inventory, Shops, TempInventory } from "lyra";
+        r#"import { Bank, Drops, House, Inventory, Shops, TempInventory } from "mira";
 
 export default function* () {
   yield* Inventory.getItems();
@@ -1645,7 +1645,7 @@ export default function* () {
 fn quest_requests_reach_the_player_typed() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Quests } from "lyra";
+        r#"import { Quests } from "mira";
 
 export default function* () {
   yield* Quests.load(6552);
@@ -1752,7 +1752,7 @@ fn army_requests_reach_the_player_typed() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army } from "lyra";
+            r#"import { Army } from "mira";
 
 export default function* () {
   const army = yield* Army.start("ultras", { timeout: "2 seconds" });
@@ -1810,7 +1810,7 @@ fn until_works_in_rounds_and_reports_done_until_the_army_settles() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army, Combat, Inventory } from "lyra";
+            r#"import { Army, Combat, Inventory } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");
@@ -1898,7 +1898,7 @@ fn until_skips_the_work_when_the_army_is_already_done() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army, Combat, Inventory } from "lyra";
+            r#"import { Army, Combat, Inventory } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");
@@ -1944,7 +1944,7 @@ fn join_map_joins_the_army_room_and_agrees_on_the_result() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army } from "lyra";
+            r#"import { Army } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");
@@ -2010,7 +2010,7 @@ fn equip_set_puts_on_the_gear_in_order_and_drinks_the_pots() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army } from "lyra";
+            r#"import { Army } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");
@@ -2123,7 +2123,7 @@ fn take_turns_passes_each_turn_on_and_leaves_when_stopped() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army, Script } from "lyra";
+            r#"import { Army, Script } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");
@@ -2202,7 +2202,7 @@ fn a_turn_that_fails_fails_the_script_and_leaves_the_rotation() {
     let finished = start(
         &Folder::new(&[(
             "main.ts",
-            r#"import { Army, Script } from "lyra";
+            r#"import { Army, Script } from "mira";
 
 export default function* () {
   yield* Army.start("ultras");

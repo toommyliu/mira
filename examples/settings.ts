@@ -1,4 +1,4 @@
-import { Settings } from "lyra";
+import { Settings } from "mira";
 
 export default function* () {
   const before = yield* Settings.get();

@@ -1,4 +1,4 @@
-import { type Aura, Combat, Player, Players, World } from "lyra";
+import { type Aura, Combat, Player, Players, World } from "mira";
 
 const FIND = "";
 

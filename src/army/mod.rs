@@ -937,7 +937,7 @@ mod tests {
             let mut random = [0; 8];
             getrandom::getrandom(&mut random).unwrap();
             let root =
-                std::env::temp_dir().join(format!("lyra-army-{:x}", u64::from_ne_bytes(random)));
+                std::env::temp_dir().join(format!("mira-army-{:x}", u64::from_ne_bytes(random)));
             fs::create_dir_all(&root).unwrap();
             for (name, text) in files {
                 fs::write(root.join(name), text).unwrap();

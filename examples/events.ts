@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Combat, Events, Packets, Player, Wait, Script } from "lyra";
+import { Combat, Events, Packets, Player, Wait, Script } from "mira";
 
 export default function* () {
   if (!(yield* Player.isReady())) {

@@ -356,7 +356,7 @@ sets:
 
     #[test]
     fn a_missing_file_names_its_path() {
-        let folder = std::env::temp_dir().join("lyra-army-missing");
+        let folder = std::env::temp_dir().join("mira-army-missing");
         let error = Config::load(&folder, "ultras").unwrap_err().to_string();
         assert!(error.contains("ultras.yaml doesn't exist"), "{error}");
     }

@@ -159,7 +159,7 @@ mod tests {
     fn right_click_menu_runs_ruffle_callbacks_and_toggles_smooth_motion() {
         let movie = SwfMovie::from_data(
             include_bytes!("../../assets/loader.swf"),
-            "file:///lyra/loader.swf".into(),
+            "file:///mira/loader.swf".into(),
             None,
             None,
         )

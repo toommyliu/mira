@@ -290,9 +290,9 @@ export function renderAs3(bridge: Bridge): string {
   );
   return [
     "// AUTO-GENERATED FILE. DO NOT EDIT.",
-    "package lyra.generated",
+    "package mira.generated",
     "{",
-    "  import lyra.Externalizer;",
+    "  import mira.Externalizer;",
     ...imports.map((fqn) => `  import ${fqn};`),
     "",
     "  public class BridgeRegistryGenerated",
@@ -508,7 +508,7 @@ export function renderRust(bridge: Bridge): string {
 }
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const as3Root = join(root, "as3", "src", "lyra");
+const as3Root = join(root, "as3", "src", "mira");
 const outputs = {
   as3: join(as3Root, "generated", "BridgeRegistryGenerated.as"),
   rust: join(root, "src", "bridge", "generated.rs"),

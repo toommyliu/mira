@@ -12,7 +12,7 @@ use crate::ruffle::context_menu::{ContextMenu, MenuSelection};
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "LyraPlayerMenuTarget"]
+    #[name = "MiraPlayerMenuTarget"]
     #[ivars = Cell<Option<usize>>]
     struct MenuTarget;
 

@@ -3,4 +3,4 @@ set -eu
 cd "$(dirname "$0")/.."
 AS3_SDK="${AS3_SDK:-${FLEX_HOME:-}}"
 : "${AS3_SDK:?Set AS3_SDK to a Flex/AIR SDK containing bin/mxmlc}"
-"$AS3_SDK/bin/mxmlc" -source-path=as3/src -default-frame-rate=24 -default-size=958,550 -default-background-color=0x000000 -omit-trace-statements=true -target-player=32.0 -static-link-runtime-shared-libraries=true -optimize=true -debug=false -output=assets/loader.swf as3/src/lyra/Main.as
+"$AS3_SDK/bin/mxmlc" -source-path=as3/src -default-frame-rate=24 -default-size=958,550 -default-background-color=0x000000 -omit-trace-statements=true -target-player=32.0 -static-link-runtime-shared-libraries=true -optimize=true -debug=false -output=assets/loader.swf as3/src/mira/Main.as

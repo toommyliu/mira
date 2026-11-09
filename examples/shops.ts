@@ -1,4 +1,4 @@
-import { Inventory, Player, Shops } from "lyra";
+import { Inventory, Player, Shops } from "mira";
 
 const MAP = "arcangrove";
 const SHOP_ID = 211;

@@ -1,4 +1,4 @@
-import { House, Player } from "lyra";
+import { House, Player } from "mira";
 
 const FIND = "";
 

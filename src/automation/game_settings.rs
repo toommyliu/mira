@@ -97,7 +97,7 @@ pub(crate) struct Settings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Writer {
     Game,
-    Lyra,
+    Mira,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,9 +213,9 @@ impl Stage {
             return;
         };
         match (self.minimal, by) {
-            (false, Writer::Lyra) => self.send = Some(fps),
+            (false, Writer::Mira) => self.send = Some(fps),
             (false, Writer::Game) => {}
-            (true, Writer::Lyra) => self.resume = Some(fps),
+            (true, Writer::Mira) => self.resume = Some(fps),
             (true, Writer::Game) if fps != MINIMAL_FPS => {
                 self.resume = Some(fps);
                 self.send = Some(MINIMAL_FPS);
@@ -502,20 +502,20 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_frame_rate_from_lyra_is_applied_once_and_the_game_can_take_over() {
+    async fn a_frame_rate_from_mira_is_applied_once_and_the_game_can_take_over() {
         LocalSet::new()
             .run_until(async {
                 let (sent, _loader, _settings, frame_rate) =
                     start(Rc::new(RefCell::new(true)), Settings::default());
                 tokio::task::yield_now().await;
-                let lyra = |fps| {
+                let mira = |fps| {
                     Some(FrameRate {
                         fps,
-                        by: Writer::Lyra,
+                        by: Writer::Mira,
                     })
                 };
                 let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
-                frame_rate.send_replace(lyra(15));
+                frame_rate.send_replace(mira(15));
                 ticks(3).await;
                 assert_eq!(drain(&sent), [set(15.0)]);
                 frame_rate.send_replace(Some(FrameRate {
@@ -524,7 +524,7 @@ mod tests {
                 }));
                 ticks(2).await;
                 assert!(drain(&sent).is_empty());
-                frame_rate.send_replace(lyra(15));
+                frame_rate.send_replace(mira(15));
                 ticks(1).await;
                 assert_eq!(drain(&sent), [set(15.0)]);
             })
@@ -551,7 +551,7 @@ mod tests {
                 frame_rate.send_replace(rate(2, Writer::Game));
                 frame_rate.send_replace(rate(30, Writer::Game));
                 tokio::task::yield_now().await;
-                frame_rate.send_replace(rate(48, Writer::Lyra));
+                frame_rate.send_replace(rate(48, Writer::Mira));
                 tokio::task::yield_now().await;
                 assert_eq!(drain(&sent), [set(2.0)]);
                 settings.send_modify(|settings| settings.rendering.resume());

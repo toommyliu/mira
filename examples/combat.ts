@@ -1,4 +1,4 @@
-import { Combat, Player } from "lyra";
+import { Combat, Player } from "mira";
 
 const MONSTER = "*";
 
