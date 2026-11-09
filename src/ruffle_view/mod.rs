@@ -13,7 +13,7 @@ use std::ops::Range;
 
 use crate::{
     automation::{
-        auto_attack, auto_relogin, auto_zone,
+        auto_attack, auto_relogin, auto_zone, game_settings,
         settings::{Automation, Store},
     },
     ruffle::{Msg, Output, Runtime, view::ViewEvent},
@@ -80,9 +80,11 @@ impl RuffleView {
             .connect_visibility(move |visible| inbox.post(Msg::View(ViewEvent::Visible(visible))));
         let relogin_changes = automation.watch_auto_relogin();
         let zone_changes = automation.watch_auto_zone();
+        let game_changes = automation.watch_game_settings();
         Ok(cx.new(|cx| {
             notify_on_change(relogin_changes, cx);
             notify_on_change(zone_changes, cx);
+            notify_on_change(game_changes, cx);
             cx.spawn(async move |this, cx| {
                 while stats.changed().await.is_ok() {
                     let report = *stats.borrow_and_update();
@@ -271,6 +273,15 @@ impl RuffleView {
         }) {
             tracing::error!(%error, "couldn't save automation settings");
         }
+        cx.notify();
+    }
+
+    fn change_game_settings(
+        &mut self,
+        change: impl FnOnce(&mut game_settings::Settings),
+        cx: &mut Context<Self>,
+    ) {
+        self.automation.update_game_settings(change);
         cx.notify();
     }
 

@@ -187,12 +187,38 @@ pub(super) fn number_field(
     editing: bool,
     fresh: bool,
 ) -> Stateful<Div> {
+    input(id, text, editing, fresh).w(px(52.0)).justify_end()
+}
+
+pub(super) fn text_field(
+    id: impl Into<gpui::ElementId>,
+    text: String,
+    placeholder: &'static str,
+    editing: bool,
+    fresh: bool,
+) -> Stateful<Div> {
+    let empty = text.is_empty() && !editing;
+    input(
+        id,
+        if empty { placeholder.into() } else { text },
+        editing,
+        fresh,
+    )
+    .w(px(180.0))
+    .justify_start()
+    .when(empty, |field| field.text_color(tertiary_text()))
+}
+
+fn input(
+    id: impl Into<gpui::ElementId>,
+    text: String,
+    editing: bool,
+    fresh: bool,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
         .items_center()
-        .justify_end()
-        .w(px(52.0))
         .h(px(22.0))
         .px(px(6.0))
         .rounded(px(5.0))
@@ -201,11 +227,12 @@ pub(super) fn number_field(
         .border_color(if editing { accent() } else { white(0.1) })
         .cursor_text()
         .text_size(TEXT_SIZE)
+        .overflow_hidden()
         .child(
             div()
                 .line_height(px(16.0))
                 .px(px(1.0))
-                .when(editing && fresh, |text| {
+                .when(editing && fresh && !text.is_empty(), |text| {
                     text.bg(accent().opacity(0.35)).rounded(px(2.0))
                 })
                 .child(text),

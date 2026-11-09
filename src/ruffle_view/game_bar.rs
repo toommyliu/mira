@@ -12,12 +12,13 @@ use super::{
     ui::{self, Glyph},
 };
 use crate::automation::{
-    auto_relogin::{Phase, Settings},
-    auto_zone::Room,
+    auto_relogin::Phase, auto_zone::Room, game_settings::Settings as GameSettings,
+    settings::Automation,
 };
 
 const LAST_SERVER: &str = "Last server";
 const MAX_DIGITS: usize = 3;
+const MAX_TEXT: usize = 32;
 const SUBMENU_WIDTH: Pixels = px(200.0);
 const SUBMENU_MAX_HEIGHT: Pixels = px(360.0);
 const SUBMENU_OVERLAP: Pixels = px(2.0);
@@ -25,6 +26,7 @@ const BORDER: Pixels = px(1.0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
+    Options,
     AutoZone,
     AutoRelogin,
     Script,
@@ -41,7 +43,7 @@ impl BarMenu {
         match self {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
-            BarMenu::Script => None,
+            BarMenu::Options | BarMenu::Script => None,
         }
     }
 }
@@ -52,15 +54,20 @@ enum Field {
     Retries,
     Backoff,
     BackoffCap,
+    WalkSpeed,
+    CustomName,
+    CustomGuild,
 }
 
 impl Field {
-    const ALL: [Field; 4] = [
+    const RELOGIN: [Field; 4] = [
         Field::Delay,
         Field::Retries,
         Field::Backoff,
         Field::BackoffCap,
     ];
+    const MOVEMENT: [Field; 1] = [Field::WalkSpeed];
+    const IDENTITY: [Field; 2] = [Field::CustomName, Field::CustomGuild];
 
     fn label(self) -> &'static str {
         match self {
@@ -68,55 +75,111 @@ impl Field {
             Field::Retries => "Retries",
             Field::Backoff => "Backoff",
             Field::BackoffCap => "Backoff cap",
+            Field::WalkSpeed => "Walk speed",
+            Field::CustomName => "Name",
+            Field::CustomGuild => "Guild",
         }
     }
 
     fn unit(self) -> &'static str {
         match self {
-            Field::Retries => "",
             Field::Delay | Field::Backoff | Field::BackoffCap => "s",
+            _ => "",
         }
     }
 
-    fn range(self, settings: &Settings) -> (u32, u32) {
+    fn placeholder(self) -> &'static str {
         match self {
-            Field::Delay => (0, Settings::MAX_DELAY_SECONDS),
-            Field::Retries => (0, Settings::MAX_RETRIES),
-            Field::Backoff => (1, Settings::MAX_BACKOFF_SECONDS),
-            Field::BackoffCap => (settings.backoff_seconds, Settings::MAX_BACKOFF_SECONDS),
+            Field::CustomName => "Own name",
+            Field::CustomGuild => "Own guild",
+            _ => "",
         }
     }
 
-    fn get(self, settings: &Settings) -> u32 {
+    fn is_text(self) -> bool {
+        matches!(self, Field::CustomName | Field::CustomGuild)
+    }
+
+    fn value(self, automation: &Automation) -> String {
+        let relogin = || automation.auto_relogin();
+        let game = || automation.game_settings();
         match self {
-            Field::Delay => settings.delay_seconds,
-            Field::Retries => settings.retries,
-            Field::Backoff => settings.backoff_seconds,
-            Field::BackoffCap => settings.backoff_cap_seconds,
+            Field::Delay => relogin().delay_seconds.to_string(),
+            Field::Retries => relogin().retries.to_string(),
+            Field::Backoff => relogin().backoff_seconds.to_string(),
+            Field::BackoffCap => relogin().backoff_cap_seconds.to_string(),
+            Field::WalkSpeed => game().walk_speed.to_string(),
+            Field::CustomName => game().custom_name.unwrap_or_default(),
+            Field::CustomGuild => game().custom_guild.unwrap_or_default(),
         }
     }
 
-    fn set(self, settings: &mut Settings, value: u32) {
-        let (min, max) = self.range(settings);
-        let value = value.clamp(min, max);
+    fn commit(self, text: String, view: &mut RuffleView, cx: &mut Context<RuffleView>) {
         match self {
-            Field::Delay => settings.delay_seconds = value,
-            Field::Retries => settings.retries = value,
-            Field::Backoff => settings.backoff_seconds = value,
-            Field::BackoffCap => settings.backoff_cap_seconds = value,
+            Field::CustomName => {
+                return view.change_game_settings(|settings| settings.custom_name = Some(text), cx);
+            }
+            Field::CustomGuild => {
+                return view
+                    .change_game_settings(|settings| settings.custom_guild = Some(text), cx);
+            }
+            _ => {}
+        }
+        let Ok(value) = text.parse() else {
+            return;
+        };
+        match self {
+            Field::Delay => view.change_auto_relogin(|settings| settings.delay_seconds = value, cx),
+            Field::Retries => view.change_auto_relogin(|settings| settings.retries = value, cx),
+            Field::Backoff => {
+                view.change_auto_relogin(|settings| settings.backoff_seconds = value, cx)
+            }
+            Field::BackoffCap => {
+                view.change_auto_relogin(|settings| settings.backoff_cap_seconds = value, cx)
+            }
+            Field::WalkSpeed => {
+                view.change_game_settings(|settings| settings.walk_speed = value, cx)
+            }
+            Field::CustomName | Field::CustomGuild => {}
         }
     }
 
     fn after(self, backwards: bool) -> Field {
-        let index = Field::ALL.iter().position(|field| *field == self).unwrap();
-        let count = Field::ALL.len();
-        Field::ALL[if backwards {
+        let group: &[Field] = match self {
+            Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
+            _ => &[Field::WalkSpeed, Field::CustomName, Field::CustomGuild],
+        };
+        let index = group.iter().position(|field| *field == self).unwrap();
+        let count = group.len();
+        group[if backwards {
             (index + count - 1) % count
         } else {
             (index + 1) % count
         }]
     }
 }
+
+type Toggle = (
+    &'static str,
+    &'static str,
+    fn(&mut GameSettings) -> &mut bool,
+);
+
+const TOGGLES: [Toggle; 9] = [
+    ("infinite-range", "Infinite range", |s| {
+        &mut s.infinite_range
+    }),
+    ("provoke-cell", "Provoke cell", |s| &mut s.provoke_cell),
+    ("enemy-magnet", "Enemy magnet", |s| &mut s.enemy_magnet),
+    ("lag-killer", "Lag killer", |s| &mut s.lag_killer),
+    ("hide-players", "Hide players", |s| &mut s.hide_players),
+    ("skip-cutscenes", "Skip cutscenes", |s| {
+        &mut s.skip_cutscenes
+    }),
+    ("animations", "Animations", |s| &mut s.animations),
+    ("collisions", "Collisions", |s| &mut s.collisions),
+    ("ads", "Ads", |s| &mut s.ads),
+];
 
 struct Edit {
     field: Field,
@@ -130,7 +193,7 @@ pub(super) struct BarState {
     aim_from: Option<Point<Pixels>>,
     edit: Option<Edit>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 3]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 4]>>,
     submenu_rows: Rc<Cell<[Bounds<Pixels>; 2]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -226,8 +289,8 @@ impl RuffleView {
                 self.commit_edit(cx);
                 self.start_edit(field.after(shift));
             }
-            "up" | "down" => {
-                let stored = i64::from(field.get(&self.automation.auto_relogin()));
+            "up" | "down" if !field.is_text() => {
+                let stored = field.value(&self.automation).parse().unwrap_or(0);
                 let edit = self.bar.edit.as_mut().unwrap();
                 let step = if shift { 10 } else { 1 };
                 let draft = edit.text.parse().unwrap_or(stored);
@@ -249,6 +312,23 @@ impl RuffleView {
                 }
                 edit.fresh = false;
             }
+            _ if field.is_text() => {
+                let modifiers = event.keystroke.modifiers;
+                let Some(typed) = event.keystroke.key_char.as_deref() else {
+                    return;
+                };
+                if modifiers.platform || modifiers.control {
+                    return;
+                }
+                let edit = self.bar.edit.as_mut().unwrap();
+                if edit.fresh {
+                    edit.text.clear();
+                    edit.fresh = false;
+                }
+                if edit.text.chars().count() + typed.chars().count() <= MAX_TEXT {
+                    edit.text.push_str(typed);
+                }
+            }
             digit if digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit()) => {
                 let edit = self.bar.edit.as_mut().unwrap();
                 if edit.fresh {
@@ -266,10 +346,9 @@ impl RuffleView {
     }
 
     fn start_edit(&mut self, field: Field) {
-        let value = field.get(&self.automation.auto_relogin());
         self.bar.edit = Some(Edit {
             field,
-            text: value.to_string(),
+            text: field.value(&self.automation),
             fresh: true,
         });
     }
@@ -278,9 +357,7 @@ impl RuffleView {
         let Some(edit) = self.bar.edit.take() else {
             return;
         };
-        if let Ok(value) = edit.text.parse() {
-            self.change_auto_relogin(|settings| edit.field.set(settings, value), cx);
-        }
+        edit.field.commit(edit.text, self, cx);
         cx.notify();
     }
 
@@ -408,18 +485,19 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
         .border_color(ui::hairline())
         .text_size(ui::TEXT_SIZE)
         .text_color(ui::text())
+        .child(trigger(view, BarMenu::Options, "Options", None, cx))
         .child(trigger(
             view,
             BarMenu::AutoZone,
             "Auto zone",
-            zone_value(view),
+            Some(zone_value(view)),
             cx,
         ))
         .child(trigger(
             view,
             BarMenu::AutoRelogin,
             "Auto relogin",
-            relogin_value(view),
+            Some(relogin_value(view)),
             cx,
         ))
         .child(
@@ -443,7 +521,7 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             view,
             BarMenu::Script,
             "Script",
-            view.script.label(),
+            Some(view.script.label()),
             cx,
         ))
 }
@@ -464,12 +542,17 @@ fn trigger(
     view: &RuffleView,
     menu: BarMenu,
     title: &'static str,
-    value: SharedString,
+    value: Option<SharedString>,
     cx: &mut Context<RuffleView>,
 ) -> impl IntoElement {
     let triggers = view.bar.triggers.clone();
     let open = view.bar.open == Some(menu);
+    let label = match &value {
+        Some(value) => SharedString::from(format!("{title}: {value}")),
+        None => title.into(),
+    };
     let id = match menu {
+        BarMenu::Options => "options",
         BarMenu::AutoZone => "auto-zone",
         BarMenu::AutoRelogin => "auto-relogin",
         BarMenu::Script => "script",
@@ -483,12 +566,12 @@ fn trigger(
         .child(
             bar_control(id)
                 .role(Role::Button)
-                .aria_label(SharedString::from(format!("{title}: {value}")))
+                .aria_label(label)
                 .aria_expanded(open)
                 .gap(px(7.0))
                 .when(open, |trigger| trigger.bg(ui::pressed()))
                 .child(title)
-                .child(div().text_color(ui::secondary_text()).child(value))
+                .children(value.map(|value| div().text_color(ui::secondary_text()).child(value)))
                 .child(ui::glyph(Glyph::Down, ui::secondary_text()))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -507,6 +590,7 @@ pub(super) fn overlay(
 ) -> impl IntoElement {
     let anchor = view.bar.triggers.get()[menu as usize];
     let panel = match menu {
+        BarMenu::Options => options_panel(view, cx),
         BarMenu::AutoZone => zone_panel(view, cx),
         BarMenu::AutoRelogin => relogin_panel(view, cx),
         BarMenu::Script => script_panel(view, cx),
@@ -613,6 +697,34 @@ fn zone_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> 
         ))
 }
 
+fn options_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
+    let mut settings = view.automation.game_settings();
+    ui::panel("options-panel", px(392.0))
+        .child(ui::section("Gameplay"))
+        .child(
+            div()
+                .grid()
+                .grid_cols(2)
+                .children(TOGGLES.map(|(id, label, setting)| {
+                    toggle_row(id, label, *setting(&mut settings)).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.change_game_settings(
+                                |settings| {
+                                    let on = setting(settings);
+                                    *on = !*on;
+                                },
+                                cx,
+                            )
+                        },
+                    ))
+                })),
+        )
+        .children(Field::MOVEMENT.map(|field| field_row(view, field, cx)))
+        .child(ui::separator())
+        .child(ui::section("Identity"))
+        .children(Field::IDENTITY.map(|field| field_row(view, field, cx)))
+}
+
 fn script_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
     let action = if view.script.running() {
         ui::pressable(ui::row("script-stop"))
@@ -659,7 +771,7 @@ fn relogin_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Di
         ))
         .child(ui::separator())
         .child(ui::section("Login attempts"))
-        .children(Field::ALL.map(|field| field_row(view, field, cx)))
+        .children(Field::RELOGIN.map(|field| field_row(view, field, cx)))
 }
 
 fn field_row(
@@ -667,13 +779,17 @@ fn field_row(
     field: Field,
     cx: &mut Context<RuffleView>,
 ) -> impl IntoElement + use<> {
-    let settings = view.automation.auto_relogin();
     let edit = view.bar.edit.as_ref().filter(|edit| edit.field == field);
-    let text = edit.map_or_else(
-        || field.get(&settings).to_string(),
-        |edit| edit.text.clone(),
-    );
+    let editing = edit.is_some();
+    let fresh = edit.is_some_and(|edit| edit.fresh);
+    let text = edit.map_or_else(|| field.value(&view.automation), |edit| edit.text.clone());
     let name = field.label();
+    let id = SharedString::from(format!("{name}-field"));
+    let input = if field.is_text() {
+        ui::text_field(id, text, field.placeholder(), editing, fresh).role(Role::TextInput)
+    } else {
+        ui::number_field(id, text, editing, fresh).role(Role::SpinButton)
+    };
     ui::row(SharedString::from(format!("{name}-row")))
         .child(name)
         .child(
@@ -681,25 +797,15 @@ fn field_row(
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(
-                    ui::number_field(
-                        SharedString::from(format!("{name}-field")),
-                        text,
-                        edit.is_some(),
-                        edit.is_some_and(|edit| edit.fresh),
-                    )
-                    .role(Role::SpinButton)
-                    .aria_label(name)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.commit_edit(cx);
-                            this.start_edit(field);
-                            cx.notify();
-                        }),
-                    ),
-                )
+                .child(input.aria_label(name).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.commit_edit(cx);
+                        this.start_edit(field);
+                        cx.notify();
+                    }),
+                ))
                 .child(
                     div()
                         .w(px(8.0))
