@@ -140,6 +140,9 @@ pub(crate) async fn join(
     if name == map && here.is_some_and(|here| here.eq_ignore_ascii_case(name)) {
         return jump(loader, cell, Some(pad)).await;
     }
+    if !wait_for_action(loader, GameAction::Tfer).await? {
+        return Ok(false);
+    }
     let deadline = Instant::now() + JOIN_TIMEOUT;
     moves.clear();
     bridge::player::join_map(loader, map, Some(cell), Some(pad))?;
@@ -364,6 +367,7 @@ mod tests {
         pad: String,
         loading: u32,
         art: u32,
+        transfer_lock: u32,
         joins: Vec<Vec<Value>>,
         jumps: Vec<Vec<Value>>,
     }
@@ -376,6 +380,7 @@ mod tests {
             pad: "Spawn".into(),
             loading: 0,
             art: 0,
+            transfer_lock: 0,
             joins: Vec::new(),
             jumps: Vec::new(),
         }
@@ -408,8 +413,15 @@ mod tests {
                     place.art = place.art.saturating_sub(1);
                     Value::Bool(loaded)
                 }
+                "world.isActionAvailable" if args == [Value::String("tfer".into())] => {
+                    let available = place.transfer_lock == 0;
+                    place.transfer_lock = place.transfer_lock.saturating_sub(1);
+                    Value::Bool(available)
+                }
                 "player.joinMap" => {
-                    place.joins.push(args.to_vec());
+                    if place.transfer_lock == 0 {
+                        place.joins.push(args.to_vec());
+                    }
                     Value::Undefined
                 }
                 "player.jump" => {
@@ -466,12 +478,31 @@ mod tests {
             transfer_later(&place, &events, "yulgar", "Room", 0),
         );
         assert_eq!(joined, Ok(true));
-        let place = place.borrow();
-        assert_eq!(place.loading, 0);
-        assert_eq!(
-            place.joins,
-            [vec!["yulgar-1234".into(), "Room".into(), "Spawn".into()]]
+        {
+            let place = place.borrow();
+            assert_eq!(place.loading, 0);
+            assert_eq!(
+                place.joins,
+                [vec!["yulgar-1234".into(), "Room".into(), "Spawn".into()]]
+            );
+        }
+
+        let (loader, place) = traveller(Place {
+            transfer_lock: 5,
+            ..in_map("battleon", "Enter")
+        });
+        let (joined, ()) = tokio::join!(
+            join(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                "yulgar-1234",
+                None,
+                None
+            ),
+            transfer_later(&place, &events, "yulgar", "Enter", 0),
         );
+        assert_eq!(joined, Ok(true));
+        assert_eq!(place.borrow().joins.len(), 1);
     }
 
     #[tokio::test(start_paused = true)]
