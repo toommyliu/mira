@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     combat::selector,
     enhancements::{self, Kind, Slot},
-    wait_for_action, wait_until_ready,
+    retry_after_combat, wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
     self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
@@ -474,18 +474,21 @@ async fn equip_gear(
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     item: &Item,
 ) -> Result<bool, CallError> {
-    if !wait_for_action(loader, GameAction::EquipItem).await? {
-        return Ok(false);
-    }
-    let replies = Packets::<EquipItemPacket>::subscribe(subscribe);
-    if !bridge::inventory::equip(loader, by_id(item.item_id))? {
-        return Ok(false);
-    }
-    let uid = bridge::player::get_user_id(loader)?;
-    Ok(reply(&replies, |packet| {
-        (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
+    retry_after_combat(subscribe, async || {
+        if !wait_for_action(loader, GameAction::EquipItem).await? {
+            return Ok(false);
+        }
+        let replies = Packets::<EquipItemPacket>::subscribe(subscribe);
+        if !bridge::inventory::equip(loader, by_id(item.item_id))? {
+            return Ok(false);
+        }
+        let uid = bridge::player::get_user_id(loader)?;
+        Ok(reply(&replies, |packet| {
+            (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
+        })
+        .await)
     })
-    .await)
+    .await
 }
 
 async fn equip_consumable(
@@ -496,23 +499,26 @@ async fn equip_consumable(
     let Some(action) = item.consumable_action() else {
         return Ok(false);
     };
-    let replies = Packets::<SeiaPacket>::subscribe(subscribe);
-    if !bridge::inventory::equip(loader, by_id(item.item_id))? {
-        return Ok(false);
-    }
-    let loaded = reply(&replies, |packet| {
-        (packet.o?.id == Some(action)).then_some(packet.accepted)
+    retry_after_combat(subscribe, async || {
+        let replies = Packets::<SeiaPacket>::subscribe(subscribe);
+        if !bridge::inventory::equip(loader, by_id(item.item_id))? {
+            return Ok(false);
+        }
+        let loaded = reply(&replies, |packet| {
+            (packet.o?.id == Some(action)).then_some(packet.accepted)
+        })
+        .await;
+        // seia carries only the action id, which items with the same sMeta share.
+        Ok(loaded
+            && self::item(
+                loader,
+                &ItemQuery::ItemId {
+                    item_id: item.item_id,
+                },
+            )?
+            .is_some_and(|now| now.equipped))
     })
-    .await;
-    // seia carries only the action id, which items with the same sMeta share.
-    Ok(loaded
-        && self::item(
-            loader,
-            &ItemQuery::ItemId {
-                item_id: item.item_id,
-            },
-        )?
-        .is_some_and(|now| now.equipped))
+    .await
 }
 
 async fn wear_item(
@@ -520,18 +526,22 @@ async fn wear_item(
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     item: &Item,
 ) -> Result<bool, CallError> {
-    if !wait_for_action(loader, GameAction::WearItem).await? {
-        return Ok(false);
-    }
-    let replies = Packets::<WearItemPacket>::subscribe(subscribe);
-    if !bridge::inventory::wear(loader, by_id(item.item_id))? {
-        return Ok(false);
-    }
-    let uid = bridge::player::get_user_id(loader)?;
-    Ok(reply(&replies, |packet| {
-        (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(packet.success)
+    retry_after_combat(subscribe, async || {
+        if !wait_for_action(loader, GameAction::WearItem).await? {
+            return Ok(false);
+        }
+        let replies = Packets::<WearItemPacket>::subscribe(subscribe);
+        if !bridge::inventory::wear(loader, by_id(item.item_id))? {
+            return Ok(false);
+        }
+        let uid = bridge::player::get_user_id(loader)?;
+        Ok(reply(&replies, |packet| {
+            (packet.item_id == Some(item.item_id) && packet.uid == Some(uid))
+                .then_some(packet.success)
+        })
+        .await)
     })
-    .await)
+    .await
 }
 
 pub(crate) async fn wear(
@@ -560,18 +570,21 @@ pub(crate) async fn unequip(
     if item.usable() {
         return bridge::inventory::unequip(loader, by_id(item.item_id));
     }
-    if !wait_for_action(loader, GameAction::UnequipItem).await? {
-        return Ok(false);
-    }
-    let replies = Packets::<UnequipItemPacket>::subscribe(&subscribe);
-    if !bridge::inventory::unequip(loader, by_id(item.item_id))? {
-        return Ok(false);
-    }
-    let uid = bridge::player::get_user_id(loader)?;
-    Ok(reply(&replies, |packet| {
-        (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
+    retry_after_combat(&subscribe, async || {
+        if !wait_for_action(loader, GameAction::UnequipItem).await? {
+            return Ok(false);
+        }
+        let replies = Packets::<UnequipItemPacket>::subscribe(&subscribe);
+        if !bridge::inventory::unequip(loader, by_id(item.item_id))? {
+            return Ok(false);
+        }
+        let uid = bridge::player::get_user_id(loader)?;
+        Ok(reply(&replies, |packet| {
+            (packet.item_id == Some(item.item_id) && packet.uid == Some(uid)).then_some(true)
+        })
+        .await)
     })
-    .await)
+    .await
 }
 
 pub(crate) async fn use_item(
@@ -649,8 +662,9 @@ mod tests {
     }
 
     fn packet(data: serde_json::Value) -> Event {
+        let format = if data.is_array() { "str" } else { "json" };
         Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": data }).to_string(),
+            packet: json!({ "type": format, "dataObj": data }).to_string(),
         }
     }
 
@@ -786,7 +800,41 @@ mod tests {
             Ok(true)
         );
 
-        let (loader, events, _) = bag(vec![armor()], vec![("inventory.equip", vec![other])]);
+        let (loader, events, _) = bag(
+            vec![armor()],
+            vec![("inventory.equip", vec![other.clone()])],
+        );
+        let subscribe = |wants| events.subscribe(wants);
+        assert_eq!(
+            equip(&loader, subscribe, &by_name("Armor"), false).await,
+            Ok(false)
+        );
+
+        let too_soon = json!(["warning", "-1", "You cannot do that too soon after combat."]);
+        let (loader, events, retried) = bag(
+            vec![armor()],
+            vec![
+                ("inventory.equip", vec![too_soon.clone()]),
+                ("inventory.equip", vec![too_soon.clone()]),
+                (
+                    "inventory.equip",
+                    vec![json!({ "cmd": "equipItem", "ItemID": 5518, "uid": UID })],
+                ),
+            ],
+        );
+        let subscribe = |wants| events.subscribe(wants);
+        assert_eq!(
+            equip(&loader, subscribe, &by_name("Armor"), false).await,
+            Ok(true)
+        );
+        assert_eq!(retried.borrow().sent.len(), 3);
+
+        let (loader, events, _) = bag(
+            vec![armor()],
+            (0..60)
+                .map(|_| ("inventory.equip", vec![too_soon.clone()]))
+                .collect(),
+        );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
             equip(&loader, subscribe, &by_name("Armor"), false).await,
