@@ -6,7 +6,7 @@ use tokio::time::{Instant, timeout_at};
 use super::{
     POLL, State, arrive,
     inventory::{self, ItemQuery, Row},
-    poll, wait_for_action, wait_until_ready, world,
+    players, poll, wait_for_action, wait_until_ready, world,
 };
 use crate::bridge::{
     self, CallError, Format, GameAction, Interruption, Loader, Packet, Packets, Value,
@@ -163,6 +163,32 @@ pub(crate) async fn join(
         }
         Ok((bridge::world::is_cell_ready(loader, cell, None)?
             && bridge::player::is_loaded(loader)?)
+        .then_some(true))
+    })
+    .await
+}
+
+pub(crate) async fn go_to(loader: &impl Loader, username: &str) -> Result<bool, CallError> {
+    let username = username.trim();
+    if username.is_empty()
+        || !wait_until_ready(loader).await?
+        || !wait_for_action(loader, GameAction::Tfer).await?
+    {
+        return Ok(false);
+    }
+    bridge::player::go_to_player(loader, username)?;
+    arrive(loader, JOIN_TIMEOUT, || {
+        if !bridge::world::is_loaded(loader)? || !bridge::player::is_loaded(loader)? {
+            return Ok(None);
+        }
+        let (Some(target), Some(cell)) = (
+            players::get(loader, username)?,
+            bridge::player::get_cell(loader)?,
+        ) else {
+            return Ok(None);
+        };
+        Ok((target.cell.eq_ignore_ascii_case(&cell)
+            && bridge::world::is_cell_ready(loader, &cell, None)?)
         .then_some(true))
     })
     .await
@@ -369,6 +395,8 @@ mod tests {
         transfer_lock: u32,
         joins: Vec<Vec<Value>>,
         jumps: Vec<Vec<Value>>,
+        gotos: Vec<Value>,
+        friend: Option<(&'static str, &'static str)>,
     }
 
     fn in_map(map: &str, cell: &str) -> Place {
@@ -382,6 +410,8 @@ mod tests {
             transfer_lock: 0,
             joins: Vec::new(),
             jumps: Vec::new(),
+            gotos: Vec::new(),
+            friend: None,
         }
     }
 
@@ -429,6 +459,28 @@ mod tests {
                     place.pad = text(&args[1]);
                     Value::Undefined
                 }
+                "player.goToPlayer" => {
+                    place.gotos.push(args[0].clone());
+                    Value::Undefined
+                }
+                "player.getCell" => Value::String(place.cell.clone()),
+                "players.get" => match place.friend {
+                    Some((map, cell))
+                        if args == [Value::String("player2".into())] && place.map == map =>
+                    {
+                        Value::Object(
+                            [
+                                ("username", Value::String("player2".into())),
+                                ("userId", Value::Number(2.0)),
+                                ("cell", Value::String(cell.into())),
+                            ]
+                            .into_iter()
+                            .map(|(key, value)| (key.to_owned(), value))
+                            .collect(),
+                        )
+                    }
+                    _ => Value::Null,
+                },
                 "world.isCellReady" => Value::Bool(
                     place.loading == 0
                         && place.cell.eq_ignore_ascii_case(&text(&args[0]))
@@ -502,6 +554,35 @@ mod tests {
         );
         assert_eq!(joined, Ok(true));
         assert_eq!(place.borrow().joins.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn going_to_a_player_finishes_in_their_room_and_cell() {
+        let (loader, place) = traveller(Place {
+            friend: Some(("yulgar", "Room")),
+            transfer_lock: 5,
+            ..in_map("battleon", "Enter")
+        });
+        let events = Events::default();
+        let (arrived, ()) = tokio::join!(
+            go_to(&loader, " player2 "),
+            transfer_later(&place, &events, "yulgar", "Room", 2),
+        );
+        assert_eq!(arrived, Ok(true));
+        assert_eq!(place.borrow().gotos, [Value::String("player2".into())]);
+
+        let (loader, place) = traveller(Place {
+            friend: Some(("battleon", "r2")),
+            ..in_map("battleon", "Enter")
+        });
+        let started = Instant::now();
+        assert_eq!(go_to(&loader, "player2").await, Ok(false));
+        assert_eq!(started.elapsed(), JOIN_TIMEOUT);
+        assert_eq!(place.borrow().gotos.len(), 1);
+
+        let (loader, place) = traveller(in_map("battleon", "Enter"));
+        assert_eq!(go_to(&loader, " ").await, Ok(false));
+        assert!(place.borrow().gotos.is_empty());
     }
 
     #[tokio::test(start_paused = true)]

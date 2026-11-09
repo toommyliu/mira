@@ -1376,6 +1376,7 @@ export default function* () {
   yield* Player.getAuras();
   yield* Player.getAura("Spirit Power");
   yield* Player.hasAura("Spirit Power");
+  yield* Player.goToPlayer("player2");
   yield* Players.getAll();
   yield* Players.get("player1");
 }
@@ -1447,6 +1448,9 @@ export default function* () {
             },
             P::HasAura {
                 name: "Spirit Power".into(),
+            },
+            P::GoToPlayer {
+                username: "player2".into(),
             },
         ]
         .map(Request::Player),

@@ -144,7 +144,7 @@ pub(crate) struct RoomPlayer {
     username: String,
     user_id: i32,
     position: Option<Position>,
-    cell: String,
+    pub(crate) cell: String,
     pad: String,
     hp: f64,
     max_hp: f64,

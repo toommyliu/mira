@@ -46,6 +46,9 @@ pub(crate) enum Request {
         cell: String,
         pad: Option<String>,
     },
+    GoToPlayer {
+        username: String,
+    },
     WalkTo {
         x: f64,
         y: f64,
@@ -99,6 +102,7 @@ impl Request {
             | Request::HasAura { .. }
             | Request::JoinMap { .. }
             | Request::JumpToCell { .. }
+            | Request::GoToPlayer { .. }
             | Request::WalkTo { .. }
             | Request::Rest { .. }
             | Request::EquipOutfit { .. }
@@ -127,6 +131,9 @@ pub(super) async fn serve(
         ),
         Request::JumpToCell { cell, pad } => {
             json!(domain::player::jump(loader, &cell, pad.as_deref()).await?)
+        }
+        Request::GoToPlayer { username } => {
+            json!(domain::player::go_to(loader, &username).await?)
         }
         Request::WalkTo { x, y, speed } => {
             json!(domain::player::walk_and_arrive(loader, x as i32, y as i32, speed).await?)
@@ -230,6 +237,12 @@ mod tests {
                     map: "battleon".into(),
                     cell: None,
                     pad: None,
+                },
+                json!(false),
+            ),
+            (
+                Request::GoToPlayer {
+                    username: "player2".into(),
                 },
                 json!(false),
             ),
