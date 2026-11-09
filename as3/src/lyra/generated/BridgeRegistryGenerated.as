@@ -138,9 +138,9 @@ package lyra.generated
       external.externalize("settings.setCustomGuild", Settings.setCustomGuild);
       external.externalize("settings.setCustomName", Settings.setCustomName);
       external.externalize("settings.setFrameRate", Settings.setFrameRate);
-      external.externalize("settings.setLagKillerEnabled", Settings.setLagKillerEnabled);
       external.externalize("settings.setOtherPlayersVisible", Settings.setOtherPlayersVisible);
       external.externalize("settings.setWalkSpeed", Settings.setWalkSpeed);
+      external.externalize("settings.setWorldVisible", Settings.setWorldVisible);
       external.externalize("settings.skipCutscenes", Settings.skipCutscenes);
       external.externalize("shops.buy", Shops.buy);
       external.externalize("shops.canBuyItem", Shops.canBuyItem);

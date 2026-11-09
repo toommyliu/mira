@@ -1161,7 +1161,7 @@ export default function* () {
                 enemy_magnet: None,
                 skip_cutscenes: None,
                 hide_players: Some(true),
-                lag_killer: None,
+                rendering: None,
                 animations: None,
                 collisions: None,
                 ads: None,

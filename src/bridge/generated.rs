@@ -941,15 +941,6 @@ pub(crate) mod settings {
         Ok(decode("settings.setFrameRate", reply)?)
     }
 
-    pub(crate) fn set_lag_killer_enabled(
-        loader: &impl Loader,
-        enabled: bool,
-    ) -> Result<(), CallError> {
-        let call_args = vec![Value::Bool(enabled)];
-        let reply = loader.call("settings.setLagKillerEnabled", call_args)?;
-        Ok(decode("settings.setLagKillerEnabled", reply)?)
-    }
-
     pub(crate) fn set_other_players_visible(
         loader: &impl Loader,
         visible: bool,
@@ -963,6 +954,12 @@ pub(crate) mod settings {
         let call_args = vec![Value::Number(f64::from(speed))];
         let reply = loader.call("settings.setWalkSpeed", call_args)?;
         Ok(decode("settings.setWalkSpeed", reply)?)
+    }
+
+    pub(crate) fn set_world_visible(loader: &impl Loader, visible: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(visible)];
+        let reply = loader.call("settings.setWorldVisible", call_args)?;
+        Ok(decode("settings.setWorldVisible", reply)?)
     }
 
     pub(crate) fn skip_cutscenes(loader: &impl Loader) -> Result<(), CallError> {

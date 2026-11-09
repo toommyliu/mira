@@ -5,6 +5,7 @@ use super::calls::Reply;
 use crate::automation::{
     auto_relogin,
     auto_zone::{self, Room},
+    game_settings::RenderingMode,
     settings::Automation,
 };
 
@@ -23,7 +24,7 @@ pub(crate) enum SettingsRequest {
         enemy_magnet: Option<bool>,
         skip_cutscenes: Option<bool>,
         hide_players: Option<bool>,
-        lag_killer: Option<bool>,
+        rendering: Option<RenderingMode>,
         animations: Option<bool>,
         collisions: Option<bool>,
         ads: Option<bool>,
@@ -120,7 +121,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
             enemy_magnet,
             skip_cutscenes,
             hide_players,
-            lag_killer,
+            rendering,
             animations,
             collisions,
             ads,
@@ -135,7 +136,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.enemy_magnet, enemy_magnet);
                 apply(&mut settings.skip_cutscenes, skip_cutscenes);
                 apply(&mut settings.hide_players, hide_players);
-                apply(&mut settings.lag_killer, lag_killer);
+                apply(&mut settings.rendering, rendering);
                 apply(&mut settings.animations, animations);
                 apply(&mut settings.collisions, collisions);
                 apply(&mut settings.ads, ads);
@@ -247,6 +248,7 @@ mod tests {
         let update = serde_json::from_value(json!({
             "op": "update",
             "hidePlayers": true,
+            "rendering": "interface-only",
             "walkSpeed": 500,
             "frameRate": 500,
             "customName": "  player1  ",
@@ -260,7 +262,7 @@ mod tests {
                 "enemyMagnet": false,
                 "skipCutscenes": false,
                 "hidePlayers": true,
-                "lagKiller": false,
+                "rendering": "interface-only",
                 "animations": true,
                 "collisions": true,
                 "ads": true,

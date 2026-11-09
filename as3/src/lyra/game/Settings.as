@@ -5,7 +5,7 @@ package lyra.game {
 
   [BridgeNamespace("settings")]
   public class Settings {
-    private static var lagKillerEnabled:Boolean = false;
+    private static var worldVisible:Boolean = true;
 
     private static function sanitizeText(value:String):String {
       return value ? value : "";
@@ -21,7 +21,7 @@ package lyra.game {
     }
 
     private static function applyWorldVisibility():void {
-      Main.Game.world.visible = !lagKillerEnabled;
+      Main.Game.world.visible = worldVisible;
     }
 
     [BridgeExport]
@@ -115,8 +115,8 @@ package lyra.game {
     }
 
     [BridgeExport]
-    public static function setLagKillerEnabled(enabled:Boolean):void {
-      lagKillerEnabled = enabled;
+    public static function setWorldVisible(visible:Boolean):void {
+      worldVisible = visible;
       applyWorldVisibility();
     }
   }

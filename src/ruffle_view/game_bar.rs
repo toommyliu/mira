@@ -12,7 +12,9 @@ use super::{
     ui::{self, Glyph},
 };
 use crate::automation::{
-    auto_relogin::Phase, auto_zone::Room, game_settings::Settings as GameSettings,
+    auto_relogin::Phase,
+    auto_zone::Room,
+    game_settings::{RenderingMode, Settings as GameSettings},
     settings::Automation,
 };
 
@@ -36,6 +38,7 @@ pub(super) enum BarMenu {
 enum Submenu {
     Rooms,
     Servers,
+    Rendering,
 }
 
 impl BarMenu {
@@ -43,7 +46,8 @@ impl BarMenu {
         match self {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
-            BarMenu::Options | BarMenu::Script => None,
+            BarMenu::Options => Some(Submenu::Rendering),
+            BarMenu::Script => None,
         }
     }
 }
@@ -180,13 +184,12 @@ type Toggle = (
     fn(&mut GameSettings) -> &mut bool,
 );
 
-const TOGGLES: [Toggle; 9] = [
+const TOGGLES: [Toggle; 8] = [
     ("infinite-range", "Infinite range", |s| {
         &mut s.infinite_range
     }),
     ("provoke-cell", "Provoke cell", |s| &mut s.provoke_cell),
     ("enemy-magnet", "Enemy magnet", |s| &mut s.enemy_magnet),
-    ("lag-killer", "Lag killer", |s| &mut s.lag_killer),
     ("hide-players", "Hide players", |s| &mut s.hide_players),
     ("skip-cutscenes", "Skip cutscenes", |s| {
         &mut s.skip_cutscenes
@@ -209,7 +212,7 @@ pub(super) struct BarState {
     edit: Option<Edit>,
     focus: FocusHandle,
     triggers: Rc<Cell<[Bounds<Pixels>; 4]>>,
-    submenu_rows: Rc<Cell<[Bounds<Pixels>; 2]>>,
+    submenu_rows: Rc<Cell<[Bounds<Pixels>; 3]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
 
@@ -734,6 +737,13 @@ fn options_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Di
                     ))
                 })),
         )
+        .child(submenu_row(
+            view,
+            Submenu::Rendering,
+            "Rendering",
+            settings.rendering.label().into(),
+            cx,
+        ))
         .children(Field::MOVEMENT.map(|field| field_row(view, field, cx)))
         .child(ui::separator())
         .child(ui::section("Identity"))
@@ -852,6 +862,17 @@ fn submenu_panel(
             }))
         }
         Submenu::Servers => servers(view, panel, cx),
+        Submenu::Rendering => {
+            let selected = view.automation.game_settings().rendering;
+            panel.children(RenderingMode::ALL.map(|mode| {
+                choice_row(mode.label(), mode.label(), selected == mode).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.change_game_settings(|settings| settings.rendering = mode, cx);
+                        this.close_submenu();
+                    },
+                ))
+            }))
+        }
     };
     let bounds = view.bar.submenu_panel.clone();
     deferred(

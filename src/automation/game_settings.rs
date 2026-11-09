@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch,
     time::{Instant, sleep_until},
@@ -13,6 +13,25 @@ use crate::{
 
 const TICK: Duration = Duration::from_millis(500);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum RenderingMode {
+    #[default]
+    Full,
+    InterfaceOnly,
+}
+
+impl RenderingMode {
+    pub(crate) const ALL: [RenderingMode; 2] = [RenderingMode::Full, RenderingMode::InterfaceOnly];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            RenderingMode::Full => "Full",
+            RenderingMode::InterfaceOnly => "Interface only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
@@ -21,7 +40,7 @@ pub(crate) struct Settings {
     pub(crate) enemy_magnet: bool,
     pub(crate) skip_cutscenes: bool,
     pub(crate) hide_players: bool,
-    pub(crate) lag_killer: bool,
+    pub(crate) rendering: RenderingMode,
     pub(crate) animations: bool,
     pub(crate) collisions: bool,
     pub(crate) ads: bool,
@@ -54,7 +73,7 @@ impl Default for Settings {
             enemy_magnet: false,
             skip_cutscenes: false,
             hide_players: false,
-            lag_killer: false,
+            rendering: RenderingMode::Full,
             animations: true,
             collisions: true,
             ads: true,
@@ -90,7 +109,7 @@ impl Settings {
 
     fn overrides_the_game(&self) -> bool {
         let default = Self::default();
-        self.lag_killer != default.lag_killer || self.walk_speed != default.walk_speed
+        self.rendering != default.rendering || self.walk_speed != default.walk_speed
     }
 }
 
@@ -205,10 +224,10 @@ fn step(loader: &impl Loader, desired: &Settings, applied: &mut Settings, tick: 
         settings::set_ads_visible(loader, *visible)
     });
     sync(
-        &desired.lag_killer,
-        &mut applied.lag_killer,
-        tick && desired.lag_killer != default.lag_killer,
-        |on| settings::set_lag_killer_enabled(loader, *on),
+        &desired.rendering,
+        &mut applied.rendering,
+        tick && desired.rendering != default.rendering,
+        |mode| settings::set_world_visible(loader, *mode == RenderingMode::Full),
     );
     sync(
         &desired.walk_speed,

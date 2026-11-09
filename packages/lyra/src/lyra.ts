@@ -454,14 +454,16 @@ export const Shops = {
     shops<boolean>("sell", { query, ...options }),
 };
 
+/** `"interface-only"` hides the map and everyone in it, leaving the interface. */
+export type RenderingMode = "full" | "interface-only";
+
 export type GameSettings = {
   readonly infiniteRange: boolean;
   readonly provokeCell: boolean;
   readonly enemyMagnet: boolean;
   readonly skipCutscenes: boolean;
   readonly hidePlayers: boolean;
-  /** Hides the map and everyone in it, leaving the interface. */
-  readonly lagKiller: boolean;
+  readonly rendering: RenderingMode;
   readonly animations: boolean;
   readonly collisions: boolean;
   /** `false` hides the death screen ad and keeps the Game Menu's news carousel from opening on its own. */
