@@ -296,6 +296,7 @@ export const Combat = {
   getSkillCooldown: (skill: Skill) => combat<number>("skillCooldown", { skill }),
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
+  exit: () => combat<boolean>("exit"),
   kill: (query: MonsterQuery, { skillInterval, ...options }: KillOptions = {}) =>
     combat<boolean>("kill", { query, ...options, skillIntervalMs: millis(skillInterval) }),
   hunt: (query: MonsterQuery, options: HuntOptions = {}) =>

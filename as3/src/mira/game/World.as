@@ -201,6 +201,7 @@ public class World
           level: Number(mon.dataLeaf.iLvl || mon.objData.iLvl),
           state: int(mon.dataLeaf.intState),
           available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0,
+          aggressive: mon.objData.bRed == 1,
           auras: Auras.rows(mon.dataLeaf)
         });
       }

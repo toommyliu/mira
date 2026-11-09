@@ -40,6 +40,7 @@ pub(crate) enum Request {
     },
     CancelTarget,
     CancelAutoAttack,
+    Exit,
     Kill {
         query: MonsterQuery,
         skills: Option<Vec<Skill>>,
@@ -64,6 +65,7 @@ impl Request {
             | Request::Attack { .. }
             | Request::UseSkill { .. }
             | Request::CanUseSkill { .. }
+            | Request::Exit
             | Request::Kill { .. } => json!(false),
         }
     }
@@ -114,6 +116,7 @@ pub(super) async fn serve(
             query,
             prefer_most_matches,
         } => json!(combat::hunt(loader, &query, prefer_most_matches.unwrap_or(false)).await?),
+        Request::Exit => json!(combat::exit(loader).await?),
         Request::Target => json!(combat::target(loader)?),
         Request::HasTarget => json!(bridge::combat::has_target(loader)?),
         Request::Attack { query } => json!(combat::attack(loader, &query)?),
@@ -162,6 +165,7 @@ mod tests {
             (Request::SkillCooldown { skill: skill() }, json!(0)),
             (Request::CancelTarget, json!(null)),
             (Request::CancelAutoAttack, json!(null)),
+            (Request::Exit, json!(false)),
             (
                 Request::Kill {
                     query: frogzard(),

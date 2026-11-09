@@ -54,6 +54,8 @@ pub(crate) struct Monster {
     auras: Vec<Aura>,
     #[serde(skip)]
     available: bool,
+    #[serde(skip)]
+    pub(crate) aggressive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -427,6 +429,7 @@ pub(crate) fn monster_from(value: Value) -> Option<Monster> {
         state: State::from_game(number("state") as i32),
         auras,
         available: matches!(fields.get("available"), Some(Value::Bool(true))),
+        aggressive: matches!(fields.get("aggressive"), Some(Value::Bool(true))),
     })
 }
 

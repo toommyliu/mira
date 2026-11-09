@@ -1,13 +1,17 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::{pin, select, time::sleep};
+use tokio::{
+    pin, select,
+    time::{Instant, sleep},
+};
 
 use super::{
-    auth, has_avatar,
+    POLL, State, auth, has_avatar,
     inventory::{self, TurnInPacket},
     player,
     players::{self, RoomPlayer},
+    poll,
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
@@ -17,6 +21,8 @@ use crate::bridge::{
 pub(crate) const TICK: Duration = Duration::from_millis(200);
 pub(crate) const MIN_SKILL_INTERVAL: Duration = Duration::from_millis(50);
 const CONSUMED_TIMEOUT: Duration = Duration::from_secs(5);
+const EXIT_TIMEOUT: Duration = Duration::from_millis(2_500);
+const STAY_IDLE: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_ROTATION: [Skill; 4] = [Skill(1), Skill(2), Skill(3), Skill(4)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -91,6 +97,64 @@ pub(crate) async fn hunt(
     let reached =
         prey.cell.eq_ignore_ascii_case(&here) || player::jump(loader, &prey.cell, None).await?;
     Ok(reached.then_some(prey))
+}
+
+pub(crate) async fn exit(loader: &impl Loader) -> Result<bool, CallError> {
+    match player::state(loader)? {
+        Some(State::Idle) => return Ok(true),
+        Some(State::Combat) => {}
+        Some(State::Dead) | None => return Ok(false),
+    }
+    let here = bridge::player::get_cell(loader)?.unwrap_or_default();
+    let pad = bridge::player::get_pad(loader)?;
+    let cells = exit_cells(
+        world::cells(loader)?,
+        &world::monsters(loader, None)?,
+        &here,
+    );
+    for cell in cells.iter().cycle() {
+        bridge::combat::cancel_auto_attack(loader)?;
+        bridge::combat::cancel_target(loader)?;
+        let pad = pad.as_deref().filter(|_| cell.eq_ignore_ascii_case(&here));
+        player::jump(loader, cell, pad).await?;
+        if let Some(left) = settle(loader).await? {
+            return Ok(left);
+        }
+    }
+    Ok(false)
+}
+
+fn exit_cells(cells: Vec<String>, monsters: &[Monster], here: &str) -> Vec<String> {
+    let occupied = |cell: &str, aggressive: bool| {
+        monsters.iter().any(|monster| {
+            monster.cell.eq_ignore_ascii_case(cell) && (monster.aggressive || !aggressive)
+        })
+    };
+    let mut cells: Vec<String> = cells
+        .into_iter()
+        .filter(|cell| {
+            !matches!(cell.to_ascii_lowercase().as_str(), "" | "blank" | "wait")
+                && !occupied(cell, true)
+        })
+        .collect();
+    cells.sort_by_key(|cell| (occupied(cell, false), !cell.eq_ignore_ascii_case(here)));
+    cells
+}
+
+async fn settle(loader: &impl Loader) -> Result<Option<bool>, CallError> {
+    let mut idle_since = None;
+    poll(POLL, EXIT_TIMEOUT, || {
+        if !has_avatar(loader)? || !player::alive(loader)? {
+            return Ok(Some(false));
+        }
+        if player::state(loader)? != Some(State::Idle) {
+            idle_since = None;
+            return Ok(None);
+        }
+        let since = *idle_since.get_or_insert_with(Instant::now);
+        Ok((since.elapsed() >= STAY_IDLE).then_some(true))
+    })
+    .await
 }
 
 pub(crate) async fn use_skill(
@@ -846,6 +910,173 @@ mod tests {
                 usize::from(jumped),
                 "{query:?}"
             );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exiting_combat_jumps_to_cells_without_aggressive_monsters_until_idle() {
+        struct Case {
+            here: &'static str,
+            state: f64,
+            aggressive: &'static [&'static str],
+            calm: &'static [&'static str],
+            reaggro: &'static [&'static str],
+            dies_after: Option<usize>,
+            logs_out_after: Option<usize>,
+            left: bool,
+            jumps: &'static [(&'static str, &'static str)],
+        }
+        let (dead, idle, fighting) = (0.0, 1.0, 2.0);
+        let fight = Case {
+            here: "r2",
+            state: fighting,
+            aggressive: &["r1"],
+            calm: &[],
+            reaggro: &[],
+            dies_after: None,
+            logs_out_after: None,
+            left: true,
+            jumps: &[],
+        };
+        for case in [
+            Case {
+                state: idle,
+                ..fight
+            },
+            Case {
+                state: dead,
+                left: false,
+                ..fight
+            },
+            Case {
+                here: "r3",
+                calm: &["r3"],
+                jumps: &[("r3", "Left")],
+                ..fight
+            },
+            Case {
+                calm: &["r2"],
+                jumps: &[("Enter", "Spawn"), ("r3", "Spawn"), ("r2", "Left")],
+                ..fight
+            },
+            Case {
+                here: "r1",
+                calm: &["Enter", "r1"],
+                jumps: &[("Enter", "Spawn")],
+                ..fight
+            },
+            Case {
+                calm: &["Enter", "r3"],
+                reaggro: &["Enter"],
+                jumps: &[("Enter", "Spawn"), ("r3", "Spawn")],
+                ..fight
+            },
+            Case {
+                dies_after: Some(5),
+                left: false,
+                jumps: &[
+                    ("Enter", "Spawn"),
+                    ("r3", "Spawn"),
+                    ("r2", "Left"),
+                    ("r4", "Spawn"),
+                    ("Enter", "Spawn"),
+                ],
+                ..fight
+            },
+            Case {
+                logs_out_after: Some(2),
+                left: false,
+                jumps: &[("Enter", "Spawn"), ("r3", "Spawn")],
+                ..fight
+            },
+            Case {
+                aggressive: &["Enter", "r1", "r2", "r3", "r4"],
+                left: false,
+                ..fight
+            },
+        ] {
+            let Case {
+                here,
+                state,
+                aggressive,
+                calm,
+                reaggro,
+                dies_after,
+                logs_out_after,
+                left,
+                jumps,
+            } = case;
+            let at = Rc::new(RefCell::new((here.to_owned(), None::<Instant>, 0)));
+            let jumped = Rc::new(RefCell::new(Vec::new()));
+            let (state_at, jumps_seen) = (at.clone(), jumped.clone());
+            let loader = FakeLoader::new(move |callback, args| {
+                let mut at = state_at.borrow_mut();
+                let died = dies_after.is_some_and(|after| at.2 >= after);
+                let logged_out = logs_out_after.is_some_and(|after| at.2 >= after);
+                if logged_out && matches!(callback, "player.getState" | "player.getHp") {
+                    return Err(CallError::Threw {
+                        callback,
+                        message: "myAvatar is null".into(),
+                    });
+                }
+                Ok(match callback {
+                    "auth.isLoggedIn" => Value::Bool(!logged_out),
+                    "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
+                    "flash.isNull" => Value::Bool(false),
+                    "player.getCell" => Value::String(at.0.clone()),
+                    "player.getPad" => Value::String("Left".into()),
+                    "player.getHp" => number(if died { 0.0 } else { 100.0 }),
+                    "player.getState" => number(match at.1 {
+                        _ if died => dead,
+                        None => state,
+                        Some(since)
+                            if reaggro.contains(&at.0.as_str())
+                                && since.elapsed() >= Duration::from_millis(200) =>
+                        {
+                            fighting
+                        }
+                        Some(_) if calm.contains(&at.0.as_str()) => idle,
+                        Some(_) => fighting,
+                    }),
+                    "world.getCells" => Value::List(
+                        ["Enter", "Blank", "r1", "r2", "r3", "r4"]
+                            .map(|cell| Value::String(cell.into()))
+                            .to_vec(),
+                    ),
+                    "world.getMonsters" => Value::List(
+                        ["r2", "r4"]
+                            .into_iter()
+                            .map(|cell| (cell, false))
+                            .chain(aggressive.iter().map(|cell| (*cell, true)))
+                            .zip(1..)
+                            .map(|((cell, aggressive), id)| {
+                                row(&[
+                                    ("monMapId", number(f64::from(id))),
+                                    ("cell", Value::String(cell.into())),
+                                    ("aggressive", Value::Bool(aggressive)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                    "combat.cancelAutoAttack" | "combat.cancelTarget" => Value::Null,
+                    "player.jump" => {
+                        let [Value::String(cell), Value::String(pad)] = args else {
+                            panic!("jump needs a cell and pad: {args:?}");
+                        };
+                        jumps_seen.borrow_mut().push((cell.clone(), pad.clone()));
+                        *at = (cell.clone(), Some(Instant::now()), at.2 + 1);
+                        Value::Undefined
+                    }
+                    "world.isCellReady" => Value::Bool(args[0] == Value::String(at.0.clone())),
+                    other => panic!("unexpected call {other} {args:?}"),
+                })
+            });
+            let expected: Vec<_> = jumps
+                .iter()
+                .map(|(cell, pad)| ((*cell).to_owned(), (*pad).to_owned()))
+                .collect();
+            assert_eq!(exit(&loader).await, Ok(left), "{expected:?}");
+            assert_eq!(*jumped.borrow(), expected);
         }
     }
 

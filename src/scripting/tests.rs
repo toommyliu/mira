@@ -1420,6 +1420,7 @@ export default function* () {
   yield* Combat.getSkillCooldown(5);
   yield* Combat.cancelTarget();
   yield* Combat.cancelAutoAttack();
+  yield* Combat.exit();
   yield* Combat.kill("*");
   yield* Combat.kill("Boss", { skills: [3, 1, 5], targetPriority: [{ monMapId: 1 }, "Orb"] });
   yield* Combat.kill("Boss", { skillInterval: "1.5 seconds" });
@@ -1468,6 +1469,7 @@ export default function* () {
         C::SkillCooldown { skill: skill(5) },
         C::CancelTarget,
         C::CancelAutoAttack,
+        C::Exit,
         C::Kill {
             query: MonsterQuery::Name("*".into()),
             skills: None,
