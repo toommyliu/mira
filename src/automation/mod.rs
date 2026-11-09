@@ -3,3 +3,4 @@ pub(crate) mod auto_relogin;
 pub(crate) mod auto_zone;
 pub(crate) mod game_settings;
 pub(crate) mod settings;
+pub(crate) mod sign_in;

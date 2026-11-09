@@ -1,6 +1,8 @@
+mod account;
 mod client;
 mod game_bar;
 mod input;
+mod manager;
 mod menu;
 mod script;
 mod stats;
@@ -29,7 +31,9 @@ use gpui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
+pub(crate) use account::{Changed, State, Summary};
 pub(crate) use client::{Client, STRIP_HEIGHT, bind_keys};
+pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use ui::BAR_HEIGHT;
 
 const INACTIVE_TILE_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
@@ -55,6 +59,7 @@ pub struct RuffleView {
     servers: Vec<String>,
     bar: game_bar::BarState,
     script: script::Script,
+    account: Option<account::Link>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -153,7 +158,7 @@ impl RuffleView {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
                                     this.loading = loading;
-                                    cx.notify();
+                                    this.changed(cx);
                                 })
                                 .is_err()
                             {
@@ -167,6 +172,15 @@ impl RuffleView {
                                     this.bar.located(location);
                                     cx.notify();
                                 })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
+                        Output::SignIn(status) => {
+                            if this
+                                .update(cx, |this: &mut Self, cx| this.signed_in(status, cx))
                                 .is_err()
                             {
                                 break;
@@ -209,7 +223,7 @@ impl RuffleView {
                 if let Ok(error) = failures.recv().await {
                     let _ = this.update(cx, |this: &mut Self, cx| {
                         this.error = Some(error);
-                        cx.notify();
+                        this.changed(cx);
                     });
                 }
             })
@@ -263,6 +277,7 @@ impl RuffleView {
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(cx),
                 script: script::Script::Idle,
+                account: None,
                 _subscriptions: subscriptions,
             }
         }))

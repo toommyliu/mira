@@ -88,7 +88,7 @@ struct Dialog {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum AttemptError {
+pub(crate) enum AttemptError {
     #[error(transparent)]
     Login(#[from] LoginError),
     #[error(transparent)]
@@ -149,7 +149,7 @@ pub(crate) async fn run(
         let wake = if let Some(last) = recovering {
             let server = current.server.as_deref().unwrap_or(&last.server);
             let wake = tokio::select! {
-                result = recover(&loader, &logins, &last.credentials, server, &current, &reporter) => Wake::Recovered(result),
+                result = recover(&loader, &logins, &last.credentials, Some(server), &current, |phase| reporter.phase(phase)) => Wake::Recovered(result),
                 changed = settings.changed() => Wake::Settings { open: changed.is_ok() },
             };
             connections.clear();
@@ -225,22 +225,22 @@ pub(crate) async fn run(
     }
 }
 
-async fn recover<F: Fn(Report)>(
+pub(crate) async fn recover(
     loader: &impl Loader,
     logins: &Logins,
     credentials: &Credentials,
-    server: &str,
+    server: Option<&str>,
     settings: &Settings,
-    reporter: &Reporter<F>,
+    phase: impl Fn(Phase),
 ) -> Result<(), AttemptError> {
-    reporter.phase(Phase::Waiting);
+    phase(Phase::Waiting);
     sleep(Duration::from_secs(settings.delay_seconds.into())).await;
     let of = settings.retries + 1;
     let cap = Duration::from_secs(settings.backoff_cap_seconds.into());
     let mut backoff = Duration::from_secs(settings.backoff_seconds.into()).min(cap);
     let mut attempt = 1;
     loop {
-        reporter.phase(Phase::Attempt { attempt, of });
+        phase(Phase::Attempt { attempt, of });
         let turn = logins.turn().await;
         let result = attempt_once(loader, credentials, server).await;
         drop(turn);
@@ -248,7 +248,7 @@ async fn recover<F: Fn(Report)>(
             Ok(()) => return Ok(()),
             Err(error) if error.retryable() && attempt < of => {
                 tracing::warn!(%error, attempt, "auto relogin attempt failed");
-                reporter.phase(Phase::Backoff { attempt, of });
+                phase(Phase::Backoff { attempt, of });
                 sleep(backoff).await;
                 backoff = (backoff * 2).min(cap);
                 attempt += 1;
@@ -261,7 +261,7 @@ async fn recover<F: Fn(Report)>(
 async fn attempt_once(
     loader: &impl Loader,
     credentials: &Credentials,
-    server: &str,
+    server: Option<&str>,
 ) -> Result<(), AttemptError> {
     if auth::in_game(loader)? {
         return Ok(());
@@ -274,6 +274,9 @@ async fn attempt_once(
     {
         return Ok(());
     }
+    let Some(server) = server else {
+        return Ok(());
+    };
     match auth::connect(loader, server).await {
         Ok(()) => Ok(()),
         Err(
@@ -291,7 +294,7 @@ async fn attempt_once(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
     use tokio::{task::LocalSet, time::Instant};
@@ -301,26 +304,26 @@ mod tests {
     use crate::domain::testing::FakeLoader;
 
     #[derive(Default)]
-    struct Game {
-        connected: bool,
-        listed: bool,
-        dialog: Option<String>,
-        failing_logins: u32,
+    pub(crate) struct Game {
+        pub(crate) connected: bool,
+        pub(crate) listed: bool,
+        pub(crate) dialog: Option<String>,
+        pub(crate) failing_logins: u32,
         failing_connects: u32,
         refusals: HashMap<String, Vec<(&'static str, &'static str)>>,
-        logins: Vec<Duration>,
-        connects: Vec<String>,
+        pub(crate) logins: Vec<Duration>,
+        pub(crate) connects: Vec<String>,
         logouts: u32,
     }
 
-    struct World {
-        game: Rc<RefCell<Game>>,
-        events: Rc<Events>,
+    pub(crate) struct World {
+        pub(crate) game: Rc<RefCell<Game>>,
+        pub(crate) events: Rc<Events>,
         start: Instant,
     }
 
     impl World {
-        fn new() -> (Self, FakeLoader) {
+        pub(crate) fn new() -> (Self, FakeLoader) {
             let game = Rc::new(RefCell::new(Game::default()));
             let events = Rc::new(Events::default());
             let start = Instant::now();
@@ -418,12 +421,12 @@ mod tests {
             )
         }
 
-        fn connect(&self) {
+        pub(crate) fn connect(&self) {
             self.game.borrow_mut().connected = true;
             self.events.publish(&connection("OnConnection"));
         }
 
-        fn lose_connection(&self) {
+        pub(crate) fn lose_connection(&self) {
             self.game.borrow_mut().connected = false;
             self.events.publish(&connection("OnConnectionLost"));
         }

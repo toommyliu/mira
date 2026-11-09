@@ -1,5 +1,7 @@
 use std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration};
 
+use anyhow::Context as _;
+
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, KeyDownEvent, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
@@ -9,10 +11,12 @@ use gpui::{
 };
 
 use super::{
-    RuffleView,
+    Changed, RuffleView, Summary,
+    manager::OpenAccounts,
     ui::{self, Glyph},
 };
 use crate::{
+    accounts::{Account, AccountId},
     army::Armies,
     ruffle::{Inbox, Msg},
 };
@@ -27,7 +31,7 @@ actions!(
 struct SelectSession(usize);
 
 pub(crate) const STRIP_HEIGHT: Pixels = px(36.0);
-const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
+pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 
 fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
@@ -56,6 +60,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("cmd-{", PreviousSession, None),
         gpui::KeyBinding::new("ctrl-tab", NextSession, None),
         gpui::KeyBinding::new("ctrl-shift-tab", PreviousSession, None),
+        gpui::KeyBinding::new("cmd-shift-a", OpenAccounts, None),
     ]);
     cx.bind_keys((1..=9).map(|number| {
         gpui::KeyBinding::new(&format!("cmd-{number}"), SelectSession(number - 1), None)
@@ -81,8 +86,11 @@ pub struct Client {
 
 struct Session {
     number: usize,
+    label: SharedString,
+    account: Option<AccountId>,
     view: Entity<RuffleView>,
     player: Inbox,
+    _changes: Subscription,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -124,11 +132,16 @@ impl Client {
                 }
             }),
         });
-        client.update(cx, |client, cx| client.open_session(window, cx))?;
+        client.update(cx, |client, cx| client.open_session(None, window, cx))?;
         Ok(client)
     }
 
-    fn open_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<()> {
+    fn open_session(
+        &mut self,
+        account: Option<&Account>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Entity<RuffleView>> {
         let view = RuffleView::new(
             self.data.clone(),
             self.device.clone(),
@@ -136,16 +149,125 @@ impl Client {
             window,
             cx,
         )?;
+        let window_size = window.viewport_size();
+        let top = STRIP_HEIGHT + super::BAR_HEIGHT;
+        let player = Bounds::new(
+            point(px(0.0), top),
+            gpui::size(
+                window_size.width.max(px(1.0)),
+                (window_size.height - top).max(px(1.0)),
+            ),
+        );
+        view.update(cx, |view, _| view.layout(player, window));
         let player = view.read(cx).session.inbox();
         self.numbered += 1;
         self.sessions.push(Session {
             number: self.numbered,
-            view,
+            label: account.map_or_else(
+                || format!("Session {}", self.numbered).into(),
+                |account| account.name.clone().into(),
+            ),
+            account: account.map(Account::id),
+            view: view.clone(),
             player,
+            _changes: cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()),
         });
         self.active = self.sessions.len() - 1;
         self.show(window, cx);
+        Ok(view)
+    }
+
+    fn session_of(&self, account: &AccountId) -> Option<usize> {
+        self.sessions
+            .iter()
+            .position(|session| session.account.as_ref() == Some(account))
+    }
+
+    pub(crate) fn summary(&self, account: &AccountId, cx: &App) -> Option<Summary> {
+        let index = self.session_of(account)?;
+        Some(self.sessions[index].view.read(cx).summary())
+    }
+
+    pub(crate) fn launch(
+        &mut self,
+        account: &Account,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        match self.session_of(&account.id()) {
+            Some(index) => {
+                self.sessions[index]
+                    .view
+                    .update(cx, |view, cx| view.retry_sign_in(account, cx));
+                Ok(())
+            }
+            None => self.open_account(account, account.script.clone(), window, cx),
+        }
+    }
+
+    pub(crate) fn run_script(
+        &mut self,
+        account: &Account,
+        script: PathBuf,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        match self.session_of(&account.id()) {
+            Some(index) => {
+                self.sessions[index].view.update(cx, |view, cx| {
+                    view.retry_sign_in(account, cx);
+                    view.queue_script(script, replace, cx);
+                });
+                Ok(())
+            }
+            None => self.open_account(account, Some(script), window, cx),
+        }
+    }
+
+    fn open_account(
+        &mut self,
+        account: &Account,
+        script: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let view = self
+            .open_session(Some(account), window, cx)
+            .with_context(|| format!("couldn't open {}", account.name))?;
+        view.update(cx, |view, cx| view.sign_in(account, script, cx));
         Ok(())
+    }
+
+    pub(crate) fn stop_script(&mut self, account: &AccountId, cx: &mut Context<Self>) {
+        if let Some(index) = self.session_of(account) {
+            self.sessions[index]
+                .view
+                .update(cx, |view, cx| view.cancel_script(cx));
+        }
+    }
+
+    pub(crate) fn show_account(
+        &mut self,
+        account: &AccountId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.session_of(account) {
+            self.select(index, window, cx);
+            window.activate_window();
+        }
+    }
+
+    pub(crate) fn close_account(
+        &mut self,
+        account: &AccountId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.session_of(account) {
+            self.close_session(index, window, cx);
+        }
     }
 
     fn close_session(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -302,13 +424,20 @@ impl Client {
                     .aria_label("New session")
                     .child(ui::glyph(Glyph::Plus, ui::secondary_text()))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if let Err(error) = this.open_session(window, cx) {
+                        if let Err(error) = this.open_session(None, window, cx) {
                             tracing::error!(%error, "couldn't open a session");
                         }
                     })),
             )
             .child(self.tab_list_trigger(cx))
             .child(drag_area().flex_1())
+            .child(
+                control("accounts")
+                    .role(Role::Button)
+                    .text_color(ui::secondary_text())
+                    .child("Accounts")
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenAccounts), cx)),
+            )
             .child(self.grid_toggle(cx))
     }
 
@@ -360,7 +489,7 @@ impl Client {
             .enumerate()
             .map(|(index, session)| {
                 let active = index == self.active;
-                let label = SharedString::from(format!("Session {}", session.number));
+                let label = session.label.clone();
                 ui::pressable(ui::row(("tab-list-item", session.number)))
                     .role(Role::MenuItemRadio)
                     .aria_label(label.clone())
@@ -432,7 +561,7 @@ impl Client {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let active = index == self.active;
-        let label = SharedString::from(format!("Session {}", session.number));
+        let label = session.label.clone();
         control(("tab", session.number))
             .group("tab")
             .role(Role::Tab)
@@ -593,7 +722,7 @@ impl Client {
                     .role(Role::Button)
                     .child("New session")
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if let Err(error) = this.open_session(window, cx) {
+                        if let Err(error) = this.open_session(None, window, cx) {
                             tracing::error!(%error, "couldn't open a session");
                         }
                     })),
@@ -656,7 +785,7 @@ fn control(id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
     )
 }
 
-fn drag_area() -> gpui::Div {
+pub(super) fn drag_area() -> gpui::Div {
     div()
         .h_full()
         .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, _| {
@@ -689,7 +818,7 @@ impl Render for Client {
             .flex_col()
             .size_full()
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
-                if let Err(error) = this.open_session(window, cx) {
+                if let Err(error) = this.open_session(None, window, cx) {
                     tracing::error!(%error, "couldn't open a session");
                 }
             }))

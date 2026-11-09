@@ -26,10 +26,12 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
     army::Armies,
-    automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
+    automation::{
+        auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation, sign_in,
+    },
     bridge::{Bridge, Event, Packets},
     domain::{
-        auth::Logins,
+        auth::{Credentials, Logins},
         bank, player,
         world::{self, Location},
     },
@@ -48,6 +50,10 @@ pub(crate) enum Msg {
     Poll(async_task::Runnable),
     Script(ToPlayer),
     Command(Command),
+    SignIn {
+        credentials: Credentials,
+        server: Option<String>,
+    },
     Wake,
     Stop,
 }
@@ -60,6 +66,7 @@ pub(crate) enum Output {
     Loading(u8),
     Loaded,
     Location(Option<Location>),
+    SignIn(sign_in::Status),
 }
 
 pub(crate) enum Command {
@@ -152,6 +159,13 @@ impl Runtime {
     pub(crate) fn command(&self, command: Command) {
         self.inbox.post(Msg::Command(command));
     }
+
+    pub(crate) fn sign_in(&self, credentials: Credentials, server: Option<String>) {
+        self.inbox.post(Msg::SignIn {
+            credentials,
+            server,
+        });
+    }
 }
 
 impl Drop for Runtime {
@@ -176,6 +190,7 @@ fn run(
     display_frames: bool,
 ) -> anyhow::Result<()> {
     let mut pacing = pacing::Pacing::new(display_frames, Instant::now());
+    let mut early = Vec::new();
     let mut viewport = loop {
         match rx.recv()? {
             Msg::View(ViewEvent::Resized(viewport)) => break viewport,
@@ -184,6 +199,7 @@ fn run(
                 pacing.set_throttle(throttle, Instant::now())
             }
             Msg::Stop => return Ok(()),
+            message @ Msg::SignIn { .. } => early.push(message),
             _ => {}
         }
     };
@@ -317,6 +333,9 @@ fn run(
     rendering.mark_changed();
     let mut wait = Duration::ZERO;
     let mut effects = Vec::new();
+    for message in early {
+        inbox.post(message);
+    }
     'running: loop {
         let mut frame_due = false;
         let deadline = Instant::now() + wait;
@@ -345,6 +364,34 @@ fn run(
                         ),
                     )
                 }),
+                Some(Msg::SignIn {
+                    credentials,
+                    server,
+                }) => {
+                    let statuses = outputs.clone();
+                    let bridge = commands_bridge.clone();
+                    let loaded = bridge.subscribe(|event| matches!(event, Event::Loaded));
+                    let connections = bridge.subscribe(auto_relogin::wants);
+                    let logins = logins.clone();
+                    let settings = automation.auto_relogin();
+                    spawn_local(&inbox, &tasks, async move {
+                        while !bridge.loaded() {
+                            let _ = loaded.next().await;
+                        }
+                        sign_in::run(
+                            bridge,
+                            logins,
+                            connections,
+                            credentials,
+                            server,
+                            settings,
+                            move |status| {
+                                let _ = statuses.try_send(Output::SignIn(status));
+                            },
+                        )
+                        .await
+                    })
+                }
                 Some(Msg::Command(command)) => spawn_local(
                     &inbox,
                     &tasks,

@@ -189,6 +189,10 @@ pub(crate) async fn connect(loader: &impl Loader, server: &str) -> Result<(), Co
             }
         }
     }
+    player_ready(loader).await
+}
+
+pub(crate) async fn player_ready(loader: &impl Loader) -> Result<(), ConnectError> {
     poll(POLL, PLAYER_READY, || Ok(in_game(loader)?.then_some(())))
         .await?
         .ok_or(ConnectError::PlayerUnready)

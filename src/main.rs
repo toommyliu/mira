@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Mira supports macOS only.");
 
+mod accounts;
 mod army;
 mod automation;
 mod bridge;
@@ -45,7 +46,11 @@ fn main() -> anyhow::Result<()> {
         cx.set_menus(vec![Menu {
             name: "Mira".into(),
             disabled: false,
-            items: vec![MenuItem::action("Quit Mira", Quit)],
+            items: vec![
+                MenuItem::action("Accounts", ruffle_view::OpenAccounts),
+                MenuItem::separator(),
+                MenuItem::action("Quit Mira", Quit),
+            ],
         }]);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -65,18 +70,31 @@ fn main() -> anyhow::Result<()> {
             app_owns_titlebar_drag: true,
             ..Default::default()
         };
+        let accounts = data.join("accounts.json");
         let opened = cx.open_window(options, |window, cx| {
             let view = ruffle_view::Client::new(data, device, armies, window, cx)
                 .expect("create the AQW player view");
             window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
             view
         });
-        if let Err(error) = opened {
-            tracing::error!(%error, "couldn't open Mira");
+        let main = match opened {
+            Ok(main) => main,
+            Err(error) => {
+                tracing::error!(%error, "couldn't open Mira");
+                cx.quit();
+                return;
+            }
+        };
+        let Ok(client) = main.entity(cx) else {
             cx.quit();
-        }
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+            return;
+        };
+        cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
+            let (client, accounts) = (client.clone(), accounts.clone());
+            cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, cx));
+        });
+        cx.on_window_closed(move |cx, closed| {
+            if closed == main.window_id() || cx.windows().is_empty() {
                 cx.quit();
             }
         })

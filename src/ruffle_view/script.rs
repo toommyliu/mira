@@ -28,6 +28,16 @@ impl Script {
         matches!(self, Script::Running { .. })
     }
 
+    pub(super) fn failed(&self) -> bool {
+        matches!(
+            self,
+            Script::Finished {
+                outcome: Outcome::Failed { .. } | Outcome::Killed(_),
+                ..
+            }
+        )
+    }
+
     pub(super) fn label(&self) -> SharedString {
         match self {
             Script::Idle => "None".into(),
@@ -85,17 +95,11 @@ impl RuffleView {
         .detach();
     }
 
-    fn start_script(&mut self, entry: PathBuf, cx: &mut Context<Self>) {
+    pub(super) fn start_script(&mut self, entry: PathBuf, cx: &mut Context<Self>) {
         if self.script.running() {
             return;
         }
-        let name: SharedString = entry
-            .file_name()
-            .map_or_else(
-                || entry.display().to_string(),
-                |name| name.display().to_string(),
-            )
-            .into();
+        let name: SharedString = super::account::file_name(&entry).into();
         let inbox = self.session.inbox();
         let (finished, outcome) = async_channel::bounded(1);
         let started = Run::start(
@@ -123,7 +127,8 @@ impl RuffleView {
                             if let Script::Running { name, .. } = std::mem::take(&mut this.script) {
                                 this.script = Script::Finished { name, outcome };
                             }
-                            cx.notify();
+                            this.run_queued(cx);
+                            this.changed(cx);
                         });
                     }
                 })
@@ -142,14 +147,14 @@ impl RuffleView {
                 },
             },
         };
-        cx.notify();
+        self.changed(cx);
     }
 
     pub(super) fn stop_script(&mut self, cx: &mut Context<Self>) {
         if let Script::Running { run, stopping, .. } = &mut self.script {
             run.stop();
             *stopping = true;
-            cx.notify();
+            self.changed(cx);
         }
     }
 }
