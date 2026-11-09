@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{cmp::Reverse, time::Duration};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -46,7 +46,7 @@ pub(crate) struct Monster {
     monster_id: f64,
     name: String,
     race: String,
-    cell: String,
+    pub(crate) cell: String,
     hp: f64,
     max_hp: f64,
     level: f64,
@@ -273,6 +273,36 @@ pub(crate) fn first_available_mon_map_id(
             .find(|monster| monster.available && query.matches(monster))
             .map(|monster| monster.mon_map_id)
     }))
+}
+
+pub(crate) fn hunt_target(
+    loader: &impl Loader,
+    here: &str,
+    query: &MonsterQuery,
+    most_matches: bool,
+) -> Result<Option<Monster>, CallError> {
+    let mut alive: Vec<Monster> = monsters(loader, None)?
+        .into_iter()
+        .filter(|monster| {
+            !monster.cell.is_empty()
+                && matches!(monster.state, Some(State::Idle | State::Combat))
+                && query.matches(monster)
+        })
+        .collect();
+    alive.sort_by_key(|monster| !monster.cell.eq_ignore_ascii_case(here));
+    if !most_matches {
+        return Ok(alive.into_iter().next());
+    }
+    let crowd = |cell: &str| {
+        alive
+            .iter()
+            .filter(|monster| monster.cell.eq_ignore_ascii_case(cell))
+            .count()
+    };
+    Ok(alive
+        .iter()
+        .min_by_key(|monster| Reverse(crowd(&monster.cell)))
+        .cloned())
 }
 
 pub(crate) async fn monster_drops(

@@ -1264,6 +1264,8 @@ export default function* () {
   yield* Combat.cancelAutoAttack();
   yield* Combat.kill("*");
   yield* Combat.kill("Boss", { skills: [3, 1, 5], targetPriority: [{ monMapId: 1 }, "Orb"] });
+  yield* Combat.hunt("Frogzard");
+  yield* Combat.hunt({ monMapId: 4 }, { preferMostMatches: true });
   yield* Player.getAuras();
   yield* Player.getAura("Spirit Power");
   yield* Player.hasAura("Spirit Power");
@@ -1318,6 +1320,14 @@ export default function* () {
                 MonsterQuery::MonMapId { mon_map_id: 1.0 },
                 MonsterQuery::Name("Orb".into()),
             ]),
+        },
+        C::Hunt {
+            query: MonsterQuery::Name("Frogzard".into()),
+            prefer_most_matches: None,
+        },
+        C::Hunt {
+            query: MonsterQuery::MonMapId { mon_map_id: 4.0 },
+            prefer_most_matches: Some(true),
         },
     ]
     .map(Request::Combat)

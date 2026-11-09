@@ -6,6 +6,7 @@ use tokio::{pin, select, time::sleep};
 use super::{
     auth, has_avatar,
     inventory::{self, TurnInPacket},
+    player,
     players::{self, RoomPlayer},
     world::{self, Monster, MonsterQuery},
 };
@@ -75,6 +76,20 @@ pub(crate) fn attack(loader: &impl Loader, query: &MonsterQuery) -> Result<bool,
 
 fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
     bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
+}
+
+pub(crate) async fn hunt(
+    loader: &impl Loader,
+    query: &MonsterQuery,
+    most_matches: bool,
+) -> Result<Option<Monster>, CallError> {
+    let here = bridge::player::get_cell(loader)?.unwrap_or_default();
+    let Some(prey) = world::hunt_target(loader, &here, query, most_matches)? else {
+        return Ok(None);
+    };
+    let reached =
+        prey.cell.eq_ignore_ascii_case(&here) || player::jump(loader, &prey.cell, None).await?;
+    Ok(reached.then_some(prey))
 }
 
 pub(crate) async fn use_skill(
@@ -743,6 +758,83 @@ mod tests {
                 "{slotted:?} {taken:?}"
             );
             assert_eq!(fight.borrow().cast, cast);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hunting_jumps_to_a_cell_with_a_live_match() {
+        let lair = [
+            ("Frogzard", "r2", 0.0),
+            ("Slime", "r2", 1.0),
+            ("Frogzard", "r3", 1.0),
+            ("Frogzard", "r4", 2.0),
+            ("Frogzard", "r4", 1.0),
+            ("Slime", "r3", 1.0),
+        ];
+        for (cell, query, most_matches, expected) in [
+            ("r2", named("Frogzard"), false, Some(("r3", 3.0))),
+            ("r3", named("Frogzard"), false, Some(("r3", 3.0))),
+            ("r2", named("Frogzard"), true, Some(("r4", 4.0))),
+            ("r3", named("Frogzard"), true, Some(("r4", 4.0))),
+            ("r4", named("*"), true, Some(("r4", 4.0))),
+            ("r3", named("*"), true, Some(("r3", 3.0))),
+            (
+                "r2",
+                MonsterQuery::MonMapId { mon_map_id: 1.0 },
+                false,
+                None,
+            ),
+            ("r2", named("Dragon"), true, None),
+        ] {
+            let here = Rc::new(RefCell::new(cell.to_owned()));
+            let state = here.clone();
+            let loader = FakeLoader::new(move |callback, args| {
+                Ok(match callback {
+                    "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
+                    "player.getCell" => Value::String(state.borrow().clone()),
+                    "world.getCells" => Value::List(
+                        ["Enter", "r2", "r3", "r4"]
+                            .map(|cell| Value::String(cell.into()))
+                            .to_vec(),
+                    ),
+                    "world.getMonsters" => Value::List(
+                        lair.iter()
+                            .zip(1..)
+                            .map(|((name, cell, state), id)| {
+                                row(&[
+                                    ("monMapId", number(f64::from(id))),
+                                    ("name", Value::String((*name).into())),
+                                    ("cell", Value::String((*cell).into())),
+                                    ("state", number(*state)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                    "player.jump" => {
+                        let Value::String(cell) = &args[0] else {
+                            panic!("jump needs a cell: {args:?}");
+                        };
+                        *state.borrow_mut() = cell.clone();
+                        Value::Undefined
+                    }
+                    "world.isCellReady" => {
+                        Value::Bool(args[0] == Value::String(state.borrow().clone()))
+                    }
+                    other => panic!("unexpected call {other} {args:?}"),
+                })
+            });
+            let hunted = hunt(&loader, &query, most_matches).await.unwrap();
+            assert_eq!(
+                hunted.map(|monster| (here.borrow().clone(), monster.mon_map_id)),
+                expected.map(|(cell, id)| (cell.to_owned(), id)),
+                "from {cell} hunting {query:?}, most matches {most_matches}"
+            );
+            let jumped = expected.is_some_and(|(to, _)| to != cell);
+            assert_eq!(
+                loader.count("player.jump"),
+                usize::from(jumped),
+                "{query:?}"
+            );
         }
     }
 

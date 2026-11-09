@@ -43,14 +43,19 @@ pub(crate) enum Request {
         skills: Option<Vec<Skill>>,
         target_priority: Option<Vec<MonsterQuery>>,
     },
+    Hunt {
+        query: MonsterQuery,
+        prefer_most_matches: Option<bool>,
+    },
 }
 
 impl Request {
     fn without_avatar(&self) -> serde_json::Value {
         match self {
-            Request::Target | Request::CancelTarget | Request::CancelAutoAttack => {
-                serde_json::Value::Null
-            }
+            Request::Target
+            | Request::CancelTarget
+            | Request::CancelAutoAttack
+            | Request::Hunt { .. } => serde_json::Value::Null,
             Request::SkillCooldown { .. } => json!(0),
             Request::HasTarget
             | Request::Attack { .. }
@@ -98,6 +103,10 @@ pub(super) async fn serve(
             .await?
         ),
         request if !domain::has_avatar(loader)? => request.without_avatar(),
+        Request::Hunt {
+            query,
+            prefer_most_matches,
+        } => json!(combat::hunt(loader, &query, prefer_most_matches.unwrap_or(false)).await?),
         Request::Target => json!(combat::target(loader)?),
         Request::HasTarget => json!(bridge::combat::has_target(loader)?),
         Request::Attack { query } => json!(combat::attack(loader, &query)?),
@@ -153,6 +162,13 @@ mod tests {
                     target_priority: None,
                 },
                 json!(false),
+            ),
+            (
+                Request::Hunt {
+                    query: frogzard(),
+                    prefer_most_matches: Some(true),
+                },
+                json!(null),
             ),
         ] {
             assert_eq!(

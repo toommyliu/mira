@@ -237,6 +237,11 @@ export type KillOptions = {
   readonly targetPriority?: readonly MonsterQuery[];
 };
 
+export type HuntOptions = {
+  /** Picks the cell with the most live matches. Ties go to your own cell. */
+  readonly preferMostMatches?: boolean;
+};
+
 export const Players = {
   getAll: () => players<readonly RoomPlayer[]>("all"),
   get: (username: string) => players<RoomPlayer | null>("get", { username }),
@@ -255,6 +260,8 @@ export const Combat = {
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
   kill: (query: MonsterQuery, options: KillOptions = {}) =>
     combat<boolean>("kill", { query, ...options }),
+  hunt: (query: MonsterQuery, options: HuntOptions = {}) =>
+    combat<Monster | null>("hunt", { query, ...options }),
 };
 
 export type ItemQuery = string | { readonly itemId: number };
