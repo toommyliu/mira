@@ -5,14 +5,17 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::{
     State, arrive,
     auras::{self, Aura},
+    events::{GameEvent, Kind, Myself},
     ready, wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
-    self, CallError, Format, GameAction, Loader, Packet, Packets, Value, packets::wire,
+    self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
+    packets::{disconnected, wire},
 };
 
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const DROPS_TIMEOUT: Duration = Duration::from_secs(5);
+const MOVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
@@ -103,6 +106,103 @@ pub(crate) fn has_cell(loader: &impl Loader, cell: &str) -> Result<bool, CallErr
 
 pub(crate) fn cell_pads(loader: &impl Loader) -> Result<Vec<String>, CallError> {
     Ok(texts(bridge::world::get_cell_pads(loader)?))
+}
+
+pub(crate) const PADS: [&str; 8] = [
+    "Spawn", "Center", "Left", "Right", "Top", "Bottom", "Up", "Down",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Location {
+    pub(crate) cell: String,
+    pub(crate) pad: String,
+    pub(crate) cells: Vec<String>,
+    pub(crate) cell_pads: Vec<String>,
+}
+
+pub(crate) fn location(loader: &impl Loader) -> Result<Option<Location>, CallError> {
+    if !ready(loader)? {
+        return Ok(None);
+    }
+    Ok(Some(Location {
+        cell: bridge::player::get_cell(loader)?.unwrap_or_default(),
+        pad: bridge::player::get_pad(loader)?.unwrap_or_default(),
+        cells: cells(loader)?,
+        cell_pads: cell_pads(loader)?,
+    }))
+}
+
+pub(crate) fn moves(event: &Event) -> bool {
+    match event {
+        Event::PacketFromClient { packet } => moved_to_cell(packet).is_some(),
+        event => Kind::MapJoined.wants(event) || Kind::CellChanged.wants(event),
+    }
+}
+
+enum Move {
+    Map,
+    Cell { cell: String, pad: String },
+}
+
+fn moved_to_cell(packet: &str) -> Option<Move> {
+    let mut fields = packet.split('%').skip(3);
+    match (
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+    ) {
+        ("moveToCell", _room, cell, pad) => Some(Move::Cell {
+            cell: cell.to_owned(),
+            pad: pad.to_owned(),
+        }),
+        _ => None,
+    }
+}
+
+fn own_move(loader: &impl Loader, event: &Event) -> Option<Move> {
+    if let Event::PacketFromClient { packet } = event {
+        return moved_to_cell(packet);
+    }
+    let mut moved = Vec::new();
+    Kind::MapJoined.read(event, &Myself(loader), &mut moved);
+    Kind::CellChanged.read(event, &Myself(loader), &mut moved);
+    moved.into_iter().find_map(|event| match event {
+        GameEvent::MapJoined { .. } => Some(Move::Map),
+        GameEvent::CellChanged {
+            is_self: true,
+            cell,
+            pad,
+            ..
+        } => Some(Move::Cell { cell, pad }),
+        _ => None,
+    })
+}
+
+pub(crate) async fn track_location(
+    loader: impl Loader,
+    events: Subscription,
+    report: impl Fn(Option<Location>),
+) {
+    loop {
+        let read = match events.next().await {
+            Ok(event) if disconnected(&event) => Ok(None),
+            Ok(event) => match own_move(&loader, &event) {
+                None => continue,
+                Some(Move::Map) => map_loaded(&loader).await.and_then(|_| location(&loader)),
+                Some(Move::Cell { cell, pad }) => arrive(&loader, MOVE_TIMEOUT, || {
+                    Ok(bridge::world::is_cell_ready(&loader, &cell, Some(&pad))?.then_some(true))
+                })
+                .await
+                .and_then(|_| location(&loader)),
+            },
+            Err(_) => location(&loader),
+        };
+        match read {
+            Ok(location) => report(location),
+            Err(error) => tracing::debug!(%error, "couldn't read the player's location"),
+        }
+    }
 }
 
 pub(crate) fn area_id(loader: &impl Loader) -> Result<f64, CallError> {
@@ -613,6 +713,88 @@ mod tests {
         assert_eq!(area_id(&loader).unwrap(), 42.0);
         let (loader, _) = scene(quiet("Enter"), Rc::default(), Vec::new());
         assert_eq!(area_id(&loader).unwrap(), 0.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_location_follows_your_own_moves_until_the_connection_drops() {
+        let place = Rc::new(RefCell::new(("battleon", "Enter", "Spawn")));
+        let current = place.clone();
+        let loader = FakeLoader::new(move |callback, _| {
+            let (map, cell, pad) = *current.borrow();
+            let texts = |texts: &[&str]| {
+                Value::List(
+                    texts
+                        .iter()
+                        .map(|text| Value::String((*text).into()))
+                        .collect(),
+                )
+            };
+            Ok(match callback {
+                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" | "world.isCellReady" => {
+                    Value::Bool(true)
+                }
+                "flash.getGameObjectS" => Value::String(json!("player1").to_string()),
+                "player.getCell" => Value::String(cell.into()),
+                "player.getPad" => Value::String(pad.into()),
+                "world.getCells" if map == "battleon" => texts(&["Enter", "r2"]),
+                "world.getCells" => texts(&["Enter", "Boss"]),
+                "world.getCellPads" => texts(&["Spawn", "Left"]),
+                other => panic!("unexpected call {other}"),
+            })
+        });
+        let events = Rc::new(Events::default());
+        let reports = Rc::new(RefCell::new(Vec::new()));
+        let seen = reports.clone();
+        LocalSet::new()
+            .run_until(async {
+                tokio::task::spawn_local(track_location(
+                    loader,
+                    events.subscribe(moves),
+                    move |location| {
+                        seen.borrow_mut().push(
+                            location.map(|location| (location.cell, location.pad, location.cells)),
+                        )
+                    },
+                ));
+                let publish = |packet: serde_json::Value| {
+                    events.publish(&Event::ExtensionResponse {
+                        packet: packet.to_string(),
+                    });
+                    tokio::time::sleep(Duration::from_millis(50))
+                };
+                let moved = |name: &str, cell: &str, pad: &str| {
+                    json!({ "type": "str", "dataObj": ["uotls", "-1", name, format!("strFrame:{cell},strPad:{pad}")] })
+                };
+                publish(moved("player2", "r2", "Left")).await;
+                assert_eq!(*reports.borrow(), []);
+
+                *place.borrow_mut() = ("battleon", "r2", "Left");
+                publish(moved("player1", "r2", "Left")).await;
+                *place.borrow_mut() = ("battleon", "Enter", "Right");
+                events.publish(&Event::PacketFromClient {
+                    packet: "%xt%zm%moveToCell%1%Enter%Right%".into(),
+                });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                *place.borrow_mut() = ("dage", "Enter", "Spawn");
+                publish(json!({ "type": "json", "dataObj": { "cmd": "moveToArea", "strMapName": "dage" } }))
+                    .await;
+                events.publish(&Event::Connection {
+                    status: "OnConnectionLost".into(),
+                });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                let texts = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect();
+                assert_eq!(
+                    *reports.borrow(),
+                    [
+                        Some(("r2".into(), "Left".into(), texts(&["Enter", "r2"]))),
+                        Some(("Enter".into(), "Right".into(), texts(&["Enter", "r2"]))),
+                        Some(("Enter".into(), "Spawn".into(), texts(&["Enter", "Boss"]))),
+                        None,
+                    ]
+                );
+            })
+            .await;
     }
 
     #[tokio::test(start_paused = true)]

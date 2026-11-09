@@ -27,7 +27,11 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
     bridge::{Bridge, Packets},
-    domain::auth::Logins,
+    domain::{
+        auth::Logins,
+        bank, player,
+        world::{self, Location},
+    },
     scripting::{self, Calls, ToPlayer},
 };
 use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
@@ -42,6 +46,7 @@ pub(crate) enum Msg {
     Frame,
     Poll(async_task::Runnable),
     Script(ToPlayer),
+    Command(Command),
     Wake,
     Stop,
 }
@@ -51,6 +56,12 @@ pub(crate) enum Output {
     AutoRelogin(auto_relogin::Report),
     FrameClock(bool),
     Cursor(MouseCursor),
+    Location(Option<Location>),
+}
+
+pub(crate) enum Command {
+    Jump { cell: String, pad: String },
+    OpenBank,
 }
 
 #[derive(Clone)]
@@ -131,6 +142,10 @@ impl Runtime {
 
     pub(crate) fn release_keys(&self) {
         self.inbox.post(Msg::ReleaseKeys);
+    }
+
+    pub(crate) fn command(&self, command: Command) {
+        self.inbox.post(Msg::Command(command));
     }
 }
 
@@ -222,6 +237,18 @@ fn run(
         &tasks,
         auto_attack::run(bridge.clone(), automation.watch_auto_attack()),
     );
+    let located = outputs.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        world::track_location(
+            bridge.clone(),
+            bridge.subscribe(world::moves),
+            move |location| {
+                let _ = located.try_send(Output::Location(location));
+            },
+        ),
+    );
     spawn_local(
         &inbox,
         &tasks,
@@ -244,6 +271,7 @@ fn run(
     let mut open_menu: Option<OpenMenu> = None;
     let mut scripts = Calls::default();
     let scripts_bridge = bridge.clone();
+    let commands_bridge = bridge.clone();
     let mut input = PlayerInput::new(bridge);
     let show_stats = preferences::BoolPreference::new(data.join("show-stats"));
     let stats_enabled = show_stats.load().unwrap_or_else(|error| {
@@ -286,6 +314,11 @@ fn run(
                         ),
                     )
                 }),
+                Some(Msg::Command(command)) => spawn_local(
+                    &inbox,
+                    &tasks,
+                    run_command(commands_bridge.clone(), command),
+                ),
                 Some(Msg::Frame) => {
                     inbox.frame_pending.store(false, Ordering::Relaxed);
                     frame_due = true;
@@ -386,6 +419,16 @@ fn run(
         }
     }
     Ok(())
+}
+
+async fn run_command(bridge: Bridge, command: Command) {
+    let done = match command {
+        Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
+        Command::OpenBank => bank::open(&bridge).await.map(drop),
+    };
+    if let Err(error) = done {
+        tracing::warn!(%error, "a game bar command failed");
+    }
 }
 
 #[cfg(test)]

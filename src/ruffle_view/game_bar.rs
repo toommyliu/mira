@@ -11,11 +11,15 @@ use super::{
     RuffleView,
     ui::{self, Glyph},
 };
-use crate::automation::{
-    auto_relogin::Phase,
-    auto_zone::Room,
-    game_settings::{RenderingMode, Settings as GameSettings},
-    settings::Automation,
+use crate::{
+    automation::{
+        auto_relogin::Phase,
+        auto_zone::Room,
+        game_settings::{RenderingMode, Settings as GameSettings},
+        settings::Automation,
+    },
+    domain::world::{Location, PADS},
+    ruffle::Command,
 };
 
 const LAST_SERVER: &str = "Last server";
@@ -32,6 +36,8 @@ pub(super) enum BarMenu {
     AutoZone,
     AutoRelogin,
     Script,
+    Cell,
+    Pad,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,7 +53,7 @@ impl BarMenu {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
             BarMenu::Options => Some(Submenu::Rendering),
-            BarMenu::Script => None,
+            BarMenu::Script | BarMenu::Cell | BarMenu::Pad => None,
         }
     }
 }
@@ -219,8 +225,9 @@ pub(super) struct BarState {
     submenu: Option<(Submenu, Point<Pixels>)>,
     aim_from: Option<Point<Pixels>>,
     edit: Option<Edit>,
+    location: Option<Location>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 4]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 6]>>,
     submenu_rows: Rc<Cell<[Bounds<Pixels>; 3]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -232,6 +239,7 @@ impl BarState {
             submenu: None,
             aim_from: None,
             edit: None,
+            location: None,
             focus: cx.focus_handle(),
             triggers: Default::default(),
             submenu_rows: Default::default(),
@@ -241,6 +249,10 @@ impl BarState {
 
     pub(super) fn open(&self) -> Option<BarMenu> {
         self.open
+    }
+
+    pub(super) fn located(&mut self, location: Option<Location>) {
+        self.location = location;
     }
 }
 
@@ -408,6 +420,11 @@ impl RuffleView {
         cx.notify();
     }
 
+    fn travel(&mut self, cell: String, pad: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.session.command(Command::Jump { cell, pad });
+        self.close_menu(window, cx);
+    }
+
     fn close_submenu(&mut self) {
         self.bar.submenu = None;
         self.bar.aim_from = None;
@@ -547,6 +564,27 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                     this.change_auto_attack(|settings| settings.enabled = !attack, cx)
                 })),
         )
+        .child(trigger(
+            view,
+            BarMenu::Cell,
+            "Cell",
+            place(view, |location| &location.cell),
+            cx,
+        ))
+        .child(trigger(
+            view,
+            BarMenu::Pad,
+            "Pad",
+            place(view, |location| &location.pad),
+            cx,
+        ))
+        .child(
+            bar_control("bank")
+                .role(Role::Button)
+                .aria_label("Bank")
+                .child("Bank")
+                .on_click(cx.listener(|this, _, _, _| this.session.command(Command::OpenBank))),
+        )
         .child(div().flex_1())
         .child(trigger(
             view,
@@ -587,6 +625,8 @@ fn trigger(
         BarMenu::AutoZone => "auto-zone",
         BarMenu::AutoRelogin => "auto-relogin",
         BarMenu::Script => "script",
+        BarMenu::Cell => "cell",
+        BarMenu::Pad => "pad",
     };
     div()
         .on_children_prepainted(move |bounds, _, _| {
@@ -625,6 +665,7 @@ pub(super) fn overlay(
         BarMenu::AutoZone => zone_panel(view, cx),
         BarMenu::AutoRelogin => relogin_panel(view, cx),
         BarMenu::Script => script_panel(view, cx),
+        BarMenu::Cell | BarMenu::Pad => travel_panel(view, menu, cx),
     }
     .track_focus(&view.bar.focus)
     .on_key_down(cx.listener(RuffleView::panel_key_down))
@@ -782,6 +823,56 @@ fn script_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div
         .child(action)
 }
 
+fn place(view: &RuffleView, part: fn(&Location) -> &String) -> Option<SharedString> {
+    view.bar
+        .location
+        .as_ref()
+        .map(part)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.clone().into())
+}
+
+fn travel_panel(view: &RuffleView, menu: BarMenu, cx: &mut Context<RuffleView>) -> Stateful<Div> {
+    let panel = ui::panel("travel-panel", px(200.0))
+        .max_h(SUBMENU_MAX_HEIGHT)
+        .overflow_y_scroll();
+    let Some(location) = &view.bar.location else {
+        return panel.child(note("Log in to travel"));
+    };
+    if menu == BarMenu::Pad {
+        return panel.children(PADS.iter().enumerate().map(|(index, pad)| {
+            let in_cell = location
+                .cell_pads
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(pad));
+            let cell = location.cell.clone();
+            choice_row(("pad", index), *pad, location.pad.eq_ignore_ascii_case(pad))
+                .when(!in_cell, |row| row.text_color(ui::tertiary_text()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.travel(cell.clone(), pad.to_string(), window, cx)
+                }))
+        }));
+    }
+    if location.cells.is_empty() {
+        return panel.child(note("No cells"));
+    }
+    panel.children(location.cells.iter().enumerate().map(|(index, cell)| {
+        let (cell, pad) = (cell.clone(), location.pad.clone());
+        choice_row(("cell", index), cell.clone(), cell == location.cell).on_click(cx.listener(
+            move |this, _, window, cx| this.travel(cell.clone(), pad.clone(), window, cx),
+        ))
+    }))
+}
+
+fn note(text: &'static str) -> impl IntoElement {
+    div()
+        .px(px(8.0))
+        .py(px(6.0))
+        .text_size(ui::SMALL_TEXT_SIZE)
+        .text_color(ui::tertiary_text())
+        .child(text)
+}
+
 fn relogin_panel(view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
     let settings = view.automation.auto_relogin();
     ui::panel("auto-relogin-panel", px(264.0))
@@ -925,13 +1016,7 @@ fn servers(view: &RuffleView, panel: Stateful<Div>, cx: &mut Context<RuffleView>
     panel
         .child(choice_row("server-last", LAST_SERVER, saved.is_none()).on_click(choose(None)))
         .child(if view.servers.is_empty() {
-            div()
-                .px(px(8.0))
-                .py(px(6.0))
-                .text_size(ui::SMALL_TEXT_SIZE)
-                .text_color(ui::tertiary_text())
-                .child("Log in to list the other servers")
-                .into_any_element()
+            note("Log in to list the other servers").into_any_element()
         } else {
             ui::separator().into_any_element()
         })

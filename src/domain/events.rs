@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     State,
     auras::FightAurasPacket,
+    auth,
     combat::{CtPacket, FightMessagesPacket, UserMessagePacket},
     drops::DropItemPacket,
     inventory::AddItemsPacket,
@@ -13,7 +14,7 @@ use super::{
     world::{EventPacket, RespawnMonLine},
 };
 use crate::bridge::{
-    Event, Packet,
+    self, Event, Loader, Packet,
     packets::{self, disconnected, names},
 };
 
@@ -128,6 +129,23 @@ pub(crate) enum GameEvent {
 pub(crate) trait Me {
     fn username(&self) -> Option<String>;
     fn user_id(&self) -> Option<i32>;
+}
+
+pub(crate) struct Myself<'a, L>(pub(crate) &'a L);
+
+impl<L: Loader> Me for Myself<'_, L> {
+    fn username(&self) -> Option<String> {
+        auth::username(self.0).unwrap_or_else(|error| {
+            tracing::debug!(%error, "couldn't read the username for an event");
+            None
+        })
+    }
+
+    fn user_id(&self) -> Option<i32> {
+        bridge::player::get_user_id(self.0)
+            .inspect_err(|error| tracing::debug!(%error, "couldn't read the user id for an event"))
+            .ok()
+    }
 }
 
 impl Kind {

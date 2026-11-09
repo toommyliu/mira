@@ -136,6 +136,18 @@ impl RuffleView {
                             }
                             continue;
                         }
+                        Output::Location(location) => {
+                            if this
+                                .update(cx, |this: &mut Self, cx| {
+                                    this.bar.located(location);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                         Output::Cursor(cursor) => {
                             if this
                                 .update(cx, |this: &mut Self, cx| {

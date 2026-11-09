@@ -6,11 +6,8 @@ use super::{
     feeds::{Feed, FeedId, Feeds},
 };
 use crate::{
-    bridge::{self, Event, Loader, Subscription, packets::disconnected},
-    domain::{
-        auth,
-        events::{Kind, Me},
-    },
+    bridge::{Event, Loader, Subscription, packets::disconnected},
+    domain::events::{Kind, Myself},
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -45,28 +42,11 @@ pub(super) fn serve(
                 return;
             }
             let mut read = Vec::new();
-            kind.read(&event, &Player(&loader), &mut read);
+            kind.read(&event, &Myself(&loader), &mut read);
             items.extend(read.into_iter().map(|event| json!(event)));
         }),
     );
     Ok(Value::Null)
-}
-
-struct Player<'a, L>(&'a L);
-
-impl<L: Loader> Me for Player<'_, L> {
-    fn username(&self) -> Option<String> {
-        auth::username(self.0).unwrap_or_else(|error| {
-            tracing::debug!(%error, "couldn't read the username for an event");
-            None
-        })
-    }
-
-    fn user_id(&self) -> Option<i32> {
-        bridge::player::get_user_id(self.0)
-            .inspect_err(|error| tracing::debug!(%error, "couldn't read the user id for an event"))
-            .ok()
-    }
 }
 
 #[cfg(test)]
