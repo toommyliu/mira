@@ -32,74 +32,77 @@ fn main() -> anyhow::Result<()> {
             .join("Mira")
             .join("armies"),
     );
-    gpui_platform::application().run(move |cx| {
-        // AppKit termination does not unwind main's stack.
-        let mut logging = Some(logging);
-        cx.on_app_quit(move |_| {
-            let logging = logging.take();
-            async move { drop(logging) }
-        })
-        .detach();
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        ruffle_view::bind_keys(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(vec![Menu {
-            name: "Mira".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Accounts", ruffle_view::OpenAccounts),
-                MenuItem::separator(),
-                MenuItem::action("Quit Mira", Quit),
-            ],
-        }]);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(
-                    px(960.0),
-                    px(550.0) + ruffle_view::BAR_HEIGHT + ruffle_view::STRIP_HEIGHT,
-                ),
-                cx,
-            ))),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Mira".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(px(12.0), px(11.0))),
-            }),
-            window_background: WindowBackgroundAppearance::Transparent,
-            app_owns_titlebar_drag: true,
-            ..Default::default()
-        };
-        let accounts = data.join("accounts.json");
-        let opened = cx.open_window(options, |window, cx| {
-            let view = ruffle_view::Client::new(data, device, armies, window, cx)
-                .expect("create the AQW player view");
-            window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
-            view
-        });
-        let main = match opened {
-            Ok(main) => main,
-            Err(error) => {
-                tracing::error!(%error, "couldn't open Mira");
+    gpui_platform::application()
+        .with_assets(mira_ui::Assets)
+        .run(move |cx| {
+            // AppKit termination does not unwind main's stack.
+            let mut logging = Some(logging);
+            cx.on_app_quit(move |_| {
+                let logging = logging.take();
+                async move { drop(logging) }
+            })
+            .detach();
+            mira_ui::init(cx);
+            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            ruffle_view::bind_keys(cx);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.set_menus(vec![Menu {
+                name: "Mira".into(),
+                disabled: false,
+                items: vec![
+                    MenuItem::action("Accounts", ruffle_view::OpenAccounts),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit Mira", Quit),
+                ],
+            }]);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(
+                        px(960.0),
+                        px(550.0) + ruffle_view::BAR_HEIGHT + ruffle_view::STRIP_HEIGHT,
+                    ),
+                    cx,
+                ))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Mira".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.0), px(11.0))),
+                }),
+                window_background: WindowBackgroundAppearance::Transparent,
+                app_owns_titlebar_drag: true,
+                ..Default::default()
+            };
+            let accounts = data.join("accounts.json");
+            let opened = cx.open_window(options, |window, cx| {
+                let view = ruffle_view::Client::new(data, device, armies, window, cx)
+                    .expect("create the AQW player view");
+                window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
+                view
+            });
+            let main = match opened {
+                Ok(main) => main,
+                Err(error) => {
+                    tracing::error!(%error, "couldn't open Mira");
+                    cx.quit();
+                    return;
+                }
+            };
+            let Ok(client) = main.entity(cx) else {
                 cx.quit();
                 return;
-            }
-        };
-        let Ok(client) = main.entity(cx) else {
-            cx.quit();
-            return;
-        };
-        cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
-            let (client, accounts) = (client.clone(), accounts.clone());
-            cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, cx));
+            };
+            cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
+                let (client, accounts) = (client.clone(), accounts.clone());
+                cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, cx));
+            });
+            cx.on_window_closed(move |cx, closed| {
+                if closed == main.window_id() || cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            cx.activate(true);
         });
-        cx.on_window_closed(move |cx, closed| {
-            if closed == main.window_id() || cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        cx.activate(true);
-    });
     Ok(())
 }

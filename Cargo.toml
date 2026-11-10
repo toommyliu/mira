@@ -4,8 +4,18 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[dependencies]
+[workspace]
+members = ["crates/ui"]
+
+[workspace.dependencies]
 anyhow = "1"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", features = ["font-kit"] }
+mira-ui = { path = "crates/ui" }
+unicode-segmentation = "1"
+
+[dependencies]
+anyhow.workspace = true
 arboard = { version = "3.7", default-features = false }
 async-channel = "2.5"
 async-task = "4.7"
@@ -13,8 +23,9 @@ block2 = "0.6"
 dirs = "6"
 encoding_rs = "0.8.35"
 getrandom = "0.2"
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", default-features = false }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", features = ["font-kit"] }
+gpui.workspace = true
+gpui_platform.workspace = true
+mira-ui.workspace = true
 objc2 = "0.6"
 oxc = { version = "0.157", features = ["codegen", "semantic", "transformer"] }
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSView", "NSResponder", "NSGraphics", "NSWindow"] }

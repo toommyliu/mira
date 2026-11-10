@@ -18,6 +18,9 @@ catalogs:
     esbuild:
       specifier: 0.28.2
       version: 0.28.2
+    lucide-static:
+      specifier: 1.59.0
+      version: 1.59.0
     oxfmt:
       specifier: 0.75.0
       version: 0.75.0
@@ -38,6 +41,9 @@ importers:
       esbuild:
         specifier: 'catalog:'
         version: 0.28.2
+      lucide-static:
+        specifier: 'catalog:'
+        version: 1.59.0
       oxfmt:
         specifier: 'catalog:'
         version: 0.75.0
@@ -513,6 +519,9 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
+  lucide-static@1.59.0:
+    resolution: {integrity: sha512-MuHZYaXbHgzN2QO6D3OM19bj09A+8GJiFSdXIMlbnLLEGQQ9+NRH2KaCxuivevD3Y23vM74kV17XBifgtqhfEg==}
+
   oxfmt@0.75.0:
     resolution: {integrity: sha512-/ZKvY5asfsVi9hdkOmRIumqOPu6kxlTgiJSZf54uq29kKew+Gu1FFAnEkGePyvLVW+MAYu41D6XggnzoElQzPw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -808,6 +817,8 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
+
+  lucide-static@1.59.0: {}
 
   oxfmt@0.75.0:
     dependencies:

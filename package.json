@@ -5,6 +5,7 @@
   "scripts": {
     "gen:bridge": "node scripts/gen-bridge.ts",
     "check:bridge": "node scripts/gen-bridge.ts --check",
+    "icons": "node scripts/sync-icons.ts",
     "build:runtime": "node scripts/build-runtime.ts --outdir target/mira-runtime",
     "test": "node --test scripts/*.test.ts",
     "typecheck": "effect-tsgo tsrs --noEmit && pnpm -r typecheck",
@@ -16,6 +17,7 @@
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
     "esbuild": "catalog:",
+    "lucide-static": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:"
   },
