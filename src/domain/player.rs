@@ -134,11 +134,11 @@ pub(crate) async fn join(
         return Ok(false);
     }
     let map = map.trim();
-    let name = map_name(map);
+    let (name, room) = split_room(map);
     let cell = cell.unwrap_or(DEFAULT_CELL);
     let pad = pad.unwrap_or(DEFAULT_PAD);
     let here = bridge::player::get_map(loader)?;
-    if name == map && here.is_some_and(|here| here.eq_ignore_ascii_case(name)) {
+    if here.is_some_and(|here| here.eq_ignore_ascii_case(name)) && in_room(loader, room)? {
         return jump(loader, cell, Some(pad)).await;
     }
     if !ready_to_transfer(loader).await? {
@@ -226,10 +226,19 @@ pub(crate) async fn jump(
     Ok(arrived)
 }
 
-fn map_name(map: &str) -> &str {
-    map.find('-')
-        .filter(|index| *index > 0 && *index < map.len() - 1)
-        .map_or(map, |index| &map[..index])
+fn split_room(map: &str) -> (&str, Option<&str>) {
+    match map.split_once('-') {
+        Some((name, room)) if !name.is_empty() && !room.is_empty() => (name, Some(room)),
+        _ => (map, None),
+    }
+}
+
+fn in_room(loader: &impl Loader, room: Option<&str>) -> Result<bool, CallError> {
+    let Some(room) = room else {
+        return Ok(true);
+    };
+    let here = world::room_number(loader)?;
+    Ok(room.parse().is_ok_and(|room: u32| here == Some(room)))
 }
 
 pub(crate) fn walk_to(loader: &impl Loader, x: i32, y: i32) -> Result<bool, CallError> {
@@ -397,6 +406,7 @@ mod tests {
     struct Place {
         logged_in: bool,
         map: String,
+        room: u32,
         cell: String,
         pad: String,
         loading: u32,
@@ -413,6 +423,7 @@ mod tests {
         Place {
             logged_in: true,
             map: map.into(),
+            room: 1,
             cell: cell.into(),
             pad: "Spawn".into(),
             loading: 0,
@@ -443,6 +454,9 @@ mod tests {
                     Value::Bool(place.logged_in && loaded)
                 }
                 "player.getMap" => Value::String(place.map.clone()),
+                "flash.getGameObject" if args == ["world.strAreaName".into()] => {
+                    Value::String(format!(r#""{}-{}""#, place.map, place.room))
+                }
                 "world.getCells" => Value::List(
                     ["Enter", "r2", "Room"]
                         .map(|cell| Value::String(cell.into()))
@@ -541,6 +555,7 @@ mod tests {
             place.loading = 3;
             place.art = art;
             place.map = map.into();
+            place.room = 5;
             place.cell = cell.into();
         }
         events.publish(&Event::ExtensionResponse {
@@ -719,22 +734,29 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn joining_the_current_map_without_a_room_jumps() {
-        let (loader, place) = traveller(in_map("battleon", "Enter"));
-        let events = Events::default();
-        assert_eq!(
-            join(
-                &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
-                "Battleon",
-                Some("r2"),
-                None
-            )
-            .await,
-            Ok(true)
-        );
-        assert!(place.borrow().joins.is_empty());
-        assert_eq!(place.borrow().jumps, [vec!["r2".into(), "Spawn".into()]]);
+    async fn joining_the_current_map_or_room_jumps() {
+        for target in ["Battleon", "battleon-1"] {
+            let (loader, place) = traveller(in_map("battleon", "Enter"));
+            let events = Events::default();
+            assert_eq!(
+                join(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    target,
+                    Some("r2"),
+                    None
+                )
+                .await,
+                Ok(true),
+                "{target}"
+            );
+            assert!(place.borrow().joins.is_empty(), "{target}");
+            assert_eq!(
+                place.borrow().jumps,
+                [vec!["r2".into(), "Spawn".into()]],
+                "{target}"
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]
