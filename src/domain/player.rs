@@ -141,7 +141,7 @@ pub(crate) async fn join(
     if name == map && here.is_some_and(|here| here.eq_ignore_ascii_case(name)) {
         return jump(loader, cell, Some(pad)).await;
     }
-    if !wait_for_action(loader, GameAction::Tfer).await? {
+    if !ready_to_transfer(loader).await? {
         return Ok(false);
     }
     let deadline = Instant::now() + JOIN_TIMEOUT;
@@ -171,13 +171,7 @@ pub(crate) async fn join(
 
 pub(crate) async fn go_to(loader: &impl Loader, username: &str) -> Result<bool, CallError> {
     let username = username.trim();
-    if username.is_empty()
-        || !wait_until_ready(loader).await?
-        || poll(POLL, RESPAWN_TIMEOUT, || Ok(alive(loader)?.then_some(())))
-            .await?
-            .is_none()
-        || !combat::exit(loader).await?
-        || !wait_for_action(loader, GameAction::Tfer).await?
+    if username.is_empty() || !wait_until_ready(loader).await? || !ready_to_transfer(loader).await?
     {
         return Ok(false);
     }
@@ -197,6 +191,16 @@ pub(crate) async fn go_to(loader: &impl Loader, username: &str) -> Result<bool, 
         .then_some(true))
     })
     .await
+}
+
+async fn ready_to_transfer(loader: &impl Loader) -> Result<bool, CallError> {
+    Ok(
+        poll(POLL, RESPAWN_TIMEOUT, || Ok(alive(loader)?.then_some(())))
+            .await?
+            .is_some()
+            && combat::exit(loader).await?
+            && wait_for_action(loader, GameAction::Tfer).await?,
+    )
 }
 
 pub(crate) async fn jump(
@@ -455,7 +459,7 @@ mod tests {
                     Value::Bool(available)
                 }
                 "player.joinMap" => {
-                    if place.transfer_lock == 0 {
+                    if place.transfer_lock == 0 && place.state == State::Idle {
                         place.joins.push(args.to_vec());
                     }
                     Value::Undefined
@@ -586,6 +590,40 @@ mod tests {
         );
         assert_eq!(joined, Ok(true));
         assert_eq!(place.borrow().joins.len(), 1);
+
+        for state in [State::Dead, State::Combat] {
+            let (loader, place) = traveller(Place {
+                state,
+                ..in_map("battleon", "Enter")
+            });
+            let (joined, (), ()) = tokio::join!(
+                join(
+                    &loader,
+                    Packets::subscribe(|wants| events.subscribe(wants)),
+                    "yulgar-1234",
+                    None,
+                    None
+                ),
+                async {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if place.borrow().state == State::Dead {
+                        place.borrow_mut().state = State::Idle;
+                    }
+                },
+                async {
+                    let sent = poll(POLL, JOIN_TIMEOUT, || {
+                        Ok((!place.borrow().joins.is_empty()).then_some(()))
+                    })
+                    .await
+                    .unwrap();
+                    if sent.is_some() {
+                        transfer_later(&place, &events, "yulgar", "Enter", 0).await;
+                    }
+                },
+            );
+            assert_eq!(joined, Ok(true), "{state:?}");
+            assert_eq!(place.borrow().joins.len(), 1);
+        }
     }
 
     #[tokio::test(start_paused = true)]
