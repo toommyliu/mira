@@ -174,7 +174,7 @@ export const Player = {
   walkTo: (x: number, y: number, options: WalkOptions = {}) =>
     player<boolean>("walkTo", { x, y, ...options }),
   rest: (options: RestOptions = {}) => player<boolean>("rest", options),
-  /** Joins the player's room and cell, wherever they are. */
+  /** Joins the player's room and cell, wherever they are. Waits to respawn and leaves combat first. */
   goToPlayer: (username: string) => player<boolean>("goToPlayer", { username }),
   /** Registrations and config last until the session closes, after scripts end. */
   boosts: {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, timeout_at};
 
 use super::{
-    POLL, State, arrive,
+    POLL, State, arrive, combat,
     inventory::{self, ItemQuery, Row},
     players, poll, wait_for_action, wait_until_ready, world,
 };
@@ -17,6 +17,7 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
 const JUMP_TIMEOUT: Duration = Duration::from_secs(5);
 const WALK_TIMEOUT: Duration = Duration::from_secs(3);
 const REST_TIMEOUT: Duration = Duration::from_secs(10);
+const RESPAWN_TIMEOUT: Duration = Duration::from_secs(12);
 const OUTFIT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_CELL: &str = "Enter";
 const DEFAULT_PAD: &str = "Spawn";
@@ -172,6 +173,10 @@ pub(crate) async fn go_to(loader: &impl Loader, username: &str) -> Result<bool, 
     let username = username.trim();
     if username.is_empty()
         || !wait_until_ready(loader).await?
+        || poll(POLL, RESPAWN_TIMEOUT, || Ok(alive(loader)?.then_some(())))
+            .await?
+            .is_none()
+        || !combat::exit(loader).await?
         || !wait_for_action(loader, GameAction::Tfer).await?
     {
         return Ok(false);
@@ -397,6 +402,7 @@ mod tests {
         jumps: Vec<Vec<Value>>,
         gotos: Vec<Value>,
         friend: Option<(&'static str, &'static str)>,
+        state: State,
     }
 
     fn in_map(map: &str, cell: &str) -> Place {
@@ -412,6 +418,7 @@ mod tests {
             jumps: Vec::new(),
             gotos: Vec::new(),
             friend: None,
+            state: State::Idle,
         }
     }
 
@@ -457,12 +464,37 @@ mod tests {
                     place.jumps.push(args.to_vec());
                     place.cell = text(&args[0]);
                     place.pad = text(&args[1]);
+                    if place.state == State::Combat {
+                        place.state = State::Idle;
+                    }
                     Value::Undefined
                 }
                 "player.goToPlayer" => {
-                    place.gotos.push(args[0].clone());
+                    if place.state == State::Idle {
+                        place.gotos.push(args[0].clone());
+                        if let Some((map, cell)) = place.friend.filter(|(map, _)| place.map != *map)
+                        {
+                            place.map = map.into();
+                            place.cell = cell.into();
+                            place.loading = 3;
+                        }
+                    }
                     Value::Undefined
                 }
+                "player.getState" => Value::Number(match place.state {
+                    State::Dead => 0.0,
+                    State::Idle => 1.0,
+                    State::Combat => 2.0,
+                }),
+                "player.getHp" => Value::Number(if place.state == State::Dead {
+                    0.0
+                } else {
+                    100.0
+                }),
+                "flash.isNull" => Value::Bool(false),
+                "world.getMonsters" => Value::List(Vec::new()),
+                "combat.cancelAutoAttack" | "combat.cancelTarget" => Value::Null,
+                "player.getPad" => Value::String(place.pad.clone()),
                 "player.getCell" => Value::String(place.cell.clone()),
                 "players.get" => match place.friend {
                     Some((map, cell))
@@ -563,13 +595,34 @@ mod tests {
             transfer_lock: 5,
             ..in_map("battleon", "Enter")
         });
-        let events = Events::default();
-        let (arrived, ()) = tokio::join!(
-            go_to(&loader, " player2 "),
-            transfer_later(&place, &events, "yulgar", "Room", 2),
-        );
-        assert_eq!(arrived, Ok(true));
+        assert_eq!(go_to(&loader, " player2 ").await, Ok(true));
         assert_eq!(place.borrow().gotos, [Value::String("player2".into())]);
+
+        let (loader, place) = traveller(Place {
+            friend: Some(("yulgar", "Room")),
+            state: State::Dead,
+            ..in_map("battleon", "Enter")
+        });
+        let started = Instant::now();
+        let (arrived, ()) = tokio::join!(go_to(&loader, "player2"), async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            place.borrow_mut().state = State::Idle;
+        });
+        assert_eq!(arrived, Ok(true));
+        assert!(started.elapsed() >= Duration::from_secs(10));
+        assert_eq!(place.borrow().gotos.len(), 1);
+
+        let (loader, place) = traveller(Place {
+            friend: Some(("yulgar", "Room")),
+            state: State::Combat,
+            ..in_map("battleon", "Enter")
+        });
+        assert_eq!(go_to(&loader, "player2").await, Ok(true));
+        {
+            let place = place.borrow();
+            assert_eq!(place.jumps, [vec!["Enter".into(), "Spawn".into()]]);
+            assert_eq!(place.gotos.len(), 1);
+        }
 
         let (loader, place) = traveller(Place {
             friend: Some(("battleon", "r2")),
