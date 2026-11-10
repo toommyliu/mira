@@ -256,7 +256,7 @@ type Toggle = (
     fn(&mut GameSettings) -> &mut bool,
 );
 
-const TOGGLES: [Toggle; 8] = [
+const TOGGLES: [Toggle; 9] = [
     ("infinite-range", "Infinite range", |s| {
         &mut s.infinite_range
     }),
@@ -269,6 +269,7 @@ const TOGGLES: [Toggle; 8] = [
     ("animations", "Animations", |s| &mut s.animations),
     ("collisions", "Collisions", |s| &mut s.collisions),
     ("ads", "Ads", |s| &mut s.ads),
+    ("anti-counter", "Anti counter", |s| &mut s.anti_counter),
 ];
 
 struct Edit {

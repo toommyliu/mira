@@ -34,6 +34,7 @@ pub(crate) enum SettingsRequest {
         custom_name: Option<Option<String>>,
         #[serde(default, deserialize_with = "present")]
         custom_guild: Option<Option<String>>,
+        anti_counter: Option<bool>,
     },
 }
 
@@ -129,6 +130,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
             frame_rate,
             custom_name,
             custom_guild,
+            anti_counter,
         } => {
             let settings = automation.update_game_settings(|settings| {
                 apply(&mut settings.infinite_range, infinite_range);
@@ -145,6 +147,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.walk_speed, walk_speed);
                 apply(&mut settings.custom_name, custom_name);
                 apply(&mut settings.custom_guild, custom_guild);
+                apply(&mut settings.anti_counter, anti_counter);
             });
             let frame_rate = match frame_rate {
                 Some(fps) => automation.set_frame_rate(fps),
@@ -272,6 +275,7 @@ mod tests {
                 "frameRate": 60,
                 "customName": "player1",
                 "customGuild": null,
+                "antiCounter": true,
             }))
         );
         let clear = serde_json::from_value(json!({ "op": "update", "customName": null })).unwrap();

@@ -9,6 +9,7 @@ use crate::{
     domain::{
         self,
         combat::{self, Skill},
+        counter_attack::CounterAttacks,
         world::MonsterQuery,
     },
 };
@@ -74,6 +75,7 @@ impl Request {
 pub(super) async fn serve(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    counter_attacks: &CounterAttacks,
     request: Request,
 ) -> Reply {
     Ok(match request {
@@ -86,6 +88,7 @@ pub(super) async fn serve(
             combat::use_skill(
                 loader,
                 Packets::subscribe(&subscribe),
+                counter_attacks,
                 skill,
                 target.as_ref(),
                 force.unwrap_or(false),
@@ -102,6 +105,7 @@ pub(super) async fn serve(
             combat::kill(
                 loader,
                 Packets::subscribe(&subscribe),
+                counter_attacks,
                 &query,
                 skills.as_deref().unwrap_or(&combat::DEFAULT_ROTATION),
                 skill_interval_ms.map_or(combat::TICK, |ms| {
@@ -119,7 +123,7 @@ pub(super) async fn serve(
         Request::Exit => json!(combat::exit(loader).await?),
         Request::Target => json!(combat::target(loader)?),
         Request::HasTarget => json!(bridge::combat::has_target(loader)?),
-        Request::Attack { query } => json!(combat::attack(loader, &query)?),
+        Request::Attack { query } => json!(combat::attack(loader, counter_attacks, &query)?),
         Request::CanUseSkill { skill } => {
             json!(bridge::combat::can_use_skill(loader, skill.index())?)
         }
@@ -184,7 +188,13 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                serve(&loader, |wants| events.subscribe(wants), request.clone()).await,
+                serve(
+                    &loader,
+                    |wants| events.subscribe(wants),
+                    &CounterAttacks::default(),
+                    request.clone()
+                )
+                .await,
                 Ok(expected),
                 "{request:?}"
             );

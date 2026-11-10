@@ -4142,6 +4142,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "oxc",
  "raw-window-handle",
+ "regex",
  "reqwest",
  "rquickjs",
  "ruffle_core",

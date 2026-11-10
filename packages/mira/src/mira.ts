@@ -620,6 +620,12 @@ export type GameSettings = {
   readonly customName: string | null;
   /** Shown only to this client. `null` restores the character's own guild. */
   readonly customGuild: string | null;
+  /**
+   * On by default. Stops attacking a monster from its counter attack warning until the counter fades,
+   * and holds skills while Sun's Heat is on you.
+   * `Combat.attack`, `useSkill` and `kill` skip a countering monster, and auto attack waits it out.
+   */
+  readonly antiCounter: boolean;
 };
 
 export type SettingsPatch = Partial<Omit<GameSettings, "frameRate">> & {

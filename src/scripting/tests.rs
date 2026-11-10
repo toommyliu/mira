@@ -1168,7 +1168,7 @@ export default function* () {
   yield* AutoZone.get();
   yield* AutoZone.update({ map: "queeniona" });
   yield* Settings.get();
-  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null });
+  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null, antiCounter: false });
 }
 "#,
     )]);
@@ -1221,6 +1221,7 @@ export default function* () {
                 frame_rate: None,
                 custom_name: None,
                 custom_guild: Some(None),
+                anti_counter: Some(false),
             }),
         ]
     );

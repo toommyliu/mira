@@ -14,7 +14,7 @@ use crate::{
     army::Armies,
     automation::settings::Automation,
     bridge::{Bridge, CallError},
-    domain::auth::Logins,
+    domain::{auth::Logins, counter_attack::CounterAttacks},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -141,6 +141,7 @@ pub(crate) async fn answer(
     logins: Rc<Logins>,
     automation: Automation,
     armies: Armies,
+    counter_attacks: CounterAttacks,
     state: Rc<RunState>,
     call: Call,
 ) {
@@ -150,7 +151,19 @@ pub(crate) async fn answer(
         reply,
         ..
     } = call;
-    reply.send(serve(&bridge, &logins, &automation, &armies, run, &state, request).await);
+    reply.send(
+        serve(
+            &bridge,
+            &logins,
+            &automation,
+            &armies,
+            &counter_attacks,
+            run,
+            &state,
+            request,
+        )
+        .await,
+    );
 }
 
 async fn serve(
@@ -158,6 +171,7 @@ async fn serve(
     logins: &Logins,
     automation: &Automation,
     armies: &Armies,
+    counter_attacks: &CounterAttacks,
     run: RunId,
     state: &RunState,
     request: Request,
@@ -187,7 +201,13 @@ async fn serve(
             world::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }
         Request::Combat(request) => {
-            combat::serve(bridge, |wants| bridge.subscribe(wants), request).await
+            combat::serve(
+                bridge,
+                |wants| bridge.subscribe(wants),
+                counter_attacks,
+                request,
+            )
+            .await
         }
         Request::Inventory(request) => {
             inventory::serve(bridge, |wants| bridge.subscribe(wants), request).await

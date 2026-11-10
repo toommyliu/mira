@@ -257,12 +257,13 @@ pub(crate) fn available_mon_map_id(
     loader: &impl Loader,
     query: &MonsterQuery,
 ) -> Result<Option<f64>, CallError> {
-    first_available_mon_map_id(loader, std::slice::from_ref(query))
+    first_available_mon_map_id(loader, std::slice::from_ref(query), |_| true)
 }
 
 pub(crate) fn first_available_mon_map_id(
     loader: &impl Loader,
     queries: &[MonsterQuery],
+    keep: impl Fn(f64) -> bool,
 ) -> Result<Option<f64>, CallError> {
     if queries.is_empty() {
         return Ok(None);
@@ -272,7 +273,7 @@ pub(crate) fn first_available_mon_map_id(
     Ok(queries.iter().find_map(|query| {
         monsters
             .iter()
-            .find(|monster| monster.available && query.matches(monster))
+            .find(|monster| monster.available && query.matches(monster) && keep(monster.mon_map_id))
             .map(|monster| monster.mon_map_id)
     }))
 }

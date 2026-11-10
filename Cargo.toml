@@ -22,6 +22,7 @@ objc2-core-graphics = "0.3"
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSNotification"] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "CAMetalLayer", "CATransaction"] }
 raw-window-handle = "0.6"
+regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["cookies", "native-tls", "stream"] }
 rquickjs = { version = "0.14", features = ["loader"] }
 ruffle_core = { git = "https://github.com/toommyliu/ruffle", rev = "a5b8bc8c8f16b39121417577a261625eceee2565", features = ["aac", "audio", "default_compatibility_rules", "default_font", "lzma", "mp3", "nellymoser", "stats"] }

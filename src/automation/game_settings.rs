@@ -92,6 +92,7 @@ pub(crate) struct Settings {
     pub(crate) walk_speed: u32,
     pub(crate) custom_name: Option<String>,
     pub(crate) custom_guild: Option<String>,
+    pub(crate) anti_counter: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +126,7 @@ impl Default for Settings {
             walk_speed: 8,
             custom_name: None,
             custom_guild: None,
+            anti_counter: true,
         }
     }
 }
@@ -261,6 +263,7 @@ pub(crate) async fn log_hidden_ads(events: Subscription) {
 }
 
 fn step(loader: &impl Loader, desired: &Settings, applied: &mut Settings, tick: bool) {
+    applied.anti_counter = desired.anti_counter;
     sync(
         &desired.custom_name,
         &mut applied.custom_name,

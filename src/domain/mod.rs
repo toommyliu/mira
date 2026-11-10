@@ -2,6 +2,7 @@ pub(crate) mod auras;
 pub(crate) mod auth;
 pub(crate) mod bank;
 pub(crate) mod combat;
+pub(crate) mod counter_attack;
 pub(crate) mod drops;
 pub(crate) mod enhancements;
 pub(crate) mod events;

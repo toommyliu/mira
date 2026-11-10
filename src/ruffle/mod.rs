@@ -27,13 +27,15 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     army::Armies,
     automation::{
-        auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests,
+        anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests,
         settings::Automation, sign_in,
     },
     bridge::{Bridge, Event, Packets},
     domain::{
         auth::{Credentials, Logins},
-        bank, player,
+        bank,
+        counter_attack::{self, CounterAttacks},
+        player,
         world::{self, Location},
     },
     scripting::{self, Calls, ToPlayer},
@@ -240,6 +242,17 @@ fn run(
     bridge.attach(&player);
     let phases = outputs.clone();
     let logins = Rc::new(Logins::default());
+    let counter_attacks = CounterAttacks::default();
+    spawn_local(
+        &inbox,
+        &tasks,
+        anti_counter::run(
+            bridge.clone(),
+            bridge.subscribe(counter_attack::wants),
+            automation.watch_game_settings(),
+            counter_attacks.clone(),
+        ),
+    );
     spawn_local(
         &inbox,
         &tasks,
@@ -266,7 +279,11 @@ fn run(
     spawn_local(
         &inbox,
         &tasks,
-        auto_attack::run(bridge.clone(), automation.watch_auto_attack()),
+        auto_attack::run(
+            bridge.clone(),
+            automation.watch_auto_attack(),
+            counter_attacks.clone(),
+        ),
     );
     let subscriber = bridge.clone();
     spawn_local(
@@ -391,6 +408,7 @@ fn run(
                             logins.clone(),
                             automation.clone(),
                             armies.clone(),
+                            counter_attacks.clone(),
                             state,
                             call,
                         ),

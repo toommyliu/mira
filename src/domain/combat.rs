@@ -7,7 +7,9 @@ use tokio::{
 };
 
 use super::{
-    POLL, State, auth, has_avatar,
+    POLL, State, auth,
+    counter_attack::CounterAttacks,
+    has_avatar,
     inventory::{self, TurnInPacket},
     player,
     players::{self, RoomPlayer},
@@ -74,11 +76,23 @@ pub(crate) fn target(loader: &impl Loader) -> Result<Option<Target>, CallError> 
     })
 }
 
-pub(crate) fn attack(loader: &impl Loader, query: &MonsterQuery) -> Result<bool, CallError> {
+pub(crate) fn attack(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+    query: &MonsterQuery,
+) -> Result<bool, CallError> {
     match world::available_mon_map_id(loader, query)? {
-        Some(id) => attack_id(loader, id),
-        None => Ok(false),
+        Some(id) if !counter_attacks.countering(id) => attack_id(loader, id),
+        _ => Ok(false),
     }
+}
+
+pub(crate) fn targets_countering(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+) -> Result<bool, CallError> {
+    Ok(counter_attacks.any()
+        && matches!(target(loader)?, Some(Target::Monster(monster)) if counter_attacks.countering(monster.mon_map_id)))
 }
 
 fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
@@ -160,6 +174,7 @@ async fn settle(loader: &impl Loader) -> Result<Option<bool>, CallError> {
 pub(crate) async fn use_skill(
     loader: &impl Loader,
     turn_ins: Packets<TurnInPacket>,
+    counter_attacks: &CounterAttacks,
     skill: Skill,
     target: Option<&MonsterQuery>,
     force: bool,
@@ -168,14 +183,17 @@ pub(crate) async fn use_skill(
     if wait_until_ready && !ready(loader, skill).await? {
         return Ok(false);
     }
-    if !has_avatar(loader)? {
+    if !has_avatar(loader)? || counter_attacks.holds_skills(loader)? {
         return Ok(false);
     }
     let selector = match target {
+        None if targets_countering(loader, counter_attacks)? => return Ok(false),
         None => None,
         Some(query) => match world::available_mon_map_id(loader, query)? {
-            Some(id) => Some(selector("monsterMapId", Value::Number(id))),
-            None => return Ok(false),
+            Some(id) if !counter_attacks.countering(id) => {
+                Some(selector("monsterMapId", Value::Number(id)))
+            }
+            _ => return Ok(false),
         },
     };
     let consumed = if skill.consumable() {
@@ -292,6 +310,7 @@ impl CtPacket {
 pub(crate) async fn kill(
     loader: &impl Loader,
     fights: Packets<CtPacket>,
+    counter_attacks: &CounterAttacks,
     query: &MonsterQuery,
     skills: &[Skill],
     interval: Duration,
@@ -304,19 +323,44 @@ pub(crate) async fn kill(
         return Ok(false);
     };
     fights.clear();
-    let first = world::first_available_mon_map_id(loader, priority)?.unwrap_or(id);
-    if !attack_id(loader, first)? {
+    if let Some(first) = wanted(loader, counter_attacks, id, priority)?
+        && !attack_id(loader, first)?
+    {
         return Ok(false);
     }
     let engaged = Engaged(loader);
-    let killed = fight(loader, &fights, id, skills, interval, priority).await;
+    let killed = fight(
+        loader,
+        &fights,
+        counter_attacks,
+        id,
+        skills,
+        interval,
+        priority,
+    )
+    .await;
     std::mem::forget(engaged);
     killed
+}
+
+fn wanted(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+    id: f64,
+    priority: &[MonsterQuery],
+) -> Result<Option<f64>, CallError> {
+    Ok(
+        world::first_available_mon_map_id(loader, priority, |other| {
+            !counter_attacks.countering(other)
+        })?
+        .or_else(|| (!counter_attacks.countering(id)).then_some(id)),
+    )
 }
 
 async fn fight(
     loader: &impl Loader,
     fights: &Packets<CtPacket>,
+    counter_attacks: &CounterAttacks,
     id: f64,
     skills: &[Skill],
     interval: Duration,
@@ -328,12 +372,15 @@ async fn fight(
         if !auth::in_game(loader)? || bridge::player::get_cell(loader)? != cell {
             return Ok(false);
         }
-        let wanted = world::first_available_mon_map_id(loader, priority)?.unwrap_or(id);
-        if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == wanted)
-        {
-            attack_id(loader, wanted)?;
+        if let Some(wanted) = wanted(loader, counter_attacks, id, priority)? {
+            if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == wanted)
+            {
+                attack_id(loader, wanted)?;
+            }
+            if !counter_attacks.holds_skills(loader)? {
+                use_next_skill(loader, skills, &mut next)?;
+            }
         }
-        use_next_skill(loader, skills, &mut next)?;
         let tick = sleep(interval);
         pin!(tick);
         loop {
@@ -394,7 +441,7 @@ mod tests {
     use super::*;
     use crate::{
         bridge::{Event, Events},
-        domain::testing::FakeLoader,
+        domain::{counter_attack::Signal, testing::FakeLoader},
     };
 
     struct Monster {
@@ -518,6 +565,7 @@ mod tests {
                     Value::Bool(fight.cell == "r2" && alive)
                 }
                 "combat.getSkillCooldownRemaining" => number(fight.cooldown()),
+                "player.getAuras" => Value::List(Vec::new()),
                 "combat.getConsumableSkillItem" => fight.slotted.map_or(Value::Null, |id| {
                     row(&[("itemId", number(id)), ("ready", Value::Bool(true))])
                 }),
@@ -605,6 +653,7 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &CounterAttacks::default(),
                 &named("frogzard"),
                 &DEFAULT_ROTATION,
                 Duration::from_millis(700),
@@ -633,6 +682,7 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &CounterAttacks::default(),
                 &named("Frogzard"),
                 &[Skill(3), Skill(1)],
                 TICK,
@@ -656,11 +706,13 @@ mod tests {
             ..Fight::default()
         });
         let frogzard = named("Frogzard");
+        let counter_attacks = CounterAttacks::default();
         let killed = timeout(
             Duration::from_secs(5),
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &counter_attacks,
                 &frogzard,
                 &DEFAULT_ROTATION,
                 TICK,
@@ -682,6 +734,7 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &CounterAttacks::default(),
                 &named("Dragon"),
                 &DEFAULT_ROTATION,
                 TICK,
@@ -705,6 +758,7 @@ mod tests {
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &CounterAttacks::default(),
                 &named("Frogzard"),
                 &DEFAULT_ROTATION,
                 TICK,
@@ -723,11 +777,13 @@ mod tests {
             monsters: frogzards(),
             ..Fight::default()
         });
+        let counter_attacks = CounterAttacks::default();
         let interrupted = timeout(
             TICK,
             kill(
                 &loader,
                 Packets::subscribe(|wants| events.subscribe(wants)),
+                &counter_attacks,
                 &MonsterQuery::MonMapId { mon_map_id: 3.0 },
                 &DEFAULT_ROTATION,
                 TICK,
@@ -756,12 +812,30 @@ mod tests {
         });
         let skill = Skill(2);
         assert_eq!(
-            use_skill(&loader, turn_ins(), skill, None, false, false).await,
+            use_skill(
+                &loader,
+                turn_ins(),
+                &CounterAttacks::default(),
+                skill,
+                None,
+                false,
+                false
+            )
+            .await,
             Ok(false)
         );
         let started = Instant::now();
         assert_eq!(
-            use_skill(&loader, turn_ins(), skill, None, false, true).await,
+            use_skill(
+                &loader,
+                turn_ins(),
+                &CounterAttacks::default(),
+                skill,
+                None,
+                false,
+                true
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(started.elapsed(), cooldown);
@@ -779,7 +853,16 @@ mod tests {
             ..Fight::default()
         });
         assert_eq!(
-            use_skill(&loader, turn_ins(), Skill(1), None, false, true).await,
+            use_skill(
+                &loader,
+                turn_ins(),
+                &CounterAttacks::default(),
+                Skill(1),
+                None,
+                false,
+                true
+            )
+            .await,
             Ok(false)
         );
         assert!(fight.borrow().cast.is_empty());
@@ -795,12 +878,30 @@ mod tests {
         let frogzard = named("Frogzard");
         let dragon = named("Dragon");
         assert_eq!(
-            use_skill(&loader, turn_ins(), Skill(1), Some(&dragon), false, false).await,
+            use_skill(
+                &loader,
+                turn_ins(),
+                &CounterAttacks::default(),
+                Skill(1),
+                Some(&dragon),
+                false,
+                false
+            )
+            .await,
             Ok(false)
         );
         assert!(fight.borrow().cast.is_empty());
         assert_eq!(
-            use_skill(&loader, turn_ins(), Skill(1), Some(&frogzard), false, false).await,
+            use_skill(
+                &loader,
+                turn_ins(),
+                &CounterAttacks::default(),
+                Skill(1),
+                Some(&frogzard),
+                false,
+                false
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(fight.borrow().target, Some(2.0));
@@ -823,6 +924,7 @@ mod tests {
                 use_skill(
                     &loader,
                     Packets::subscribe(|wants| events.subscribe(wants)),
+                    &CounterAttacks::default(),
                     Skill(5),
                     None,
                     false,
@@ -1078,6 +1180,109 @@ mod tests {
             assert_eq!(exit(&loader).await, Ok(left), "{expected:?}");
             assert_eq!(*jumped.borrow(), expected);
         }
+    }
+
+    fn countering(ids: &[i32]) -> CounterAttacks {
+        let counter_attacks = CounterAttacks::default();
+        for id in ids {
+            counter_attacks.apply(Signal::Begin {
+                mon_map_id: *id,
+                lasts: Duration::from_secs(7),
+            });
+        }
+        counter_attacks
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_passes_over_a_countering_priority_target() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        assert_eq!(
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &countering(&[3]),
+                &named("Frogzard"),
+                &DEFAULT_ROTATION,
+                TICK,
+                &[named("Slime")],
+            )
+            .await,
+            Ok(true)
+        );
+        let fight = fight.borrow();
+        assert_eq!(fight.attacked, [2.0]);
+        assert_eq!(fight.monsters[2].hp, 5);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_waits_out_its_target_s_counter_before_attacking() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        let counter_attacks = countering(&[2]);
+        let frogzard = named("Frogzard");
+        let kill = || {
+            kill(
+                &loader,
+                Packets::subscribe(|wants| events.subscribe(wants)),
+                &counter_attacks,
+                &frogzard,
+                &DEFAULT_ROTATION,
+                TICK,
+                &[],
+            )
+        };
+        assert!(timeout(Duration::from_secs(6), kill()).await.is_err());
+        assert!(fight.borrow().attacked.is_empty() && fight.borrow().cast.is_empty());
+        assert_eq!(kill().await, Ok(true));
+        assert_eq!(fight.borrow().cast, [1, 2, 3]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_countering_monster_is_neither_attacked_nor_hit_with_skills() {
+        let (loader, fight, _) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            target: Some(2.0),
+            ..Fight::default()
+        });
+        let counter_attacks = countering(&[2]);
+        let frogzard = named("Frogzard");
+        assert_eq!(attack(&loader, &counter_attacks, &frogzard), Ok(false));
+        assert_eq!(
+            use_skill(
+                &loader,
+                turn_ins(),
+                &counter_attacks,
+                Skill(1),
+                None,
+                false,
+                false
+            )
+            .await,
+            Ok(false)
+        );
+        assert_eq!(
+            use_skill(
+                &loader,
+                turn_ins(),
+                &counter_attacks,
+                Skill(1),
+                Some(&frogzard),
+                false,
+                false
+            )
+            .await,
+            Ok(false)
+        );
+        let fight = fight.borrow();
+        assert!(fight.attacked.is_empty() && fight.cast.is_empty());
     }
 
     #[test]

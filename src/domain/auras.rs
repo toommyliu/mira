@@ -31,6 +31,8 @@ pub(crate) struct AuraEntry {
     pub(crate) name: String,
     #[serde(rename = "dur", default, deserialize_with = "wire::number")]
     pub(crate) duration: Option<f64>,
+    #[serde(rename = "stk", default, deserialize_with = "wire::number")]
+    pub(crate) stack: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -54,6 +56,10 @@ pub(crate) struct Aura {
 }
 
 impl Aura {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     fn is_named(&self, name: &str) -> bool {
         self.name.to_lowercase() == name.to_lowercase()
     }

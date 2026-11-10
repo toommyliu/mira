@@ -324,8 +324,8 @@ impl Kind {
                 };
                 for change in fight.changes.into_iter().flatten() {
                     let added = match change.cmd.as_str() {
-                        "aura+" => true,
-                        "aura-" => false,
+                        "aura+" | "aura++" => true,
+                        "aura-" | "aura--" => false,
                         _ => continue,
                     };
                     if added != (self == Kind::AuraAdded) {
@@ -335,6 +335,9 @@ impl Kind {
                         let is_self =
                             target_type == TargetType::Player && me.user_id() == Some(target_id);
                         for aura in change.auras.iter().chain(&change.aura) {
+                            if !added && aura.stack.is_some_and(|stack| stack > 0.0) {
+                                continue;
+                            }
                             let name = aura.name.clone();
                             events.push(if added {
                                 GameEvent::AuraAdded {
@@ -409,7 +412,7 @@ fn player_update(packet: &str) -> Option<PlayerUpdate> {
         .or_else(|| decode::<PlayerUpdateLine>(packet).map(PlayerUpdate::from))
 }
 
-fn targets(references: &str) -> impl Iterator<Item = (TargetType, i32)> + '_ {
+pub(crate) fn targets(references: &str) -> impl Iterator<Item = (TargetType, i32)> + '_ {
     references.split(',').filter_map(|reference| {
         let (kind, id) = reference.trim().split_once(':')?;
         let kind = match kind {
@@ -679,6 +682,9 @@ mod tests {
             { "cmd": "aura+", "cInf": "p:28552", "tInf": "p:28552", "auras": [{ "nam": "Royal Resolve", "dur": 6 }] },
             { "cmd": "aura+", "cInf": "p:28554", "tInf": "p:28554", "auras": [{ "nam": "Shield" }] },
             { "cmd": "aura-", "tInf": "p:28552", "aura": { "nam": "Stacks Consumed" } },
+            { "cmd": "aura++", "tInf": "m:2", "auras": [{ "nam": "Counter Attack", "dur": 5 }] },
+            { "cmd": "aura--", "tInf": "m:2", "aura": { "nam": "Counter Attack" } },
+            { "cmd": "aura--", "tInf": "p:28552", "aura": { "nam": "Fury", "stk": 2 } },
             null,
         ] } });
         let added = |name: &str, target_type, target_id, is_self, duration| GameEvent::AuraAdded {
@@ -695,16 +701,25 @@ mod tests {
                 added("Censure", TargetType::Monster, 1, false, Some(10.0)),
                 added("Royal Resolve", TargetType::Player, 28552, true, Some(6.0)),
                 added("Shield", TargetType::Player, 28554, false, None),
+                added("Counter Attack", TargetType::Monster, 2, false, Some(5.0)),
             ]
         );
         assert_eq!(
             read(Kind::AuraRemoved, packet),
-            [GameEvent::AuraRemoved {
-                name: "Stacks Consumed".into(),
-                target_type: TargetType::Player,
-                target_id: 28552,
-                is_self: true,
-            }]
+            [
+                GameEvent::AuraRemoved {
+                    name: "Stacks Consumed".into(),
+                    target_type: TargetType::Player,
+                    target_id: 28552,
+                    is_self: true,
+                },
+                GameEvent::AuraRemoved {
+                    name: "Counter Attack".into(),
+                    target_type: TargetType::Monster,
+                    target_id: 2,
+                    is_self: false,
+                },
+            ]
         );
     }
 

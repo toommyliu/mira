@@ -1,3 +1,4 @@
+pub(crate) mod anti_counter;
 pub(crate) mod auto_attack;
 pub(crate) mod auto_relogin;
 pub(crate) mod auto_zone;

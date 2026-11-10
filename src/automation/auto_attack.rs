@@ -4,7 +4,8 @@ use tokio::{sync::watch, time::sleep};
 use crate::bridge::{self, CallError, Loader, Value};
 use crate::domain::{
     auth,
-    combat::{DEFAULT_ROTATION, TICK, selector, use_next_skill},
+    combat::{DEFAULT_ROTATION, TICK, selector, targets_countering, use_next_skill},
+    counter_attack::CounterAttacks,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,7 +14,11 @@ pub(crate) struct Settings {
     pub(crate) enabled: bool,
 }
 
-pub(crate) async fn run(loader: impl Loader, mut settings: watch::Receiver<Settings>) {
+pub(crate) async fn run(
+    loader: impl Loader,
+    mut settings: watch::Receiver<Settings>,
+    counter_attacks: CounterAttacks,
+) {
     let mut next = 0;
     loop {
         let enabled = settings.borrow_and_update().enabled;
@@ -22,7 +27,7 @@ pub(crate) async fn run(loader: impl Loader, mut settings: watch::Receiver<Setti
                 return;
             },
             () = sleep(TICK), if enabled => {
-                if let Err(error) = attack(&loader, &mut next) {
+                if let Err(error) = attack(&loader, &counter_attacks, &mut next) {
                     tracing::debug!(%error, "auto attack skipped a tick");
                 }
             }
@@ -30,22 +35,32 @@ pub(crate) async fn run(loader: impl Loader, mut settings: watch::Receiver<Setti
     }
 }
 
-fn attack(loader: &impl Loader, next: &mut usize) -> Result<(), CallError> {
-    if !auth::in_game(loader)? {
+fn attack(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+    next: &mut usize,
+) -> Result<(), CallError> {
+    if !auth::in_game(loader)?
+        || counter_attacks.holds_skills(loader)?
+        || targets_countering(loader, counter_attacks)?
+    {
         return Ok(());
     }
-    if !bridge::combat::has_target(loader)? && !target_any_monster(loader)? {
+    if !bridge::combat::has_target(loader)? && !target_any_monster(loader, counter_attacks)? {
         return Ok(());
     }
     use_next_skill(loader, &DEFAULT_ROTATION, next)
 }
 
-fn target_any_monster(loader: &impl Loader) -> Result<bool, CallError> {
+fn target_any_monster(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+) -> Result<bool, CallError> {
     let Value::List(ids) = bridge::world::get_available_monster_map_ids(loader)? else {
         return Ok(false);
     };
     let Some(id) = ids.into_iter().find_map(|id| match id {
-        Value::Number(id) => Some(id),
+        Value::Number(id) if !counter_attacks.countering(id) => Some(id),
         _ => None,
     }) else {
         return Ok(false);
@@ -80,6 +95,7 @@ mod tests {
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" => Value::Bool(fight.in_game),
                 "combat.hasTarget" => Value::Bool(fight.target.is_some()),
+                "player.getAuras" => Value::List(Vec::new()),
                 "world.getAvailableMonsterMapIds" => {
                     Value::List(fight.monsters.iter().map(|id| Value::Number(*id)).collect())
                 }
@@ -113,7 +129,7 @@ mod tests {
             })
         });
         let (settings, receiver) = watch::channel(Settings { enabled });
-        tokio::task::spawn_local(run(loader, receiver));
+        tokio::task::spawn_local(run(loader, receiver, CounterAttacks::default()));
         (fight, settings)
     }
 
