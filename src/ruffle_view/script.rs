@@ -1,12 +1,16 @@
 use std::path::PathBuf;
 
-use gpui::{Context, PathPromptOptions, SharedString, Window};
+use gpui::{Context, EventEmitter, PathPromptOptions, SharedString, Window};
 
 use super::RuffleView;
 use crate::{
     ruffle::Msg,
     scripting::{Level, Limit, Limits, Outcome, Run},
 };
+
+pub(super) struct CloseTab;
+
+impl EventEmitter<CloseTab> for RuffleView {}
 
 #[derive(Default)]
 pub(super) struct Script(Option<Loaded>);
@@ -73,6 +77,7 @@ impl Script {
                 Outcome::Completed => format!("{name} finished"),
                 Outcome::Failed { message, .. } => format!("{name} failed: {message}"),
                 Outcome::Stopped => format!("{name} stopped"),
+                Outcome::Exited { .. } => format!("{name} exited"),
                 Outcome::Killed(Limit::Turn) => {
                     format!("{name} was stopped for running too long without waiting")
                 }
@@ -147,13 +152,7 @@ impl RuffleView {
             Ok(run) => {
                 cx.spawn(async move |this, cx| {
                     if let Ok(outcome) = outcome.recv().await {
-                        let _ = this.update(cx, |this, cx| {
-                            if let Some(loaded) = &mut this.script.0 {
-                                loaded.phase = Phase::Finished(outcome);
-                            }
-                            this.run_queued(cx);
-                            this.changed(cx);
-                        });
+                        let _ = this.update(cx, |this, cx| this.script_ended(outcome, cx));
                     }
                 })
                 .detach();
@@ -168,6 +167,19 @@ impl RuffleView {
             }),
         };
         self.script = Script(Some(Loaded { entry, name, phase }));
+        self.changed(cx);
+    }
+
+    fn script_ended(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
+        let close_tab = outcome == Outcome::Exited { close_tab: true };
+        if let Some(loaded) = &mut self.script.0 {
+            loaded.phase = Phase::Finished(outcome);
+        }
+        if close_tab {
+            cx.emit(CloseTab);
+        } else {
+            self.run_queued(cx);
+        }
         self.changed(cx);
     }
 

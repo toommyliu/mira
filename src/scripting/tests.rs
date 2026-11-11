@@ -433,6 +433,108 @@ export default function* () {
 }
 
 #[test]
+fn exiting_runs_cleanup_and_cannot_be_caught() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  yield* Script.exit().pipe(
+    Effect.catchCause(() => Effect.sync(() => console.log("caught"))),
+    Effect.ensuring(Effect.sync(() => console.log(`cleanup, aborted ${Script.signal.aborted}`))),
+  );
+  console.log("after exit");
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Exited { close_tab: false });
+    assert_eq!(finished.logs, ["cleanup, aborted true"]);
+}
+
+#[test]
+fn exiting_from_a_fork_logs_out_after_cleanup() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Auth, Script } from "mira";
+
+export default function* () {
+  yield* Effect.forkChild(
+    Effect.andThen(Effect.sleep("10 millis"), Script.exit({ logout: true, closeTab: true })),
+  );
+  yield* Effect.never.pipe(Effect.ensuring(Auth.isLoggedIn()));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(true)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Exited { close_tab: true });
+    assert!(
+        finished.elapsed >= Duration::from_secs(1),
+        "{:?}",
+        finished.elapsed
+    );
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(requests, [A::LoggedIn, A::Logout].map(Request::Auth));
+}
+
+#[test]
+fn exiting_wins_over_a_root_the_abort_ends() {
+    for resumed in ["Effect.void", r#"Effect.die(new Error("aborted"))"#] {
+        let folder = Folder::new(&[(
+            "main.ts",
+            &format!(
+                r#"import {{ Effect }} from "effect";
+import {{ Script }} from "mira";
+
+export default function* () {{
+  yield* Effect.forkChild(
+    Effect.andThen(Effect.sleep("10 millis"), Script.exit({{ logout: true, closeTab: true }})),
+  );
+  yield* Effect.callback<void>((resume) => {{
+    Script.signal.addEventListener("abort", () => resume({resumed}));
+  }});
+}}
+"#
+            ),
+        )]);
+        let player = FakePlayer::default();
+        let finished = start(
+            &folder,
+            "main.ts",
+            Limits::default(),
+            player.answering(|_, _| Some(Ok(json!(null)))),
+        )
+        .finish();
+        assert_eq!(
+            finished.outcome,
+            Outcome::Exited { close_tab: true },
+            "{resumed}"
+        );
+        assert!(
+            player
+                .seen()
+                .contains(&Seen::Call(1, Request::Auth(A::Logout))),
+            "{resumed} logged out"
+        );
+    }
+}
+
+#[test]
 fn stopping_interrupts_a_loop_that_never_yields() {
     for script in [
         "export default function* () { while (true) {} }\n",

@@ -4,13 +4,14 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 
-import { failed, stopping } from "./run.ts";
+import { call } from "./call.ts";
+import { exited, exiting, failed, stopping } from "./run.ts";
 
-type Settle = (
-  outcome: "completed" | "failed" | "stopped",
-  message?: string,
-  stack?: string,
-) => void;
+type Settle = {
+  (outcome: "completed" | "stopped"): void;
+  (outcome: "exited", closeTab: boolean): void;
+  (outcome: "failed", message: string, stack?: string): void;
+};
 
 const GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
 
@@ -28,10 +29,24 @@ export function start(exported: unknown, settle: Settle): () => void {
     settle("failed", "The default export must be a generator function or an Effect.");
     return () => {};
   }
-  const fiber = Effect.runFork(Effect.scoped(Effect.raceFirst(root, Deferred.await(failed))));
+  const ended = Effect.scoped(
+    Effect.raceFirst(root, Effect.raceFirst(Deferred.await(failed), Deferred.await(exited))),
+  );
+  const fiber = Effect.runFork(
+    Effect.flatMap(Effect.exit(ended), (result) => {
+      const request = exiting.request;
+      if (request === undefined) return result;
+      if (!request.logout) return Effect.void;
+      const logout = call<void>({ domain: "auth", op: "logout" });
+      return request.closeTab ? Effect.andThen(logout, Effect.sleep("1 second")) : logout;
+    }),
+  );
   fiber.addObserver((exit) => {
     stopping.abort();
-    if (Exit.isSuccess(exit)) return settle("completed");
+    if (Exit.isSuccess(exit)) {
+      const request = exiting.request;
+      return request === undefined ? settle("completed") : settle("exited", request.closeTab);
+    }
     if (Cause.hasInterruptsOnly(exit.cause)) return settle("stopped");
     const error = Cause.squash(exit.cause);
     if (error instanceof Error) return settle("failed", error.message, error.stack);

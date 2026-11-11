@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
-import { failed, stopping } from "./run.ts";
+import { exited, exiting, failed, stopping } from "./run.ts";
 import { call } from "./call.ts";
 
 declare const console: { readonly warn: (message: string) => void };
@@ -639,10 +639,18 @@ export const Settings = {
   update: (patch: SettingsPatch) => settings<GameSettings>("update", patch),
 };
 
+export type ExitOptions = { readonly logout?: boolean; readonly closeTab?: boolean };
+
 export const Script = {
   sleep: (duration: Duration.Input) => Effect.sleep(duration),
-  /** Aborts when the script is stopped, before cleanup runs, or when it ends. */
+  /** Aborts when the script is stopped or exits, before cleanup runs, or when it ends. */
   signal: stopping.signal,
+  /** Ends the script from any fiber. Cleanup runs first, then the logout, then the tab closes a second later. */
+  exit: ({ logout = false, closeTab = false }: ExitOptions = {}): Effect.Effect<never> =>
+    Effect.sync(() => {
+      exiting.request ??= { logout, closeTab };
+      stopping.abort();
+    }).pipe(Effect.andThen(Deferred.succeed(exited, undefined)), Effect.andThen(Effect.never)),
 };
 
 export type Subscription<A> = { readonly next: Effect.Effect<A> };

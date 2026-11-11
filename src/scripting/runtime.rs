@@ -30,6 +30,9 @@ pub(crate) enum Outcome {
         stack: Option<String>,
     },
     Stopped,
+    Exited {
+        close_tab: bool,
+    },
     Killed(Limit),
 }
 
@@ -446,12 +449,19 @@ fn settle_function<'js>(
 ) -> rquickjs::Result<Function<'js>> {
     Function::new(
         ctx.clone(),
-        move |kind: String, message: Opt<String>, stack: Opt<String>| {
+        move |kind: String, detail: Opt<rquickjs::Value<'js>>, stack: Opt<String>| {
             let outcome = match kind.as_str() {
                 "completed" => Outcome::Completed,
                 "stopped" => Outcome::Stopped,
+                "exited" => Outcome::Exited {
+                    close_tab: detail.0.and_then(|detail| detail.as_bool()) == Some(true),
+                },
                 _ => {
-                    let message = message.0.unwrap_or_default();
+                    let message = detail
+                        .0
+                        .and_then(|detail| detail.into_string())
+                        .and_then(|message| message.to_string().ok())
+                        .unwrap_or_default();
                     if message == "out of memory" {
                         Outcome::Killed(Limit::Memory)
                     } else {

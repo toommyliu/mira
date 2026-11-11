@@ -13,6 +13,7 @@ use gpui::{
 use super::{
     Changed, Details, Glance, RuffleView, Summary,
     manager::OpenAccounts,
+    script::CloseTab,
     ui::{self, Glyph},
 };
 use mira_ui::{
@@ -125,6 +126,7 @@ struct Session {
     view: Entity<RuffleView>,
     player: Inbox,
     _changes: Subscription,
+    _close: Subscription,
 }
 
 fn tab_card(title: SharedString, details: Details) -> Option<HoverCard> {
@@ -247,6 +249,11 @@ impl Client {
             view: view.clone(),
             player,
             _changes: cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()),
+            _close: cx.subscribe_in(&view, window, |this, view, _: &CloseTab, window, cx| {
+                if let Some(index) = this.sessions.iter().position(|s| &s.view == view) {
+                    this.close_session(index, window, cx);
+                }
+            }),
         });
         self.active = self.sessions.len() - 1;
         self.show(window, cx);
