@@ -317,6 +317,18 @@ export type Enhancement = {
   readonly range: number | null;
   readonly rarity: number | null;
 };
+export type DamageTarget =
+  | "all"
+  | "undead"
+  | "human"
+  | "chaos"
+  | "dragonkin"
+  | "orc"
+  | "drakath"
+  | "elemental";
+export type GearBoost =
+  | { readonly kind: "damage"; readonly against: DamageTarget; readonly percent: number }
+  | { readonly kind: Boost; readonly percent: number };
 export type Item = {
   readonly itemId: number;
   readonly charItemId: number | null;
@@ -328,6 +340,7 @@ export type Item = {
   readonly slot: string;
   readonly link: string;
   readonly meta: string;
+  readonly boosts: readonly GearBoost[];
   readonly file: string;
   readonly equipped: boolean;
   readonly wearable: boolean;

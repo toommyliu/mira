@@ -24,6 +24,7 @@ package mira.game {
         slot: item.sES,
         link: item.sLink,
         meta: item.sMeta,
+        boosts: GearBoosts.parse(item.sMeta),
         file: item.sFile,
         equipped: item.bEquip == 1,
         wearable: item.hasOwnProperty("bWear"),

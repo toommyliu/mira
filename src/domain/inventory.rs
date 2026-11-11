@@ -91,6 +91,7 @@ pub(crate) struct Item {
     slot: String,
     link: String,
     meta: String,
+    boosts: Vec<GearBoost>,
     file: String,
     pub(crate) equipped: bool,
     wearable: bool,
@@ -112,6 +113,70 @@ pub(crate) struct Enhancement {
     dps: Option<i32>,
     range: Option<i32>,
     rarity: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct GearBoost {
+    #[serde(flatten)]
+    effect: GearEffect,
+    percent: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum GearEffect {
+    Damage { against: DamageTarget },
+    Gold,
+    Xp,
+    Rep,
+    ClassPoints,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DamageTarget {
+    All,
+    Undead,
+    Human,
+    Chaos,
+    Dragonkin,
+    Orc,
+    Drakath,
+    Elemental,
+}
+
+impl DamageTarget {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "all" => DamageTarget::All,
+            "undead" => DamageTarget::Undead,
+            "human" => DamageTarget::Human,
+            "chaos" => DamageTarget::Chaos,
+            "dragonkin" => DamageTarget::Dragonkin,
+            "orc" => DamageTarget::Orc,
+            "drakath" => DamageTarget::Drakath,
+            "elemental" => DamageTarget::Elemental,
+            _ => return None,
+        })
+    }
+}
+
+fn gear_boost(value: Value) -> Option<GearBoost> {
+    let row = row(value)?;
+    let effect = match row.text("kind").as_str() {
+        "damage" => GearEffect::Damage {
+            against: DamageTarget::named(&row.text("against"))?,
+        },
+        "gold" => GearEffect::Gold,
+        "xp" => GearEffect::Xp,
+        "rep" => GearEffect::Rep,
+        "classPoints" => GearEffect::ClassPoints,
+        _ => return None,
+    };
+    Some(GearBoost {
+        effect,
+        percent: row.positive("percent")?,
+    })
 }
 
 impl Item {
@@ -259,7 +324,11 @@ pub(super) fn item_count(row: &Row) -> Option<ItemCount> {
 }
 
 pub(super) fn item_from(value: Value) -> Option<Item> {
-    let row = row(value)?;
+    let mut row = row(value)?;
+    let boosts = list(&mut row.0, "boosts")
+        .into_iter()
+        .filter_map(gear_boost)
+        .collect();
     Some(Item {
         item_id: row.item_id()?,
         char_item_id: row.positive("charItemId"),
@@ -271,6 +340,7 @@ pub(super) fn item_from(value: Value) -> Option<Item> {
         slot: row.text("slot"),
         link: row.text("link"),
         meta: row.text("meta"),
+        boosts,
         file: row.text("file"),
         equipped: row.flag("equipped"),
         wearable: row.flag("wearable"),
@@ -839,8 +909,8 @@ mod tests {
             serde_json::to_value(item_from(Value::Object(potion)).unwrap()).unwrap(),
             json!({ "itemId": 7539, "charItemId": 75390, "name": "Potion",
                     "description": "Restores health.", "quantity": 3, "maxStack": 1,
-                    "category": "Item", "slot": "co", "link": "potion", "meta": "214", "file": "",
-                    "equipped": false, "wearable": false, "worn": false, "member": false,
+                    "category": "Item", "slot": "co", "link": "potion", "meta": "214", "boosts": [],
+                    "file": "", "equipped": false, "wearable": false, "worn": false, "member": false,
                     "coins": false, "pool": "misc", "classRank": null, "enhancement": null })
         );
 
@@ -865,6 +935,49 @@ mod tests {
             class["enhancement"],
             json!({ "id": 55, "level": 100, "patternId": null, "procId": 3,
                     "dps": 100, "range": 10, "rarity": 9 })
+        );
+    }
+
+    #[test]
+    fn gear_boosts_keep_known_kinds_and_drop_the_rest() {
+        let boost = |fields: &[(&str, Value)]| {
+            Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                    .collect(),
+            )
+        };
+        let sword = with(
+            item(4.0, "Sword", "Sword"),
+            &[(
+                "boosts",
+                Value::List(vec![
+                    boost(&[
+                        ("kind", text("damage")),
+                        ("against", text("undead")),
+                        ("percent", Value::Number(75.0)),
+                    ]),
+                    boost(&[
+                        ("kind", text("classPoints")),
+                        ("percent", Value::Number(25.0)),
+                    ]),
+                    boost(&[
+                        ("kind", text("damage")),
+                        ("against", text("goblin")),
+                        ("percent", Value::Number(10.0)),
+                    ]),
+                    boost(&[("kind", text("luck")), ("percent", Value::Number(10.0))]),
+                    boost(&[("kind", text("gold")), ("percent", Value::Number(0.0))]),
+                ]),
+            )],
+        );
+        assert_eq!(
+            serde_json::to_value(item_from(Value::Object(sword)).unwrap()).unwrap()["boosts"],
+            json!([
+                { "kind": "damage", "against": "undead", "percent": 75 },
+                { "kind": "classPoints", "percent": 25 }
+            ])
         );
     }
 
