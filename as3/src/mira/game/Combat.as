@@ -75,6 +75,7 @@ package mira.game {
             level: dataLeaf.iLvl,
             race: objData.sRace,
             name: objData.strMonName,
+            aggressive: objData.bRed == 1,
             auras: Auras.rows(dataLeaf)
           };
         }

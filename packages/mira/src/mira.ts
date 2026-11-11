@@ -212,6 +212,7 @@ export type Monster = {
   readonly maxHp: number;
   readonly level: number;
   readonly state: State | null;
+  readonly aggressive: boolean;
   readonly auras: readonly Aura[];
 };
 export type Drop = {

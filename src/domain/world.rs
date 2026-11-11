@@ -54,7 +54,6 @@ pub(crate) struct Monster {
     auras: Vec<Aura>,
     #[serde(skip)]
     available: bool,
-    #[serde(skip)]
     pub(crate) aggressive: bool,
 }
 
@@ -576,6 +575,7 @@ mod tests {
                 ("level", Value::Number(12.0)),
                 ("state", Value::Number(state)),
                 ("available", Value::Bool(available)),
+                ("aggressive", Value::Bool(mon_map_id == 1.0)),
                 (
                     "auras",
                     Value::List(if mon_map_id == 1.0 {
@@ -701,6 +701,7 @@ mod tests {
             serde_json::to_value(&all[0]).unwrap(),
             json!({ "monMapId": 1.0, "monsterId": 101.0, "name": "Frogzard", "race": "Beast",
                     "cell": "r2", "hp": 900.0, "maxHp": 1000.0, "level": 12.0, "state": "idle",
+                    "aggressive": true,
                     "auras": [{ "name": "Burn", "value": null, "stack": 1,
                                 "category": null, "icon": null, "persistent": false,
                                 "duration": 0.0, "expiresAt": null }] })
