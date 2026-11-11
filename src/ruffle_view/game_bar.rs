@@ -918,6 +918,14 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             live,
         ))
         .child(
+            div()
+                .flex_none()
+                .mx(px(4.0))
+                .w(px(1.0))
+                .h(px(16.0))
+                .bg(theme.hairline),
+        )
+        .child(
             bar_control(&theme, "bank", live)
                 .flex_none()
                 .role(Role::Button)
@@ -1025,11 +1033,6 @@ fn trigger(
                         .into_any_element(),
                     }
                 }))
-                .child(
-                    div()
-                        .flex_none()
-                        .child(ui::glyph(Glyph::Down, theme.text_secondary)),
-                )
                 .when(enabled, |trigger| {
                     trigger.on_mouse_down(
                         MouseButton::Left,
