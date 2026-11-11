@@ -56,6 +56,7 @@ package mira.generated
       external.externalize("drops.isUsingCustomDrops", DropList.isUsingCustomDrops);
       external.externalize("drops.reject", DropList.reject);
       external.externalize("drops.toggleUi", DropList.toggleUi);
+      external.externalize("extras.setBankSearchEnabled", Extras.setBankSearchEnabled);
       external.externalize("extras.setChatHistoryEnabled", Extras.setChatHistoryEnabled);
       external.externalize("extras.setCopyMenusEnabled", Extras.setCopyMenusEnabled);
       external.externalize("flash.callGameFunction", Main.callGameFunction);

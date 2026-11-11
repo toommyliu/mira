@@ -290,6 +290,15 @@ pub(crate) mod drops {
 pub(crate) mod extras {
     use crate::bridge::{CallError, Loader, Value, decode};
 
+    pub(crate) fn set_bank_search_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setBankSearchEnabled", call_args)?;
+        Ok(decode("extras.setBankSearchEnabled", reply)?)
+    }
+
     pub(crate) fn set_chat_history_enabled(
         loader: &impl Loader,
         enabled: bool,

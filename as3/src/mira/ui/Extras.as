@@ -10,5 +10,10 @@ package mira.ui {
     public static function setChatHistoryEnabled(enabled:Boolean):void {
       ChatHistory.setEnabled(enabled);
     }
+
+    [BridgeExport]
+    public static function setBankSearchEnabled(enabled:Boolean):void {
+      BankSearch.setEnabled(enabled);
+    }
   }
 }

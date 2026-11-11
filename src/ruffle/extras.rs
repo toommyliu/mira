@@ -9,15 +9,17 @@ use crate::bridge::{self, Event, Loader, Subscription};
 pub(crate) enum Extra {
     CopyMenus,
     ChatHistory,
+    BankSearch,
 }
 
 impl Extra {
-    pub(crate) const ALL: [Extra; 2] = [Extra::CopyMenus, Extra::ChatHistory];
+    pub(crate) const ALL: [Extra; 3] = [Extra::CopyMenus, Extra::ChatHistory, Extra::BankSearch];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Extra::CopyMenus => "Copy menus",
             Extra::ChatHistory => "Chat history",
+            Extra::BankSearch => "Bank search",
         }
     }
 
@@ -29,6 +31,9 @@ impl Extra {
             Extra::ChatHistory => {
                 "Press Up and Down in the chat box to bring back messages you've sent."
             }
+            Extra::BankSearch => {
+                "Search the bank by enhancement or boost, like forge or dmg undead."
+            }
         }
     }
 }
@@ -38,6 +43,7 @@ impl Extra {
 pub(crate) struct Extras {
     copy_menus: bool,
     chat_history: bool,
+    bank_search: bool,
 }
 
 impl Extras {
@@ -45,6 +51,7 @@ impl Extras {
         match extra {
             Extra::CopyMenus => self.copy_menus,
             Extra::ChatHistory => self.chat_history,
+            Extra::BankSearch => self.bank_search,
         }
     }
 
@@ -52,6 +59,7 @@ impl Extras {
         let enabled = match extra {
             Extra::CopyMenus => &mut self.copy_menus,
             Extra::ChatHistory => &mut self.chat_history,
+            Extra::BankSearch => &mut self.bank_search,
         };
         *enabled = !*enabled;
     }
@@ -117,7 +125,8 @@ pub(super) async fn run<L: Loader>(
         }
         let extras = *extras.borrow_and_update();
         let applied = bridge::extras::set_copy_menus_enabled(&loader, extras.copy_menus)
-            .and_then(|()| bridge::extras::set_chat_history_enabled(&loader, extras.chat_history));
+            .and_then(|()| bridge::extras::set_chat_history_enabled(&loader, extras.chat_history))
+            .and_then(|()| bridge::extras::set_bank_search_enabled(&loader, extras.bank_search));
         if let Err(error) = applied {
             tracing::debug!(%error, "AS3 extras will apply once the loader is ready");
         }
@@ -204,7 +213,8 @@ mod tests {
                     applied.borrow_mut().drain(..).collect::<Vec<_>>(),
                     [
                         ("extras.setCopyMenusEnabled", false),
-                        ("extras.setChatHistoryEnabled", true)
+                        ("extras.setChatHistoryEnabled", true),
+                        ("extras.setBankSearchEnabled", false)
                     ]
                 );
 
@@ -214,7 +224,8 @@ mod tests {
                     *applied.borrow(),
                     [
                         ("extras.setCopyMenusEnabled", true),
-                        ("extras.setChatHistoryEnabled", true)
+                        ("extras.setChatHistoryEnabled", true),
+                        ("extras.setBankSearchEnabled", false)
                     ]
                 );
                 fs::remove_file(path).unwrap();
