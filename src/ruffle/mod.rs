@@ -1,5 +1,6 @@
 mod backends;
 pub(crate) mod context_menu;
+pub(crate) mod extras;
 mod net;
 mod pacing;
 mod preferences;
@@ -114,6 +115,7 @@ impl Runtime {
         outputs: async_channel::Sender<Output>,
         stats: tokio::sync::watch::Sender<Option<stats::Report>>,
         automation: Automation,
+        extras: tokio::sync::watch::Receiver<extras::Extras>,
         armies: Armies,
         display_frames: bool,
     ) -> std::io::Result<Self> {
@@ -135,6 +137,7 @@ impl Runtime {
                     outputs,
                     stats,
                     automation,
+                    extras,
                     armies,
                     display_frames,
                 ) {
@@ -194,6 +197,7 @@ fn run(
     outputs: async_channel::Sender<Output>,
     stats: tokio::sync::watch::Sender<Option<stats::Report>>,
     automation: Automation,
+    extras: tokio::sync::watch::Receiver<extras::Extras>,
     armies: Armies,
     display_frames: bool,
 ) -> anyhow::Result<()> {
@@ -358,6 +362,11 @@ fn run(
             automation.watch_game_settings(),
             automation.watch_frame_rate(),
         ),
+    );
+    spawn_local(
+        &inbox,
+        &tasks,
+        extras::run(bridge.clone(), bridge.subscribe(extras::wants), extras),
     );
     spawn_local(
         &inbox,

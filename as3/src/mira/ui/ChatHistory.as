@@ -13,8 +13,15 @@ package mira.ui {
     private static var cursor:int = 0;
     private static var draft:String = "";
 
-    public static function init(stage:Stage):void {
-      stage.addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown, true);
+    public static function setEnabled(enabled:Boolean):void {
+      var stage:Stage = Main.getInstance().getStage();
+      if (enabled) {
+        stage.addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown, true);
+        return;
+      }
+
+      stage.removeEventListener(KeyboardEvent.KEY_DOWN, onKeyDown, true);
+      clear();
     }
 
     public static function clear():void {

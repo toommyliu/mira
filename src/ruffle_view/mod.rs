@@ -12,14 +12,14 @@ mod ui;
 #[path = "macos.rs"]
 mod native;
 
-use std::ops::Range;
+use std::{ops::Range, rc::Rc};
 
 use crate::{
     automation::{
         auto_attack, auto_relogin, auto_zone, game_settings,
         settings::{Automation, Store},
     },
-    ruffle::{Msg, Output, Runtime, view::ViewEvent},
+    ruffle::{Msg, Output, Runtime, context_menu::MenuSelection, extras, view::ViewEvent},
 };
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
@@ -61,6 +61,7 @@ pub struct RuffleView {
     marked: Option<Range<usize>>,
     modifiers: gpui::Modifiers,
     automation: Store,
+    extras: Rc<extras::Store>,
     auto_relogin: auto_relogin::Phase,
     servers: Vec<String>,
     bar: game_bar::BarState,
@@ -75,6 +76,7 @@ impl RuffleView {
         data: std::path::PathBuf,
         device: reqwest::header::HeaderValue,
         armies: crate::army::Armies,
+        extras: Rc<extras::Store>,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Entity<RuffleView>> {
@@ -91,6 +93,7 @@ impl RuffleView {
             outputs_tx,
             stats_tx,
             Automation::clone(&automation),
+            extras.watch(),
             armies,
             native.supports_display_frames(),
         )?;
@@ -225,15 +228,21 @@ impl RuffleView {
                             continue;
                         }
                     };
-                    let Ok((view, input_view)) =
-                        this.update(cx, |this: &mut Self, _| this.native.menu_views())
-                    else {
+                    let Ok((view, input_view, extras)) = this.update(cx, |this: &mut Self, _| {
+                        let (view, input_view) = this.native.menu_views();
+                        (view, input_view, this.extras.get())
+                    }) else {
                         break;
                     };
-                    let selection = menu::show(view, menu).await;
+                    let selection = menu::show(view, menu, extras).await;
                     menu::sync_modifiers(&input_view);
                     if this
                         .update_in(cx, |this, window, _| {
+                            if let Some(MenuSelection::Extra(extra)) = selection
+                                && let Err(error) = this.extras.toggle(extra)
+                            {
+                                tracing::error!(%error, "couldn't save AS3 extras");
+                            }
                             this.session.close_menu(selection);
                             this.restore_modifiers(window);
                         })
@@ -300,6 +309,7 @@ impl RuffleView {
                 marked: None,
                 modifiers: Default::default(),
                 automation,
+                extras,
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(cx),

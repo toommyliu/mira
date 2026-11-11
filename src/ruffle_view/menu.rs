@@ -8,7 +8,10 @@ use objc2::{
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSMenu, NSMenuItem, NSView};
 use objc2_foundation::{NSPoint, NSRunLoop, NSString};
 
-use crate::ruffle::context_menu::{ContextMenu, MenuSelection};
+use crate::ruffle::{
+    context_menu::{ContextMenu, MenuSelection},
+    extras::{Extra, Extras},
+};
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -25,12 +28,16 @@ define_class!(
 );
 
 // GCD won't drain the main queue while one of its blocks is tracking a menu, which stalls GPUI.
-pub(super) async fn show(view: Retained<NSView>, context: ContextMenu) -> Option<MenuSelection> {
+pub(super) async fn show(
+    view: Retained<NSView>,
+    context: ContextMenu,
+    extras: Extras,
+) -> Option<MenuSelection> {
     let (sender, selection) = async_channel::bounded(1);
     let pending = Cell::new(Some((view, context)));
     let block = RcBlock::new(move || {
         if let Some((view, context)) = pending.take() {
-            let _ = sender.try_send(track(&view, context));
+            let _ = sender.try_send(track(&view, context, extras));
         }
     });
     // SAFETY: the main run loop runs the block on the main thread, where it was created.
@@ -38,7 +45,7 @@ pub(super) async fn show(view: Retained<NSView>, context: ContextMenu) -> Option
     selection.recv().await.ok().flatten()
 }
 
-fn track(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
+fn track(view: &NSView, context: ContextMenu, extras: Extras) -> Option<MenuSelection> {
     let mtm = MainThreadMarker::new().unwrap();
     let target: Retained<MenuTarget> =
         unsafe { msg_send![super(MenuTarget::alloc().set_ivars(Cell::new(None))), init] };
@@ -62,24 +69,47 @@ fn track(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
     if !context.items.is_empty() {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     }
-    let smooth_motion = NSMenuItem::new(mtm);
-    smooth_motion.setTitle(&NSString::from_str("Smooth motion"));
-    smooth_motion.setState(isize::from(context.smooth_motion));
-    smooth_motion.setTag(context.items.len() as isize);
-    unsafe {
-        smooth_motion.setTarget(Some(&target));
-        smooth_motion.setAction(Some(sel!(selectItem:)));
+    let player = [
+        (
+            "Smooth motion",
+            context.smooth_motion,
+            None,
+            MenuSelection::SmoothMotion,
+        ),
+        (
+            "Performance stats",
+            context.stats,
+            None,
+            MenuSelection::Stats,
+        ),
+    ];
+    let as3 = Extra::ALL.map(|extra| {
+        (
+            extra.label(),
+            extras.enabled(extra),
+            Some(extra.tooltip()),
+            MenuSelection::Extra(extra),
+        )
+    });
+    let mut mira_items = Vec::new();
+    for (group, items) in [&player[..], &as3[..]].into_iter().enumerate() {
+        if group != 0 {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+        for &(title, checked, tooltip, selection) in items {
+            let native_item = NSMenuItem::new(mtm);
+            native_item.setTitle(&NSString::from_str(title));
+            native_item.setState(isize::from(checked));
+            native_item.setToolTip(tooltip.map(NSString::from_str).as_deref());
+            native_item.setTag((context.items.len() + mira_items.len()) as isize);
+            unsafe {
+                native_item.setTarget(Some(&target));
+                native_item.setAction(Some(sel!(selectItem:)));
+            }
+            menu.addItem(&native_item);
+            mira_items.push(selection);
+        }
     }
-    menu.addItem(&smooth_motion);
-    let stats = NSMenuItem::new(mtm);
-    stats.setTitle(&NSString::from_str("Performance stats"));
-    stats.setState(isize::from(context.stats));
-    stats.setTag(context.items.len() as isize + 1);
-    unsafe {
-        stats.setTarget(Some(&target));
-        stats.setAction(Some(sel!(selectItem:)));
-    }
-    menu.addItem(&stats);
     let y = if view.isFlipped() {
         f64::from(context.at.y)
     } else {
@@ -91,13 +121,9 @@ fn track(view: &NSView, context: ContextMenu) -> Option<MenuSelection> {
         Some(view),
     );
     target.ivars().get().map(|index| {
-        if index == context.items.len() {
-            MenuSelection::SmoothMotion
-        } else if index == context.items.len() + 1 {
-            MenuSelection::Stats
-        } else {
-            MenuSelection::Ruffle(index)
-        }
+        index
+            .checked_sub(context.items.len())
+            .map_or(MenuSelection::Ruffle(index), |offset| mira_items[offset])
     })
 }
 

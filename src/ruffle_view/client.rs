@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use anyhow::Context as _;
 
@@ -27,7 +27,7 @@ use mira_ui::{
 use crate::{
     accounts::{Account, AccountId},
     army::Armies,
-    ruffle::{Inbox, Msg},
+    ruffle::{Inbox, Msg, extras},
 };
 
 actions!(
@@ -105,6 +105,7 @@ pub struct Client {
     data: PathBuf,
     device: reqwest::header::HeaderValue,
     armies: Armies,
+    extras: Rc<extras::Store>,
     sessions: Vec<Session>,
     active: usize,
     layout: Layout,
@@ -189,6 +190,7 @@ impl Client {
         cx: &mut App,
     ) -> anyhow::Result<Entity<Client>> {
         let client = cx.new(|cx| Client {
+            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
             data,
             device,
             armies,
@@ -223,6 +225,7 @@ impl Client {
             self.data.clone(),
             self.device.clone(),
             self.armies.clone(),
+            Rc::clone(&self.extras),
             window,
             cx,
         )?;

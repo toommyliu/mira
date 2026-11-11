@@ -287,6 +287,28 @@ pub(crate) mod drops {
     }
 }
 
+pub(crate) mod extras {
+    use crate::bridge::{CallError, Loader, Value, decode};
+
+    pub(crate) fn set_chat_history_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setChatHistoryEnabled", call_args)?;
+        Ok(decode("extras.setChatHistoryEnabled", reply)?)
+    }
+
+    pub(crate) fn set_copy_menus_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setCopyMenusEnabled", call_args)?;
+        Ok(decode("extras.setCopyMenusEnabled", reply)?)
+    }
+}
+
 pub(crate) mod flash {
     use crate::bridge::{CallError, Loader, Value, decode};
 

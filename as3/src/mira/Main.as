@@ -15,6 +15,7 @@ package mira {
 	import mira.Externalizer;
 	import mira.module.Modules;
 	import mira.ui.ChatHistory;
+	import mira.ui.ItemCopyMenu;
 	import mira.ui.QuestCopyMenu;
 	import mira.util.SFSEvent;
 
@@ -101,8 +102,8 @@ package mira {
 
 			Modules.init();
 			this.stg.addEventListener(Event.ENTER_FRAME, Modules.handleFrame);
-			QuestCopyMenu.init(this.stg, this.gameDomain);
-			ChatHistory.init(this.stg);
+			QuestCopyMenu.init(this.gameDomain);
+			ItemCopyMenu.init(this.gameDomain);
 
 			this.emitLoaded();
 		}

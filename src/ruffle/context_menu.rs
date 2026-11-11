@@ -3,7 +3,7 @@ use ruffle_core::{
     events::{KeyDescriptor, MouseButton},
 };
 
-use super::view::Point;
+use super::{extras::Extra, view::Point};
 use crate::bridge::Bridge;
 
 pub(crate) struct ContextMenu {
@@ -18,6 +18,7 @@ pub(crate) enum MenuSelection {
     Ruffle(usize),
     SmoothMotion,
     Stats,
+    Extra(Extra),
 }
 
 pub(super) struct OpenMenu {

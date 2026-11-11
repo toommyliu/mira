@@ -17,6 +17,7 @@ package mira.generated
   import mira.game.TempInventory;
   import mira.game.World;
   import mira.Main;
+  import mira.ui.Extras;
 
   public class BridgeRegistryGenerated
   {
@@ -55,6 +56,8 @@ package mira.generated
       external.externalize("drops.isUsingCustomDrops", DropList.isUsingCustomDrops);
       external.externalize("drops.reject", DropList.reject);
       external.externalize("drops.toggleUi", DropList.toggleUi);
+      external.externalize("extras.setChatHistoryEnabled", Extras.setChatHistoryEnabled);
+      external.externalize("extras.setCopyMenusEnabled", Extras.setCopyMenusEnabled);
       external.externalize("flash.callGameFunction", Main.callGameFunction);
       external.externalize("flash.callGameFunction0", Main.callGameFunction0);
       external.externalize("flash.getArrayObject", Main.getArrayObject);
