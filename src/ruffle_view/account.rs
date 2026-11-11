@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{Context, EventEmitter, SharedString};
+use mira_ui::components::Activity;
 
 use super::{Loading, RuffleView};
 use crate::{accounts::Account, automation::sign_in::Status};
@@ -10,6 +11,7 @@ pub(crate) struct Changed;
 impl EventEmitter<Changed> for RuffleView {}
 
 pub(super) struct Link {
+    username: String,
     status: Option<Status>,
     queued: Option<PathBuf>,
 }
@@ -38,6 +40,7 @@ impl RuffleView {
         cx: &mut Context<Self>,
     ) {
         self.account = Some(Link {
+            username: account.username.clone(),
             status: None,
             queued: script,
         });
@@ -118,6 +121,30 @@ impl RuffleView {
             script: queued.or_else(|| self.script.status().map(Into::into)),
             running: self.script.running(),
         }
+    }
+
+    pub(super) fn activity(&self) -> Activity {
+        let link = self.account.as_ref();
+        let status = link.and_then(|link| link.status.as_ref());
+        let queued = link.is_some_and(|link| link.queued.is_some());
+        if self.error.is_some()
+            || matches!(status, Some(Status::Failed(_)))
+            || (self.script.failed() && !queued)
+        {
+            return Activity::Failed;
+        }
+        if self.script.running() {
+            return Activity::Running;
+        }
+        match (link, status) {
+            (None, _) | (Some(_), Some(Status::Online(_))) => Activity::Idle,
+            (Some(_), Some(Status::Offline)) => Activity::Stopped,
+            (Some(_), _) => Activity::Waiting,
+        }
+    }
+
+    pub(super) fn username(&self) -> Option<&str> {
+        self.account.as_ref().map(|link| link.username.as_str())
     }
 
     pub(super) fn retry_sign_in(&mut self, account: &Account, cx: &mut Context<Self>) {

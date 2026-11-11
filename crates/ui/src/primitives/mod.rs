@@ -40,7 +40,7 @@ pub use checkbox::{Checkbox, CheckedState};
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
 pub use field::Field;
-pub use icon::{Icon, icon};
+pub use icon::{Icon, icon, sidebar_icon};
 pub use input::{Input, InputEvent};
 pub use kbd::Kbd;
 pub use list::{List, ListItem, VirtualList};

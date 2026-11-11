@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::{
-    ActiveTheme as _, nav,
+    ActiveTheme as _,
     theme::{LINE_SMALL, TEXT_SMALL},
 };
 
@@ -45,23 +45,13 @@ impl Tooltip {
 
 impl RenderOnce for Tooltip {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let focused = focus.contains_focused(window, cx) && window.last_input_was_keyboard();
         let trigger = div()
             .id(self.id.clone())
-            .track_focus(&focus)
             .relative()
             .flex_none()
             .aria_description(self.label.clone())
             .child(self.trigger);
-        attach(
-            trigger,
-            (self.id, "tooltip"),
-            self.label,
-            focused,
-            window,
-            cx,
-        )
+        attach(trigger, (self.id, "tooltip"), self.label, false, window, cx)
     }
 }
 

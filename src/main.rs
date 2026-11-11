@@ -2,6 +2,7 @@
 compile_error!("Mira supports macOS only.");
 
 mod accounts;
+mod appearance;
 mod army;
 mod automation;
 mod bridge;
@@ -13,8 +14,8 @@ mod ruffle_view;
 mod scripting;
 
 use gpui::{
-    Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions, actions, point, px, size,
+    App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance,
+    WindowBounds, WindowOptions, actions, point, px, size,
 };
 
 actions!(mira, [Quit]);
@@ -46,35 +47,27 @@ fn main() -> anyhow::Result<()> {
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
             ruffle_view::bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.set_menus(vec![Menu {
-                name: "Mira".into(),
-                disabled: false,
-                items: vec![
-                    MenuItem::action("Accounts", ruffle_view::OpenAccounts),
-                    MenuItem::separator(),
-                    MenuItem::action("Quit Mira", Quit),
-                ],
-            }]);
+            appearance::init(cx, set_menus);
+            set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(
-                        px(960.0),
-                        px(550.0) + ruffle_view::BAR_HEIGHT + ruffle_view::STRIP_HEIGHT,
-                    ),
+                    size(px(960.0), px(550.0) + ruffle_view::BAR_HEIGHT),
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Mira".into()),
                     appears_transparent: true,
-                    traffic_light_position: Some(point(px(12.0), px(11.0))),
+                    traffic_light_position: Some(point(px(12.0), px(9.0))),
                 }),
                 window_background: WindowBackgroundAppearance::Transparent,
+                window_min_size: Some(size(px(920.0), px(528.0) + ruffle_view::BAR_HEIGHT)),
                 app_owns_titlebar_drag: true,
                 ..Default::default()
             };
             let accounts = data.join("accounts.json");
             let opened = cx.open_window(options, |window, cx| {
+                appearance::follow_system(window);
                 let view = ruffle_view::Client::new(data, device, armies, window, cx)
                     .expect("create the AQW player view");
                 window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
@@ -105,4 +98,18 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
         });
     Ok(())
+}
+
+fn set_menus(cx: &mut App) {
+    let appearance = appearance::menu(cx);
+    cx.set_menus(vec![Menu {
+        name: "Mira".into(),
+        disabled: false,
+        items: vec![
+            MenuItem::action("Accounts", ruffle_view::OpenAccounts),
+            appearance,
+            MenuItem::separator(),
+            MenuItem::action("Quit Mira", Quit),
+        ],
+    }]);
 }

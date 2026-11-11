@@ -13,8 +13,12 @@ const ICONS = [
   "chevron-down",
   "chevron-right",
   "chevron-up",
+  "clock",
+  "layout-grid",
   "minus",
   "plus",
+  "rotate-ccw",
+  "square",
   "x",
 ] as const;
 

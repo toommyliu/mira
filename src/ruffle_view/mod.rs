@@ -28,11 +28,16 @@ use gpui::{
     ParentElement as _, Pixels, Render, Role, ScrollWheelEvent, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window, canvas, div, prelude::FluentBuilder as _, px,
 };
+use mira_ui::{
+    ActiveTheme as _, Theme,
+    primitives::Spinner,
+    theme::{ROW, TEXT_BODY, TEXT_SMALL, TEXT_TITLE},
+};
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
 pub(crate) use account::{Changed, State, Summary};
-pub(crate) use client::{Client, STRIP_HEIGHT, bind_keys};
+pub(crate) use client::{Client, bind_keys};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use ui::BAR_HEIGHT;
 
@@ -58,6 +63,7 @@ pub struct RuffleView {
     auto_relogin: auto_relogin::Phase,
     servers: Vec<String>,
     bar: game_bar::BarState,
+    bar_inset: Pixels,
     script: script::Script,
     account: Option<account::Link>,
     _subscriptions: [Subscription; 3],
@@ -184,6 +190,18 @@ impl RuffleView {
                             }
                             continue;
                         }
+                        Output::Identity(identity) => {
+                            if this
+                                .update(cx, |this: &mut Self, cx| {
+                                    this.bar.identified(identity);
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                         Output::SignIn(status) => {
                             if this
                                 .update(cx, |this: &mut Self, cx| this.signed_in(status, cx))
@@ -282,11 +300,23 @@ impl RuffleView {
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(cx),
+                bar_inset: Pixels::ZERO,
                 script: script::Script::default(),
                 account: None,
                 _subscriptions: subscriptions,
             }
         }))
+    }
+
+    pub(super) fn bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex_none()
+            .w_full()
+            .child(game_bar::bar(self, cx))
+            .when_some(self.bar.open(), |bar, menu| {
+                bar.child(game_bar::overlay(self, menu, cx))
+            })
+            .into_any_element()
     }
 
     fn present(&mut self, tiled: bool, active: bool, cx: &mut Context<Self>) {
@@ -297,7 +327,7 @@ impl RuffleView {
                 (true, false) => Some(INACTIVE_TILE_FRAME),
                 (false, false) => Some(HIDDEN_TAB_FRAME),
             }));
-        if tiled && !self.tiled {
+        if tiled && (!self.tiled || !active) {
             self.dismiss_menu(cx);
         }
         self.tiled = tiled;
@@ -488,7 +518,7 @@ enum Loading {
     Done,
 }
 
-fn loading(loading: Loading) -> impl IntoElement {
+fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
     let label: gpui::SharedString = match loading {
         Loading::Percent(percent) => format!("Loading {percent}%").into(),
         Loading::Started | Loading::Done => "Loading".into(),
@@ -502,18 +532,22 @@ fn loading(loading: Loading) -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap(px(14.0))
-        .role(Role::ProgressIndicator)
-        .aria_label(label.clone())
-        .child(ui::spinner())
+        .bg(theme.base)
+        .child(
+            Spinner::new("loading-spinner")
+                .label(label.clone())
+                .size(px(24.0)),
+        )
         .child(
             div()
-                .text_size(ui::SMALL_TEXT_SIZE)
-                .text_color(ui::secondary_text())
+                .text_size(TEXT_SMALL)
+                .text_color(theme.text_secondary)
                 .child(label),
         )
 }
 
 fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
+    let theme = cx.theme();
     div()
         .id("minimal-rendering")
         .absolute()
@@ -524,32 +558,33 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap(px(6.0))
-        .bg(ui::bar_background())
-        .text_size(ui::TEXT_SIZE)
-        .text_color(ui::text())
+        .bg(theme.base)
+        .text_size(TEXT_BODY)
+        .text_color(theme.text)
         .child(
             div()
-                .text_size(px(15.0))
+                .text_size(TEXT_TITLE)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child("Minimal rendering"),
         )
         .child(
             div()
-                .text_color(ui::secondary_text())
+                .text_color(theme.text_secondary)
                 .child("The game and scripts keep running while using fewer resources."),
         )
         .child(
             ui::pressable(
+                theme,
                 div()
                     .id("resume-rendering")
                     .flex()
                     .items_center()
                     .mt(px(8.0))
-                    .h(ui::ROW_HEIGHT)
+                    .h(ROW)
                     .px(px(12.0))
-                    .rounded(ui::CONTROL_RADIUS)
+                    .rounded(theme.radius.control)
                     .border_1()
-                    .border_color(ui::hairline())
+                    .border_color(theme.hairline)
                     .font_weight(gpui::FontWeight::MEDIUM),
             )
             .role(Role::Button)
@@ -571,12 +606,16 @@ impl Render for RuffleView {
             }
         };
         let player = div()
+            .id("game")
+            .role(Role::Application)
+            .aria_label("Game")
             .relative()
             .flex_1()
             .w_full()
             .when_some(self.error.clone(), |view, error| {
-                view.bg(gpui::rgb(0x181818))
-                    .text_color(gpui::rgb(0xffffff))
+                let theme = cx.theme();
+                view.bg(theme.base)
+                    .text_color(theme.text)
                     .child(format!("Couldn't start AQW: {error}"))
             })
             .track_focus(&self.focus)
@@ -591,7 +630,7 @@ impl Render for RuffleView {
             )
             .when(
                 !matches!(self.loading, Loading::Done) && self.error.is_none(),
-                |view| view.child(loading(self.loading)),
+                |view| view.child(loading(cx.theme(), self.loading)),
             )
             .when(
                 self.automation.game_settings().rendering.minimal(),
@@ -609,11 +648,8 @@ impl Render for RuffleView {
             .flex()
             .flex_col()
             .size_full()
-            .when(!self.tiled, |root| root.child(game_bar::bar(self, cx)))
+            .when(!self.tiled, |root| root.child(self.bar(cx)))
             .child(player)
-            .when_some(self.bar.open().filter(|_| !self.tiled), |root, menu| {
-                root.child(game_bar::overlay(self, menu, cx))
-            })
     }
 }
 

@@ -230,6 +230,120 @@ fn input_keeps_the_cursor_on_a_character_boundary_while_composing(cx: &mut TestA
     );
 }
 
+fn focused_input(
+    build: impl FnOnce(mira_ui::primitives::Input) -> mira_ui::primitives::Input + 'static,
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Entity<mira_ui::primitives::Input>,
+    &mut VisualTestContext,
+) {
+    use gpui::Focusable as _;
+    cx.update(mira_ui::init);
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        build(mira_ui::primitives::Input::new("Field", cx))
+    });
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx), cx));
+    cx.run_until_parked();
+    (input, cx)
+}
+
+#[gpui::test]
+fn password_input_shows_a_bullet_per_character_and_keeps_it_off_the_clipboard(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Bounds, ClipboardItem, EntityInputHandler as _, Modifiers, point, px};
+    let (input, cx) = focused_input(|input| input.password(), cx);
+    cx.simulate_input("ab");
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "\u{1F642}", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let caret_x = |utf16: usize, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            input.update(cx, |input, cx| {
+                let bounds = input.bounds_for_range(utf16..utf16, Bounds::default(), window, cx);
+                f32::from(bounds.unwrap().left())
+            })
+        })
+    };
+    let bullet = caret_x(1, cx);
+    assert!((caret_x(4, cx) - 3.0 * bullet).abs() < 0.01);
+
+    press(cx, "home");
+    cx.simulate_click(
+        point(px(300.0), mira_ui::theme::CONTROL_MD / 2.0),
+        Modifiers::none(),
+    );
+    cx.simulate_input("c");
+    press(cx, "shift-left");
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    press(cx, "cmd-c");
+    press(cx, "cmd-x");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("unchanged".into())
+    );
+    assert_eq!(
+        input.read_with(cx, |input, _| input.text().to_string()),
+        "ab\u{1F642}c"
+    );
+}
+
+#[gpui::test]
+fn input_stops_growing_at_its_max_length(cx: &mut TestAppContext) {
+    use gpui::{ClipboardItem, EntityInputHandler as _};
+    let (input, cx) = focused_input(|input| input.max_length(4), cx);
+    let text =
+        |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.text().to_string());
+    cx.simulate_input("abcdef");
+    assert_eq!(text(cx), "abcd");
+
+    press(cx, "backspace");
+    press(cx, "backspace");
+    cx.write_to_clipboard(ClipboardItem::new_string("xyz".into()));
+    press(cx, "cmd-v");
+    assert_eq!(text(cx), "abxy");
+
+    press(cx, "cmd-a");
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "ありがとう", Some(5..5), window, cx);
+            input.unmark_text(window, cx);
+        })
+    });
+    assert_eq!(text(cx), "ありがと");
+}
+
+struct NarrowStatus;
+
+impl Render for NarrowStatus {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{Activity, StatusLabel};
+        div().w(gpui::px(120.0)).flex().flex_col().child(
+            div()
+                .debug_selector(|| "status".into())
+                .child(StatusLabel::new(
+                    "status",
+                    Activity::Failed,
+                    "Login failed: the server closed the connection",
+                )),
+        )
+    }
+}
+
+#[gpui::test]
+fn status_label_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| NarrowStatus);
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("status").unwrap();
+    assert!(bounds.size.width <= gpui::px(120.0));
+    assert!(bounds.size.height > mira_ui::theme::LINE_BODY);
+}
+
 struct Host {
     renders: Rc<Cell<usize>>,
 }
@@ -279,4 +393,39 @@ fn table_skips_cells_without_a_column(cx: &mut TestAppContext) {
     cx.update(mira_ui::init);
     let (_, cx) = cx.add_window_view(|_, _| Loot);
     cx.run_until_parked();
+}
+
+struct TooltipBesideFocus {
+    focus: FocusHandle,
+}
+
+impl Render for TooltipBesideFocus {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus)
+            .size_full()
+            .child(mira_ui::primitives::Tooltip::new(
+                "tip",
+                "Hide sidebar",
+                div().id("trigger").size(gpui::px(26.0)),
+            ))
+    }
+}
+
+#[gpui::test]
+fn clicking_a_tooltip_trigger_leaves_focus_where_it_was(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        TooltipBesideFocus { focus }
+    });
+    cx.run_until_parked();
+    cx.simulate_click(
+        gpui::point(gpui::px(13.0), gpui::px(13.0)),
+        gpui::Modifiers::none(),
+    );
+    let focus = view.read_with(cx, |view, _| view.focus.clone());
+    assert!(cx.update(|window, _| focus.is_focused(window)));
 }

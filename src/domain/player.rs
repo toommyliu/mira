@@ -96,6 +96,36 @@ pub(crate) fn factions(loader: &impl Loader) -> Result<Vec<Faction>, CallError> 
         .collect())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Identity {
+    pub(crate) name: String,
+    pub(crate) guild: Option<String>,
+}
+
+pub(crate) fn identity(loader: &impl Loader) -> Result<Option<Identity>, CallError> {
+    Ok(identity_of(&bridge::player::get_data(loader)?))
+}
+
+fn identity_of(data: &Value) -> Option<Identity> {
+    let Value::Object(data) = data else {
+        return None;
+    };
+    let Some(Value::String(name)) = data.get("strUsername") else {
+        return None;
+    };
+    let guild = match data.get("guild") {
+        Some(Value::Object(guild)) => match guild.get("Name") {
+            Some(Value::String(guild)) if !guild.is_empty() => Some(guild.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some(Identity {
+        name: name.clone(),
+        guild,
+    })
+}
+
 pub(crate) fn outfit_names(loader: &impl Loader) -> Result<Vec<String>, CallError> {
     let Value::List(outfits) = bridge::outfits::get_all(loader)? else {
         return Ok(Vec::new());
@@ -842,5 +872,33 @@ mod tests {
         });
         assert_eq!(jump(&loader, "r2", None).await, Ok(false));
         assert!(loader.count("flash.getGameObject") > 0);
+    }
+    #[test]
+    fn identity_reads_the_players_own_name_and_guild() {
+        let data = |guild: Value| {
+            Value::Object(
+                [
+                    ("strUsername".to_owned(), Value::String("player1".into())),
+                    ("guild".to_owned(), guild),
+                ]
+                .into(),
+            )
+        };
+        let guild = Value::Object([("Name".to_owned(), Value::String("Guild One".into()))].into());
+        assert_eq!(
+            identity_of(&data(guild)),
+            Some(Identity {
+                name: "player1".into(),
+                guild: Some("Guild One".into()),
+            })
+        );
+        assert_eq!(
+            identity_of(&data(Value::Null)),
+            Some(Identity {
+                name: "player1".into(),
+                guild: None,
+            })
+        );
+        assert_eq!(identity_of(&Value::Null), None);
     }
 }

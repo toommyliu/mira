@@ -40,6 +40,7 @@ actions!(
 );
 
 const CONTEXT: &str = "Input";
+const BULLET: char = '\u{2022}';
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -77,6 +78,8 @@ pub struct Input {
     content: SharedString,
     placeholder: SharedString,
     search: bool,
+    password: bool,
+    max_length: Option<usize>,
     invalid: bool,
     selected: Range<usize>,
     reversed: bool,
@@ -96,6 +99,8 @@ impl Input {
             content: SharedString::default(),
             placeholder: SharedString::default(),
             search: false,
+            password: false,
+            max_length: None,
             invalid: false,
             selected: 0..0,
             reversed: false,
@@ -116,6 +121,16 @@ impl Input {
         self
     }
 
+    pub fn password(mut self) -> Self {
+        self.password = true;
+        self
+    }
+
+    pub fn max_length(mut self, max_length: usize) -> Self {
+        self.max_length = Some(max_length);
+        self
+    }
+
     pub fn text(&self) -> &str {
         &self.content
     }
@@ -131,6 +146,46 @@ impl Input {
     pub fn set_invalid(&mut self, invalid: bool, cx: &mut Context<Self>) {
         self.invalid = invalid;
         cx.notify();
+    }
+
+    fn display_text(&self) -> SharedString {
+        if self.password {
+            BULLET
+                .to_string()
+                .repeat(self.content.graphemes(true).count())
+                .into()
+        } else {
+            self.content.clone()
+        }
+    }
+
+    fn to_display(&self, offset: usize) -> usize {
+        if self.password {
+            self.content[..offset].graphemes(true).count() * BULLET.len_utf8()
+        } else {
+            offset
+        }
+    }
+
+    fn from_display(&self, offset: usize) -> usize {
+        if self.password {
+            self.content
+                .grapheme_indices(true)
+                .nth(offset / BULLET.len_utf8())
+                .map_or(self.content.len(), |(index, _)| index)
+        } else {
+            offset
+        }
+    }
+
+    fn fit<'a>(&self, range: &Range<usize>, text: &'a str) -> &'a str {
+        let Some(max_length) = self.max_length else {
+            return text;
+        };
+        let kept = self.content.chars().count() - self.content[range.clone()].chars().count();
+        text.char_indices()
+            .nth(max_length.saturating_sub(kept))
+            .map_or(text, |(index, _)| &text[..index])
     }
 
     fn cursor(&self) -> usize {
@@ -241,7 +296,7 @@ impl Input {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected.is_empty() {
+        if !self.password && !self.selected.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected.clone()].to_string(),
             ));
@@ -249,7 +304,7 @@ impl Input {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected.is_empty() {
+        if !self.password && !self.selected.is_empty() {
             self.copy(&Copy, window, cx);
             self.replace_text_in_range(None, "", window, cx);
         }
@@ -274,10 +329,10 @@ impl Input {
         if self.content.is_empty() || position.y < bounds.top() {
             return 0;
         }
-        if position.y > bounds.bottom() || line.text != self.content {
+        if position.y > bounds.bottom() || line.text != self.display_text() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        self.from_display(line.closest_index_for_x(position.x - bounds.left()))
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -388,6 +443,7 @@ impl EntityInputHandler for Input {
             .map(|range| self.range_from_utf16(range))
             .or(self.marked.clone())
             .unwrap_or(self.selected.clone());
+        let text = self.fit(&range, text);
         self.content =
             (self.content[..range.start].to_owned() + text + &self.content[range.end..]).into();
         self.selected = range.start + text.len()..range.start + text.len();
@@ -410,6 +466,7 @@ impl EntityInputHandler for Input {
             .map(|range| self.range_from_utf16(range))
             .or(self.marked.clone())
             .unwrap_or(self.selected.clone());
+        let text = self.fit(&range, text);
         self.content =
             (self.content[..range.start].to_owned() + text + &self.content[range.end..]).into();
         self.marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
@@ -434,11 +491,11 @@ impl EntityInputHandler for Input {
         let range = self.range_from_utf16(&range);
         Some(Bounds::from_corners(
             point(
-                bounds.left() + layout.x_for_index(range.start),
+                bounds.left() + layout.x_for_index(self.to_display(range.start)),
                 bounds.top(),
             ),
             point(
-                bounds.left() + layout.x_for_index(range.end),
+                bounds.left() + layout.x_for_index(self.to_display(range.end)),
                 bounds.bottom(),
             ),
         ))
@@ -452,7 +509,7 @@ impl EntityInputHandler for Input {
     ) -> Option<usize> {
         let local = self.bounds?.localize(&at)?;
         let index = self.layout.as_ref()?.index_for_x(local.x)?;
-        Some(self.utf8_to_utf16(index))
+        Some(self.utf8_to_utf16(self.from_display(index)))
     }
 }
 
@@ -471,11 +528,13 @@ impl Render for Input {
             .id("field")
             .role(if self.search {
                 Role::SearchInput
+            } else if self.password {
+                Role::PasswordInput
             } else {
                 Role::TextInput
             })
             .aria_label(self.label.clone())
-            .aria_value(self.content.clone())
+            .aria_value(self.display_text())
             .when(!self.placeholder.is_empty(), |field| {
                 field.aria_placeholder(self.placeholder.clone())
             })
@@ -610,7 +669,7 @@ impl gpui::Element for TextElement {
         let (text, color) = if field.content.is_empty() {
             (field.placeholder.clone(), theme.text_tertiary)
         } else {
-            (field.content.clone(), style.color)
+            (field.display_text(), style.color)
         };
         let run = TextRun {
             len: text.len(),
@@ -620,7 +679,12 @@ impl gpui::Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = match field.marked.as_ref().filter(|_| !field.content.is_empty()) {
+        let marked = field
+            .marked
+            .as_ref()
+            .filter(|_| !field.content.is_empty())
+            .map(|marked| field.to_display(marked.start)..field.to_display(marked.end));
+        let runs = match marked {
             Some(marked) => [
                 TextRun {
                     len: marked.start,
@@ -652,7 +716,7 @@ impl gpui::Element for TextElement {
         let caret_x = if field.content.is_empty() {
             px(0.0)
         } else {
-            line.x_for_index(field.cursor())
+            line.x_for_index(field.to_display(field.cursor()))
         };
         let (selection, cursor) = if field.selected.is_empty() {
             (
@@ -670,11 +734,12 @@ impl gpui::Element for TextElement {
                 Some(fill(
                     Bounds::from_corners(
                         point(
-                            bounds.left() + line.x_for_index(field.selected.start),
+                            bounds.left()
+                                + line.x_for_index(field.to_display(field.selected.start)),
                             bounds.top(),
                         ),
                         point(
-                            bounds.left() + line.x_for_index(field.selected.end),
+                            bounds.left() + line.x_for_index(field.to_display(field.selected.end)),
                             bounds.bottom(),
                         ),
                     ),

@@ -16,7 +16,9 @@ use objc2_core_graphics::CGColor;
 use objc2_foundation::{
     NSNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
 };
-use objc2_quartz_core::{CADisplayLink, CAFrameRateRange, CAMetalLayer, CATransaction};
+use objc2_quartz_core::{
+    CADisplayLink, CAFrameRateRange, CAMetalLayer, CATransaction, kCAGravityResizeAspect,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[derive(Debug, thiserror::Error)]
@@ -77,10 +79,16 @@ impl NativeView {
         let layer = CAMetalLayer::new();
         layer.setBackgroundColor(Some(&CGColor::new_srgb(0.0, 0.0, 0.0, 1.0)));
         layer.setOpaque(true);
+        // Until the player draws at a new size, Core Animation scales the previous frame into the layer's bounds.
+        layer.setContentsGravity(unsafe { kCAGravityResizeAspect });
         let view = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
         view.setLayer(Some(&layer));
         view.setWantsLayer(true);
-        content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, None);
+        content.addSubview_positioned_relativeTo(
+            &view,
+            NSWindowOrderingMode::Below,
+            Some(gpui_view),
+        );
         let input_view =
             unsafe { Retained::retain(handle.ns_view.cast::<NSView>().as_ptr()) }.unwrap();
         Ok(NativeView {

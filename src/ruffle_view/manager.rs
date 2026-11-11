@@ -1,19 +1,27 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Global,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, PathPromptOptions,
-    Pixels, Render, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Toggled, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement as _,
+    IntoElement, ParentElement as _, PathPromptOptions, Pixels, Render, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
 
 use super::{
     Client, State, Summary,
     account::file_name,
     client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
-    ui::{self, Glyph},
 };
+use mira_ui::{
+    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
+    components::{Activity, Empty, StatusLabel},
+    primitives::{
+        Alert, Button, Checkbox, CheckedState, Dialog, Field, Input, InputEvent,
+        button::{Size, Variant},
+    },
+    theme::{CONTROL_MD, TEXT_BODY, TEXT_SMALL},
+};
+
 use crate::accounts::{Account, AccountId, Accounts, Draft, SaveError};
 
 actions!(mira, [OpenAccounts]);
@@ -50,11 +58,11 @@ pub(crate) fn open(
             traffic_light_position: Some(gpui::point(px(12.0), px(15.0))),
         }),
         app_owns_titlebar_drag: true,
-        window_min_size: Some(size(px(640.0), px(280.0))),
+        window_min_size: Some(size(px(640.0), px(360.0))),
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let manager = cx.new(|cx| Manager::new(game, client, path, cx));
+        let manager = cx.new(|cx| Manager::new(game, client, path, window, cx));
         let focus = manager.read(cx).focus.clone();
         window.focus(&focus, cx);
         manager
@@ -72,85 +80,78 @@ pub(crate) struct Manager {
     form: Option<Form>,
     notice: Option<SharedString>,
     focus: FocusHandle,
-    _client: gpui::Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 struct Form {
+    open: bool,
     editing: Option<AccountId>,
-    draft: Draft,
-    field: Option<Field>,
-    fresh: bool,
+    name: Entity<Input>,
+    username: Entity<Input>,
+    password: Entity<Input>,
+    server: Entity<Input>,
+    script: Option<PathBuf>,
     error: Option<SharedString>,
     removing: bool,
-    focus: FocusHandle,
+    _inputs: [Subscription; 4],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Field {
-    Name,
-    Username,
-    Password,
-    Server,
+impl Form {
+    fn draft(&self, cx: &App) -> Draft {
+        let text = |input: &Entity<Input>| input.read(cx).text().to_owned();
+        Draft {
+            name: text(&self.name),
+            username: text(&self.username),
+            password: text(&self.password),
+            server: text(&self.server),
+            script: self.script.clone(),
+        }
+    }
 }
 
-impl Field {
-    const ALL: [Field; 4] = [Field::Name, Field::Username, Field::Password, Field::Server];
+fn input(
+    text: String,
+    build: impl FnOnce(&mut Context<Input>) -> Input,
+    cx: &mut Context<Manager>,
+) -> Entity<Input> {
+    cx.new(|cx| {
+        let mut input = build(cx).max_length(MAX_FIELD);
+        input.set_text(text, cx);
+        input
+    })
+}
 
-    fn label(self) -> &'static str {
-        match self {
-            Field::Name => "Name",
-            Field::Username => "Username",
-            Field::Password => "Password",
-            Field::Server => "Server",
-        }
-    }
-
-    fn placeholder(self) -> &'static str {
-        match self {
-            Field::Name => "Same as username",
-            Field::Server => "Choose in game",
-            Field::Username | Field::Password => "",
-        }
-    }
-
-    fn text(self, draft: &mut Draft) -> &mut String {
-        match self {
-            Field::Name => &mut draft.name,
-            Field::Username => &mut draft.username,
-            Field::Password => &mut draft.password,
-            Field::Server => &mut draft.server,
-        }
-    }
-
-    fn step(self, backwards: bool) -> Field {
-        let index = Field::ALL.iter().position(|field| *field == self).unwrap();
-        let count = Field::ALL.len();
-        Field::ALL[if backwards {
-            (index + count - 1) % count
-        } else {
-            (index + 1) % count
-        }]
+fn activity(state: State) -> Activity {
+    match state {
+        State::Online => Activity::Running,
+        State::Busy => Activity::Waiting,
+        State::Offline => Activity::Stopped,
+        State::Failed => Activity::Failed,
     }
 }
 
 impl Manager {
     fn new(
-        window: WindowHandle<Client>,
+        game: WindowHandle<Client>,
         client: Entity<Client>,
         path: PathBuf,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let observed = cx.observe(&client, |_, _, cx| cx.notify());
+        let subscriptions = [
+            cx.observe(&client, |_, _, cx| cx.notify()),
+            cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
+        ];
         Self {
-            window,
+            window: game,
             client,
             accounts: Accounts::open(path).map_err(Into::into),
             checked: HashSet::new(),
             form: None,
             notice: None,
             focus,
-            _client: observed,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -248,58 +249,98 @@ impl Manager {
         .detach();
     }
 
-    fn toggle(&mut self, id: AccountId, cx: &mut Context<Self>) {
-        if !self.checked.remove(&id) {
+    fn set_checked(&mut self, id: AccountId, checked: bool, cx: &mut Context<Self>) {
+        if checked {
             self.checked.insert(id);
+        } else {
+            self.checked.remove(&id);
         }
         cx.notify();
     }
 
-    fn toggle_all(&mut self, cx: &mut Context<Self>) {
+    fn set_all_checked(&mut self, checked: bool, cx: &mut Context<Self>) {
         let Ok(accounts) = &self.accounts else {
             return;
         };
-        if self.checked.len() == accounts.list().len() {
-            self.checked.clear();
+        self.checked = if checked {
+            accounts.list().iter().map(Account::id).collect()
         } else {
-            self.checked = accounts.list().iter().map(Account::id).collect();
-        }
+            HashSet::new()
+        };
         cx.notify();
     }
 
-    fn edit(&mut self, account: Option<&Account>, window: &mut Window, cx: &mut Context<Self>) {
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
+    fn edit(&mut self, account: Option<&Account>, cx: &mut Context<Self>) {
+        let draft = account.map(Draft::of).unwrap_or_default();
+        let name = input(
+            draft.name,
+            |cx| Input::new("Name", cx).placeholder("Same as username"),
+            cx,
+        );
+        let username = input(draft.username, |cx| Input::new("Username", cx), cx);
+        let password = input(
+            draft.password,
+            |cx| Input::new("Password", cx).password(),
+            cx,
+        );
+        let server = input(
+            draft.server,
+            |cx| Input::new("Server", cx).placeholder("Choose in game"),
+            cx,
+        );
+        let inputs = [&name, &username, &password, &server]
+            .map(|input| cx.subscribe(input, Self::input_event));
         self.form = Some(Form {
+            open: true,
             editing: account.map(Account::id),
-            draft: account.map(Draft::of).unwrap_or_default(),
-            field: Some(if account.is_some() {
-                Field::Name
-            } else {
-                Field::Username
-            }),
-            fresh: true,
+            name,
+            username,
+            password,
+            server,
+            script: draft.script,
             error: None,
             removing: false,
-            focus,
+            _inputs: inputs,
         });
         cx.notify();
     }
 
-    fn close_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.form = None;
-        window.focus(&self.focus, cx);
-        cx.notify();
+    fn input_event(&mut self, _: Entity<Input>, event: &InputEvent, cx: &mut Context<Self>) {
+        match event {
+            InputEvent::Submitted => self.save(cx),
+            InputEvent::Changed => {
+                if let Some(form) = &mut self.form
+                    && form.error.take().is_some()
+                {
+                    cx.notify();
+                }
+            }
+        }
     }
 
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_form(&mut self, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.form {
+            form.open = false;
+            cx.notify();
+        }
+    }
+
+    fn set_removing(&mut self, removing: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.form {
+            form.removing = removing;
+            cx.notify();
+        }
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>) {
         let (Some(form), Ok(accounts)) = (&mut self.form, &mut self.accounts) else {
             return;
         };
+        let draft = form.draft(cx);
         let renamed = form
             .editing
             .as_ref()
-            .filter(|editing| **editing != AccountId::of(form.draft.username.trim()));
+            .filter(|editing| **editing != AccountId::of(draft.username.trim()));
         if let Some(old) = renamed
             && self.client.read(cx).summary(old, cx).is_some()
         {
@@ -307,26 +348,26 @@ impl Manager {
             cx.notify();
             return;
         }
-        match accounts.save(form.editing.as_ref(), form.draft.clone()) {
+        match accounts.save(form.editing.as_ref(), draft) {
             Ok(id) => {
-                if let Some(old) = form.editing.take()
-                    && self.checked.remove(&old)
+                if let Some(old) = &form.editing
+                    && self.checked.remove(old)
                 {
                     self.checked.insert(id);
                 }
-                self.close_form(window, cx);
+                form.open = false;
             }
             Err(error) => {
                 form.error = Some(match error {
                     SaveError::Invalid(invalid) => invalid.to_string().into(),
                     SaveError::Io(_) => error.to_string().into(),
                 });
-                cx.notify();
             }
         }
+        cx.notify();
     }
 
-    fn remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn remove(&mut self, cx: &mut Context<Self>) {
         let (Some(form), Ok(accounts)) = (&mut self.form, &mut self.accounts) else {
             return;
         };
@@ -336,13 +377,14 @@ impl Manager {
         match accounts.remove(&id) {
             Ok(()) => {
                 self.checked.remove(&id);
-                self.close_form(window, cx);
+                form.open = false;
             }
             Err(error) => {
+                form.removing = false;
                 form.error = Some(format!("couldn't save the accounts: {error}").into());
-                cx.notify();
             }
         }
+        cx.notify();
     }
 
     fn choose_form_script(&mut self, cx: &mut Context<Self>) {
@@ -353,79 +395,12 @@ impl Manager {
             };
             let _ = this.update(cx, |this, cx| {
                 if let Some(form) = &mut this.form {
-                    form.draft.script = Some(script);
+                    form.script = Some(script);
                     cx.notify();
                 }
             });
         })
         .detach();
-    }
-
-    fn form_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.form else {
-            return;
-        };
-        let keystroke = &event.keystroke;
-        let command = keystroke.modifiers.platform;
-        match keystroke.key.as_str() {
-            "escape" => return self.close_form(window, cx),
-            "enter" => return self.save(window, cx),
-            "tab" => {
-                form.field = Some(
-                    form.field
-                        .map_or(Field::Name, |field| field.step(keystroke.modifiers.shift)),
-                );
-                form.fresh = true;
-            }
-            "a" if command => form.fresh = true,
-            "v" if command => {
-                let pasted = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .unwrap_or_default();
-                let pasted: String = pasted.chars().filter(|c| !c.is_control()).collect();
-                form.type_text(&pasted);
-            }
-            "backspace" => {
-                let Some(field) = form.field else {
-                    return;
-                };
-                let text = field.text(&mut form.draft);
-                if form.fresh || command {
-                    text.clear();
-                } else {
-                    text.pop();
-                }
-                form.fresh = false;
-            }
-            _ => {
-                let Some(typed) = keystroke.key_char.as_deref() else {
-                    return;
-                };
-                if command || keystroke.modifiers.control {
-                    return;
-                }
-                form.type_text(typed);
-            }
-        }
-        form.error = None;
-        cx.stop_propagation();
-        cx.notify();
-    }
-}
-
-impl Form {
-    fn type_text(&mut self, typed: &str) {
-        let Some(field) = self.field else {
-            return;
-        };
-        let text = field.text(&mut self.draft);
-        if self.fresh {
-            text.clear();
-            self.fresh = false;
-        }
-        let room = MAX_FIELD.saturating_sub(text.chars().count());
-        text.extend(typed.chars().take(room));
     }
 }
 
@@ -444,85 +419,8 @@ fn choose_script(cx: &mut Context<Manager>) -> impl Future<Output = Option<PathB
     }
 }
 
-fn danger() -> gpui::Hsla {
-    gpui::hsla(0.0, 0.75, 0.66, 1.0)
-}
-
-fn button(id: impl Into<gpui::ElementId>, label: &'static str, enabled: bool) -> Stateful<Div> {
-    let button = div()
-        .id(id)
-        .flex()
-        .flex_none()
-        .items_center()
-        .h(px(26.0))
-        .px(px(10.0))
-        .rounded(ui::CONTROL_RADIUS)
-        .border_1()
-        .border_color(ui::hairline())
-        .role(Role::Button)
-        .aria_label(label)
-        .child(label);
-    if enabled {
-        ui::pressable(button)
-    } else {
-        button.text_color(ui::tertiary_text())
-    }
-}
-
-fn checkbox(
-    id: impl Into<gpui::ElementId>,
-    label: SharedString,
-    on: Option<bool>,
-) -> Stateful<Div> {
-    let filled = on != Some(false);
-    div()
-        .id(id)
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(16.0))
-        .rounded(px(4.0))
-        .border_1()
-        .border_color(if filled {
-            ui::accent()
-        } else {
-            ui::secondary_text()
-        })
-        .when(filled, |box_| box_.bg(ui::accent()))
-        .cursor_pointer()
-        .role(Role::CheckBox)
-        .aria_label(label)
-        .aria_toggled(match on {
-            Some(true) => Toggled::True,
-            Some(false) => Toggled::False,
-            None => Toggled::Mixed,
-        })
-        .map(|box_| match on {
-            Some(true) => box_.child(ui::glyph(Glyph::Check, ui::text())),
-            None => box_.child(div().w(px(8.0)).h(px(1.5)).bg(ui::text())),
-            Some(false) => box_,
-        })
-}
-
-fn small(button: Stateful<Div>) -> Stateful<Div> {
-    button
-        .h(px(22.0))
-        .px(px(8.0))
-        .text_size(ui::SMALL_TEXT_SIZE)
-}
-
-fn state_color(state: State) -> gpui::Hsla {
-    match state {
-        State::Online => gpui::hsla(142.0 / 360.0, 0.6, 0.52, 1.0),
-        State::Busy => ui::tertiary_text(),
-        State::Offline => gpui::hsla(38.0 / 360.0, 0.9, 0.58, 1.0),
-        State::Failed => danger(),
-    }
-}
-
 impl Manager {
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let selected = self.checked_accounts();
         let any = !selected.is_empty();
         let total = self
@@ -530,9 +428,9 @@ impl Manager {
             .as_ref()
             .map_or(0, |accounts| accounts.list().len());
         let all = match selected.len() {
-            0 => Some(false),
-            count if count == total => Some(true),
-            _ => None,
+            0 => CheckedState::Unchecked,
+            count if count == total => CheckedState::Checked,
+            _ => CheckedState::Indeterminate,
         };
         let count: SharedString = match selected.len() {
             0 => "Select accounts to act on them".into(),
@@ -544,10 +442,12 @@ impl Manager {
                     run: fn(&mut Manager, Vec<Account>, &mut Context<Manager>),
                     cx: &mut Context<Self>| {
             let targets = selected.clone();
-            button(id, label, any).when(any, |button| {
-                button.on_click(cx.listener(move |this, _, _, cx| run(this, targets.clone(), cx)))
-            })
+            Button::new(id, label)
+                .disabled(!any)
+                .on_click(cx.listener(move |this, _, _, cx| run(this, targets.clone(), cx)))
         };
+        let check_all =
+            cx.listener(|this, checked: &bool, _, cx| this.set_all_checked(*checked, cx));
         div()
             .flex()
             .flex_none()
@@ -556,13 +456,14 @@ impl Manager {
             .h(px(44.0))
             .pr(px(12.0))
             .border_b_1()
-            .border_color(ui::hairline())
+            .border_color(theme.hairline)
             .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
             .when(total > 0, |toolbar| {
                 toolbar.child(
-                    checkbox("check-all", "Select all accounts".into(), all)
-                        .mr(px(4.0))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_all(cx))),
+                    div().mr(px(4.0)).child(
+                        Checkbox::new("check-all", "Select all", all)
+                            .on_toggle(move |checked, window, cx| check_all(&checked, window, cx)),
+                    ),
                 )
             })
             .child(bulk("launch-selected", "Launch", Manager::launch, cx))
@@ -578,24 +479,20 @@ impl Manager {
                     .min_w_0()
                     .px(px(6.0))
                     .truncate()
-                    .text_size(ui::SMALL_TEXT_SIZE)
-                    .text_color(ui::secondary_text())
+                    .text_size(TEXT_SMALL)
+                    .text_color(theme.text_secondary)
                     .child(count),
             )
             .child(
-                button("add-account", "Add account", self.accounts.is_ok()).when(
-                    self.accounts.is_ok(),
-                    |button| {
-                        button.on_click(
-                            cx.listener(|this, _, window, cx| this.edit(None, window, cx)),
-                        )
-                    },
-                ),
+                Button::new("add-account", "Add account")
+                    .disabled(self.accounts.is_err())
+                    .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
             )
     }
 
     fn cards(
         &self,
+        theme: &Theme,
         accounts: &[Account],
         columns: u16,
         cx: &mut Context<Self>,
@@ -610,7 +507,7 @@ impl Manager {
         let cards: Vec<_> = accounts
             .iter()
             .zip(summaries)
-            .map(|(account, summary)| self.card(account, summary, cx))
+            .map(|(account, summary)| self.card(theme, account, summary, cx))
             .collect();
         div()
             .id("accounts")
@@ -629,6 +526,7 @@ impl Manager {
 
     fn card(
         &self,
+        theme: &Theme,
         account: &Account,
         summary: Option<Summary>,
         cx: &mut Context<Self>,
@@ -636,17 +534,12 @@ impl Manager {
         let id = account.id();
         let checked = self.checked.contains(&id);
         let open = summary.is_some();
-        let (status, status_color, dot) = match &summary {
-            Some(summary) => (
-                summary.login.clone(),
-                if summary.state == State::Failed {
-                    danger()
-                } else {
-                    ui::text()
-                },
-                Some(state_color(summary.state)),
-            ),
-            None => ("Not open".into(), ui::tertiary_text(), None),
+        let status_id = SharedString::from(format!("status-{}", account.username));
+        let status = match &summary {
+            Some(summary) => {
+                StatusLabel::new(status_id, activity(summary.state), summary.login.clone())
+            }
+            None => StatusLabel::new(status_id, Activity::Idle, "Not open"),
         };
         let (script, script_color): (SharedString, _) = match &summary {
             Some(Summary {
@@ -657,18 +550,19 @@ impl Manager {
             }) => (
                 live.clone(),
                 match (script_failed, running) {
-                    (true, _) => danger(),
-                    (false, true) => ui::text(),
-                    (false, false) => ui::secondary_text(),
+                    (true, _) => theme.danger_text,
+                    (false, true) => theme.text,
+                    (false, false) => theme.text_secondary,
                 },
             ),
             _ => match &account.script {
-                Some(script) => (file_name(script).into(), ui::secondary_text()),
-                None => ("No script".into(), ui::tertiary_text()),
+                Some(script) => (file_name(script).into(), theme.text_secondary),
+                None => ("No script".into(), theme.text_tertiary),
             },
         };
-        let name = account.name.clone();
-        let toggle_id = id.clone();
+        let toggle = cx.listener(move |this, checked: &bool, _, cx| {
+            this.set_checked(id.clone(), *checked, cx)
+        });
         let launch_target = account.clone();
         let edit_target = account.clone();
         div()
@@ -684,11 +578,10 @@ impl Manager {
             .border_1()
             .map(|card| {
                 if checked {
-                    card.border_color(ui::accent())
-                        .bg(ui::accent().opacity(0.08))
+                    card.border_color(theme.accent)
+                        .bg(theme.accent.opacity(0.08))
                 } else {
-                    card.border_color(ui::hairline())
-                        .bg(gpui::hsla(0.0, 0.0, 1.0, 0.035))
+                    card.border_color(theme.hairline).bg(theme.surface)
                 }
             })
             .child(
@@ -698,41 +591,41 @@ impl Manager {
                     .gap(px(8.0))
                     .min_w_0()
                     .child(
-                        checkbox(
-                            SharedString::from(format!("check-{}", account.username)),
-                            format!("Select {name}").into(),
-                            Some(checked),
-                        )
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.toggle(toggle_id.clone(), cx)),
-                        ),
-                    )
-                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .overflow_hidden()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(name),
+                            .child(
+                                Checkbox::new(
+                                    SharedString::from(format!("check-{}", account.username)),
+                                    account.name.clone(),
+                                    if checked {
+                                        CheckedState::Checked
+                                    } else {
+                                        CheckedState::Unchecked
+                                    },
+                                )
+                                .on_toggle(move |checked, window, cx| toggle(&checked, window, cx)),
+                            ),
                     )
                     .child(
-                        small(button(
+                        Button::new(
                             SharedString::from(format!("edit-{}", account.username)),
                             "Edit",
-                            true,
-                        ))
-                        .border_color(gpui::transparent_black())
-                        .text_color(ui::secondary_text())
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.edit(Some(&edit_target), window, cx),
-                        )),
+                        )
+                        .variant(Variant::Ghost)
+                        .size(Size::Small)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.edit(Some(&edit_target), cx)),
+                        ),
                     )
                     .child(
-                        small(button(
+                        Button::new(
                             SharedString::from(format!("open-{}", account.username)),
                             if open { "Show" } else { "Launch" },
-                            true,
-                        ))
+                        )
+                        .size(Size::Small)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if open {
                                 this.show(launch_target.clone(), cx)
@@ -742,39 +635,13 @@ impl Manager {
                         })),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .min_w_0()
-                    .text_size(ui::SMALL_TEXT_SIZE)
-                    .line_height(px(16.0))
-                    .child(
-                        div()
-                            .flex_none()
-                            .mt(px(4.5))
-                            .size(px(7.0))
-                            .rounded_full()
-                            .map(|dot_| match dot {
-                                Some(color) => dot_.bg(color),
-                                None => dot_.border_1().border_color(ui::tertiary_text()),
-                            }),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .line_clamp(2)
-                            .text_color(status_color)
-                            .child(status),
-                    ),
-            )
+            .child(status)
             .child(
                 div()
                     .min_w_0()
                     .pl(px(14.0))
                     .line_clamp(2)
-                    .text_size(ui::SMALL_TEXT_SIZE)
+                    .text_size(TEXT_SMALL)
                     .line_height(px(16.0))
                     .text_color(script_color)
                     .child(script),
@@ -782,206 +649,130 @@ impl Manager {
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap(px(6.0))
-            .text_color(ui::secondary_text())
-            .child("No accounts yet.")
-            .child(
-                button("add-first-account", "Add account", true)
-                    .mt(px(8.0))
-                    .text_color(ui::text())
-                    .on_click(cx.listener(|this, _, window, cx| this.edit(None, window, cx))),
+        div().flex().flex_1().items_center().justify_center().child(
+            Empty::new(
+                "No accounts yet",
+                "Add an account to launch it and run its script from here.",
             )
+            .action(
+                Button::new("add-first-account", "Add account")
+                    .variant(Variant::Primary)
+                    .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
+            ),
+        )
     }
 
-    fn form(&self, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let fields: Vec<_> = Field::ALL
-            .iter()
-            .map(|&field| {
-                let editing = form.field == Some(field);
-                let value = match field {
-                    Field::Name => form.draft.name.clone(),
-                    Field::Username => form.draft.username.clone(),
-                    Field::Password => "•".repeat(form.draft.password.chars().count()),
-                    Field::Server => form.draft.server.clone(),
-                };
-                let input = ui::text_field(
-                    SharedString::from(format!("field-{}", field.label())),
-                    value,
-                    field.placeholder(),
-                    editing,
-                    editing && form.fresh,
-                )
-                .w(px(260.0))
-                .role(if field == Field::Password {
-                    Role::PasswordInput
-                } else {
-                    Role::TextInput
-                })
-                .aria_label(field.label())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(form) = &mut this.form {
-                        form.field = Some(field);
-                        form.fresh = true;
-                        window.focus(&form.focus, cx);
-                        cx.notify();
-                    }
-                }));
-                form_row(field.label(), input)
-            })
-            .collect();
+    fn form(&self, theme: &Theme, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let script: SharedString = form
-            .draft
             .script
             .as_deref()
             .map_or_else(|| "None".into(), |script| file_name(script).into());
-        let has_script = form.draft.script.is_some();
-        let script_row = form_row(
-            "Script",
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .w(px(260.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(if has_script {
-                            ui::text()
-                        } else {
-                            ui::tertiary_text()
-                        })
-                        .child(script),
-                )
-                .when(has_script, |row| {
-                    row.child(button("clear-script", "Clear", true).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Some(form) = &mut this.form {
-                                form.draft.script = None;
-                                cx.notify();
-                            }
-                        },
-                    )))
-                })
-                .child(
-                    button("choose-script", "Choose…", true)
-                        .on_click(cx.listener(|this, _, _, cx| this.choose_form_script(cx))),
-                ),
-        );
-        let title = if form.editing.is_some() {
-            "Edit account"
-        } else {
-            "Add account"
-        };
-        let footer = if form.removing {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(ui::SMALL_TEXT_SIZE)
-                        .text_color(ui::secondary_text())
-                        .child("Remove this account? An open tab stays open."),
-                )
-                .child(
-                    button("keep", "Keep", true).on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(form) = &mut this.form {
-                            form.removing = false;
-                            cx.notify();
-                        }
-                    })),
-                )
-                .child(
-                    button("confirm-remove", "Remove", true)
-                        .text_color(danger())
-                        .on_click(cx.listener(|this, _, window, cx| this.remove(window, cx))),
-                )
-        } else {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .when(form.editing.is_some(), |footer| {
-                    footer.child(
-                        button("remove", "Remove", true)
-                            .text_color(danger())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(form) = &mut this.form {
-                                    form.removing = true;
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                })
-                .child(div().flex_1())
-                .child(
-                    button("cancel", "Cancel", true)
-                        .on_click(cx.listener(|this, _, window, cx| this.close_form(window, cx))),
-                )
-                .child(
-                    button("save", "Save", true)
-                        .bg(ui::accent())
-                        .border_color(ui::accent())
-                        .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
-                )
-        };
-        div()
-            .id("form-backdrop")
-            .absolute()
-            .inset_0()
-            .occlude()
+        let has_script = form.script.is_some();
+        let script_row = div()
             .flex()
             .items_center()
-            .justify_center()
-            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
+            .gap(px(8.0))
+            .h(CONTROL_MD)
             .child(
-                ui::panel("account-form", px(400.0))
-                    .p(px(16.0))
-                    .gap(px(10.0))
-                    .role(Role::Dialog)
-                    .aria_label(title)
-                    .track_focus(&form.focus)
-                    .on_key_down(cx.listener(Self::form_key_down))
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
-                    .children(fields)
-                    .child(script_row)
-                    .children(form.error.clone().map(|error| {
-                        div()
-                            .text_size(ui::SMALL_TEXT_SIZE)
-                            .text_color(danger())
-                            .child(error)
-                    }))
-                    .child(footer.mt(px(6.0))),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if has_script {
+                        theme.text
+                    } else {
+                        theme.text_tertiary
+                    })
+                    .child(script),
             )
+            .when(has_script, |row| {
+                row.child(Button::new("clear-script", "Clear").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(form) = &mut this.form {
+                            form.script = None;
+                            cx.notify();
+                        }
+                    },
+                )))
+            })
+            .child(
+                Button::new("choose-script", "Choose…")
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_form_script(cx))),
+            );
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .gap(px(12.0))
+                    .child(Field::new("Name", form.name.clone()))
+                    .child(Field::new("Username", form.username.clone()))
+                    .child(Field::new("Password", form.password.clone()))
+                    .child(Field::new("Server", form.server.clone())),
+            )
+            .child(Field::new("Script", script_row))
+            .children(form.error.clone().map(|error| {
+                div()
+                    .text_size(TEXT_SMALL)
+                    .text_color(theme.danger_text)
+                    .child(error)
+            }));
+        let close = cx.listener(|this, _: &(), _, cx| this.close_form(cx));
+        Dialog::new(
+            "account-form",
+            form.open,
+            if form.editing.is_some() {
+                "Edit account"
+            } else {
+                "Add account"
+            },
+        )
+        .body(body)
+        .when(form.editing.is_some(), |dialog| {
+            dialog.action(
+                div().flex_1().child(
+                    Button::new("remove", "Remove")
+                        .variant(Variant::Danger)
+                        .on_click(cx.listener(|this, _, _, cx| this.set_removing(true, cx))),
+                ),
+            )
+        })
+        .action(
+            Button::new("cancel", "Cancel")
+                .on_click(cx.listener(|this, _, _, cx| this.close_form(cx))),
+        )
+        .action(
+            Button::new("save", "Save")
+                .variant(Variant::Primary)
+                .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+        )
+        .on_close(move |window, cx| close(&(), window, cx))
     }
-}
 
-fn form_row(label: &'static str, input: impl IntoElement) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(12.0))
-        .child(div().text_color(ui::secondary_text()).child(label))
-        .child(input)
+    fn remove_confirmation(&self, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let keep = cx.listener(|this, _: &(), _, cx| this.set_removing(false, cx));
+        Dialog::new("remove-account", form.removing, "Remove this account?")
+            .alert()
+            .description("An open tab stays open.")
+            .action(
+                Button::new("keep", "Keep")
+                    .on_click(cx.listener(|this, _, _, cx| this.set_removing(false, cx))),
+            )
+            .action(
+                Button::new("confirm-remove", "Remove")
+                    .variant(Variant::Danger)
+                    .on_click(cx.listener(|this, _, _, cx| this.remove(cx))),
+            )
+            .on_close(move |window, cx| keep(&(), window, cx))
+    }
 }
 
 impl Render for Manager {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let columns = if window.viewport_size().width >= WIDE {
             3
         } else {
@@ -994,39 +785,43 @@ impl Render for Manager {
                 .items_center()
                 .justify_center()
                 .px(px(24.0))
-                .text_color(danger())
+                .text_color(theme.danger_text)
                 .child(format!("Mira couldn't load your accounts: {error}"))
                 .into_any_element(),
             Ok(accounts) if accounts.list().is_empty() => self.empty(cx).into_any_element(),
             Ok(accounts) => {
                 let list = accounts.list().to_vec();
-                self.cards(&list, columns, cx).into_any_element()
+                self.cards(&theme, &list, columns, cx).into_any_element()
             }
         };
-        let form = self.form.as_ref().map(|form| self.form(form, cx));
+        let form = self.form.as_ref().map(|form| self.form(&theme, form, cx));
+        let remove_confirmation = self
+            .form
+            .as_ref()
+            .filter(|form| form.open)
+            .map(|form| self.remove_confirmation(form, cx));
         div()
-            .relative()
             .flex()
             .flex_col()
             .size_full()
-            .bg(ui::bar_background())
-            .text_size(ui::TEXT_SIZE)
-            .text_color(ui::text())
+            .bg(theme.base)
+            .text_size(TEXT_BODY)
+            .text_color(theme.text)
+            .key_context(FOCUS_SCOPE)
+            .id("accounts")
+            .role(Role::Group)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
-            .child(self.toolbar(cx))
+            .child(self.toolbar(&theme, cx))
             .children(self.notice.clone().map(|notice| {
                 div()
                     .flex_none()
                     .px(px(12.0))
-                    .py(px(8.0))
-                    .border_b_1()
-                    .border_color(ui::hairline())
-                    .text_size(ui::SMALL_TEXT_SIZE)
-                    .text_color(danger())
-                    .child(notice)
+                    .pt(px(12.0))
+                    .child(Alert::new("notice", Tone::Danger, notice))
             }))
             .child(body)
             .children(form)
+            .children(remove_confirmation)
     }
 }

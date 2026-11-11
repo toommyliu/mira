@@ -1,13 +1,13 @@
-use std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context as _;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeyDownEvent, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Toggled, Window, actions,
-    anchored, deferred, div, point, prelude::FluentBuilder as _, px,
+    App, AppContext as _, Bounds, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyDownEvent, Modifiers, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render, Role, ScrollHandle,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    Window, actions, anchored, deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -15,6 +15,14 @@ use super::{
     manager::OpenAccounts,
     ui::{self, Glyph},
 };
+use mira_ui::{
+    ActiveTheme as _, Theme,
+    components::status_dot,
+    motion,
+    primitives::{Icon, Tooltip, icon, sidebar_icon},
+    theme::{CONTROL_SM, ROW, TEXT_BODY, TEXT_SMALL},
+};
+
 use crate::{
     accounts::{Account, AccountId},
     army::Armies,
@@ -23,26 +31,46 @@ use crate::{
 
 actions!(
     mira,
-    [NewSession, CloseSession, NextSession, PreviousSession]
+    [
+        NewSession,
+        CloseSession,
+        NextSession,
+        PreviousSession,
+        ToggleSidebar
+    ]
 );
 
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = mira, no_json)]
 struct SelectSession(usize);
 
-pub(crate) const STRIP_HEIGHT: Pixels = px(36.0);
+const SIDEBAR_WIDTH: Pixels = px(208.0);
+const TAB_GAP: Pixels = px(2.0);
+const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 
 fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
     tabs.iter()
         .enumerate()
-        .filter(|(_, (left, right))| {
-            left + scrolled >= viewport.0 && right + scrolled <= viewport.1
+        .filter(|(_, (top, bottom))| {
+            top + scrolled >= viewport.0 && bottom + scrolled <= viewport.1
         })
         .map(|(index, _)| index)
         .take(9)
         .collect()
+}
+
+fn rest_top(slot: Pixels, from: usize, index: usize) -> Pixels {
+    slot + (ROW + TAB_GAP) * (index as f32 - from as f32)
+}
+
+fn drop_index(row_centers: &[f32], from: usize, center: f32) -> usize {
+    row_centers
+        .iter()
+        .enumerate()
+        .filter(|&(index, &row)| index != from && row < center)
+        .count()
 }
 
 fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
@@ -61,6 +89,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("ctrl-tab", NextSession, None),
         gpui::KeyBinding::new("ctrl-shift-tab", PreviousSession, None),
         gpui::KeyBinding::new("cmd-shift-a", OpenAccounts, None),
+        gpui::KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
     ]);
     cx.bind_keys((1..=9).map(|number| {
         gpui::KeyBinding::new(&format!("cmd-{number}"), SelectSession(number - 1), None)
@@ -74,11 +103,12 @@ pub struct Client {
     sessions: Vec<Session>,
     active: usize,
     layout: Layout,
+    sidebar: Sidebar,
+    dragging: Option<TabDrag>,
+    drags: usize,
     numbered: usize,
     focus: FocusHandle,
     tab_scroll: ScrollHandle,
-    tab_list: Option<FocusHandle>,
-    tab_list_trigger: Rc<Cell<Bounds<Pixels>>>,
     shortcut_hints: bool,
     shortcut_hint_delay: Option<Task<()>>,
     _activation: Subscription,
@@ -95,8 +125,31 @@ struct Session {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
-    Tabs,
+    Single,
     Grid,
+}
+
+#[derive(Clone, Copy)]
+struct TabDrag {
+    number: usize,
+    generation: usize,
+    grab: Pixels,
+    top: Pixels,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sidebar {
+    Hidden,
+    Full,
+}
+
+impl Sidebar {
+    fn width(self) -> Pixels {
+        match self {
+            Sidebar::Hidden => px(0.0),
+            Sidebar::Full => SIDEBAR_WIDTH,
+        }
+    }
 }
 
 fn grid_shape(count: usize) -> (usize, usize) {
@@ -118,12 +171,13 @@ impl Client {
             armies,
             sessions: Vec::new(),
             active: 0,
-            layout: Layout::Tabs,
+            layout: Layout::Single,
+            sidebar: Sidebar::Hidden,
+            dragging: None,
+            drags: 0,
             numbered: 0,
             focus: cx.focus_handle(),
             tab_scroll: ScrollHandle::new(),
-            tab_list: None,
-            tab_list_trigger: Rc::default(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
@@ -150,23 +204,24 @@ impl Client {
             cx,
         )?;
         let window_size = window.viewport_size();
-        let top = STRIP_HEIGHT + super::BAR_HEIGHT;
+        let left = self.sidebar.width();
         let player = Bounds::new(
-            point(px(0.0), top),
+            point(left, super::BAR_HEIGHT),
             gpui::size(
-                window_size.width.max(px(1.0)),
-                (window_size.height - top).max(px(1.0)),
+                (window_size.width - left).max(px(1.0)),
+                (window_size.height - super::BAR_HEIGHT).max(px(1.0)),
             ),
         );
-        view.update(cx, |view, _| view.layout(player, window));
+        let inset = bar_inset(left);
+        view.update(cx, |view, _| {
+            view.bar_inset = inset;
+            view.layout(player, window)
+        });
         let player = view.read(cx).session.inbox();
         self.numbered += 1;
         self.sessions.push(Session {
             number: self.numbered,
-            label: account.map_or_else(
-                || format!("Session {}", self.numbered).into(),
-                |account| account.name.clone().into(),
-            ),
+            label: account.map_or_else(|| "New tab".into(), |account| account.name.clone().into()),
             account: account.map(Account::id),
             view: view.clone(),
             player,
@@ -311,6 +366,14 @@ impl Client {
         cx.notify();
     }
 
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar = match self.sidebar {
+            Sidebar::Hidden => Sidebar::Full,
+            Sidebar::Full => Sidebar::Hidden,
+        };
+        cx.notify();
+    }
+
     fn move_session(&mut self, number: usize, to: usize, cx: &mut Context<Self>) {
         let Some(from) = self.sessions.iter().position(|s| s.number == number) else {
             return;
@@ -328,6 +391,93 @@ impl Client {
             .position(|s| s.number == active)
             .unwrap_or(0);
         cx.notify();
+    }
+
+    fn drag_tab(&mut self, pointer: Pixels, cx: &mut Context<Self>) {
+        if let Some(drag) = self.dragging.as_mut() {
+            drag.top = pointer - drag.grab;
+            cx.notify();
+        }
+    }
+
+    fn drop_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.dragging.take() else {
+            return;
+        };
+        if let Some((_, to)) = self.drag_target(drag) {
+            self.move_session(drag.number, to, cx);
+        }
+        cx.notify();
+    }
+
+    fn cancel_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !cx.has_active_drag() || self.dragging.take().is_none() {
+            return false;
+        }
+        cx.stop_active_drag(window);
+        cx.notify();
+        true
+    }
+
+    fn drag_target(&self, drag: TabDrag) -> Option<(usize, usize)> {
+        let (from, slot) = self.drag_slot(drag)?;
+        let centers: Vec<_> = (0..self.sessions.len())
+            .map(|index| f32::from(rest_top(slot, from, index) + ROW / 2.0))
+            .collect();
+        let center = f32::from(drag.top + ROW / 2.0);
+        Some((from, drop_index(&centers, from, center)))
+    }
+
+    fn drag_slot(&self, drag: TabDrag) -> Option<(usize, Pixels)> {
+        let from = self
+            .sessions
+            .iter()
+            .position(|session| session.number == drag.number)?;
+        let slot = self.tab_scroll.bounds_for_item(from)?.top() + self.tab_scroll.offset().y;
+        Some((from, slot))
+    }
+
+    fn lifted_top(&self, drag: TabDrag) -> Option<Pixels> {
+        let (from, slot) = self.drag_slot(drag)?;
+        let list = self.tab_scroll.bounds();
+        let first = rest_top(slot, from, 0);
+        let last = rest_top(slot, from, self.sessions.len().checked_sub(1)?);
+        let min = first.max(list.top());
+        let max = last.min(list.bottom() - ROW).max(min);
+        Some(drag.top.max(min).min(max))
+    }
+
+    fn lifted_tab(&self, theme: &Theme, cx: &App) -> Option<impl IntoElement + use<>> {
+        let drag = self.dragging.filter(|_| cx.has_active_drag())?;
+        let index = self
+            .sessions
+            .iter()
+            .position(|session| session.number == drag.number)?;
+        let session = &self.sessions[index];
+        let row = self.tab_scroll.bounds_for_item(index)?;
+        let top = self.lifted_top(drag)?;
+        Some(deferred(
+            anchored().position(point(row.left(), top)).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .w(row.size.width)
+                    .h(ROW)
+                    .pl(px(8.0))
+                    .pr(px(4.0))
+                    .rounded(theme.radius.item)
+                    .bg(theme.overlay)
+                    .shadow(theme.floating())
+                    .text_size(TEXT_BODY)
+                    .text_color(theme.text)
+                    .when(index == self.active, |tab| {
+                        tab.font_weight(gpui::FontWeight::MEDIUM)
+                    })
+                    .child(status_dot(theme, session.view.read(cx).activity()))
+                    .child(div().flex_1().truncate().child(session.label.clone())),
+            ),
+        ))
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers, cx: &mut Context<Self>) {
@@ -352,14 +502,17 @@ impl Client {
     }
 
     fn shortcut_tabs(&self) -> Vec<usize> {
+        if self.sidebar == Sidebar::Hidden {
+            return (0..self.sessions.len().min(9)).collect();
+        }
         let viewport = self.tab_scroll.bounds();
         let tabs: Vec<_> = (0..self.sessions.len())
             .map_while(|index| self.tab_scroll.bounds_for_item(index))
-            .map(|tab| (f32::from(tab.left()), f32::from(tab.right())))
+            .map(|tab| (f32::from(tab.top()), f32::from(tab.bottom())))
             .collect();
         fully_visible(
-            (f32::from(viewport.left()), f32::from(viewport.right())),
-            f32::from(self.tab_scroll.offset().x),
+            (f32::from(viewport.top()), f32::from(viewport.bottom())),
+            f32::from(self.tab_scroll.offset().y),
             &tabs,
         )
     }
@@ -372,8 +525,11 @@ impl Client {
         }
     }
 
-    fn strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
         let shortcuts = self.shortcut_tabs();
+        let drag = self.dragging.filter(|_| cx.has_active_drag());
+        let target = drag.and_then(|drag| Some((drag.generation, self.drag_target(drag)?)));
         let tabs: Vec<_> = self
             .sessions
             .iter()
@@ -383,205 +539,146 @@ impl Client {
                     .shortcut_hints
                     .then(|| shortcut_for(&shortcuts, index))
                     .flatten();
-                self.tab(index, session, hint, cx)
+                self.tab(&theme, index, session, hint, target, window, cx)
             })
             .collect();
         div()
             .flex()
+            .flex_col()
             .flex_none()
-            .items_center()
-            .gap(px(2.0))
-            .w_full()
-            .h(STRIP_HEIGHT)
-            // The window draws a 1px highlight over the strip's top row.
-            .pt(px(1.0))
-            .pr(px(6.0))
-            .bg(ui::bar_background())
-            .border_b_1()
-            .border_color(ui::hairline())
-            .text_size(ui::TEXT_SIZE)
-            .text_color(ui::text())
-            .on_drop(cx.listener(|this, tab: &DraggedTab, _, cx| {
-                this.move_session(tab.number, usize::MAX, cx)
-            }))
-            .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
+            .w(SIDEBAR_WIDTH)
+            .h_full()
+            .bg(theme.well)
+            .border_r_1()
+            .border_color(theme.hairline)
+            .text_size(TEXT_BODY)
+            .text_color(theme.text)
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(2.0))
+                    .h(super::BAR_HEIGHT)
+                    .pr(px(8.0))
+                    .child(drag_area().flex_1())
+                    .child(Tooltip::new(
+                        "new-session-tip",
+                        "New tab",
+                        control(&theme, "new-session")
+                            .size(CONTROL_SM)
+                            .justify_center()
+                            .role(Role::Button)
+                            .aria_label("New tab")
+                            .child(icon(Icon::Plus, theme.text_secondary))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if let Err(error) = this.open_session(None, window, cx) {
+                                    tracing::error!(%error, "couldn't open a session");
+                                }
+                            })),
+                    ))
+                    .child(self.grid_toggle(&theme, cx)),
+            )
             .child(
                 div()
                     .id("tabs")
                     .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .min_w_0()
-                    .overflow_x_scroll()
+                    .flex_col()
+                    .gap(TAB_GAP)
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .overflow_y_scroll()
                     .track_scroll(&self.tab_scroll)
+                    .on_drag_move(
+                        cx.listener(|this, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                            this.drag_tab(event.event.position.y, cx)
+                        }),
+                    )
                     .children(tabs),
             )
-            .child(
-                control("new-session")
-                    .w(ui::ROW_HEIGHT)
-                    .justify_center()
-                    .role(Role::Button)
-                    .aria_label("New session")
-                    .child(ui::glyph(Glyph::Plus, ui::secondary_text()))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Err(error) = this.open_session(None, window, cx) {
-                            tracing::error!(%error, "couldn't open a session");
-                        }
-                    })),
-            )
-            .child(self.tab_list_trigger(cx))
             .child(drag_area().flex_1())
-            .child(
-                control("accounts")
-                    .role(Role::Button)
-                    .text_color(ui::secondary_text())
-                    .child("Accounts")
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenAccounts), cx)),
-            )
-            .child(self.grid_toggle(cx))
-    }
-
-    fn tab_list_trigger(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let bounds = Rc::clone(&self.tab_list_trigger);
-        let open = self.tab_list.is_some();
-        div()
-            .on_children_prepainted(move |children, _, _| bounds.set(children[0]))
-            .child(
-                control("tab-list")
-                    .w(ui::ROW_HEIGHT)
-                    .justify_center()
-                    .role(Role::Button)
-                    .aria_label("All sessions")
-                    .aria_expanded(open)
-                    .when(open, |trigger| trigger.bg(ui::pressed()))
-                    .tooltip(ui::tooltip("All sessions"))
-                    .child(ui::glyph(Glyph::Down, ui::secondary_text()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            cx.stop_propagation();
-                            if this.tab_list.is_some() {
-                                this.close_tab_list(window, cx);
-                            } else {
-                                let focus = cx.focus_handle();
-                                window.focus(&focus, cx);
-                                this.tab_list = Some(focus);
-                                cx.notify();
-                            }
-                        }),
-                    ),
-            )
-    }
-
-    fn close_tab_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab_list.take().is_some() {
-            self.show(window, cx);
-        }
-    }
-
-    fn tab_list(&self, focus: &FocusHandle, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let anchor = self.tab_list_trigger.get();
-        let trigger = Rc::clone(&self.tab_list_trigger);
-        let shortcuts = self.shortcut_tabs();
-        let rows: Vec<_> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .map(|(index, session)| {
-                let active = index == self.active;
-                let label = session.label.clone();
-                ui::pressable(ui::row(("tab-list-item", session.number)))
-                    .role(Role::MenuItemRadio)
-                    .aria_label(label.clone())
-                    .aria_toggled(if active {
-                        Toggled::True
-                    } else {
-                        Toggled::False
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w_0()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(div().w(px(12.0)).flex_none().when(active, |check| {
-                                check.child(ui::glyph(Glyph::Check, ui::text()))
-                            }))
-                            .child(div().truncate().child(label)),
-                    )
-                    .children(shortcut_for(&shortcuts, index).map(|number| {
-                        div()
-                            .flex_none()
-                            .text_size(ui::SMALL_TEXT_SIZE)
-                            .text_color(ui::tertiary_text())
-                            .child(format!("⌘{number}"))
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.tab_list = None;
-                        this.select(index, window, cx)
-                    }))
-            })
-            .collect();
-        deferred(
-            anchored()
-                .position(point(anchor.left(), anchor.bottom() + px(6.0)))
-                .snap_to_window_with_margin(px(8.0))
-                .child(
-                    ui::panel("tab-list-panel", px(220.0))
-                        .role(Role::Menu)
-                        .aria_label("All sessions")
-                        .max_h(px(360.0))
-                        .overflow_y_scroll()
-                        .track_focus(focus)
-                        .children(rows)
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                cx.stop_propagation();
-                                this.close_tab_list(window, cx);
-                            }
-                        }))
-                        .on_mouse_down_out(cx.listener(
-                            move |this, event: &MouseDownEvent, window, cx| {
-                                if !trigger.get().contains(&event.position) {
-                                    this.close_tab_list(window, cx);
-                                }
-                            },
-                        )),
-                ),
-        )
-        .with_priority(1)
+            .children(self.lifted_tab(&theme, cx))
     }
 
     fn tab(
         &self,
+        theme: &Theme,
+        index: usize,
+        session: &Session,
+        hint: Option<usize>,
+        target: Option<(usize, (usize, usize))>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let active = index == self.active;
+        let label = session.label.clone();
+        let activity = session.view.read(cx).activity();
+        let row = div()
+            .id(("tab", session.number))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.0))
+            .h(ROW)
+            .pl(px(8.0))
+            .pr(px(4.0))
+            .rounded(theme.radius.item)
+            .role(Role::Tab)
+            .aria_label(label.clone())
+            .aria_selected(active)
+            .when(active, |tab| tab.font_weight(gpui::FontWeight::MEDIUM))
+            .child(status_dot(theme, activity))
+            .child(div().flex_1().truncate().child(label.clone()));
+        let Some((generation, (from, to))) = target else {
+            return self.resting_tab(row, theme, index, session, hint, cx);
+        };
+        if index == from {
+            return row.invisible().into_any_element();
+        }
+        let shift = if from < index && index <= to {
+            -1.0
+        } else if to <= index && index < from {
+            1.0
+        } else {
+            0.0
+        };
+        let offset = motion::travel(
+            ("tab-shift", generation * 1_000_000 + session.number),
+            shift * f32::from(ROW + TAB_GAP),
+            window,
+            cx,
+        );
+        row.relative()
+            .top(px(offset))
+            .map(|tab| {
+                if active {
+                    tab.bg(theme.selected).text_color(theme.text)
+                } else {
+                    tab.text_color(theme.text_secondary)
+                }
+            })
+            .into_any_element()
+    }
+
+    fn resting_tab(
+        &self,
+        row: Stateful<gpui::Div>,
+        theme: &Theme,
         index: usize,
         session: &Session,
         hint: Option<usize>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    ) -> gpui::AnyElement {
         let active = index == self.active;
-        let label = session.label.clone();
-        control(("tab", session.number))
-            .group("tab")
-            .role(Role::Tab)
-            .aria_label(label.clone())
-            .aria_selected(active)
-            .gap(px(6.0))
-            .pr(px(4.0))
-            .flex_shrink(1.0)
-            .min_w(px(112.0))
-            .max_w(px(180.0))
-            .text_color(if active {
-                ui::text()
-            } else {
-                ui::secondary_text()
+        row.group("tab")
+            .map(|tab| {
+                if active {
+                    tab.bg(theme.selected).text_color(theme.text)
+                } else {
+                    ui::pressable(theme, tab).text_color(theme.text_secondary)
+                }
             })
-            .when(active, |tab| {
-                tab.bg(ui::pressed()).font_weight(gpui::FontWeight::MEDIUM)
-            })
-            .child(div().flex_1().truncate().child(label.clone()))
-            .children(hint.map(shortcut_badge))
+            .children(hint.map(|number| shortcut_badge(theme, number)))
             .when(hint.is_none(), |tab| {
                 tab.child(
                     div()
@@ -598,11 +695,11 @@ impl Client {
                                 .invisible()
                                 .group_hover("tab", |close| close.visible())
                         })
-                        .hover(|close| close.bg(ui::hover()))
-                        .active(|close| close.bg(ui::pressed()))
+                        .hover(|close| close.bg(theme.fill_hover))
+                        .active(|close| close.bg(theme.fill_pressed))
                         .role(Role::Button)
-                        .aria_label("Close session")
-                        .child(ui::glyph(Glyph::Close, ui::secondary_text()))
+                        .aria_label("Close tab")
+                        .child(ui::glyph(Glyph::Close, theme.text_secondary))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
                             this.close_session(index, window, cx)
@@ -613,52 +710,103 @@ impl Client {
             .on_drag(
                 DraggedTab {
                     number: session.number,
-                    label,
-                    active,
                 },
-                |tab, _, _, cx| cx.new(|_| tab.clone()),
+                {
+                    let client = cx.weak_entity();
+                    move |tab, grabbed_at, _, cx| {
+                        let _ = client.update(cx, |client, cx| {
+                            let top = client
+                                .tab_scroll
+                                .bounds_for_item(index)
+                                .map_or(Pixels::ZERO, |row| {
+                                    row.top() + client.tab_scroll.offset().y
+                                });
+                            client.drags += 1;
+                            client.dragging = Some(TabDrag {
+                                number: tab.number,
+                                generation: client.drags,
+                                grab: grabbed_at.y,
+                                top,
+                            });
+                            cx.notify();
+                        });
+                        cx.new(|_| tab.clone())
+                    }
+                },
             )
-            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(ui::hover()))
-            .on_drop(cx.listener(move |this, tab: &DraggedTab, _, cx| {
-                this.move_session(tab.number, index, cx)
-            }))
+            .into_any_element()
     }
 
-    fn grid_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let on = self.layout == Layout::Grid;
-        control("grid")
-            .w(ui::ROW_HEIGHT)
+    fn sidebar_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let label = match self.sidebar {
+            Sidebar::Hidden => "Show sidebar",
+            Sidebar::Full => "Hide sidebar",
+        };
+        let toggle = control(theme, "sidebar-toggle")
+            .size(CONTROL_SM)
             .justify_center()
             .role(Role::Button)
-            .aria_label("Grid view")
-            .aria_toggled(if on { Toggled::True } else { Toggled::False })
-            .when(on, |toggle| toggle.bg(ui::pressed()))
-            .tooltip(ui::tooltip("Grid view"))
-            .child(ui::glyph(
-                Glyph::Grid,
-                if on { ui::text() } else { ui::secondary_text() },
+            .aria_label(label)
+            .child(sidebar_icon(
+                self.sidebar == Sidebar::Full,
+                theme.text_secondary,
             ))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let layout = if on { Layout::Tabs } else { Layout::Grid };
-                this.set_layout(layout, window, cx)
-            }))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
+        div()
+            .absolute()
+            .left(TRAFFIC_LIGHTS_WIDTH)
+            .top((super::BAR_HEIGHT - CONTROL_SM) / 2.0)
+            .occlude()
+            .child(Tooltip::new("sidebar-toggle-tip", label, toggle))
     }
 
-    fn tile(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn grid_toggle(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (label, glyph, next) = match self.layout {
+            Layout::Single => ("Grid view", Icon::LayoutGrid, Layout::Grid),
+            Layout::Grid => ("Single view", Icon::Square, Layout::Single),
+        };
+        let toggle = control(theme, "grid")
+            .size(CONTROL_SM)
+            .justify_center()
+            .role(Role::Button)
+            .aria_label(label)
+            .child(icon(glyph, theme.text_secondary))
+            .on_click(cx.listener(move |this, _, window, cx| this.set_layout(next, window, cx)));
+        Tooltip::new("grid-tip", label, toggle)
+    }
+
+    fn tile(
+        &self,
+        theme: &Theme,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let highlight = self.sessions.len() > 1 && index == self.active;
+        let (columns, rows) = grid_shape(self.sessions.len());
+        let (row, column) = (index / columns, index % columns);
         div()
             .id(("tile", self.sessions[index].number))
+            .relative()
             .flex()
             .size_full()
             .min_w_0()
             .min_h_0()
-            .border_1()
-            .border_color(if highlight {
-                ui::accent()
-            } else {
-                ui::bar_background()
-            })
+            .border_color(theme.base)
+            .when(column > 0, |tile| tile.border_l_1())
+            .when(column + 1 < columns, |tile| tile.border_r_1())
+            .when(row > 0, |tile| tile.border_t_1())
+            .when(row + 1 < rows, |tile| tile.border_b_1())
             .child(self.sessions[index].view.clone())
+            .when(highlight, |tile| {
+                tile.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_1()
+                        .border_color(theme.accent),
+                )
+            })
             .on_any_mouse_down(cx.listener(move |this, _, window, cx| {
                 if this.active != index {
                     this.select(index, window, cx);
@@ -667,6 +815,7 @@ impl Client {
     }
 
     fn grid(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
         let (columns, rows) = grid_shape(self.sessions.len());
         div()
             .flex()
@@ -690,15 +839,16 @@ impl Client {
                             .flex_basis(px(0.0))
                             .flex_grow(1.0);
                         if index < self.sessions.len() {
-                            cell.child(self.tile(index, cx))
+                            cell.child(self.tile(&theme, index, cx))
                         } else {
-                            cell.bg(ui::bar_background())
+                            cell.bg(theme.base)
                         }
                     }))
             }))
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
         div()
             .flex()
             .flex_col()
@@ -707,20 +857,20 @@ impl Client {
             .items_center()
             .justify_center()
             .gap(px(6.0))
-            .bg(ui::bar_background())
-            .text_size(ui::TEXT_SIZE)
-            .text_color(ui::secondary_text())
-            .child("No sessions are open.")
+            .bg(theme.base)
+            .text_size(TEXT_BODY)
+            .text_color(theme.text_secondary)
+            .child("No tabs are open.")
             .child(
-                control("open-session")
+                control(theme, "open-session")
                     .mt(px(8.0))
                     .px(px(12.0))
                     .border_1()
-                    .border_color(ui::hairline())
-                    .text_color(ui::text())
+                    .border_color(theme.hairline)
+                    .text_color(theme.text)
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .role(Role::Button)
-                    .child("New session")
+                    .child("New tab")
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Err(error) = this.open_session(None, window, cx) {
                             tracing::error!(%error, "couldn't open a session");
@@ -733,32 +883,15 @@ impl Client {
 #[derive(Clone)]
 struct DraggedTab {
     number: usize,
-    label: SharedString,
-    active: bool,
 }
 
 impl Render for DraggedTab {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .h(px(26.0))
-            .px(px(10.0))
-            .rounded(ui::CONTROL_RADIUS)
-            .bg(ui::panel_background())
-            .border_1()
-            .border_color(ui::hairline())
-            .text_size(ui::TEXT_SIZE)
-            .text_color(if self.active {
-                ui::text()
-            } else {
-                ui::secondary_text()
-            })
-            .child(self.label.clone())
+        gpui::Empty
     }
 }
 
-fn shortcut_badge(number: usize) -> impl IntoElement {
+fn shortcut_badge(theme: &Theme, number: usize) -> impl IntoElement {
     div()
         .flex()
         .flex_none()
@@ -766,14 +899,15 @@ fn shortcut_badge(number: usize) -> impl IntoElement {
         .h(px(18.0))
         .px(px(5.0))
         .rounded(px(4.0))
-        .bg(ui::hover())
-        .text_size(ui::SMALL_TEXT_SIZE)
-        .text_color(ui::secondary_text())
+        .bg(theme.fill_hover)
+        .text_size(TEXT_SMALL)
+        .text_color(theme.text_secondary)
         .child(format!("⌘{number}"))
 }
 
-fn control(id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
+fn control(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
     ui::pressable(
+        theme,
         div()
             .id(id)
             .flex()
@@ -781,8 +915,12 @@ fn control(id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
             .items_center()
             .h(px(26.0))
             .px(px(10.0))
-            .rounded(ui::CONTROL_RADIUS),
+            .rounded(theme.radius.control),
     )
+}
+
+fn bar_inset(sidebar_width: Pixels) -> Pixels {
+    (TRAFFIC_LIGHTS_WIDTH + CONTROL_SM - sidebar_width).max(BAR_PADDING)
 }
 
 pub(super) fn drag_area() -> gpui::Div {
@@ -798,11 +936,30 @@ pub(super) fn drag_area() -> gpui::Div {
 }
 
 impl Render for Client {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let inset = bar_inset(self.sidebar.width());
+        for session in &self.sessions {
+            if session.view.read(cx).bar_inset != inset {
+                session.view.update(cx, |view, _| view.bar_inset = inset);
+            }
+        }
+        let (bar_background, bar_border) = (cx.theme().base, cx.theme().border);
+        let game_bar = !self.sessions.is_empty();
         let body = if self.sessions.is_empty() {
             self.empty(cx).into_any_element()
         } else if self.layout == Layout::Grid {
-            self.grid(cx).into_any_element()
+            let bar = self.sessions[self.active]
+                .view
+                .update(cx, |view, cx| view.bar(cx));
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .w_full()
+                .min_h_0()
+                .child(bar)
+                .child(self.grid(cx))
+                .into_any_element()
         } else {
             div()
                 .flex()
@@ -813,9 +970,10 @@ impl Render for Client {
                 .into_any_element()
         };
         div()
+            .id("client")
+            .role(Role::Group)
             .track_focus(&self.focus)
             .flex()
-            .flex_col()
             .size_full()
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
                 if let Err(error) = this.open_session(None, window, cx) {
@@ -832,16 +990,42 @@ impl Render for Client {
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.modifiers_changed(event.modifiers, cx)
             }))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| this.drop_tab(cx)))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.cancel_drag(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {
                     this.select(index, window, cx)
                 }
             }))
-            .child(self.strip(cx))
-            .child(body)
-            .when_some(self.tab_list.clone(), |root, focus| {
-                root.child(self.tab_list(&focus, cx))
+            .when(self.sidebar == Sidebar::Full, |root| {
+                root.child(self.sidebar(window, cx))
             })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .when(self.sidebar == Sidebar::Hidden && !game_bar, |column| {
+                        column.child(
+                            drag_area()
+                                .flex_none()
+                                .w_full()
+                                .h(super::BAR_HEIGHT)
+                                .bg(bar_background)
+                                .border_b_1()
+                                .border_color(bar_border),
+                        )
+                    })
+                    .child(body),
+            )
+            .child(self.sidebar_toggle(cx))
     }
 }
 
@@ -867,14 +1051,23 @@ mod tests {
     #[test]
     fn shortcuts_number_only_the_tabs_fully_in_view() {
         let tabs: Vec<_> = (0..12)
-            .map(|index| (index as f32 * 100.0, index as f32 * 100.0 + 90.0))
+            .map(|index| (index as f32 * 30.0, index as f32 * 30.0 + 28.0))
             .collect();
-        assert_eq!(fully_visible((0.0, 450.0), 0.0, &tabs), [0, 1, 2, 3]);
-        assert_eq!(fully_visible((0.0, 450.0), -150.0, &tabs), [2, 3, 4, 5]);
+        assert_eq!(fully_visible((0.0, 130.0), 0.0, &tabs), [0, 1, 2, 3]);
+        assert_eq!(fully_visible((0.0, 130.0), -45.0, &tabs), [2, 3, 4]);
         assert_eq!(
-            fully_visible((0.0, 2000.0), 0.0, &tabs),
+            fully_visible((0.0, 1000.0), 0.0, &tabs),
             (0..9).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_dragged_tab_lands_after_every_row_whose_center_it_passed() {
+        let rows = [10.0, 40.0, 70.0, 100.0];
+        assert_eq!(drop_index(&rows, 1, -50.0), 0);
+        assert_eq!(drop_index(&rows, 1, 30.0), 1);
+        assert_eq!(drop_index(&rows, 1, 80.0), 2);
+        assert_eq!(drop_index(&rows, 1, 500.0), 3);
     }
 
     #[test]

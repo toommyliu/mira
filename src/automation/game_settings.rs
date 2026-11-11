@@ -109,6 +109,7 @@ pub(crate) struct FrameRate {
 
 impl FrameRate {
     pub(crate) const RANGE: (u32, u32) = (1, 60);
+    pub(crate) const DEFAULT: u32 = 24;
 }
 
 impl Default for Settings {

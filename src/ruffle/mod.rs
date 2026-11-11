@@ -69,6 +69,7 @@ pub(crate) enum Output {
     Loading(u8),
     Loaded,
     Location(Option<Location>),
+    Identity(Option<player::Identity>),
     SignIn(sign_in::Status),
 }
 
@@ -320,6 +321,7 @@ fn run(
         ),
     );
     let located = outputs.clone();
+    let identified = bridge.clone();
     spawn_local(
         &inbox,
         &tasks,
@@ -327,7 +329,15 @@ fn run(
             bridge.clone(),
             bridge.subscribe(world::moves),
             move |location| {
+                let identity = match location {
+                    Some(_) => player::identity(&identified).unwrap_or_else(|error| {
+                        tracing::debug!(%error, "couldn't read the player's name and guild");
+                        None
+                    }),
+                    None => None,
+                };
                 let _ = located.try_send(Output::Location(location));
+                let _ = located.try_send(Output::Identity(identity));
             },
         ),
     );

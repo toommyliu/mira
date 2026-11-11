@@ -1,6 +1,6 @@
 use gpui::{Hsla, Styled as _, Svg, px, svg};
 
-use crate::assets::HEAVY;
+use crate::assets::{HEAVY, SIDEBAR, SIDEBAR_OPEN};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
@@ -12,8 +12,12 @@ pub enum Icon {
     ChevronDown,
     ChevronRight,
     ChevronUp,
+    Clock,
+    LayoutGrid,
     Minus,
     Plus,
+    RotateCcw,
+    Square,
     X,
 }
 
@@ -28,8 +32,12 @@ impl Icon {
             Icon::ChevronDown => "icons/chevron-down.svg",
             Icon::ChevronRight => "icons/chevron-right.svg",
             Icon::ChevronUp => "icons/chevron-up.svg",
+            Icon::Clock => "icons/clock.svg",
+            Icon::LayoutGrid => "icons/layout-grid.svg",
             Icon::Minus => "icons/minus.svg",
             Icon::Plus => "icons/plus.svg",
+            Icon::RotateCcw => "icons/rotate-ccw.svg",
+            Icon::Square => "icons/square.svg",
             Icon::X => "icons/x.svg",
         }
     }
@@ -50,6 +58,15 @@ pub fn icon(icon: Icon, color: Hsla) -> Svg {
         .path(icon.path())
         .flex_none()
         .size(px(14.0))
+        .text_color(color)
+}
+
+pub fn sidebar_icon(open: bool, color: Hsla) -> Svg {
+    svg()
+        .path(if open { SIDEBAR_OPEN } else { SIDEBAR })
+        .flex_none()
+        .w(px(16.0))
+        .h(px(13.0))
         .text_color(color)
 }
 

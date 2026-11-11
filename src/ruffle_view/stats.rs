@@ -2,13 +2,15 @@ use gpui::{
     Anchor, App, Bounds, DispatchPhase, Entity, Hitbox, HitboxBehavior, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     PathBuilder, Pixels, Point, Size, StatefulInteractiveElement as _, Styled as _, Window,
-    anchored, canvas, div, fill, point, px, rgb, rgba, size,
+    anchored, canvas, div, fill, point, px, size,
+};
+use mira_ui::{
+    Theme,
+    theme::{SYSTEM_MONO, TEXT_CAPTION},
 };
 
 use crate::ruffle::stats::{GRAPH_SAMPLES, Report, Timing};
 
-const LOGIC_COLOR: u32 = 0x7bb7ff;
-const RENDER_COLOR: u32 = 0xa9e9af;
 const GRAPH_WIDTH: f32 = 208.0;
 const GRAPH_HEIGHT: f32 = 40.0;
 const MARGIN: Pixels = px(8.0);
@@ -44,6 +46,9 @@ pub(super) fn overlay(
         .frames()
         .map(|frame| frame.logic_ms.max(frame.render_ms))
         .fold(4.0, f64::max);
+    let theme = Theme::dark();
+    let (logic_color, render_color) = (theme.accent, theme.text);
+    let (column_line, row_line, axis) = (theme.border_strong, theme.border, theme.text_secondary);
     let panel = div()
         .id("player-stats")
         .role(gpui::Role::Group)
@@ -54,17 +59,17 @@ pub(super) fn overlay(
         .cursor_move()
         .p_2()
         .w(px(GRAPH_WIDTH + 16.0))
-        .bg(rgba(0x000000bf))
-        .text_color(rgb(0xffffff))
-        .text_size(px(11.0))
+        .bg(theme.overlay.opacity(0.75))
+        .text_color(theme.text)
+        .text_size(TEXT_CAPTION)
         .line_height(gpui::relative(1.3))
-        .font_family("Menlo")
+        .font_family(SYSTEM_MONO)
         .flex()
         .flex_col()
         .child(div().flex().justify_between().child("Metal").child(format!("[{}×{}]", report.width, report.height)))
         .child(fps)
-        .child(div().text_color(rgb(LOGIC_COLOR)).child(logic))
-        .child(div().text_color(rgb(RENDER_COLOR)).child(render))
+        .child(div().text_color(logic_color).child(logic))
+        .child(div().text_color(render_color).child(render))
         .child(
             div().relative().mt_1().w(px(GRAPH_WIDTH)).h(px(GRAPH_HEIGHT))
                 .child(canvas(
@@ -73,17 +78,17 @@ pub(super) fn overlay(
                         for x in 0..=8 {
                             window.paint_quad(fill(
                                 Bounds::new(bounds.origin + point(px(x as f32 * (GRAPH_WIDTH - 1.0) / 8.0), px(0.0)), size(px(1.0), px(GRAPH_HEIGHT))),
-                                rgba(0xffffff40),
+                                column_line,
                             ));
                         }
                         for y in [0.0, GRAPH_HEIGHT / 2.0, GRAPH_HEIGHT - 1.0] {
                             window.paint_quad(fill(
                                 Bounds::new(bounds.origin + point(px(0.0), px(y)), size(px(GRAPH_WIDTH), px(1.0))),
-                                rgba(0xffffff20),
+                                row_line,
                             ));
                         }
                         if report.frames().len() >= 2 {
-                            for (color, render) in [(LOGIC_COLOR, false), (RENDER_COLOR, true)] {
+                            for (color, render) in [(logic_color, false), (render_color, true)] {
                                 let mut path = PathBuilder::stroke(px(1.0));
                                 for (index, frame) in report.frames().enumerate() {
                                     let ms = if render { frame.render_ms } else { frame.logic_ms };
@@ -92,18 +97,18 @@ pub(super) fn overlay(
                                     let position = bounds.origin + point(px(x), px(y));
                                     if index == 0 { path.move_to(position); } else { path.line_to(position); }
                                 }
-                                if let Ok(path) = path.build() { window.paint_path(path, rgb(color)); }
+                                if let Ok(path) = path.build() { window.paint_path(path, color); }
                             }
                         }
                         for rect in [
                             Bounds::new(bounds.origin, size(px(1.0), px(GRAPH_HEIGHT))),
                             Bounds::new(bounds.origin + point(px(0.0), px(GRAPH_HEIGHT - 1.0)), size(px(GRAPH_WIDTH), px(1.0))),
                         ] {
-                            window.paint_quad(fill(rect, rgba(0xffffffcc)));
+                            window.paint_quad(fill(rect, axis));
                         }
                     },
                 ).size_full())
-                .child(div().absolute().top_0().left_1().text_size(px(9.0)).text_color(rgb(0xb8b8b8)).child(format!("{scale_ms:.0} ms"))),
+                .child(div().absolute().top_0().left_1().text_size(px(9.0)).text_color(theme.text_secondary).child(format!("{scale_ms:.0} ms"))),
         )
         .child(canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
