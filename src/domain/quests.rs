@@ -202,9 +202,11 @@ impl Packet for AcceptQuestPacket {
 #[derive(Deserialize)]
 pub(crate) struct CompleteQuestPacket {
     #[serde(rename = "QuestID", default, deserialize_with = "wire::integer")]
-    quest_id: Option<i32>,
+    pub(crate) quest_id: Option<i32>,
+    #[serde(rename = "sName", default, deserialize_with = "wire::text")]
+    pub(crate) name: String,
     #[serde(rename = "bSuccess", default, deserialize_with = "wire::flag")]
-    success: bool,
+    pub(crate) success: bool,
 }
 
 impl Packet for CompleteQuestPacket {

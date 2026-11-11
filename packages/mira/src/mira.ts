@@ -934,7 +934,9 @@ export type GameEvent =
       readonly name: string;
       readonly quantity: number;
       readonly temp: boolean;
-    };
+    }
+  /** The server accepted a turn-in, whether from a script or the game's quest window. */
+  | { readonly type: "questCompleted"; readonly questId: number; readonly name: string };
 export type EventType = GameEvent["type"];
 export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
 /** `type` picks the event. Other fields must match exactly. */

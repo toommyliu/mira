@@ -11,6 +11,7 @@ use super::{
     players::{
         ExitAreaLine, FightPlayersPacket, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket,
     },
+    quests::CompleteQuestPacket,
     world::{EventPacket, RespawnMonLine},
 };
 use crate::bridge::{
@@ -36,6 +37,7 @@ pub(crate) enum Kind {
     AuraRemoved,
     Message,
     ItemAdded,
+    QuestCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -124,6 +126,10 @@ pub(crate) enum GameEvent {
         quantity: i32,
         temp: bool,
     },
+    QuestCompleted {
+        quest_id: i32,
+        name: String,
+    },
 }
 
 pub(crate) trait Me {
@@ -184,6 +190,11 @@ impl Kind {
                 ) || names(packet, UserMessagePacket::FORMAT, UserMessagePacket::CMD)
             }
             Kind::ItemAdded => names(packet, AddItemsPacket::FORMAT, AddItemsPacket::CMD),
+            Kind::QuestCompleted => names(
+                packet,
+                CompleteQuestPacket::FORMAT,
+                CompleteQuestPacket::CMD,
+            ),
         }
     }
 
@@ -393,6 +404,16 @@ impl Kind {
                             temp: item.temp,
                         })
                     }));
+                }
+            }
+            Kind::QuestCompleted => {
+                if let Some(CompleteQuestPacket {
+                    quest_id: Some(quest_id),
+                    name,
+                    success: true,
+                }) = decode::<CompleteQuestPacket>(packet)
+                {
+                    events.push(GameEvent::QuestCompleted { quest_id, name });
                 }
             }
             Kind::Zone => {
@@ -762,6 +783,20 @@ mod tests {
                 temp: true
             }]
         );
+    }
+
+    #[test]
+    fn a_quest_turn_in_reports_only_when_the_server_accepts_it() {
+        let done = |success: u8| json!({ "type": "json", "dataObj": { "cmd": "ccqr", "QuestID": 6552, "bSuccess": success, "sName": "Power UP!", "msg": "" } });
+        assert!(wanted(Kind::QuestCompleted, done(1)));
+        assert_eq!(
+            read(Kind::QuestCompleted, done(1)),
+            [GameEvent::QuestCompleted {
+                quest_id: 6552,
+                name: "Power UP!".into()
+            }]
+        );
+        assert_eq!(read(Kind::QuestCompleted, done(0)), []);
     }
 
     #[test]

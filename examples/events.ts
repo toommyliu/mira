@@ -28,6 +28,9 @@ export default function* () {
   yield* Events.on({ type: "itemAdded", temp: true }, (item) =>
     Effect.sync(() => console.log(`got ${item.quantity} ${item.name}`)),
   );
+  yield* Events.on({ type: "questCompleted" }, ({ questId, name }) =>
+    Effect.sync(() => console.log(`completed ${name} (${questId})`)),
+  );
   yield* Events.on({ type: "message" }, ({ text }) => Effect.sync(() => console.log(`says: ${text}`)));
   yield* Events.on({ type: "auraAdded", self: true }, ({ name, duration }) =>
     Effect.sync(() => console.log(`aura ${name} for ${duration ?? "?"}s`)),
