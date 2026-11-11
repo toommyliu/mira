@@ -63,6 +63,17 @@ fn is_visible(window: &NSWindow) -> bool {
         .contains(NSWindowOcclusionState::Visible)
 }
 
+// GPUI presents `displayLayer:` frames in the same CATransaction as our layer changes.
+pub(super) fn present_next_frame_with_players(window: &Window) {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    unsafe { handle.ns_view.cast::<NSView>().as_ref() }.setNeedsDisplay(true);
+}
+
 impl NativeView {
     pub(super) fn attach(window: &Window) -> Result<NativeView, Error> {
         let handle = HasWindowHandle::window_handle(window).map_err(|_| Error::NoAppKitView)?;

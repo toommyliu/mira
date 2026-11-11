@@ -423,6 +423,7 @@ impl Client {
 
     fn set_layout(&mut self, layout: Layout, window: &mut Window, cx: &mut Context<Self>) {
         self.layout = layout;
+        super::native::present_next_frame_with_players(window);
         self.show(window, cx);
     }
 
@@ -444,11 +445,12 @@ impl Client {
         cx.notify();
     }
 
-    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+    fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.sidebar = match self.sidebar {
             Sidebar::Hidden => Sidebar::Full,
             Sidebar::Full => Sidebar::Hidden,
         };
+        super::native::present_next_frame_with_players(window);
         cx.notify();
     }
 
@@ -865,7 +867,7 @@ impl Client {
                 self.sidebar == Sidebar::Full,
                 theme.text_secondary,
             ))
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
         div()
             .absolute()
             .left(sidebar_toggle_left(window))
@@ -1149,7 +1151,9 @@ impl Render for Client {
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.modifiers_changed(event.modifiers, cx)
             }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
+            )
             .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| this.drop_tab(cx)))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && this.cancel_drag(window, cx) {
