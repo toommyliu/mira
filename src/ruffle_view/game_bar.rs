@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use mira_ui::{
-    ActiveTheme as _, Theme, motion,
+    ActiveTheme as _, PointerCursor as _, Theme, motion,
     nav::{self, Axis, Step},
     primitives::{Icon, Scrollbar, Spinner, icon},
     theme::{CONTROL_SM, DISABLED_OPACITY, PANEL_INSET, ROW, TEXT_BODY, TEXT_SMALL},
@@ -1434,7 +1434,7 @@ fn registered_row(
                 .justify_center()
                 .size(px(20.0))
                 .rounded(theme.radius.control)
-                .cursor_pointer()
+                .pointer_cursor(theme)
                 .hover(|style| style.bg(theme.fill_hover))
                 .active(|style| style.bg(theme.fill_pressed))
                 .role(Role::Button)
@@ -1662,7 +1662,7 @@ fn travel_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) 
             Column::Pad => "pad",
         };
         choice(theme, (id, spot.row), label, selected)
-            .cursor_pointer()
+            .pointer_cursor(theme)
             .when(view.bar.jump == Some(spot), |row| row.bg(theme.fill_hover))
             .active(move |style| style.bg(pressed))
             .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {

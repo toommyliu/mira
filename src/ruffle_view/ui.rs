@@ -4,7 +4,7 @@ use gpui::{
     point, prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
-    Theme,
+    PointerCursor as _, Theme,
     theme::{PANEL_INSET, ROW, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL},
 };
 
@@ -42,7 +42,7 @@ pub(super) fn row(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<Div
 
 pub(super) fn pressable(theme: &Theme, row: Stateful<Div>) -> Stateful<Div> {
     let (hover, pressed) = (theme.fill_hover, theme.fill_pressed);
-    row.cursor_pointer()
+    row.pointer_cursor(theme)
         .hover(move |style| style.bg(hover))
         .active(move |style| style.bg(pressed))
 }

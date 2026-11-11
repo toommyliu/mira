@@ -2,7 +2,6 @@
 compile_error!("Mira supports macOS only.");
 
 mod accounts;
-mod appearance;
 mod army;
 mod automation;
 mod bridge;
@@ -12,6 +11,7 @@ mod net;
 mod ruffle;
 mod ruffle_view;
 mod scripting;
+mod settings;
 
 use gpui::{
     App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance,
@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
             ruffle_view::bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
-            appearance::init(cx, set_menus);
+            settings::init(data.join("settings.json"), set_menus, cx);
             set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
             let accounts = data.join("accounts.json");
             let manager_device = device.clone();
             let opened = cx.open_window(options, |window, cx| {
-                appearance::follow_system(window);
+                settings::follow_system(window);
                 let view =
                     ruffle_view::Client::new(data, accounts.clone(), device, armies, window, cx)
                         .expect("create the AQW player view");
@@ -104,15 +104,22 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn set_menus(cx: &mut App) {
-    let appearance = appearance::menu(cx);
-    cx.set_menus(vec![Menu {
-        name: "Mira".into(),
-        disabled: false,
-        items: vec![
-            MenuItem::action("Accounts", ruffle_view::OpenAccounts),
-            appearance,
-            MenuItem::separator(),
-            MenuItem::action("Quit Mira", Quit),
-        ],
-    }]);
+    let appearance = settings::appearance_menu(cx);
+    cx.set_menus(vec![
+        Menu {
+            name: "Mira".into(),
+            disabled: false,
+            items: vec![
+                MenuItem::action("Settings…", settings::OpenSettings),
+                MenuItem::action("Accounts", ruffle_view::OpenAccounts),
+                MenuItem::separator(),
+                MenuItem::action("Quit Mira", Quit),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            disabled: false,
+            items: vec![appearance],
+        },
+    ]);
 }

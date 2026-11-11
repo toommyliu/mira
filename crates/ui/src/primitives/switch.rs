@@ -22,6 +22,7 @@ pub struct Switch {
     on: bool,
     label: SharedString,
     description: Option<SharedString>,
+    show_label: bool,
     disabled: bool,
     on_toggle: Option<ToggleHandler>,
 }
@@ -33,6 +34,7 @@ impl Switch {
             on,
             label: label.into(),
             description: None,
+            show_label: true,
             disabled: false,
             on_toggle: None,
         }
@@ -40,6 +42,11 @@ impl Switch {
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn hide_label(mut self) -> Self {
+        self.show_label = false;
         self
     }
 
@@ -114,7 +121,9 @@ impl RenderOnce for Switch {
                             .shadow(theme.raised()),
                     ),
             )
-            .child(caption(self.label, self.description, cx))
+            .when(self.show_label, |row| {
+                row.child(caption(self.label, self.description, cx))
+            })
             .when_some(
                 self.on_toggle.filter(|_| !self.disabled),
                 |row, on_toggle| {

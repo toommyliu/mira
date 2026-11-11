@@ -17,7 +17,7 @@ use super::{
     ui::{self, Glyph},
 };
 use mira_ui::{
-    ActiveTheme as _, Theme, Tone,
+    ActiveTheme as _, PointerCursor as _, Theme, Tone,
     components::format_keystroke,
     motion,
     primitives::{HoverCard, Icon, Tooltip, attach_card, icon, sidebar_icon},
@@ -804,7 +804,7 @@ impl Client {
                         .justify_center()
                         .size(px(18.0))
                         .rounded(px(4.0))
-                        .cursor_pointer()
+                        .pointer_cursor(theme)
                         .when(!active, |close| {
                             close
                                 .invisible()
@@ -1084,7 +1084,7 @@ fn bar_inset(window: &Window, sidebar_width: Pixels) -> Pixels {
     (sidebar_toggle_left(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
 }
 
-pub(super) fn drag_area() -> gpui::Div {
+pub(crate) fn drag_area() -> gpui::Div {
     div()
         .h_full()
         .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, _| {
