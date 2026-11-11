@@ -850,9 +850,7 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             view,
             BarMenu::Script,
             "Script",
-            view.script
-                .loaded()
-                .map(|_| Detail::Text(view.script.label())),
+            None,
             None,
             cx,
             true,

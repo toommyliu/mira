@@ -48,24 +48,6 @@ impl Script {
         self.0.as_ref().map(|loaded| &loaded.name)
     }
 
-    pub(super) fn label(&self) -> SharedString {
-        let Some(Loaded { name, phase, .. }) = &self.0 else {
-            return "None".into();
-        };
-        match phase {
-            Phase::Ready
-            | Phase::Running {
-                stopping: false, ..
-            } => name.clone(),
-            Phase::Running { stopping: true, .. } => "Stopping".into(),
-            Phase::Finished(outcome) => match outcome {
-                Outcome::Completed => "Finished".into(),
-                Outcome::Failed { .. } => "Failed".into(),
-                Outcome::Stopped | Outcome::Killed(_) => "Stopped".into(),
-            },
-        }
-    }
-
     pub(super) fn failure(&self) -> Option<String> {
         match &self.0.as_ref()?.phase {
             Phase::Finished(Outcome::Failed { message, .. }) => Some(message.clone()),
