@@ -379,6 +379,12 @@ impl BarState {
     pub(super) fn identified(&mut self, identity: Option<Identity>) {
         self.identity = identity;
     }
+
+    pub(super) fn character(&self) -> Option<&str> {
+        self.identity
+            .as_ref()
+            .map(|identity| identity.name.as_str())
+    }
 }
 
 impl RuffleView {

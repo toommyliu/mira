@@ -36,7 +36,7 @@ use mira_ui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
-pub(crate) use account::{Changed, Details, Glance, State, Summary};
+pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, bind_keys};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use ui::BAR_HEIGHT;
@@ -68,6 +68,7 @@ pub struct RuffleView {
     bar_inset: Pixels,
     script: script::Script,
     account: Option<account::Link>,
+    status: Option<crate::automation::sign_in::Status>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -197,8 +198,16 @@ impl RuffleView {
                         Output::Identity(identity) => {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
+                                    let unlinked = this.account.is_none();
+                                    if unlinked && let Some(identity) = &identity {
+                                        cx.emit(Identified(identity.name.clone()));
+                                    }
                                     this.bar.identified(identity);
-                                    cx.notify();
+                                    if unlinked {
+                                        this.changed(cx);
+                                    } else {
+                                        cx.notify();
+                                    }
                                 })
                                 .is_err()
                             {
@@ -316,6 +325,7 @@ impl RuffleView {
                 bar_inset: Pixels::ZERO,
                 script: script::Script::default(),
                 account: None,
+                status: None,
                 _subscriptions: subscriptions,
             }
         }))

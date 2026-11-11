@@ -59,6 +59,7 @@ pub(crate) enum Msg {
         credentials: Credentials,
         server: Option<String>,
     },
+    WatchSignIn,
     Wake,
     Stop,
 }
@@ -176,6 +177,10 @@ impl Runtime {
             credentials,
             server,
         });
+    }
+
+    pub(crate) fn watch_sign_in(&self) {
+        self.inbox.post(Msg::WatchSignIn);
     }
 }
 
@@ -471,6 +476,33 @@ fn run(
                                 let _ = statuses.try_send(Output::SignIn(status));
                             },
                         )
+                        .await
+                    })
+                }
+                Some(Msg::WatchSignIn) => {
+                    let statuses = outputs.clone();
+                    let bridge = commands_bridge.clone();
+                    let loaded = bridge.subscribe(|event| matches!(event, Event::Loaded));
+                    let connections = bridge.subscribe(auto_relogin::wants);
+                    let identified = bridge.clone();
+                    spawn_local(&inbox, &tasks, async move {
+                        while !bridge.loaded() {
+                            let _ = loaded.next().await;
+                        }
+                        sign_in::watch(bridge, connections, move |status| {
+                            if matches!(status, sign_in::Status::Online(_)) {
+                                match player::identity(&identified) {
+                                    Ok(identity) => {
+                                        let _ = statuses.try_send(Output::Identity(identity));
+                                    }
+                                    Err(error) => tracing::debug!(
+                                        %error,
+                                        "couldn't read the player's name and guild"
+                                    ),
+                                }
+                            }
+                            let _ = statuses.try_send(Output::SignIn(status));
+                        })
                         .await
                     })
                 }

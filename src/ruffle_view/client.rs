@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use super::{
-    Changed, Details, Glance, RuffleView, Summary,
+    Changed, Details, Glance, Identified, RuffleView, Summary,
     manager::OpenAccounts,
     script::CloseTab,
     ui::{self, Glyph},
@@ -25,7 +25,7 @@ use mira_ui::{
 };
 
 use crate::{
-    accounts::{Account, AccountId},
+    accounts::{Account, AccountId, Accounts},
     army::Armies,
     ruffle::{Inbox, Msg, extras},
 };
@@ -103,6 +103,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 
 pub struct Client {
     data: PathBuf,
+    accounts: PathBuf,
     device: reqwest::header::HeaderValue,
     armies: Armies,
     extras: Rc<extras::Store>,
@@ -122,12 +123,22 @@ pub struct Client {
 
 struct Session {
     number: usize,
-    label: SharedString,
+    label: Option<SharedString>,
     account: Option<AccountId>,
     view: Entity<RuffleView>,
     player: Inbox,
     _changes: Subscription,
+    _identified: Subscription,
     _close: Subscription,
+}
+
+impl Session {
+    fn title(&self, cx: &App) -> SharedString {
+        self.label
+            .clone()
+            .or_else(|| Some(self.view.read(cx).character()?.to_owned().into()))
+            .unwrap_or_else(|| "New tab".into())
+    }
 }
 
 fn tab_card(title: SharedString, details: Details) -> Option<HoverCard> {
@@ -184,6 +195,7 @@ fn grid_shape(count: usize) -> (usize, usize) {
 impl Client {
     pub(crate) fn new(
         data: PathBuf,
+        accounts: PathBuf,
         device: reqwest::header::HeaderValue,
         armies: Armies,
         window: &mut Window,
@@ -192,6 +204,7 @@ impl Client {
         let client = cx.new(|cx| Client {
             extras: Rc::new(extras::Store::open(data.join("as3.json"))),
             data,
+            accounts,
             device,
             armies,
             sessions: Vec::new(),
@@ -244,14 +257,20 @@ impl Client {
             view.layout(player, window)
         });
         let player = view.read(cx).session.inbox();
+        if account.is_none() {
+            view.read(cx).session.watch_sign_in();
+        }
         self.numbered += 1;
         self.sessions.push(Session {
             number: self.numbered,
-            label: account.map_or_else(|| "New tab".into(), |account| account.name.clone().into()),
+            label: account.map(|account| account.name.clone().into()),
             account: account.map(Account::id),
             view: view.clone(),
             player,
             _changes: cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()),
+            _identified: cx.subscribe(&view, |this, view, Identified(name), cx| {
+                this.link(&view, name, cx)
+            }),
             _close: cx.subscribe_in(&view, window, |this, view, _: &CloseTab, window, cx| {
                 if let Some(index) = this.sessions.iter().position(|s| &s.view == view) {
                     this.close_session(index, window, cx);
@@ -261,6 +280,29 @@ impl Client {
         self.active = self.sessions.len() - 1;
         self.show(window, cx);
         Ok(view)
+    }
+
+    fn link(&mut self, view: &Entity<RuffleView>, username: &str, cx: &mut Context<Self>) {
+        let id = AccountId::of(username);
+        if self.session_of(&id).is_some() {
+            return;
+        }
+        let Some(session) = self.sessions.iter_mut().find(|s| &s.view == view) else {
+            return;
+        };
+        let accounts = match Accounts::open(self.accounts.clone()) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                tracing::warn!(%error, "couldn't match the player to an account");
+                return;
+            }
+        };
+        let Some(account) = accounts.get(&id) else {
+            return;
+        };
+        session.label = Some(account.name.clone().into());
+        session.account = Some(id);
+        view.update(cx, |view, cx| view.adopt(account, cx));
     }
 
     fn session_of(&self, account: &AccountId) -> Option<usize> {
@@ -503,7 +545,7 @@ impl Client {
                     .text_color(theme.text)
                     .child(tab_face(
                         theme,
-                        &session.label,
+                        &session.title(cx),
                         session.view.read(cx).glance(),
                         index == self.active,
                         None,
@@ -664,6 +706,7 @@ impl Client {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let active = index == self.active;
+        let title = session.title(cx);
         let glance = session.view.read(cx).glance();
         let description = glance.as_ref().map(|glance| glance.label.clone());
         let row = div()
@@ -677,19 +720,19 @@ impl Client {
             .pb(TAB_BOTTOM)
             .rounded(theme.radius.item)
             .role(Role::Tab)
-            .aria_label(session.label.clone())
+            .aria_label(title.clone())
             .when_some(description, |tab, description: SharedString| {
                 tab.aria_description(description)
             })
             .aria_selected(active)
             .child(tab_face(
                 theme,
-                &session.label,
+                &title,
                 glance,
                 active,
                 hint.filter(|_| target.is_none()),
             ));
-        let row = match tab_card(session.label.clone(), session.view.read(cx).details()) {
+        let row = match tab_card(title, session.view.read(cx).details()) {
             Some(card) => attach_card(row, ("tab-card", session.number), card, window, cx),
             None => row,
         };

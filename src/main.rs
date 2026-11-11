@@ -69,8 +69,9 @@ fn main() -> anyhow::Result<()> {
             let manager_device = device.clone();
             let opened = cx.open_window(options, |window, cx| {
                 appearance::follow_system(window);
-                let view = ruffle_view::Client::new(data, device, armies, window, cx)
-                    .expect("create the AQW player view");
+                let view =
+                    ruffle_view::Client::new(data, accounts.clone(), device, armies, window, cx)
+                        .expect("create the AQW player view");
                 window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
                 view
             });

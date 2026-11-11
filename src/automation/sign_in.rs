@@ -25,13 +25,7 @@ pub(crate) async fn run(
     settings: auto_relogin::Settings,
     report: impl Fn(Status),
 ) {
-    let last = RefCell::new(None);
-    let report = |status: Status| {
-        if last.borrow().as_ref() != Some(&status) {
-            last.replace(Some(status.clone()));
-            report(status);
-        }
-    };
+    let report = on_change(report);
     let settings = auto_relogin::Settings {
         delay_seconds: 0,
         ..settings
@@ -54,14 +48,35 @@ pub(crate) async fn run(
         Ok(()) => report(Status::ChooseServer),
         Err(error) => return report(Status::Failed(error.to_string())),
     }
+    follow(&loader, &connections, &report).await
+}
+
+pub(crate) async fn watch(loader: impl Loader, connections: Subscription, report: impl Fn(Status)) {
+    let report = on_change(report);
+    if ready(&loader).await {
+        report(online(&loader));
+    } else {
+        report(Status::Offline);
+    }
+    follow(&loader, &connections, &report).await
+}
+
+fn on_change(report: impl Fn(Status)) -> impl Fn(Status) {
+    let last = RefCell::new(None);
+    move |status: Status| {
+        if last.borrow().as_ref() != Some(&status) {
+            last.replace(Some(status.clone()));
+            report(status);
+        }
+    }
+}
+
+async fn follow(loader: &impl Loader, connections: &Subscription, report: &impl Fn(Status)) {
     loop {
         match connections.next().await {
             Ok(Event::Connection { status }) if status == "OnConnection" => {
-                while bridge::auth::is_logged_in(&loader).unwrap_or(false) {
-                    if auth::player_ready(&loader).await.is_ok() {
-                        report(online(&loader));
-                        break;
-                    }
+                if ready(loader).await {
+                    report(online(loader));
                 }
             }
             Ok(Event::Connection { status }) if status == "OnConnectionLost" => {
@@ -69,12 +84,21 @@ pub(crate) async fn run(
             }
             Ok(_) => {}
             Err(Lagged) => {
-                if !bridge::auth::is_logged_in(&loader).unwrap_or(false) {
+                if !bridge::auth::is_logged_in(loader).unwrap_or(false) {
                     report(Status::Offline);
                 }
             }
         }
     }
+}
+
+async fn ready(loader: &impl Loader) -> bool {
+    while bridge::auth::is_logged_in(loader).unwrap_or(false) {
+        if auth::player_ready(loader).await.is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 fn online(loader: &impl Loader) -> Status {
@@ -109,6 +133,20 @@ mod tests {
             },
             server.map(str::to_owned),
             auto_relogin::Settings::default(),
+            move |status| seen.borrow_mut().push(status),
+        ));
+        Running { world, reports }
+    }
+
+    fn watching(connected: bool, dialog: Option<&str>) -> Running {
+        let (world, loader) = World::new();
+        world.game.borrow_mut().connected = connected;
+        world.game.borrow_mut().dialog = dialog.map(str::to_owned);
+        let reports = Rc::new(RefCell::new(Vec::new()));
+        let seen = reports.clone();
+        tokio::task::spawn_local(watch(
+            loader,
+            world.events.subscribe(auto_relogin::wants),
             move |status| seen.borrow_mut().push(status),
         ));
         Running { world, reports }
@@ -205,6 +243,45 @@ mod tests {
                 assert_eq!(
                     running.reports.borrow().last(),
                     Some(&Status::Online(Some("Twilly".into())))
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_player_who_logs_in_by_hand_is_followed_without_logging_in_again() {
+        LocalSet::new()
+            .run_until(async {
+                let running = watching(false, None);
+                settle().await;
+                running.world.connect();
+                settle().await;
+                running.world.lose_connection();
+                settle().await;
+                assert!(running.world.game.borrow().logins.is_empty());
+                assert_eq!(
+                    *running.reports.borrow(),
+                    [
+                        Status::Offline,
+                        Status::Online(Some("Twilly".into())),
+                        Status::Offline,
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_player_watched_mid_room_load_comes_online_once_it_loads() {
+        LocalSet::new()
+            .run_until(async {
+                let running = watching(true, Some("Loading"));
+                settle().await;
+                running.world.game.borrow_mut().dialog = None;
+                settle().await;
+                assert_eq!(
+                    *running.reports.borrow(),
+                    [Status::Online(Some("Twilly".into()))]
                 );
             })
             .await;

@@ -10,9 +10,12 @@ pub(crate) struct Changed;
 
 impl EventEmitter<Changed> for RuffleView {}
 
+pub(crate) struct Identified(pub(crate) String);
+
+impl EventEmitter<Identified> for RuffleView {}
+
 pub(super) struct Link {
     username: String,
-    status: Option<Status>,
     queued: Option<PathBuf>,
 }
 
@@ -61,18 +64,24 @@ impl RuffleView {
     ) {
         self.account = Some(Link {
             username: account.username.clone(),
-            status: None,
             queued: script,
         });
+        self.status = None;
         self.session
             .sign_in(account.credentials(), account.server.clone());
         self.changed(cx);
     }
 
+    pub(super) fn adopt(&mut self, account: &Account, cx: &mut Context<Self>) {
+        self.account = Some(Link {
+            username: account.username.clone(),
+            queued: None,
+        });
+        self.changed(cx);
+    }
+
     pub(super) fn signed_in(&mut self, status: Status, cx: &mut Context<Self>) {
-        if let Some(link) = &mut self.account {
-            link.status = Some(status);
-        }
+        self.status = Some(status);
         self.run_queued(cx);
         self.changed(cx);
     }
@@ -101,7 +110,7 @@ impl RuffleView {
         let Some(link) = &mut self.account else {
             return;
         };
-        if !matches!(link.status, Some(Status::Online(_))) || self.script.running() {
+        if !matches!(self.status, Some(Status::Online(_))) || self.script.running() {
             return;
         }
         if let Some(script) = link.queued.take() {
@@ -115,7 +124,7 @@ impl RuffleView {
     }
 
     pub(crate) fn summary(&self) -> Summary {
-        let status = self.account.as_ref().and_then(|link| link.status.as_ref());
+        let status = self.status.as_ref();
         let login: SharedString = match (&self.error, status, self.loading) {
             (Some(error), _, _) => format!("Couldn't start: {error}").into(),
             (None, None, Loading::Percent(percent)) => format!("Loading {percent}%").into(),
@@ -149,7 +158,7 @@ impl RuffleView {
         if self.error.is_some() {
             return Some(Glance::new("Couldn't start", Tone::Danger));
         }
-        let online = match link.and_then(|link| link.status.as_ref()) {
+        let online = match self.status.as_ref() {
             Some(status @ Status::Online(_)) => Some(login_label(status)),
             Some(Status::Failed(_)) => return Some(Glance::new("Login failed", Tone::Danger)),
             Some(Status::LoggingIn { attempt: 1, .. }) => {
@@ -168,6 +177,9 @@ impl RuffleView {
                 ));
             }
             Some(Status::ChooseServer) => return Some(Glance::new("Choose server", Tone::Warning)),
+            Some(Status::Offline) if link.is_none() => {
+                return Some(Glance::new("Not logged in", Tone::Neutral));
+            }
             Some(Status::Offline) => return Some(Glance::new("Offline", Tone::Warning)),
             None => match (link, self.loading) {
                 (None, Loading::Done) => None,
@@ -199,7 +211,7 @@ impl RuffleView {
 
     pub(super) fn details(&self) -> Details {
         let link = self.account.as_ref();
-        let status = link.and_then(|link| link.status.as_ref());
+        let status = self.status.as_ref();
         let queued = link
             .and_then(|link| link.queued.as_deref())
             .filter(|_| !self.script.running());
@@ -226,15 +238,16 @@ impl RuffleView {
         }
     }
 
+    pub(super) fn character(&self) -> Option<&str> {
+        self.bar.character()
+    }
+
     pub(super) fn username(&self) -> Option<&str> {
         self.account.as_ref().map(|link| link.username.as_str())
     }
 
     pub(super) fn retry_sign_in(&mut self, account: &Account, cx: &mut Context<Self>) {
-        let failed = self
-            .account
-            .as_ref()
-            .is_some_and(|link| matches!(link.status, Some(Status::Failed(_))));
+        let failed = self.account.is_some() && matches!(self.status, Some(Status::Failed(_)));
         if failed {
             let queued = self.account.take().and_then(|link| link.queued);
             self.sign_in(account, queued, cx);
@@ -252,7 +265,7 @@ fn login_label(status: &Status) -> SharedString {
             format!("Attempt {attempt} of {of} failed, retrying").into()
         }
         Status::ChooseServer => "Choose a server".into(),
-        Status::Online(Some(server)) => format!("Online on {server}").into(),
+        Status::Online(Some(server)) => server.clone().into(),
         Status::Online(None) => "Online".into(),
         Status::Offline => "Offline".into(),
         Status::Failed(error) => format!("Login failed: {error}").into(),
