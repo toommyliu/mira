@@ -1,4 +1,7 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement as _,
@@ -6,6 +9,7 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
+use reqwest::header::HeaderValue;
 
 use super::{
     Client, State, Summary,
@@ -16,18 +20,23 @@ use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
     components::{Activity, Empty, StatusLabel},
     primitives::{
-        Alert, Button, Checkbox, CheckedState, Dialog, Field, Input, InputEvent,
+        Alert, Button, Checkbox, CheckedState, Dialog, Field, Input, InputEvent, Select,
         button::{Size, Variant},
     },
     theme::{CONTROL_MD, TEXT_BODY, TEXT_SMALL},
 };
 
-use crate::accounts::{Account, AccountId, Accounts, Draft, SaveError};
+use crate::{
+    accounts::{Account, AccountId, Accounts, Change, Draft, SaveError},
+    net,
+};
 
 actions!(mira, [OpenAccounts]);
 
 const MAX_FIELD: usize = 64;
 const WIDE: Pixels = px(720.0);
+const CHOOSE_IN_GAME: &str = "Choose in game";
+const MIXED: &str = "Mixed";
 
 struct Open(WindowHandle<Manager>);
 
@@ -37,6 +46,7 @@ pub(crate) fn open(
     game: WindowHandle<Client>,
     client: Entity<Client>,
     path: PathBuf,
+    device: HeaderValue,
     cx: &mut App,
 ) {
     if let Some(manager) = cx.try_global::<Open>().map(|open| open.0)
@@ -62,7 +72,7 @@ pub(crate) fn open(
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let manager = cx.new(|cx| Manager::new(game, client, path, window, cx));
+        let manager = cx.new(|cx| Manager::new(game, client, path, device, window, cx));
         let focus = manager.read(cx).focus.clone();
         window.focus(&focus, cx);
         manager
@@ -76,11 +86,43 @@ pub(crate) struct Manager {
     window: WindowHandle<Client>,
     client: Entity<Client>,
     accounts: Result<Accounts, SharedString>,
+    device: HeaderValue,
+    servers: Servers,
     checked: HashSet<AccountId>,
     form: Option<Form>,
+    bulk: Option<Bulk>,
     notice: Option<SharedString>,
     focus: FocusHandle,
     _subscriptions: [Subscription; 2],
+}
+
+enum Servers {
+    Loading,
+    Listed(Vec<String>),
+    Unavailable,
+}
+
+impl Servers {
+    fn choices(&self, saved: Option<&str>) -> Vec<String> {
+        let mut names = match self {
+            Servers::Listed(names) => names.clone(),
+            Servers::Loading | Servers::Unavailable => Vec::new(),
+        };
+        if let Some(saved) = saved
+            && !names.iter().any(|name| name == saved)
+        {
+            names.push(saved.to_owned());
+        }
+        names
+    }
+
+    fn note(&self) -> Option<&'static str> {
+        match self {
+            Servers::Loading => Some("Loading servers…"),
+            Servers::Listed(_) => None,
+            Servers::Unavailable => Some("Couldn't load the server list."),
+        }
+    }
 }
 
 struct Form {
@@ -89,11 +131,29 @@ struct Form {
     name: Entity<Input>,
     username: Entity<Input>,
     password: Entity<Input>,
-    server: Entity<Input>,
+    server: Option<String>,
     script: Option<PathBuf>,
     error: Option<SharedString>,
     removing: bool,
-    _inputs: [Subscription; 4],
+    _inputs: [Subscription; 3],
+}
+
+struct Bulk {
+    open: bool,
+    ids: HashSet<AccountId>,
+    change: Change,
+    error: Option<SharedString>,
+}
+
+fn shared<T: Clone + PartialEq>(
+    accounts: &[Account],
+    field: impl Fn(&Account) -> &Option<T>,
+) -> Option<Option<T>> {
+    let first = field(accounts.first()?);
+    accounts
+        .iter()
+        .all(|account| field(account) == first)
+        .then(|| first.clone())
 }
 
 impl Form {
@@ -103,7 +163,7 @@ impl Form {
             name: text(&self.name),
             username: text(&self.username),
             password: text(&self.password),
-            server: text(&self.server),
+            server: self.server.clone(),
             script: self.script.clone(),
         }
     }
@@ -135,6 +195,7 @@ impl Manager {
         game: WindowHandle<Client>,
         client: Entity<Client>,
         path: PathBuf,
+        device: HeaderValue,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -143,16 +204,76 @@ impl Manager {
             cx.observe(&client, |_, _, cx| cx.notify()),
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
         ];
-        Self {
+        let mut manager = Self {
             window: game,
             client,
             accounts: Accounts::open(path).map_err(Into::into),
+            device,
+            servers: Servers::Unavailable,
             checked: HashSet::new(),
             form: None,
+            bulk: None,
             notice: None,
             focus,
             _subscriptions: subscriptions,
+        };
+        manager.list_servers(cx);
+        manager
+    }
+
+    fn list_servers(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.servers, Servers::Unavailable) {
+            return;
         }
+        self.servers = Servers::Loading;
+        let device = self.device.clone();
+        let listed = cx.background_spawn(async move { net::servers(device) });
+        cx.spawn(async move |this, cx| {
+            let servers = match listed.await {
+                Ok(names) => Servers::Listed(names),
+                Err(error) => {
+                    tracing::warn!(error = format!("{error:#}"), "couldn't list the servers");
+                    Servers::Unavailable
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.servers = servers;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn edit_selected(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
+        self.bulk = Some(Bulk {
+            open: true,
+            ids: targets.iter().map(Account::id).collect(),
+            change: Change {
+                server: shared(&targets, |account| &account.server),
+                script: shared(&targets, |account| &account.script),
+            },
+            error: None,
+        });
+        self.list_servers(cx);
+        cx.notify();
+    }
+
+    fn close_bulk(&mut self, cx: &mut Context<Self>) {
+        if let Some(bulk) = &mut self.bulk {
+            bulk.open = false;
+            cx.notify();
+        }
+    }
+
+    fn save_bulk(&mut self, cx: &mut Context<Self>) {
+        let (Some(bulk), Ok(accounts)) = (&mut self.bulk, &mut self.accounts) else {
+            return;
+        };
+        match accounts.change(&bulk.ids, bulk.change.clone()) {
+            Ok(()) => bulk.open = false,
+            Err(error) => bulk.error = Some(format!("couldn't save the accounts: {error}").into()),
+        }
+        cx.notify();
     }
 
     fn checked_accounts(&self) -> Vec<Account> {
@@ -283,25 +404,21 @@ impl Manager {
             |cx| Input::new("Password", cx).password(),
             cx,
         );
-        let server = input(
-            draft.server,
-            |cx| Input::new("Server", cx).placeholder("Choose in game"),
-            cx,
-        );
-        let inputs = [&name, &username, &password, &server]
-            .map(|input| cx.subscribe(input, Self::input_event));
+        let inputs =
+            [&name, &username, &password].map(|input| cx.subscribe(input, Self::input_event));
         self.form = Some(Form {
             open: true,
             editing: account.map(Account::id),
             name,
             username,
             password,
-            server,
+            server: draft.server,
             script: draft.script,
             error: None,
             removing: false,
             _inputs: inputs,
         });
+        self.list_servers(cx);
         cx.notify();
     }
 
@@ -387,17 +504,15 @@ impl Manager {
         cx.notify();
     }
 
-    fn choose_form_script(&mut self, cx: &mut Context<Self>) {
+    fn choose_script_for(&mut self, set: fn(&mut Self, Option<PathBuf>), cx: &mut Context<Self>) {
         let chosen = choose_script(cx);
         cx.spawn(async move |this, cx| {
             let Some(script) = chosen.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                if let Some(form) = &mut this.form {
-                    form.script = Some(script);
-                    cx.notify();
-                }
+                set(this, Some(script));
+                cx.notify();
             });
         })
         .detach();
@@ -471,6 +586,7 @@ impl Manager {
             .child(bulk("stop-selected", "Stop", Manager::stop, cx))
             .child(bulk("run-selected", "Run script…", Manager::run_chosen, cx))
             .child(bulk("close-selected", "Close", Manager::close, cx))
+            .child(bulk("edit-selected", "Edit…", Manager::edit_selected, cx))
             .child(
                 drag_area()
                     .flex()
@@ -663,42 +779,6 @@ impl Manager {
     }
 
     fn form(&self, theme: &Theme, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let script: SharedString = form
-            .script
-            .as_deref()
-            .map_or_else(|| "None".into(), |script| file_name(script).into());
-        let has_script = form.script.is_some();
-        let script_row = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .h(CONTROL_MD)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(if has_script {
-                        theme.text
-                    } else {
-                        theme.text_tertiary
-                    })
-                    .child(script),
-            )
-            .when(has_script, |row| {
-                row.child(Button::new("clear-script", "Clear").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        if let Some(form) = &mut this.form {
-                            form.script = None;
-                            cx.notify();
-                        }
-                    },
-                )))
-            })
-            .child(
-                Button::new("choose-script", "Choose…")
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_form_script(cx))),
-            );
         let body = div()
             .flex()
             .flex_col()
@@ -711,9 +791,20 @@ impl Manager {
                     .child(Field::new("Name", form.name.clone()))
                     .child(Field::new("Username", form.username.clone()))
                     .child(Field::new("Password", form.password.clone()))
-                    .child(Field::new("Server", form.server.clone())),
+                    .child(self.server_field(
+                        "server",
+                        Some(form.server.as_deref()),
+                        set_form_server,
+                        cx,
+                    )),
             )
-            .child(Field::new("Script", script_row))
+            .child(script_field(
+                theme,
+                "script",
+                Some(form.script.as_deref()),
+                set_form_script,
+                cx,
+            ))
             .children(form.error.clone().map(|error| {
                 div()
                     .text_size(TEXT_SMALL)
@@ -752,6 +843,111 @@ impl Manager {
         .on_close(move |window, cx| close(&(), window, cx))
     }
 
+    fn bulk_form(
+        &self,
+        theme: &Theme,
+        bulk: &Bulk,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let title = match bulk.ids.len() {
+            1 => "Edit 1 account".to_owned(),
+            count => format!("Edit {count} accounts"),
+        };
+        let mixed = bulk.change.server.is_none() || bulk.change.script.is_none();
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .gap(px(12.0))
+                    .child(self.server_field(
+                        "bulk-server",
+                        bulk.change.server.as_ref().map(Option::as_deref),
+                        |this, server| {
+                            if let Some(bulk) = &mut this.bulk {
+                                bulk.change.server = Some(server);
+                            }
+                        },
+                        cx,
+                    )),
+            )
+            .child(script_field(
+                theme,
+                "bulk-script",
+                bulk.change.script.as_ref().map(Option::as_deref),
+                |this, script| {
+                    if let Some(bulk) = &mut this.bulk {
+                        bulk.change.script = Some(script);
+                    }
+                },
+                cx,
+            ))
+            .children(bulk.error.clone().map(|error| {
+                div()
+                    .text_size(TEXT_SMALL)
+                    .text_color(theme.danger_text)
+                    .child(error)
+            }));
+        let close = cx.listener(|this, _: &(), _, cx| this.close_bulk(cx));
+        Dialog::new("bulk-form", bulk.open, title)
+            .when(mixed, |dialog| {
+                dialog.description("Mixed fields keep each account's own value.")
+            })
+            .body(body)
+            .action(
+                Button::new("bulk-cancel", "Cancel")
+                    .on_click(cx.listener(|this, _, _, cx| this.close_bulk(cx))),
+            )
+            .action(
+                Button::new("bulk-save", "Save")
+                    .variant(Variant::Primary)
+                    .on_click(cx.listener(|this, _, _, cx| this.save_bulk(cx))),
+            )
+            .on_close(move |window, cx| close(&(), window, cx))
+    }
+
+    fn server_field(
+        &self,
+        id: &'static str,
+        current: Option<Option<&str>>,
+        set: fn(&mut Self, Option<String>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let names = self.servers.choices(current.flatten());
+        let selected = current.map(|server| {
+            server
+                .and_then(|server| names.iter().position(|name| name == server))
+                .map_or(0, |index| index + 1)
+        });
+        let options = std::iter::once(SharedString::from(CHOOSE_IN_GAME))
+            .chain(names.iter().cloned().map(SharedString::from))
+            .collect();
+        let choose = cx.listener(move |this, index: &usize, _, cx| {
+            set(
+                this,
+                index
+                    .checked_sub(1)
+                    .and_then(|index| names.get(index).cloned()),
+            );
+            cx.notify();
+        });
+        let field = Field::new(
+            "Server",
+            Select::new(id, "Server", options, selected)
+                .placeholder(MIXED)
+                .width(px(184.0))
+                .align_item_with_trigger()
+                .on_select(move |index, window, cx| choose(&index, window, cx)),
+        );
+        match self.servers.note() {
+            Some(note) => field.description(note),
+            None => field,
+        }
+    }
+
     fn remove_confirmation(&self, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let keep = cx.listener(|this, _: &(), _, cx| this.set_removing(false, cx));
         Dialog::new("remove-account", form.removing, "Remove this account?")
@@ -768,6 +964,60 @@ impl Manager {
             )
             .on_close(move |window, cx| keep(&(), window, cx))
     }
+}
+
+fn set_form_server(manager: &mut Manager, server: Option<String>) {
+    if let Some(form) = &mut manager.form {
+        form.server = server;
+    }
+}
+
+fn set_form_script(manager: &mut Manager, script: Option<PathBuf>) {
+    if let Some(form) = &mut manager.form {
+        form.script = script;
+    }
+}
+
+fn script_field(
+    theme: &Theme,
+    id: &'static str,
+    current: Option<Option<&Path>>,
+    set: fn(&mut Manager, Option<PathBuf>),
+    cx: &mut Context<Manager>,
+) -> impl IntoElement + use<> {
+    let (label, color): (SharedString, _) = match current {
+        None => (MIXED.into(), theme.text_tertiary),
+        Some(None) => ("None".into(), theme.text_tertiary),
+        Some(Some(script)) => (file_name(script).into(), theme.text),
+    };
+    let row = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .h(CONTROL_MD)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(color)
+                .child(label),
+        )
+        .when(current != Some(None), |row| {
+            row.child(
+                Button::new(SharedString::from(format!("{id}-clear")), "Clear").on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        set(this, None);
+                        cx.notify();
+                    }),
+                ),
+            )
+        })
+        .child(
+            Button::new(SharedString::from(format!("{id}-choose")), "Choose…")
+                .on_click(cx.listener(move |this, _, _, cx| this.choose_script_for(set, cx))),
+        );
+    Field::new("Script", row)
 }
 
 impl Render for Manager {
@@ -795,6 +1045,10 @@ impl Render for Manager {
             }
         };
         let form = self.form.as_ref().map(|form| self.form(&theme, form, cx));
+        let bulk = self
+            .bulk
+            .as_ref()
+            .map(|bulk| self.bulk_form(&theme, bulk, cx));
         let remove_confirmation = self
             .form
             .as_ref()
@@ -823,5 +1077,6 @@ impl Render for Manager {
             .child(body)
             .children(form)
             .children(remove_confirmation)
+            .children(bulk)
     }
 }

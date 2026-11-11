@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Write as _},
     os::unix::fs::OpenOptionsExt as _,
@@ -48,7 +49,7 @@ pub(crate) struct Draft {
     pub(crate) name: String,
     pub(crate) username: String,
     pub(crate) password: String,
-    pub(crate) server: String,
+    pub(crate) server: Option<String>,
     pub(crate) script: Option<PathBuf>,
 }
 
@@ -58,10 +59,16 @@ impl Draft {
             name: account.name.clone(),
             username: account.username.clone(),
             password: account.password.clone(),
-            server: account.server.clone().unwrap_or_default(),
+            server: account.server.clone(),
             script: account.script.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Change {
+    pub(crate) server: Option<Option<String>>,
+    pub(crate) script: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -132,7 +139,6 @@ impl Accounts {
             return Err(Invalid::Taken(username).into());
         }
         let name = draft.name.trim();
-        let server = draft.server.trim();
         let account = Account {
             name: if name.is_empty() {
                 username.clone()
@@ -141,7 +147,7 @@ impl Accounts {
             },
             username,
             password: draft.password,
-            server: (!server.is_empty()).then(|| server.to_owned()),
+            server: server_name(draft.server),
             script: draft.script,
         };
         let mut list = self.list.clone();
@@ -152,6 +158,25 @@ impl Accounts {
         write(&self.path, &list)?;
         self.list = list;
         Ok(id)
+    }
+
+    pub(crate) fn change(&mut self, ids: &HashSet<AccountId>, change: Change) -> io::Result<()> {
+        let server = change.server.map(server_name);
+        let mut list = self.list.clone();
+        for account in list
+            .iter_mut()
+            .filter(|account| ids.contains(&account.id()))
+        {
+            if let Some(server) = &server {
+                account.server = server.clone();
+            }
+            if let Some(script) = &change.script {
+                account.script = script.clone();
+            }
+        }
+        write(&self.path, &list)?;
+        self.list = list;
+        Ok(())
     }
 
     pub(crate) fn remove(&mut self, id: &AccountId) -> io::Result<()> {
@@ -165,6 +190,12 @@ impl Accounts {
         self.list = list;
         Ok(())
     }
+}
+
+fn server_name(server: Option<String>) -> Option<String> {
+    server
+        .map(|server| server.trim().to_owned())
+        .filter(|server| !server.is_empty())
 }
 
 fn write(path: &Path, accounts: &[Account]) -> io::Result<()> {
@@ -219,7 +250,7 @@ mod tests {
                     name: " Farmer ".into(),
                     username: " player1 ".into(),
                     password: " pass word ".into(),
-                    server: " Twilly ".into(),
+                    server: Some(" Twilly ".into()),
                     script: Some("/scripts/farm.ts".into()),
                 },
             )
@@ -275,6 +306,48 @@ mod tests {
         assert_eq!(accounts.list()[0].username, "player1");
         accounts.remove(&first).unwrap();
         assert_eq!(Accounts::open(path.clone()).unwrap().list().len(), 1);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_change_applies_only_to_the_chosen_accounts_and_only_the_fields_it_sets() {
+        let path = temporary_path();
+        let mut accounts = Accounts::open(path.clone()).unwrap();
+        let first = accounts.save(None, draft("player1")).unwrap();
+        let second = accounts.save(None, draft("player2")).unwrap();
+        accounts.save(None, draft("player3")).unwrap();
+        accounts
+            .change(
+                &HashSet::from([first.clone(), second]),
+                Change {
+                    server: Some(Some(" Twig ".into())),
+                    script: Some(Some("/scripts/farm.ts".into())),
+                },
+            )
+            .unwrap();
+        accounts
+            .change(
+                &HashSet::from([first]),
+                Change {
+                    server: Some(Some(" ".into())),
+                    script: None,
+                },
+            )
+            .unwrap();
+        let saved: Vec<_> = Accounts::open(path.clone())
+            .unwrap()
+            .list()
+            .iter()
+            .map(|account| (account.server.clone(), account.script.clone()))
+            .collect();
+        assert_eq!(
+            saved,
+            [
+                (None, Some("/scripts/farm.ts".into())),
+                (Some("Twig".into()), Some("/scripts/farm.ts".into())),
+                (None, None),
+            ]
+        );
         fs::remove_file(path).unwrap();
     }
 

@@ -66,6 +66,7 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             let accounts = data.join("accounts.json");
+            let manager_device = device.clone();
             let opened = cx.open_window(options, |window, cx| {
                 appearance::follow_system(window);
                 let view = ruffle_view::Client::new(data, device, armies, window, cx)
@@ -86,8 +87,9 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
-                let (client, accounts) = (client.clone(), accounts.clone());
-                cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, cx));
+                let (client, accounts, device) =
+                    (client.clone(), accounts.clone(), manager_device.clone());
+                cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, device, cx));
             });
             cx.on_window_closed(move |cx, closed| {
                 if closed == main.window_id() || cx.windows().is_empty() {

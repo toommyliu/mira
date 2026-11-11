@@ -1,9 +1,11 @@
-use std::{fs, io::Write, path::Path};
+use std::{fs, io::Write, path::Path, time::Duration};
 
 use reqwest::header::{self, HeaderMap, HeaderValue};
+use serde::Deserialize;
 use url::{Host, Url};
 
 pub(crate) const USER_AGENT: &str = "Ruffle/0.7.1 (https://ruffle.rs)";
+const SERVERS: &str = "https://game.aq.com/game/api/data/servers";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GameHost(String);
@@ -69,9 +71,55 @@ pub(crate) async fn dial(host: &GameHost, port: u16) -> std::io::Result<tokio::n
     tokio::net::TcpStream::connect((host.as_str(), port)).await
 }
 
+pub(crate) fn servers(device: HeaderValue) -> anyhow::Result<Vec<String>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let url = Url::parse(SERVERS)?;
+        let mut headers = HeaderMap::new();
+        identify(&url, &mut headers, &device);
+        let body = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?
+            .get(url)
+            .headers(headers)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        Ok(server_names(&body)?)
+    })
+}
+
+fn server_names(json: &[u8]) -> serde_json::Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Row {
+        #[serde(rename = "sName")]
+        name: String,
+    }
+    Ok(serde_json::from_slice::<Vec<Row>>(json)?
+        .into_iter()
+        .map(|row| row.name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_server_list_names_every_server_in_order() {
+        let json = br#"[
+            {"sName":"Twilly","iCount":949,"iMax":1000,"bOnline":1,"bUpg":0},
+            {"sName":" ","iCount":0,"iMax":1000,"bOnline":0,"bUpg":0},
+            {"sName":"Yorumi","iCount":12,"iMax":500,"bOnline":1,"bUpg":1}
+        ]"#;
+        assert_eq!(server_names(json).unwrap(), ["Twilly", "Yorumi"]);
+        assert!(server_names(b"<html>").is_err());
+    }
 
     #[test]
     fn device_id_is_stable_and_invalid_files_are_reported() {
