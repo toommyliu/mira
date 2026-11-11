@@ -1,11 +1,11 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, Bounds, Context, Div, ElementId, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _,
-    Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Toggled, Window, anchored, deferred, div, point,
-    prelude::FluentBuilder as _, px,
+    App, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement as _, Pixels, Point, RenderOnce, Role, ScrollHandle,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
+    anchored, deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use mira_ui::{
@@ -474,7 +474,11 @@ impl RuffleView {
                         self.bar.cells_scroll.scroll_to_item(spot.row);
                     }
                 }
-                Some(JumpKey::Travel { cell, pad }) => self.travel(cell, pad, window, cx),
+                Some(JumpKey::Travel {
+                    cell,
+                    pad,
+                    keep_open,
+                }) => self.travel(cell, pad, keep_open, window, cx),
                 None => return,
             }
             cx.stop_propagation();
@@ -590,9 +594,18 @@ impl RuffleView {
         cx.notify();
     }
 
-    fn travel(&mut self, cell: String, pad: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn travel(
+        &mut self,
+        cell: String,
+        pad: String,
+        keep_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.session.command(Command::Jump { cell, pad });
-        self.close_menu(window, cx);
+        if !keep_open {
+            self.close_menu(window, cx);
+        }
     }
 
     fn close_submenu(&mut self) {
@@ -666,7 +679,11 @@ struct Spot {
 #[derive(PartialEq, Debug)]
 enum JumpKey {
     Move(Spot),
-    Travel { cell: String, pad: String },
+    Travel {
+        cell: String,
+        pad: String,
+        keep_open: bool,
+    },
 }
 
 fn current_spot(location: &Location) -> Spot {
@@ -723,15 +740,14 @@ fn jump_key(location: &Location, at: Option<Spot>, event: &KeyDownEvent) -> Opti
         });
     };
     if key == "enter" || key == "space" {
-        return Some(match at.column {
-            Column::Cell => JumpKey::Travel {
-                cell: location.cells[at.row].clone(),
-                pad: location.pad.clone(),
-            },
-            Column::Pad => JumpKey::Travel {
-                cell: location.cell.clone(),
-                pad: PADS[at.row].to_string(),
-            },
+        let (cell, pad) = match at.column {
+            Column::Cell => (location.cells[at.row].clone(), location.pad.clone()),
+            Column::Pad => (location.cell.clone(), PADS[at.row].to_string()),
+        };
+        return Some(JumpKey::Travel {
+            cell,
+            pad,
+            keep_open: event.keystroke.modifiers.shift,
         });
     }
     if let Some(column) = across {
@@ -1667,7 +1683,10 @@ fn travel_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) 
                 row,
             };
             jump_row(spot, cell.clone().into(), cell == location.cell).on_click(cx.listener(
-                move |this, _, window, cx| this.travel(cell.clone(), pad.clone(), window, cx),
+                move |this, event: &ClickEvent, window, cx| {
+                    let keep_open = event.modifiers().shift;
+                    this.travel(cell.clone(), pad.clone(), keep_open, window, cx)
+                },
             ))
         })
         .collect();
@@ -1686,8 +1705,9 @@ fn travel_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) 
             };
             jump_row(spot, (*pad).into(), location.pad.eq_ignore_ascii_case(pad))
                 .when(!in_cell, |row| row.text_color(theme.text_tertiary))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.travel(cell.clone(), pad.to_string(), window, cx)
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    let keep_open = event.modifiers().shift;
+                    this.travel(cell.clone(), pad.to_string(), keep_open, window, cx)
                 }))
         })
         .collect();
@@ -2082,14 +2102,32 @@ mod tests {
             press(&location, spot(Column::Cell, 2), "enter"),
             Some(JumpKey::Travel {
                 cell: "r3".into(),
-                pad: "Left".into()
+                pad: "Left".into(),
+                keep_open: false,
+            })
+        );
+        assert_eq!(
+            press(&location, spot(Column::Cell, 2), "shift-enter"),
+            Some(JumpKey::Travel {
+                cell: "r3".into(),
+                pad: "Left".into(),
+                keep_open: true,
             })
         );
         assert_eq!(
             press(&location, spot(Column::Pad, 4), "space"),
             Some(JumpKey::Travel {
                 cell: "r2".into(),
-                pad: "Top".into()
+                pad: "Top".into(),
+                keep_open: false,
+            })
+        );
+        assert_eq!(
+            press(&location, spot(Column::Pad, 4), "shift-space"),
+            Some(JumpKey::Travel {
+                cell: "r2".into(),
+                pad: "Top".into(),
+                keep_open: true,
             })
         );
         assert_eq!(press(&location, spot(Column::Cell, 0), "x"), None);
