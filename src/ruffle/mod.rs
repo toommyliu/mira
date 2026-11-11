@@ -548,6 +548,7 @@ fn run(
                             Effect::Resize(next) if next != viewport => {
                                 player.set_viewport_dimensions(next.dimensions());
                                 viewport = next;
+                                pacing.resized = true;
                             }
                             Effect::Resize(_) => {}
                             Effect::Visible(visible) => pacing.visible = visible,

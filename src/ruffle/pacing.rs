@@ -4,6 +4,7 @@ pub(super) struct Pacing {
     display_frames: bool,
     pub(super) visible: bool,
     pub(super) minimal: bool,
+    pub(super) resized: bool,
     throttle: Option<Duration>,
     next_render: Instant,
 }
@@ -14,6 +15,7 @@ impl Pacing {
             display_frames,
             visible: true,
             minimal: false,
+            resized: false,
             throttle: None,
             next_render: now,
         }
@@ -50,8 +52,9 @@ impl Pacing {
         } else {
             now >= self.next_render
         };
-        let draw = self.presenting() && needs_render && due;
+        let draw = self.presenting() && (self.resized || needs_render && due);
         if draw {
+            self.resized = false;
             self.next_render = now + self.throttle.unwrap_or(Duration::from_secs_f64(1.0 / 60.0));
         }
         draw
@@ -92,6 +95,7 @@ mod tests {
                 hide(&mut pacing, true);
                 for pass in 0..240 {
                     let now = start + STAGE_FRAME * pass;
+                    pacing.resized = pass % 2 == 0;
                     assert!(
                         !pacing.draw(now, true, interpolating, true),
                         "{cause} display_frames={display_frames} interpolating={interpolating} pass={pass}"
@@ -135,6 +139,25 @@ mod tests {
                 pacing.draw(selected, true, interpolating, true),
                 "display_frames={display_frames} interpolating={interpolating}"
             );
+        }
+    }
+
+    #[test]
+    fn resized_view_draws_once_on_the_next_pass_without_a_stage_change() {
+        for (display_frames, interpolating) in MODES {
+            for throttle in [None, Some(Duration::from_millis(500))] {
+                let start = Instant::now();
+                let mut pacing = Pacing::new(display_frames, start);
+                pacing.set_throttle(throttle, start);
+                assert!(pacing.draw(start, true, interpolating, true));
+                let next = start + Duration::from_millis(1);
+                pacing.resized = true;
+                assert!(
+                    pacing.draw(next, false, interpolating, false),
+                    "display_frames={display_frames} interpolating={interpolating} throttle={throttle:?}"
+                );
+                assert!(!pacing.draw(next, false, interpolating, false));
+            }
         }
     }
 
