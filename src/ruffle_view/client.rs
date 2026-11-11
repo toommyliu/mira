@@ -375,7 +375,7 @@ impl Client {
             let active = index == self.active;
             session
                 .view
-                .update(cx, |view, cx| view.present(tiled, active, cx));
+                .update(cx, |view, cx| view.present(tiled, active, window, cx));
         }
         match self.sessions.get(self.active) {
             Some(session) => {

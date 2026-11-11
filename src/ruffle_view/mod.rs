@@ -41,7 +41,7 @@ pub(crate) use client::{Client, bind_keys};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use ui::BAR_HEIGHT;
 
-const INACTIVE_TILE_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
+const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
 const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub struct RuffleView {
@@ -49,6 +49,7 @@ pub struct RuffleView {
     error: Option<String>,
     loading: Loading,
     tiled: bool,
+    selected: bool,
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
     player_bounds: Bounds<Pixels>,
@@ -276,6 +277,7 @@ impl RuffleView {
                     this.session.send(ViewEvent::Focus(
                         window.is_window_active() && this.focus.is_focused(window),
                     ));
+                    this.throttle(window);
                     if !window.is_window_active() {
                         this.modifiers = Default::default();
                     }
@@ -286,6 +288,7 @@ impl RuffleView {
                 error: None,
                 loading: Loading::Started,
                 tiled: false,
+                selected: false,
                 stats: None,
                 stats_placement: stats::Placement::default(),
                 player_bounds: Bounds::default(),
@@ -319,19 +322,24 @@ impl RuffleView {
             .into_any_element()
     }
 
-    fn present(&mut self, tiled: bool, active: bool, cx: &mut Context<Self>) {
+    fn present(&mut self, tiled: bool, active: bool, window: &Window, cx: &mut Context<Self>) {
         self.native.set_shown(tiled || active);
-        self.session
-            .send(ViewEvent::Throttle(match (tiled, active) {
-                (_, true) => None,
-                (true, false) => Some(INACTIVE_TILE_FRAME),
-                (false, false) => Some(HIDDEN_TAB_FRAME),
-            }));
         if tiled && (!self.tiled || !active) {
             self.dismiss_menu(cx);
         }
         self.tiled = tiled;
+        self.selected = active;
+        self.throttle(window);
         cx.notify();
+    }
+
+    fn throttle(&self, window: &Window) {
+        self.session
+            .send(ViewEvent::Throttle(match (self.selected, self.tiled) {
+                (true, _) if window.is_window_active() => None,
+                (true, _) | (false, true) => Some(UNFOCUSED_FRAME),
+                (false, false) => Some(HIDDEN_TAB_FRAME),
+            }));
     }
 
     fn layout(&mut self, bounds: Bounds<Pixels>, window: &Window) {
