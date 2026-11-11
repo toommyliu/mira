@@ -115,7 +115,7 @@ impl RenderOnce for LogView {
 
         div()
             .relative()
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(lines)
             .child(bar)
             .when(ring, |log| log.child(theme.focus_ring(theme.radius.panel)))

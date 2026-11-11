@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Div, ElementId, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle, ScrollStrategy, ScrollWheelEvent,
+    ParentElement as _, Pixels, RenderOnce, Role, ScrollEvent, ScrollHandle, ScrollStrategy,
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle,
     Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
@@ -238,7 +238,7 @@ impl Options {
     }
 }
 
-fn contain_scroll(_: &ScrollWheelEvent, _: &mut Window, cx: &mut App) {
+fn contain_scroll(_: &ScrollEvent, _: &mut Window, cx: &mut App) {
     cx.stop_propagation();
 }
 
@@ -294,7 +294,7 @@ impl RenderOnce for List {
             );
         div()
             .relative()
-            .on_scroll_wheel(contain_scroll)
+            .on_scroll(contain_scroll)
             .child(list)
             .child(bar)
     }
@@ -382,7 +382,7 @@ impl RenderOnce for VirtualList {
         );
         list_frame(self.id.clone(), self.label, &options)
             .relative()
-            .on_scroll_wheel(contain_scroll)
+            .on_scroll(contain_scroll)
             .on_key_down(options.keys(
                 move |index| lookup(index),
                 move |index| reveal.scroll_to_item(index, ScrollStrategy::Nearest),

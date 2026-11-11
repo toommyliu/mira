@@ -31,7 +31,7 @@ impl Render for Rooms {
     }
 }
 
-fn rooms(selected: Option<usize>, keys: &str, cx: &mut TestAppContext) -> Option<usize> {
+fn rooms(selected: Option<usize>, keys: &'static str, cx: &mut TestAppContext) -> Option<usize> {
     cx.update(mira_ui::init);
     let picked = Rc::new(Cell::new(None));
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -51,7 +51,7 @@ fn rooms(selected: Option<usize>, keys: &str, cx: &mut TestAppContext) -> Option
     picked.get()
 }
 
-fn press(cx: &mut VisualTestContext, key: &str) {
+fn press(cx: &mut VisualTestContext, key: &'static str) {
     cx.simulate_keystrokes(key);
     cx.simulate_event(KeyUpEvent {
         keystroke: Keystroke::parse(key).unwrap(),

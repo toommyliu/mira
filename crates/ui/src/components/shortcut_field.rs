@@ -110,7 +110,7 @@ fn record(
     let modified = keystroke.modifiers.modified();
     match key {
         "tab" if !modified || keystroke.modifiers == Modifiers::shift() => return false,
-        "escape" if !modified => window.blur(),
+        "escape" if !modified => window.blur(cx),
         "backspace" | "delete" if !modified => {
             if let Some(on_change) = on_change {
                 on_change(None, window, cx);
@@ -120,7 +120,7 @@ fn record(
             if let Some(on_change) = on_change {
                 on_change(Some(keystroke.clone()), window, cx);
             }
-            window.blur();
+            window.blur(cx);
         }
         _ => {}
     }

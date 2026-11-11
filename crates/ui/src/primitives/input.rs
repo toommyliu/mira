@@ -621,14 +621,6 @@ struct Prepainted {
     selection: Option<PaintQuad>,
 }
 
-impl IntoElement for TextElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl gpui::Element for TextElement {
     type RequestLayoutState = ();
     type PrepaintState = Prepainted;

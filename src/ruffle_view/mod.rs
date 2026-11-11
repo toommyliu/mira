@@ -25,7 +25,7 @@ use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
     Focusable, Hitbox, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
     KeyUpEvent, ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Pixels, Render, Role, ScrollWheelEvent, StatefulInteractiveElement as _,
+    ParentElement as _, Pixels, Render, Role, ScrollEvent, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window, canvas, div, prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
@@ -529,7 +529,7 @@ fn paint(this: Entity<RuffleView>, hitbox: Hitbox, window: &mut Window, cx: &mut
             this.hovered = hovered || captured;
         });
     });
-    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
             this.update(cx, |this, _| {
                 this.session

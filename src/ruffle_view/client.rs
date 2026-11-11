@@ -96,9 +96,14 @@ pub(crate) fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("cmd-shift-a", OpenAccounts, None),
         gpui::KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
     ]);
-    cx.bind_keys((1..=9).map(|number| {
-        gpui::KeyBinding::new(&format!("cmd-{number}"), SelectSession(number - 1), None)
-    }));
+    cx.bind_keys(
+        [
+            "cmd-1", "cmd-2", "cmd-3", "cmd-4", "cmd-5", "cmd-6", "cmd-7", "cmd-8", "cmd-9",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, keys)| gpui::KeyBinding::new(keys, SelectSession(index), None)),
+    );
 }
 
 pub struct Client {

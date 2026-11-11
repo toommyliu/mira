@@ -2041,7 +2041,7 @@ mod tests {
         assert_eq!(Field::CustomName.after(true, &automation), Field::WalkSpeed);
     }
 
-    fn press(location: &Location, at: Option<Spot>, key: &str) -> Option<JumpKey> {
+    fn press(location: &Location, at: Option<Spot>, key: &'static str) -> Option<JumpKey> {
         let event = KeyDownEvent {
             keystroke: gpui::Keystroke::parse(key).unwrap(),
             is_held: false,

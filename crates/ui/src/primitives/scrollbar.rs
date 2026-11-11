@@ -6,9 +6,9 @@ use std::{
 
 use gpui::{
     App, DispatchPhase, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, RenderOnce, ScrollHandle,
-    ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div,
-    point, prelude::FluentBuilder as _, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, RenderOnce, ScrollEvent,
+    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div, point,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::{ActiveTheme as _, motion};
@@ -90,7 +90,7 @@ impl RenderOnce for Scrollbar {
                     move |_, _, window, _| {
                         let wheel = wheel.clone();
                         let watched = watched.clone();
-                        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, _| {
+                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, _| {
                             if phase == DispatchPhase::Capture
                                 && watched.bounds().contains(&event.position)
                             {
