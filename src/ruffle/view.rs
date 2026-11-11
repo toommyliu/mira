@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use ruffle_core::events::{ImeEvent, MouseWheelDelta, TextControlCode};
-use ruffle_core::{PlayerEvent, ViewportDimensions};
+use ruffle_core::{PlayerEvent, StageAlign, ViewportDimensions};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ViewEvent {
@@ -73,6 +73,13 @@ impl Viewport {
             scale_factor: self.scale,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StageFit {
+    pub width: NonZeroU32,
+    pub height: NonZeroU32,
+    pub align: StageAlign,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

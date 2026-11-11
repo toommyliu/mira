@@ -9,6 +9,7 @@ mod surface;
 pub(crate) mod view;
 
 use std::{
+    num::NonZeroU32,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -21,7 +22,8 @@ use std::{
 };
 
 use ruffle_core::{
-    FloatDuration, PlayerBuilder, backend::ui::MouseCursor, config::Letterbox, tag_utils::SwfMovie,
+    FloatDuration, Player, PlayerBuilder, StageScaleMode, backend::ui::MouseCursor,
+    config::Letterbox, tag_utils::SwfMovie,
 };
 use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
@@ -74,6 +76,7 @@ pub(crate) enum Output {
     Location(Option<Location>),
     Identity(Option<player::Identity>),
     SignIn(sign_in::Status),
+    Stage(Option<view::StageFit>),
 }
 
 #[derive(Clone)]
@@ -413,6 +416,7 @@ fn run(
     stats.set_enabled(&mut player.lock().unwrap(), stats_enabled);
     let mut last_tick = Instant::now();
     let mut frame_clock_enabled = false;
+    let mut stage = None;
     let mut frame_rate = f64::NAN;
     let mut rendering = automation.watch_game_settings();
     rendering.mark_changed();
@@ -605,6 +609,10 @@ fn run(
             frame_clock_enabled = frame_clock;
         }
         if pacing.draw(now, player.needs_render(), interpolating, frame_due) {
+            let fit = stage_fit(&mut player);
+            if fit != stage && outputs.try_send(Output::Stage(fit)).is_ok() {
+                stage = fit;
+            }
             player.render();
         }
         stats.sample(&mut player, viewport.dimensions());
@@ -630,6 +638,21 @@ async fn run_command(bridge: Bridge, command: Command) {
     if let Err(error) = done {
         tracing::warn!(%error, "a game bar command failed");
     }
+}
+
+fn stage_fit(player: &mut Player) -> Option<view::StageFit> {
+    player.mutate_with_update_context(|context| {
+        let stage = context.stage;
+        if stage.scale_mode() != StageScaleMode::ShowAll {
+            return None;
+        }
+        let (width, height) = stage.movie_size();
+        Some(view::StageFit {
+            width: NonZeroU32::new(width)?,
+            height: NonZeroU32::new(height)?,
+            align: stage.align(),
+        })
+    })
 }
 
 #[cfg(test)]

@@ -19,7 +19,12 @@ use crate::{
         auto_attack, auto_relogin, auto_zone, game_settings,
         settings::{Automation, Store},
     },
-    ruffle::{Msg, Output, Runtime, context_menu::MenuSelection, extras, view::ViewEvent},
+    ruffle::{
+        Msg, Output, Runtime,
+        context_menu::MenuSelection,
+        extras,
+        view::{StageFit, ViewEvent},
+    },
 };
 use gpui::{
     App, AppContext as _, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
@@ -53,6 +58,7 @@ pub struct RuffleView {
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
     player_bounds: Bounds<Pixels>,
+    stage: Option<StageFit>,
     native: NativeView,
     focus: FocusHandle,
     hovered: bool,
@@ -236,6 +242,18 @@ impl RuffleView {
                             }
                             continue;
                         }
+                        Output::Stage(stage) => {
+                            if this
+                                .update(cx, |this: &mut Self, cx| {
+                                    this.stage = stage;
+                                    cx.notify();
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                     };
                     let Ok((view, input_view, extras)) = this.update(cx, |this: &mut Self, _| {
                         let (view, input_view) = this.native.menu_views();
@@ -310,6 +328,7 @@ impl RuffleView {
                 stats: None,
                 stats_placement: stats::Placement::default(),
                 player_bounds: Bounds::default(),
+                stage: None,
                 native,
                 focus,
                 hovered: false,
@@ -362,13 +381,15 @@ impl RuffleView {
             }));
     }
 
-    fn layout(&mut self, bounds: Bounds<Pixels>, window: &Window) {
-        self.player_bounds = bounds;
+    fn layout(&mut self, area: Bounds<Pixels>, window: &Window) -> Bounds<Pixels> {
         let scale = window.scale_factor();
+        let bounds = input::stage_bounds(area, self.stage, scale);
+        self.player_bounds = bounds;
         self.native.set_frame(bounds, scale);
         if let Some(viewport) = input::viewport(bounds, scale) {
             self.session.send(ViewEvent::Resized(viewport));
         }
+        bounds
     }
 
     fn change_auto_relogin(
@@ -629,8 +650,8 @@ impl Render for RuffleView {
         let prepaint = {
             let this = this.clone();
             move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
-                this.update(cx, |this, _| this.layout(bounds, window));
-                window.insert_hitbox(bounds, HitboxBehavior::Normal)
+                let player = this.update(cx, |this, _| this.layout(bounds, window));
+                window.insert_hitbox(player, HitboxBehavior::Normal)
             }
         };
         let player = div()

@@ -1,7 +1,9 @@
 use crate::ruffle::view::{
-    Key, KeyCode, Modifiers, MouseButton, NamedKey, Point, ViewEvent, Viewport, WheelDelta,
+    Key, KeyCode, Modifiers, MouseButton, NamedKey, Point, StageFit, ViewEvent, Viewport,
+    WheelDelta,
 };
-use gpui::{Bounds, Keystroke, Pixels, ScrollDelta};
+use gpui::{Bounds, Keystroke, Pixels, ScrollDelta, px, size};
+use ruffle_core::StageAlign;
 
 #[derive(Default)]
 pub(super) struct Mouse {
@@ -185,6 +187,37 @@ pub(super) fn viewport(bounds: Bounds<Pixels>, scale: f32) -> Option<Viewport> {
     Viewport::new(bounds.size.width.into(), bounds.size.height.into(), scale)
 }
 
+pub(super) fn stage_bounds(
+    area: Bounds<Pixels>,
+    stage: Option<StageFit>,
+    scale: f32,
+) -> Bounds<Pixels> {
+    let Some(stage) = stage else {
+        return area;
+    };
+    let width = f32::from(area.size.width) * scale;
+    let height = f32::from(area.size.height) * scale;
+    let (stage_width, stage_height) = (stage.width.get() as f32, stage.height.get() as f32);
+    let fit = (width / stage_width).min(height / stage_height);
+    let fit_width = (stage_width * fit).round().min(width.floor());
+    let fit_height = (stage_height * fit).round().min(height.floor());
+    let offset = |free: f32, start: StageAlign, end: StageAlign| {
+        if stage.align.contains(start) {
+            0.0
+        } else if stage.align.contains(end) {
+            free.floor()
+        } else {
+            (free / 2.0).floor()
+        }
+    };
+    let x = offset(width - fit_width, StageAlign::LEFT, StageAlign::RIGHT);
+    let y = offset(height - fit_height, StageAlign::TOP, StageAlign::BOTTOM);
+    Bounds::new(
+        gpui::point(area.origin.x + px(x / scale), area.origin.y + px(y / scale)),
+        size(px(fit_width / scale), px(fit_height / scale)),
+    )
+}
+
 pub(super) fn utf16_to_byte(text: &str, offset: usize) -> usize {
     let mut units = 0;
     for (byte, c) in text.char_indices() {
@@ -199,6 +232,75 @@ pub(super) fn utf16_to_byte(text: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroU32;
+
+    fn stage(align: StageAlign) -> Option<StageFit> {
+        Some(StageFit {
+            width: NonZeroU32::new(958).unwrap(),
+            height: NonZeroU32::new(550).unwrap(),
+            align,
+        })
+    }
+
+    #[test]
+    fn player_takes_the_stage_aspect_centered_on_whole_device_pixels() {
+        let scale = 2.0;
+        let areas = [
+            Bounds::new(
+                gpui::point(px(208.0), px(40.0)),
+                size(px(1232.0), px(860.0)),
+            ),
+            Bounds::new(gpui::point(px(0.0), px(40.0)), size(px(1440.0), px(860.0))),
+            Bounds::new(gpui::point(px(0.0), px(40.0)), size(px(700.0), px(900.0))),
+            Bounds::new(gpui::point(px(0.0), px(40.0)), size(px(1917.5), px(540.5))),
+        ];
+        for area in areas {
+            let player = stage_bounds(area, stage(StageAlign::empty()), scale);
+            let device = |value: Pixels| f32::from(value) * scale;
+            for edge in [player.left(), player.top(), player.right(), player.bottom()] {
+                assert_eq!(device(edge), device(edge).round(), "{area:?} -> {player:?}");
+            }
+            let (width, height) = (device(player.size.width), device(player.size.height));
+            assert!(
+                (width * 550.0 - height * 958.0).abs() <= 958.0,
+                "{area:?} -> {player:?}"
+            );
+            let gaps = [
+                device(player.left() - area.left()),
+                device(area.right() - player.right()),
+                device(player.top() - area.top()),
+                device(area.bottom() - player.bottom()),
+            ];
+            assert!(gaps.iter().all(|gap| *gap >= 0.0), "{area:?} -> {player:?}");
+            assert!(gaps[0].min(gaps[2]) == 0.0, "{area:?} -> {player:?}");
+            assert!((gaps[0] - gaps[1]).abs() <= 1.0, "{area:?} -> {player:?}");
+            assert!((gaps[2] - gaps[3]).abs() <= 1.0, "{area:?} -> {player:?}");
+        }
+    }
+
+    #[test]
+    fn aligned_stage_sits_against_its_edges() {
+        let area = Bounds::new(
+            gpui::point(px(208.0), px(40.0)),
+            size(px(1232.0), px(400.0)),
+        );
+        let left = stage_bounds(area, stage(StageAlign::LEFT), 2.0);
+        assert_eq!(left.origin, area.origin);
+        assert!(left.right() < area.right());
+        let right = stage_bounds(area, stage(StageAlign::RIGHT), 2.0);
+        assert_eq!(right.right(), area.right());
+        assert_eq!(right.top(), area.top());
+        assert!(right.left() > area.left());
+    }
+
+    #[test]
+    fn stage_without_a_fixed_aspect_fills_the_area() {
+        let area = Bounds::new(
+            gpui::point(px(208.0), px(40.0)),
+            size(px(1232.0), px(860.0)),
+        );
+        assert_eq!(stage_bounds(area, None, 2.0), area);
+    }
 
     #[test]
     fn game_press_keeps_its_release_when_a_repainted_hud_covers_the_pointer() {
