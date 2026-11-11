@@ -89,8 +89,15 @@ package mira.game {
       return null;
     }
 
+    // actionTimeCheck clears skill.OldCD once a skill is ready, so it is called only for the auto attack, whose
+    // branch returns before that.
+    private static function isCoolingDown(world:Object, skill:Object):Boolean {
+      return skill.auto ? !world.actionTimeCheck(skill) : getSkillCooldownRemainingValue(skill) > 0;
+    }
+
+    // testAction posts a chat warning when it refuses a skill that is cooling down.
     private static function tryUseSkill(game:Object, skill:Object):Boolean {
-      if (!skill.isOK || skill.skillLock)
+      if (!skill.isOK || skill.skillLock || isCoolingDown(game.world, skill))
         return false;
 
       var previousActionId:* = skill.actID;
@@ -199,8 +206,7 @@ package mira.game {
       return false;
     }
 
-    // Mirrors the refusals in the client's World.testAction, except range. actionTimeCheck clears skill.OldCD once a
-    // skill is ready, so it is called only for the auto attack, whose branch returns before that.
+    // Mirrors the refusals in the client's World.testAction, except range.
     [BridgeExport]
     public static function canUseSkill(index:int):Boolean {
       var world:Object = Main.Game.world;
@@ -211,7 +217,7 @@ package mira.game {
         return false;
       }
 
-      if (skill.auto ? !world.actionTimeCheck(skill) : getSkillCooldownRemainingValue(skill) > 0) {
+      if (isCoolingDown(world, skill)) {
         return false;
       }
 
