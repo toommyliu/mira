@@ -1823,8 +1823,7 @@ fn number_chip(
                         .h(px(24.0))
                         .rounded_full()
                         .justify_center()
-                        .border_0()
-                        .shadow_xs(),
+                        .border_0(),
                 ),
         )
 }
