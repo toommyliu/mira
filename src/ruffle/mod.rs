@@ -72,9 +72,12 @@ pub(crate) enum Output {
     SignIn(sign_in::Status),
 }
 
+#[derive(Clone)]
 pub(crate) enum Command {
     Jump { cell: String, pad: String },
     OpenBank,
+    ReloadMap,
+    SetSpawnPoint,
 }
 
 #[derive(Clone)]
@@ -559,6 +562,8 @@ async fn run_command(bridge: Bridge, command: Command) {
     let done = match command {
         Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
         Command::OpenBank => bank::open(&bridge).await.map(drop),
+        Command::ReloadMap => world::reload(&bridge).await.map(drop),
+        Command::SetSpawnPoint => world::set_spawn_point(&bridge, None, None).await.map(drop),
     };
     if let Err(error) = done {
         tracing::warn!(%error, "a game bar command failed");
