@@ -8,7 +8,7 @@ use mira_ui::{
     theme::{PANEL_INSET, ROW, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL},
 };
 
-pub(crate) const BAR_HEIGHT: Pixels = px(32.0);
+pub(crate) const BAR_HEIGHT: Pixels = px(38.0);
 
 pub(super) fn panel(theme: &Theme, id: &'static str, width: Pixels) -> Stateful<Div> {
     div()

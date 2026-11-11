@@ -65,8 +65,8 @@ pub fn sidebar_icon(open: bool, color: Hsla) -> Svg {
     svg()
         .path(if open { SIDEBAR_OPEN } else { SIDEBAR })
         .flex_none()
-        .w(px(16.0))
-        .h(px(13.0))
+        .w(px(18.0))
+        .h(px(14.0))
         .text_color(color)
 }
 
