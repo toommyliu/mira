@@ -52,6 +52,7 @@ impl Radii {
 pub const PANEL_INSET: Pixels = px(4.0);
 
 pub const FOCUS_RING: Pixels = px(2.0);
+pub const FOCUS_GAP: Pixels = px(2.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
@@ -141,7 +142,7 @@ impl Theme {
             danger_soft: oklch(0.65, 0.2, 25.0, 0.14),
             danger_text: oklch(0.75, 0.15, 25.0, 1.0),
             on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: ink(0.5),
+            focus: gray(0.62),
             backdrop: oklch(0.05, 0.0, 0.0, 0.55),
             pointer_cursor: false,
             stack_tint: 0.06,
@@ -185,7 +186,7 @@ impl Theme {
             danger_soft: oklch(0.6, 0.2, 25.0, 0.1),
             danger_text: oklch(0.5, 0.17, 25.0, 1.0),
             on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: ink(0.45),
+            focus: gray(0.55),
             backdrop: ink(0.28),
             pointer_cursor: false,
             stack_tint: 0.01,
@@ -210,21 +211,17 @@ impl Theme {
     }
 
     pub fn focus_ring(&self, radius: Pixels) -> Div {
-        self.ring_in(self.focus, radius)
+        self.ring_around(self.focus, radius, Pixels::ZERO)
     }
 
-    pub fn ring_in(&self, color: Hsla, radius: Pixels) -> Div {
-        self.ring_at(color, radius, px(1.0))
-    }
-
-    pub fn ring_at(&self, color: Hsla, radius: Pixels, gap: Pixels) -> Div {
-        let outset = FOCUS_RING + gap;
+    pub fn ring_around(&self, color: Hsla, radius: Pixels, border: Pixels) -> Div {
+        let outset = FOCUS_GAP + FOCUS_RING;
         div()
             .absolute()
-            .top(-outset)
-            .left(-outset)
-            .right(-outset)
-            .bottom(-outset)
+            .top(-outset - border)
+            .left(-outset - border)
+            .right(-outset - border)
+            .bottom(-outset - border)
             .rounded(if radius > Pixels::ZERO {
                 radius + outset
             } else {

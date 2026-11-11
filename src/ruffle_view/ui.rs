@@ -128,16 +128,25 @@ pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
     .size(px(12.0))
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Shape {
+    Box,
+    Pill,
+}
+
 pub(super) fn number_field(
     theme: &Theme,
     id: impl Into<gpui::ElementId>,
     text: String,
     editing: bool,
     fresh: bool,
+    shape: Shape,
 ) -> Stateful<Div> {
-    input(theme, id, text, editing, fresh)
-        .w(px(52.0))
-        .justify_end()
+    let field = input(theme, id, text, editing, fresh, shape);
+    match shape {
+        Shape::Box => field.w(px(52.0)).justify_end(),
+        Shape::Pill => field.w(px(40.0)).justify_center(),
+    }
 }
 
 pub(super) fn text_field(
@@ -155,6 +164,7 @@ pub(super) fn text_field(
         if empty { placeholder } else { text },
         editing,
         fresh,
+        Shape::Box,
     )
     .w(px(180.0))
     .justify_start()
@@ -167,30 +177,49 @@ fn input(
     text: String,
     editing: bool,
     fresh: bool,
+    shape: Shape,
 ) -> Stateful<Div> {
+    let (height, radius, border) = match shape {
+        Shape::Box => (px(22.0), px(5.0), px(1.0)),
+        Shape::Pill => (px(24.0), px(12.0), Pixels::ZERO),
+    };
     div()
         .id(id)
+        .relative()
         .flex()
         .items_center()
-        .h(px(22.0))
+        .h(height)
         .px(px(6.0))
-        .rounded(px(5.0))
+        .rounded(radius)
         .bg(theme.fill)
-        .border_1()
-        .border_color(if editing { theme.accent } else { theme.border })
+        .when(matches!(shape, Shape::Box), |field| {
+            field.border_1().border_color(theme.border)
+        })
         .cursor_text()
         .text_size(TEXT_BODY)
-        .overflow_hidden()
         .child(
             div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .line_height(px(16.0))
                 .px(px(1.0))
                 .when(editing && fresh && !text.is_empty(), |text| {
-                    text.bg(theme.accent.opacity(0.35)).rounded(px(2.0))
+                    text.bg(theme.focus.opacity(0.35)).rounded(px(2.0))
                 })
                 .child(text),
         )
         .when(editing && !fresh, |field| {
-            field.child(div().ml(px(1.0)).w(px(1.0)).h(px(14.0)).bg(theme.accent))
+            field.child(
+                div()
+                    .flex_none()
+                    .ml(px(1.0))
+                    .w(px(1.5))
+                    .h(px(14.0))
+                    .bg(theme.text),
+            )
+        })
+        .when(editing, |field| {
+            field.child(theme.ring_around(theme.focus, radius, border))
         })
 }

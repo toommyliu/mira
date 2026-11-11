@@ -195,7 +195,7 @@ impl RenderOnce for ShortcutField {
             .border_1()
             .border_color(if recording { theme.focus } else { theme.border })
             .when(recording, |field| {
-                field.child(theme.focus_ring(theme.radius.control))
+                field.child(theme.ring_around(theme.focus, theme.radius.control, px(1.0)))
             })
             .pointer_cursor(&theme)
             .text_size(TEXT_SMALL)

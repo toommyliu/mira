@@ -100,7 +100,9 @@ impl RenderOnce for Checkbox {
                     .rounded(theme.radius.tag)
                     .map(|mark| {
                         if filled {
-                            mark.bg(theme.inverse)
+                            mark.border_1()
+                                .border_color(theme.inverse)
+                                .bg(theme.inverse)
                         } else {
                             mark.border_1()
                                 .border_color(theme.border)
@@ -112,7 +114,9 @@ impl RenderOnce for Checkbox {
                                 })
                         }
                     })
-                    .when(ring, |control| control.child(theme.focus_ring(px(4.0))))
+                    .when(ring, |control| {
+                        control.child(theme.ring_around(theme.focus, px(4.0), px(1.0)))
+                    })
                     .when_some(mark, |container, mark| {
                         container.child(small_icon(mark, theme.on_inverse))
                     }),

@@ -580,11 +580,15 @@ impl Render for Input {
                 theme.border
             })
             .when(focused, |field| {
-                field.child(if self.invalid {
-                    theme.ring_in(theme.danger.opacity(0.45), theme.radius.control)
-                } else {
-                    theme.focus_ring(theme.radius.control)
-                })
+                field.child(theme.ring_around(
+                    if self.invalid {
+                        theme.danger
+                    } else {
+                        theme.focus
+                    },
+                    theme.radius.control,
+                    px(1.0),
+                ))
             })
             .text_size(TEXT_BODY)
             .line_height(LINE_BODY)

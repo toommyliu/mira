@@ -1795,7 +1795,7 @@ fn field_row(
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(field_input(theme, view, field, cx))
+                .child(field_input(theme, view, field, ui::Shape::Box, cx))
                 .child(
                     div()
                         .w(px(8.0))
@@ -1821,14 +1821,7 @@ fn number_chip(
                 .items_center()
                 .gap(px(2.0))
                 .child(reset_button(theme, view, field, cx))
-                .child(
-                    field_input(theme, view, field, cx)
-                        .w(px(40.0))
-                        .h(px(24.0))
-                        .rounded_full()
-                        .justify_center()
-                        .border_0(),
-                ),
+                .child(field_input(theme, view, field, ui::Shape::Pill, cx)),
         )
 }
 
@@ -1853,7 +1846,7 @@ fn stacked_field(
                 .child(field.label())
                 .child(reset_button(theme, view, field, cx)),
         )
-        .child(field_input(theme, view, field, cx).w_full())
+        .child(field_input(theme, view, field, ui::Shape::Box, cx).w_full())
 }
 
 fn reset_button(
@@ -1897,6 +1890,7 @@ fn field_input(
     theme: &Theme,
     view: &RuffleView,
     field: Field,
+    shape: ui::Shape,
     cx: &mut Context<RuffleView>,
 ) -> Stateful<Div> {
     let edit = view.bar.edit.as_ref().filter(|edit| edit.field == field);
@@ -1924,7 +1918,7 @@ fn field_input(
         )
         .role(Role::TextInput)
     } else {
-        ui::number_field(theme, id, text, editing, fresh).role(Role::SpinButton)
+        ui::number_field(theme, id, text, editing, fresh, shape).role(Role::SpinButton)
     }
     .when(!view.field_enabled(field), |input| input.cursor_default())
     .when(!field.editable(&view.automation), |input| {

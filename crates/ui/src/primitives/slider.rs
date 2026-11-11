@@ -231,7 +231,11 @@ impl RenderOnce for Slider {
                                     .border_color(theme.border_strong)
                                     .shadow(theme.raised())
                                     .when(ring, |thumb| {
-                                        thumb.child(theme.ring_at(theme.focus, px(7.0), px(3.0)))
+                                        thumb.child(theme.ring_around(
+                                            theme.focus,
+                                            px(7.0),
+                                            px(1.0),
+                                        ))
                                     }),
                             ),
                     ),
