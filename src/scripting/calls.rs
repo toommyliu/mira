@@ -14,7 +14,7 @@ use crate::{
     army::Armies,
     automation::settings::Automation,
     bridge::{Bridge, CallError},
-    domain::{auth::Logins, counter_attack::CounterAttacks},
+    domain::{CombatCooldown, auth::Logins, counter_attack::CounterAttacks},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -142,6 +142,7 @@ pub(crate) async fn answer(
     automation: Automation,
     armies: Armies,
     counter_attacks: CounterAttacks,
+    cooldown: CombatCooldown,
     state: Rc<RunState>,
     call: Call,
 ) {
@@ -158,6 +159,7 @@ pub(crate) async fn answer(
             &automation,
             &armies,
             &counter_attacks,
+            &cooldown,
             run,
             &state,
             request,
@@ -172,6 +174,7 @@ async fn serve(
     automation: &Automation,
     armies: &Armies,
     counter_attacks: &CounterAttacks,
+    cooldown: &CombatCooldown,
     run: RunId,
     state: &RunState,
     request: Request,
@@ -210,7 +213,7 @@ async fn serve(
             .await
         }
         Request::Inventory(request) => {
-            inventory::serve(bridge, |wants| bridge.subscribe(wants), request).await
+            inventory::serve(bridge, |wants| bridge.subscribe(wants), cooldown, request).await
         }
         Request::TempInventory(request) => inventory::serve_temp(bridge, request),
         Request::Bank(request) => {

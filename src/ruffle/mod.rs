@@ -32,6 +32,7 @@ use crate::{
     },
     bridge::{Bridge, Event, Packets},
     domain::{
+        CombatCooldown,
         auth::{Credentials, Logins},
         bank,
         counter_attack::{self, CounterAttacks},
@@ -247,6 +248,14 @@ fn run(
     let phases = outputs.clone();
     let logins = Rc::new(Logins::default());
     let counter_attacks = CounterAttacks::default();
+    let cooldown = CombatCooldown::default();
+    spawn_local(
+        &inbox,
+        &tasks,
+        cooldown
+            .clone()
+            .track(bridge.clone(), bridge.subscribe(CombatCooldown::wants)),
+    );
     spawn_local(
         &inbox,
         &tasks,
@@ -422,6 +431,7 @@ fn run(
                             automation.clone(),
                             armies.clone(),
                             counter_attacks.clone(),
+                            cooldown.clone(),
                             state,
                             call,
                         ),

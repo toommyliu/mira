@@ -17,20 +17,22 @@ pub(crate) mod shops;
 pub(crate) mod testing;
 pub(crate) mod world;
 
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use serde::{Deserialize, Serialize, de::IgnoredAny};
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, sleep_until};
 
 use crate::bridge::{
     self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription,
 };
+use events::{GameEvent, Kind, Myself};
 
 const POLL: Duration = Duration::from_millis(100);
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_millis(3_500);
 const AFTER_COMBAT_RETRY: Duration = Duration::from_secs(1);
 const AFTER_COMBAT_LIMIT: Duration = Duration::from_secs(10);
+const AFTER_COMBAT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -95,12 +97,66 @@ impl Packet for WarningLine {
     const CMD: &'static str = "warning";
 }
 
-// Only the server tracks this cooldown, and its warning doesn't say which request it refused, so
-// `attempt` must be safe to repeat.
+#[derive(Clone, Default)]
+pub(crate) struct CombatCooldown(Rc<Cell<Fight>>);
+
+#[derive(Clone, Copy, Default)]
+enum Fight {
+    #[default]
+    Calm,
+    Fighting,
+    Left(Instant),
+}
+
+impl CombatCooldown {
+    pub(crate) fn wants(event: &Event) -> bool {
+        Kind::PlayerState.wants(event)
+    }
+
+    pub(crate) async fn track(self, loader: impl Loader, events: Subscription) {
+        loop {
+            let Ok(event) = events.next().await else {
+                continue;
+            };
+            let mut states = Vec::new();
+            Kind::PlayerState.read(&event, &Myself(&loader), &mut states);
+            for event in states {
+                if let GameEvent::PlayerState {
+                    is_self: true,
+                    state,
+                    ..
+                } = event
+                {
+                    self.observe(state);
+                }
+            }
+        }
+    }
+
+    fn observe(&self, state: State) {
+        let fight = match (self.0.get(), state) {
+            (_, State::Combat) => Fight::Fighting,
+            (Fight::Fighting, _) => Fight::Left(Instant::now()),
+            (fight, _) => fight,
+        };
+        self.0.set(fight);
+    }
+
+    async fn settle(&self) {
+        if let Fight::Left(at) = self.0.get() {
+            sleep_until(at + AFTER_COMBAT).await;
+        }
+    }
+}
+
+// The server doesn't announce how long this cooldown lasts, and its warning doesn't say which
+// request it refused, so `attempt` must be safe to repeat.
 pub(crate) async fn retry_after_combat(
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     mut attempt: impl AsyncFnMut() -> Result<bool, CallError>,
 ) -> Result<bool, CallError> {
+    cooldown.settle().await;
     let deadline = Instant::now() + AFTER_COMBAT_LIMIT;
     loop {
         let warnings = Packets::<WarningLine>::subscribe(subscribe);

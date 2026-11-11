@@ -5,7 +5,7 @@ use super::calls::Reply;
 use crate::{
     bridge::{self, Event, Loader, Subscription},
     domain::{
-        self,
+        self, CombatCooldown,
         enhancements::Slot,
         inventory::{self, ItemQuery, Pool},
     },
@@ -84,11 +84,15 @@ impl Request {
 pub(super) async fn serve(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     request: Request,
 ) -> Reply {
     Ok(match request {
         Request::Equip { query, wear } => {
-            json!(inventory::equip(loader, subscribe, &query, wear.unwrap_or(false)).await?)
+            json!(
+                inventory::equip(loader, subscribe, cooldown, &query, wear.unwrap_or(false))
+                    .await?
+            )
         }
         Request::EquipByEnhancement {
             enhancement,
@@ -99,6 +103,7 @@ pub(super) async fn serve(
             inventory::equip_by_enhancement(
                 loader,
                 subscribe,
+                cooldown,
                 &enhancement,
                 special.as_deref(),
                 slot,
@@ -106,8 +111,12 @@ pub(super) async fn serve(
             )
             .await?
         ),
-        Request::Unequip { query } => json!(inventory::unequip(loader, subscribe, &query).await?),
-        Request::Wear { query } => json!(inventory::wear(loader, subscribe, &query).await?),
+        Request::Unequip { query } => {
+            json!(inventory::unequip(loader, subscribe, cooldown, &query).await?)
+        }
+        Request::Wear { query } => {
+            json!(inventory::wear(loader, subscribe, cooldown, &query).await?)
+        }
         Request::Use { query } => json!(inventory::use_item(loader, subscribe, &query).await?),
         request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Items => json!(inventory::items(loader)?),
@@ -229,7 +238,13 @@ mod tests {
             (Request::Use { query: potion() }, json!(false)),
         ] {
             assert_eq!(
-                serve(&loader, |wants| events.subscribe(wants), request.clone()).await,
+                serve(
+                    &loader,
+                    |wants| events.subscribe(wants),
+                    &CombatCooldown::default(),
+                    request.clone(),
+                )
+                .await,
                 Ok(expected),
                 "{request:?}"
             );
@@ -273,7 +288,8 @@ mod tests {
             })
         });
         let events = Events::default();
-        let ask = |request| serve(&loader, |wants| events.subscribe(wants), request);
+        let cooldown = CombatCooldown::default();
+        let ask = |request| serve(&loader, |wants| events.subscribe(wants), &cooldown, request);
         let item = || ItemQuery::ItemId { item_id: 9 };
         for (quantity, expected) in [
             (None, true),

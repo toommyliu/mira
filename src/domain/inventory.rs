@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use super::{
+    CombatCooldown,
     combat::selector,
     enhancements::{self, Kind, Slot},
     player::Boost,
@@ -478,6 +479,7 @@ pub(super) async fn ready_item(
 pub(crate) async fn equip(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     query: &ItemQuery,
     wear: bool,
 ) -> Result<bool, CallError> {
@@ -488,16 +490,16 @@ pub(crate) async fn equip(
     // seia refuses, so only a fresh seia shows that a consumable is ready.
     if item.usable() || !item.equipped {
         let equipped = if item.usable() {
-            equip_consumable(loader, &subscribe, &item).await?
+            equip_consumable(loader, &subscribe, cooldown, &item).await?
         } else {
-            equip_gear(loader, &subscribe, &item).await?
+            equip_gear(loader, &subscribe, cooldown, &item).await?
         };
         if !equipped {
             return Ok(false);
         }
     }
     if wear && item.wearable && !item.worn {
-        return wear_item(loader, &subscribe, &item).await;
+        return wear_item(loader, &subscribe, cooldown, &item).await;
     }
     Ok(true)
 }
@@ -505,6 +507,7 @@ pub(crate) async fn equip(
 pub(crate) async fn equip_by_enhancement(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     enhancement: &str,
     special: Option<&str>,
     slot: Option<Slot>,
@@ -530,15 +533,23 @@ pub(crate) async fn equip_by_enhancement(
     let Some((item_id, _)) = best else {
         return Ok(false);
     };
-    equip(loader, subscribe, &ItemQuery::ItemId { item_id }, wear).await
+    equip(
+        loader,
+        subscribe,
+        cooldown,
+        &ItemQuery::ItemId { item_id },
+        wear,
+    )
+    .await
 }
 
 async fn equip_gear(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     item: &Item,
 ) -> Result<bool, CallError> {
-    retry_after_combat(subscribe, async || {
+    retry_after_combat(subscribe, cooldown, async || {
         if !wait_for_action(loader, GameAction::EquipItem).await? {
             return Ok(false);
         }
@@ -558,12 +569,13 @@ async fn equip_gear(
 async fn equip_consumable(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     item: &Item,
 ) -> Result<bool, CallError> {
     let Some(action) = item.consumable_action() else {
         return Ok(false);
     };
-    retry_after_combat(subscribe, async || {
+    retry_after_combat(subscribe, cooldown, async || {
         let replies = Packets::<SeiaPacket>::subscribe(subscribe);
         if !bridge::inventory::equip(loader, by_id(item.item_id))? {
             return Ok(false);
@@ -588,9 +600,10 @@ async fn equip_consumable(
 async fn wear_item(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     item: &Item,
 ) -> Result<bool, CallError> {
-    retry_after_combat(subscribe, async || {
+    retry_after_combat(subscribe, cooldown, async || {
         if !wait_for_action(loader, GameAction::WearItem).await? {
             return Ok(false);
         }
@@ -611,11 +624,12 @@ async fn wear_item(
 pub(crate) async fn wear(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     query: &ItemQuery,
 ) -> Result<bool, CallError> {
     match ready_item(loader, query).await? {
         Some(item) if item.worn => Ok(true),
-        Some(item) => wear_item(loader, &subscribe, &item).await,
+        Some(item) => wear_item(loader, &subscribe, cooldown, &item).await,
         None => Ok(false),
     }
 }
@@ -623,6 +637,7 @@ pub(crate) async fn wear(
 pub(crate) async fn unequip(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    cooldown: &CombatCooldown,
     query: &ItemQuery,
 ) -> Result<bool, CallError> {
     let Some(item) = ready_item(loader, query).await? else {
@@ -634,7 +649,7 @@ pub(crate) async fn unequip(
     if item.usable() {
         return bridge::inventory::unequip(loader, by_id(item.item_id));
     }
-    retry_after_combat(&subscribe, async || {
+    retry_after_combat(&subscribe, cooldown, async || {
         if !wait_for_action(loader, GameAction::UnequipItem).await? {
             return Ok(false);
         }
@@ -673,7 +688,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{bridge::Events, domain::testing::FakeLoader};
+    use crate::{
+        bridge::Events,
+        domain::{AFTER_COMBAT, State, testing::FakeLoader},
+    };
 
     const UID: f64 = 7.0;
 
@@ -860,7 +878,14 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, subscribe, &by_name("armor"), false).await,
+            equip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("armor"),
+                false
+            )
+            .await,
             Ok(true)
         );
 
@@ -870,7 +895,14 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, subscribe, &by_name("Armor"), false).await,
+            equip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Armor"),
+                false
+            )
+            .await,
             Ok(false)
         );
 
@@ -888,7 +920,14 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, subscribe, &by_name("Armor"), false).await,
+            equip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Armor"),
+                false
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(retried.borrow().sent.len(), 3);
@@ -901,9 +940,41 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, subscribe, &by_name("Armor"), false).await,
+            equip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Armor"),
+                false
+            )
+            .await,
             Ok(false)
         );
+
+        for (states, waits) in [
+            (&[State::Combat, State::Idle][..], true),
+            (&[State::Idle][..], false),
+        ] {
+            let cooldown = CombatCooldown::default();
+            for state in states {
+                cooldown.observe(*state);
+            }
+            let (loader, events, sent) = bag(
+                vec![armor()],
+                vec![(
+                    "inventory.equip",
+                    vec![json!({ "cmd": "equipItem", "ItemID": 5518, "uid": UID })],
+                )],
+            );
+            let subscribe = |wants| events.subscribe(wants);
+            let start = tokio::time::Instant::now();
+            assert_eq!(
+                equip(&loader, subscribe, &cooldown, &by_name("Armor"), false).await,
+                Ok(true)
+            );
+            assert_eq!(start.elapsed() >= AFTER_COMBAT, waits, "{states:?}");
+            assert_eq!(sent.borrow().sent.len(), 1);
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -947,7 +1018,16 @@ mod tests {
             let (loader, events, bag) = bag(items(), replies);
             let subscribe = |wants| events.subscribe(wants);
             assert_eq!(
-                equip_by_enhancement(&loader, subscribe, enhancement, special, slot, false).await,
+                equip_by_enhancement(
+                    &loader,
+                    subscribe,
+                    &CombatCooldown::default(),
+                    enhancement,
+                    special,
+                    slot,
+                    false
+                )
+                .await,
                 Ok(expected.is_some()),
                 "{enhancement} {special:?} {slot:?}"
             );
@@ -975,7 +1055,14 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, subscribe, &by_name("Potion"), false).await,
+            equip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Potion"),
+                false
+            )
+            .await,
             Ok(true)
         );
 
@@ -988,11 +1075,25 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            equip(&loader, &subscribe, &by_name("Potion"), false).await,
+            equip(
+                &loader,
+                &subscribe,
+                &CombatCooldown::default(),
+                &by_name("Potion"),
+                false
+            )
+            .await,
             Ok(false)
         );
         assert_eq!(
-            equip(&loader, &subscribe, &by_name("Potion"), false).await,
+            equip(
+                &loader,
+                &subscribe,
+                &CombatCooldown::default(),
+                &by_name("Potion"),
+                false
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(bag.borrow().sent, ["inventory.equip", "inventory.equip"]);
@@ -1021,7 +1122,14 @@ mod tests {
             );
             let subscribe = |wants| events.subscribe(wants);
             assert_eq!(
-                equip(&loader, subscribe, &by_name("Armor"), wear).await,
+                equip(
+                    &loader,
+                    subscribe,
+                    &CombatCooldown::default(),
+                    &by_name("Armor"),
+                    wear
+                )
+                .await,
                 Ok(expected),
                 "wear {wear}, success {success}"
             );
@@ -1042,14 +1150,26 @@ mod tests {
         );
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            unequip(&loader, subscribe, &by_name("Helm")).await,
+            unequip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Helm")
+            )
+            .await,
             Ok(true)
         );
 
         let (loader, events, _) = bag(vec![helm], Vec::new());
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            unequip(&loader, subscribe, &by_name("Helm")).await,
+            unequip(
+                &loader,
+                subscribe,
+                &CombatCooldown::default(),
+                &by_name("Helm")
+            )
+            .await,
             Ok(false)
         );
 
@@ -1057,11 +1177,23 @@ mod tests {
         let (loader, events, bag) = bag(vec![equipped_potion, armor()], Vec::new());
         let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            unequip(&loader, &subscribe, &by_name("Potion")).await,
+            unequip(
+                &loader,
+                &subscribe,
+                &CombatCooldown::default(),
+                &by_name("Potion")
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(
-            unequip(&loader, &subscribe, &by_name("Armor")).await,
+            unequip(
+                &loader,
+                &subscribe,
+                &CombatCooldown::default(),
+                &by_name("Armor")
+            )
+            .await,
             Ok(true)
         );
         assert_eq!(bag.borrow().sent, ["inventory.unequip"]);
