@@ -235,7 +235,7 @@ impl Client {
                 (window_size.height - super::BAR_HEIGHT).max(px(1.0)),
             ),
         );
-        let inset = bar_inset(left);
+        let inset = bar_inset(window, left);
         view.update(cx, |view, _| {
             view.bar_inset = inset;
             view.layout(player, window)
@@ -799,7 +799,7 @@ impl Client {
             .into_any_element()
     }
 
-    fn sidebar_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let label = match self.sidebar {
             Sidebar::Hidden => "Show sidebar",
@@ -817,7 +817,7 @@ impl Client {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
         div()
             .absolute()
-            .left(TRAFFIC_LIGHTS_WIDTH)
+            .left(sidebar_toggle_left(window))
             .top((super::BAR_HEIGHT - CONTROL_SM) / 2.0)
             .occlude()
             .child(Tooltip::new("sidebar-toggle-tip", label, toggle))
@@ -1019,8 +1019,16 @@ fn control(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div>
     )
 }
 
-fn bar_inset(sidebar_width: Pixels) -> Pixels {
-    (TRAFFIC_LIGHTS_WIDTH + CONTROL_SM - sidebar_width).max(BAR_PADDING)
+fn sidebar_toggle_left(window: &Window) -> Pixels {
+    if window.is_fullscreen() {
+        BAR_PADDING
+    } else {
+        TRAFFIC_LIGHTS_WIDTH
+    }
+}
+
+fn bar_inset(window: &Window, sidebar_width: Pixels) -> Pixels {
+    (sidebar_toggle_left(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
 }
 
 pub(super) fn drag_area() -> gpui::Div {
@@ -1037,7 +1045,7 @@ pub(super) fn drag_area() -> gpui::Div {
 
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = bar_inset(self.sidebar.width());
+        let inset = bar_inset(window, self.sidebar.width());
         for session in &self.sessions {
             if session.view.read(cx).bar_inset != inset {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
@@ -1125,7 +1133,7 @@ impl Render for Client {
                     })
                     .child(body),
             )
-            .child(self.sidebar_toggle(cx))
+            .child(self.sidebar_toggle(window, cx))
     }
 }
 
