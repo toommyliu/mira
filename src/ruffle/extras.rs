@@ -24,7 +24,7 @@ impl Extra {
     pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Extra::CopyMenus => {
-                "Right-click a quest, shop, inventory or bank item to copy its name, ID or details."
+                "Right-click a monster, drop, quest, shop title, or a shop, inventory or bank item to copy its name, ID or details."
             }
             Extra::ChatHistory => {
                 "Press Up and Down in the chat box to bring back messages you've sent."

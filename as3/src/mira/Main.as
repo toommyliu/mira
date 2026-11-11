@@ -15,8 +15,7 @@ package mira {
 	import mira.Externalizer;
 	import mira.module.Modules;
 	import mira.ui.ChatHistory;
-	import mira.ui.ItemCopyMenu;
-	import mira.ui.QuestCopyMenu;
+	import mira.ui.CopyMenu;
 	import mira.util.SFSEvent;
 
 	[BridgeNamespace("flash")]
@@ -102,8 +101,7 @@ package mira {
 
 			Modules.init();
 			this.stg.addEventListener(Event.ENTER_FRAME, Modules.handleFrame);
-			QuestCopyMenu.init(this.gameDomain);
-			ItemCopyMenu.init(this.gameDomain);
+			CopyMenu.init(this.gameDomain);
 
 			this.emitLoaded();
 		}

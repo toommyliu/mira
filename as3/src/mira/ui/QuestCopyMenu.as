@@ -16,8 +16,8 @@ package mira.ui {
       frameClass = domain.getDefinition("QFrameMC") as Class;
     }
 
-    public static function covers(target:Object):Boolean {
-      return target is frameClass;
+    public static function listenerFor(target:Object):Object {
+      return target is frameClass ? target : null;
     }
 
     public static function optionsAt(frame:MovieClip, event:MouseEvent):Array {

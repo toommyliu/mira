@@ -173,6 +173,25 @@ public class World
       return ids;
     }
 
+    [BridgeIgnore]
+    public static function monsterRow(mon:Object):Object
+    {
+      return {
+        monMapId: Number(mon.dataLeaf.MonMapID),
+        monsterId: Number(mon.objData.MonID),
+        name: String(mon.objData.strMonName || ""),
+        race: String(mon.objData.sRace || ""),
+        cell: String(mon.dataLeaf.strFrame || ""),
+        hp: Number(mon.dataLeaf.intHP),
+        maxHp: Number(mon.dataLeaf.intHPMax),
+        level: Number(mon.dataLeaf.iLvl || mon.objData.iLvl),
+        state: int(mon.dataLeaf.intState),
+        available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0,
+        aggressive: mon.objData.bRed == 1,
+        auras: Auras.rows(mon.dataLeaf)
+      };
+    }
+
     [BridgeExport]
     public static function getMonsters():Array
     {
@@ -190,20 +209,7 @@ public class World
           continue;
         }
 
-        monsters.push({
-          monMapId: Number(mon.dataLeaf.MonMapID),
-          monsterId: Number(mon.objData.MonID),
-          name: String(mon.objData.strMonName || ""),
-          race: String(mon.objData.sRace || ""),
-          cell: String(mon.dataLeaf.strFrame || ""),
-          hp: Number(mon.dataLeaf.intHP),
-          maxHp: Number(mon.dataLeaf.intHPMax),
-          level: Number(mon.dataLeaf.iLvl || mon.objData.iLvl),
-          state: int(mon.dataLeaf.intState),
-          available: Boolean(mon.pMC) && mon.dataLeaf.intState > 0,
-          aggressive: mon.objData.bRed == 1,
-          auras: Auras.rows(mon.dataLeaf)
-        });
+        monsters.push(monsterRow(mon));
       }
 
       return monsters;

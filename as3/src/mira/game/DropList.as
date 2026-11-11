@@ -20,7 +20,8 @@ package mira.game {
     }
 
     // DFrame2MC keeps its item in an internal field this package cannot read, so the frame's text is read instead.
-    private static function frameEntry(frame:*):Object {
+    [BridgeIgnore]
+    public static function frameEntry(frame:*):Object {
       if (getQualifiedClassName(frame).indexOf(DROP_FRAME) == -1 || !frame.cnt || !frame.mouseChildren || !frame.cnt.ybtn.mouseEnabled) {
         return null;
       }
@@ -30,12 +31,17 @@ package mira.game {
       return item ? {item: item, quantity: shown[2] ? int(shown[2]) : 1, frame: frame} : null;
     }
 
+    [BridgeIgnore]
+    public static function customEntry(item:Object):Object {
+      return {item: item, quantity: int(Main.Game.cDropsUI.itemCount[item.dID]), frame: null};
+    }
+
     private static function entries():Array {
       var game:Object = Main.Game;
       var found:Array = [];
       if (game.cDropsUI) {
         for each (var item:Object in game.cDropsUI.invTree) {
-          found.push({item: item, quantity: int(game.cDropsUI.itemCount[item.dID]), frame: null});
+          found.push(customEntry(item));
         }
       }
 
@@ -60,7 +66,8 @@ package mira.game {
       return item ? all[items.indexOf(item)] : null;
     }
 
-    private static function row(entry:Object):Object {
+    [BridgeIgnore]
+    public static function row(entry:Object):Object {
       var row:Object = Inventory.row(entry.item);
       row.quantity = entry.quantity;
       return row;

@@ -6,6 +6,7 @@ package mira.ui {
   import flash.events.Event;
   import flash.events.MouseEvent;
   import flash.geom.ColorTransform;
+  import flash.system.ApplicationDomain;
   import flash.system.System;
   import flash.utils.Dictionary;
 
@@ -21,8 +22,16 @@ package mira.ui {
     private static const GAME_WIDTH:int = 960;
     private static const GAME_HEIGHT:int = 500;
 
+    private static const MENUS:Array = [QuestCopyMenu, ItemCopyMenu, MonsterCopyMenu, ShopCopyMenu];
+
     private static var options:Array = [];
     private static var attached:Dictionary = new Dictionary(true);
+
+    public static function init(domain:ApplicationDomain):void {
+      for each (var menu:Object in MENUS) {
+        menu.init(domain);
+      }
+    }
 
     public static function setEnabled(enabled:Boolean):void {
       var stage:Stage = Main.getInstance().getStage();
@@ -55,10 +64,13 @@ package mira.ui {
     }
 
     private static function attach(target:Object):void {
-      var menu:Class = QuestCopyMenu.covers(target) ? QuestCopyMenu : ItemCopyMenu.covers(target) ? ItemCopyMenu : null;
-      if (menu) {
-        target.addEventListener(MouseEvent.RIGHT_MOUSE_DOWN, onRightMouseDown);
-        attached[target] = menu;
+      for each (var menu:Object in MENUS) {
+        var listener:Object = menu.listenerFor(target);
+        if (listener) {
+          listener.addEventListener(MouseEvent.RIGHT_MOUSE_DOWN, onRightMouseDown);
+          attached[listener] = menu;
+          return;
+        }
       }
     }
 
