@@ -77,6 +77,20 @@ pub fn attach(
     cx: &mut App,
 ) -> Stateful<Div> {
     let id = id.into();
+    let popup_id = id.clone();
+    hover(trigger, id, focused, window, cx, move |at, window, cx| {
+        popup(popup_id, label, at, window, cx)
+    })
+}
+
+pub(crate) fn hover(
+    trigger: Stateful<Div>,
+    id: ElementId,
+    focused: bool,
+    window: &mut Window,
+    cx: &mut App,
+    popup: impl FnOnce(Bounds<Pixels>, &Window, &App) -> AnyElement,
+) -> Stateful<Div> {
     let tip = window.use_keyed_state(id.clone(), cx, |_, _| Tip::default());
     let (shown, bounds) = {
         let tip = tip.read(cx);
@@ -141,9 +155,7 @@ pub fn attach(
                 .absolute()
                 .inset_0(),
         )
-        .when(shown, |trigger| {
-            trigger.child(popup(id, label, at, window, cx))
-        })
+        .when(shown, |trigger| trigger.child(popup(at, window, cx)))
 }
 
 fn popup(

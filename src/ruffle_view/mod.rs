@@ -36,7 +36,7 @@ use mira_ui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
-pub(crate) use account::{Changed, State, Summary};
+pub(crate) use account::{Changed, Details, Glance, State, Summary};
 pub(crate) use client::{Client, bind_keys};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use ui::BAR_HEIGHT;

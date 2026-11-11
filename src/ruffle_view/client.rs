@@ -11,16 +11,16 @@ use gpui::{
 };
 
 use super::{
-    Changed, RuffleView, Summary,
+    Changed, Details, Glance, RuffleView, Summary,
     manager::OpenAccounts,
     ui::{self, Glyph},
 };
 use mira_ui::{
-    ActiveTheme as _, Theme,
-    components::status_dot,
+    ActiveTheme as _, Theme, Tone,
+    components::format_keystroke,
     motion,
-    primitives::{Icon, Tooltip, icon, sidebar_icon},
-    theme::{CONTROL_SM, ROW, TEXT_BODY, TEXT_SMALL},
+    primitives::{HoverCard, Icon, Tooltip, attach_card, icon, sidebar_icon},
+    theme::{CONTROL_SM, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
 
 use crate::{
@@ -45,7 +45,11 @@ actions!(
 struct SelectSession(usize);
 
 const SIDEBAR_WIDTH: Pixels = px(208.0);
-const TAB_GAP: Pixels = px(2.0);
+const TAB_ROW: Pixels = px(56.0);
+const TAB_GAP: Pixels = px(4.0);
+const TAB_PADDING: Pixels = px(8.0);
+const TAB_TOP: Pixels = px(8.0);
+const TAB_BOTTOM: Pixels = px(10.0);
 const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
@@ -62,7 +66,7 @@ fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Ve
 }
 
 fn rest_top(slot: Pixels, from: usize, index: usize) -> Pixels {
-    slot + (ROW + TAB_GAP) * (index as f32 - from as f32)
+    slot + (TAB_ROW + TAB_GAP) * (index as f32 - from as f32)
 }
 
 fn drop_index(row_centers: &[f32], from: usize, center: f32) -> usize {
@@ -121,6 +125,23 @@ struct Session {
     view: Entity<RuffleView>,
     player: Inbox,
     _changes: Subscription,
+}
+
+fn tab_card(title: SharedString, details: Details) -> Option<HoverCard> {
+    if details.server.is_none() && details.script.is_none() && details.error.is_none() {
+        return None;
+    }
+    let mut card = HoverCard::new(title);
+    if let Some(server) = details.server {
+        card = card.row("Server", server, Tone::Neutral);
+    }
+    if let Some(script) = details.script {
+        card = card.row("Script", script, Tone::Neutral);
+    }
+    if let Some(error) = details.error {
+        card = card.row("Error", error, Tone::Danger);
+    }
+    Some(card)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -422,9 +443,9 @@ impl Client {
     fn drag_target(&self, drag: TabDrag) -> Option<(usize, usize)> {
         let (from, slot) = self.drag_slot(drag)?;
         let centers: Vec<_> = (0..self.sessions.len())
-            .map(|index| f32::from(rest_top(slot, from, index) + ROW / 2.0))
+            .map(|index| f32::from(rest_top(slot, from, index) + TAB_ROW / 2.0))
             .collect();
-        let center = f32::from(drag.top + ROW / 2.0);
+        let center = f32::from(drag.top + TAB_ROW / 2.0);
         Some((from, drop_index(&centers, from, center)))
     }
 
@@ -443,7 +464,7 @@ impl Client {
         let first = rest_top(slot, from, 0);
         let last = rest_top(slot, from, self.sessions.len().checked_sub(1)?);
         let min = first.max(list.top());
-        let max = last.min(list.bottom() - ROW).max(min);
+        let max = last.min(list.bottom() - TAB_ROW).max(min);
         Some(drag.top.max(min).min(max))
     }
 
@@ -460,22 +481,23 @@ impl Client {
             anchored().position(point(row.left(), top)).child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(px(6.0))
                     .w(row.size.width)
-                    .h(ROW)
-                    .pl(px(8.0))
-                    .pr(px(4.0))
+                    .h(TAB_ROW)
+                    .px(TAB_PADDING)
+                    .pt(TAB_TOP)
+                    .pb(TAB_BOTTOM)
                     .rounded(theme.radius.item)
                     .bg(theme.overlay)
                     .shadow(theme.floating())
                     .text_size(TEXT_BODY)
                     .text_color(theme.text)
-                    .when(index == self.active, |tab| {
-                        tab.font_weight(gpui::FontWeight::MEDIUM)
-                    })
-                    .child(status_dot(theme, session.view.read(cx).activity()))
-                    .child(div().flex_1().truncate().child(session.label.clone())),
+                    .child(tab_face(
+                        theme,
+                        &session.label,
+                        session.view.read(cx).glance(),
+                        index == self.active,
+                        None,
+                    )),
             ),
         ))
     }
@@ -597,6 +619,27 @@ impl Client {
                     .children(tabs),
             )
             .child(drag_area().flex_1())
+            .child(
+                div().flex_none().p(px(8.0)).child(
+                    control(&theme, "accounts")
+                        .w_full()
+                        .justify_between()
+                        .role(Role::Button)
+                        .text_color(theme.text_secondary)
+                        .child("Accounts")
+                        .children(
+                            window
+                                .highest_precedence_binding_for_action(&OpenAccounts)
+                                .and_then(|binding| {
+                                    Some(format_keystroke(binding.keystrokes().first()?.inner()))
+                                })
+                                .map(|keys| div().text_color(theme.text_tertiary).child(keys)),
+                        )
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(OpenAccounts), cx)
+                        }),
+                ),
+            )
             .children(self.lifted_tab(&theme, cx))
     }
 
@@ -611,24 +654,35 @@ impl Client {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let active = index == self.active;
-        let label = session.label.clone();
-        let activity = session.view.read(cx).activity();
+        let glance = session.view.read(cx).glance();
+        let description = glance.as_ref().map(|glance| glance.label.clone());
         let row = div()
             .id(("tab", session.number))
+            .relative()
             .flex()
             .flex_none()
-            .items_center()
-            .gap(px(6.0))
-            .h(ROW)
-            .pl(px(8.0))
-            .pr(px(4.0))
+            .h(TAB_ROW)
+            .px(TAB_PADDING)
+            .pt(TAB_TOP)
+            .pb(TAB_BOTTOM)
             .rounded(theme.radius.item)
             .role(Role::Tab)
-            .aria_label(label.clone())
+            .aria_label(session.label.clone())
+            .when_some(description, |tab, description: SharedString| {
+                tab.aria_description(description)
+            })
             .aria_selected(active)
-            .when(active, |tab| tab.font_weight(gpui::FontWeight::MEDIUM))
-            .child(status_dot(theme, activity))
-            .child(div().flex_1().truncate().child(label.clone()));
+            .child(tab_face(
+                theme,
+                &session.label,
+                glance,
+                active,
+                hint.filter(|_| target.is_none()),
+            ));
+        let row = match tab_card(session.label.clone(), session.view.read(cx).details()) {
+            Some(card) => attach_card(row, ("tab-card", session.number), card, window, cx),
+            None => row,
+        };
         let Some((generation, (from, to))) = target else {
             return self.resting_tab(row, theme, index, session, hint, cx);
         };
@@ -644,12 +698,11 @@ impl Client {
         };
         let offset = motion::travel(
             ("tab-shift", generation * 1_000_000 + session.number),
-            shift * f32::from(ROW + TAB_GAP),
+            shift * f32::from(TAB_ROW + TAB_GAP),
             window,
             cx,
         );
-        row.relative()
-            .top(px(offset))
+        row.top(px(offset))
             .map(|tab| {
                 if active {
                     tab.bg(theme.selected).text_color(theme.text)
@@ -678,11 +731,13 @@ impl Client {
                     ui::pressable(theme, tab).text_color(theme.text_secondary)
                 }
             })
-            .children(hint.map(|number| shortcut_badge(theme, number)))
             .when(hint.is_none(), |tab| {
                 tab.child(
                     div()
                         .id(("close-session", session.number))
+                        .absolute()
+                        .right(px(4.0))
+                        .top(TAB_TOP)
                         .flex()
                         .flex_none()
                         .items_center()
@@ -879,6 +934,54 @@ impl Render for DraggedTab {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
+}
+
+fn tab_face(
+    theme: &Theme,
+    label: &SharedString,
+    glance: Option<Glance>,
+    active: bool,
+    hint: Option<usize>,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .h(LINE_BODY)
+                .when(hint.is_none(), |line| line.pr(px(14.0)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .line_height(LINE_BODY)
+                        .truncate()
+                        .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
+                        .child(label.clone()),
+                )
+                .children(hint.map(|number| shortcut_badge(theme, number))),
+        )
+        .child(
+            div()
+                .h(LINE_SMALL)
+                .truncate()
+                .text_size(TEXT_SMALL)
+                .line_height(LINE_SMALL)
+                .children(glance.map(|glance| {
+                    div()
+                        .text_color(match glance.tone {
+                            Tone::Neutral => theme.text_tertiary,
+                            tone => theme.tone(tone).2,
+                        })
+                        .child(glance.label)
+                })),
+        )
 }
 
 fn shortcut_badge(theme: &Theme, number: usize) -> impl IntoElement {

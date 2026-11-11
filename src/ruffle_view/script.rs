@@ -66,6 +66,19 @@ impl Script {
         }
     }
 
+    pub(super) fn failure(&self) -> Option<String> {
+        match &self.0.as_ref()?.phase {
+            Phase::Finished(Outcome::Failed { message, .. }) => Some(message.clone()),
+            Phase::Finished(Outcome::Killed(Limit::Turn)) => {
+                Some("Stopped for running too long without waiting".into())
+            }
+            Phase::Finished(Outcome::Killed(Limit::Memory)) => {
+                Some("Stopped for using too much memory".into())
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn status(&self) -> Option<String> {
         let Loaded { name, phase, .. } = self.0.as_ref()?;
         match phase {

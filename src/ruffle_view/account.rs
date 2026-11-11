@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{Context, EventEmitter, SharedString};
-use mira_ui::components::Activity;
+use mira_ui::Tone;
 
 use super::{Loading, RuffleView};
 use crate::{accounts::Account, automation::sign_in::Status};
@@ -22,6 +22,26 @@ pub(crate) enum State {
     Online,
     Offline,
     Failed,
+}
+
+pub(crate) struct Glance {
+    pub(crate) label: SharedString,
+    pub(crate) tone: Tone,
+}
+
+impl Glance {
+    fn new(label: impl Into<SharedString>, tone: Tone) -> Self {
+        Self {
+            label: label.into(),
+            tone,
+        }
+    }
+}
+
+pub(crate) struct Details {
+    pub(crate) server: Option<SharedString>,
+    pub(crate) script: Option<SharedString>,
+    pub(crate) error: Option<SharedString>,
 }
 
 pub(crate) struct Summary {
@@ -123,23 +143,86 @@ impl RuffleView {
         }
     }
 
-    pub(super) fn activity(&self) -> Activity {
+    pub(super) fn glance(&self) -> Option<Glance> {
         let link = self.account.as_ref();
-        let status = link.and_then(|link| link.status.as_ref());
-        let queued = link.is_some_and(|link| link.queued.is_some());
-        if self.error.is_some()
-            || matches!(status, Some(Status::Failed(_)))
-            || (self.script.failed() && !queued)
+        let queued = link.and_then(|link| link.queued.as_deref());
+        if self.error.is_some() {
+            return Some(Glance::new("Couldn't start", Tone::Danger));
+        }
+        let online = match link.and_then(|link| link.status.as_ref()) {
+            Some(status @ Status::Online(_)) => Some(login_label(status)),
+            Some(Status::Failed(_)) => return Some(Glance::new("Login failed", Tone::Danger)),
+            Some(Status::LoggingIn { attempt: 1, .. }) => {
+                return Some(Glance::new("Logging in", Tone::Accent));
+            }
+            Some(Status::LoggingIn { attempt, of }) => {
+                return Some(Glance::new(
+                    format!("Logging in {attempt}/{of}"),
+                    Tone::Accent,
+                ));
+            }
+            Some(Status::Retrying { attempt, of }) => {
+                return Some(Glance::new(
+                    format!("Retrying {attempt}/{of}"),
+                    Tone::Warning,
+                ));
+            }
+            Some(Status::ChooseServer) => return Some(Glance::new("Choose server", Tone::Warning)),
+            Some(Status::Offline) => return Some(Glance::new("Offline", Tone::Warning)),
+            None => match (link, self.loading) {
+                (None, Loading::Done) => None,
+                (_, Loading::Percent(percent)) => {
+                    return Some(Glance::new(format!("Loading {percent}%"), Tone::Neutral));
+                }
+                (_, _) => return Some(Glance::new("Loading", Tone::Neutral)),
+            },
+        };
+        let script = self.script.status();
+        if let Some(name) = self.script.loaded()
+            && self.script.failed()
+            && queued.is_none()
         {
-            return Activity::Failed;
+            return Some(Glance::new(format!("{name} failed"), Tone::Danger));
         }
         if self.script.running() {
-            return Activity::Running;
+            return script.map(|status| Glance::new(status, Tone::Accent));
         }
-        match (link, status) {
-            (None, _) | (Some(_), Some(Status::Online(_))) => Activity::Idle,
-            (Some(_), Some(Status::Offline)) => Activity::Stopped,
-            (Some(_), _) => Activity::Waiting,
+        if let Some(queued) = queued {
+            let waiting = format!("Waiting to run {}", file_name(queued));
+            return Some(Glance::new(waiting, Tone::Neutral));
+        }
+        match script {
+            Some(script) => Some(Glance::new(script, Tone::Neutral)),
+            None => online.map(|online| Glance::new(online, Tone::Neutral)),
+        }
+    }
+
+    pub(super) fn details(&self) -> Details {
+        let link = self.account.as_ref();
+        let status = link.and_then(|link| link.status.as_ref());
+        let queued = link
+            .and_then(|link| link.queued.as_deref())
+            .filter(|_| !self.script.running());
+        let server = match status {
+            Some(Status::Online(server)) => server.clone().map(Into::into),
+            _ => None,
+        };
+        let script = match queued {
+            Some(queued) => Some(file_name(queued).into()),
+            None => self.script.loaded().cloned(),
+        };
+        let error = match (&self.error, status) {
+            (Some(error), _) | (None, Some(Status::Failed(error))) => Some(error.clone().into()),
+            _ => self
+                .script
+                .failure()
+                .filter(|_| queued.is_none())
+                .map(Into::into),
+        };
+        Details {
+            server,
+            script,
+            error,
         }
     }
 
