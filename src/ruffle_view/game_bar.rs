@@ -1152,7 +1152,11 @@ fn submenu_row(
     div()
         .on_children_prepainted(move |bounds, _, _| {
             let mut all = rows.get();
-            all[submenu as usize] = bounds[0];
+            all[submenu as usize] = if enabled {
+                bounds[0]
+            } else {
+                Bounds::default()
+            };
             rows.set(all);
         })
         .child(
