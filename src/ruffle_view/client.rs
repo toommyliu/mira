@@ -782,7 +782,6 @@ impl Client {
         index: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let highlight = self.sessions.len() > 1 && index == self.active;
         let (columns, rows) = grid_shape(self.sessions.len());
         let (row, column) = (index / columns, index % columns);
         div()
@@ -798,15 +797,6 @@ impl Client {
             .when(row > 0, |tile| tile.border_t_1())
             .when(row + 1 < rows, |tile| tile.border_b_1())
             .child(self.sessions[index].view.clone())
-            .when(highlight, |tile| {
-                tile.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .border_1()
-                        .border_color(theme.accent),
-                )
-            })
             .on_any_mouse_down(cx.listener(move |this, _, window, cx| {
                 if this.active != index {
                     this.select(index, window, cx);
