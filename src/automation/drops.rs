@@ -1,12 +1,12 @@
 use serde::Serialize;
 use tokio::sync::watch;
 
-use super::quests;
+use super::{quests, unregister_items};
 use crate::{
     bridge::{CallError, Event, Loader, Packets, Subscription},
     domain::{
         self,
-        drops::{self, DropItemPacket},
+        drops::{self, DropItemPacket, DroppedItem},
         inventory::{Item, ItemQuery},
     },
 };
@@ -57,7 +57,38 @@ impl Config {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct State {
     pub(crate) items: Vec<ItemQuery>,
+    pub(crate) sounds: Vec<ItemQuery>,
     pub(crate) config: Config,
+}
+
+impl State {
+    pub(crate) fn unregister(&mut self, items: &[ItemQuery]) {
+        unregister_items(&mut self.items, items);
+        unregister_items(&mut self.sounds, items);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.items.clear();
+        self.sounds.clear();
+    }
+
+    pub(crate) fn rings(&self, query: &ItemQuery) -> bool {
+        self.sounds.iter().any(|sound| sound.same(query))
+    }
+
+    pub(crate) fn set_sound(&mut self, query: &ItemQuery, on: bool) {
+        unregister_items(&mut self.sounds, std::slice::from_ref(query));
+        if on && self.items.iter().any(|item| item.same(query)) {
+            self.sounds.push(query.clone());
+        }
+    }
+
+    fn rings_for(&self, dropped: &DroppedItem) -> bool {
+        self.sounds.iter().any(|sound| match sound {
+            ItemQuery::Name(_) => sound.same(&ItemQuery::Name(dropped.name.clone())),
+            ItemQuery::ItemId { item_id } => dropped.item_id == Some(*item_id),
+        })
+    }
 }
 
 enum Action {
@@ -70,6 +101,7 @@ pub(crate) async fn run(
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
     mut state: watch::Receiver<State>,
     mut quest_state: watch::Receiver<quests::State>,
+    ring: impl Fn(),
 ) {
     let dropped = Packets::<DropItemPacket>::subscribe(&subscribe);
     loop {
@@ -79,7 +111,12 @@ pub(crate) async fn run(
             tracing::debug!(%error, "drop rules skipped a check");
         }
         tokio::select! {
-            _ = dropped.next() => {}
+            packet = dropped.next() => if let Ok(packet) = packet {
+                let state = state.borrow();
+                if packet.items.iter().any(|item| state.rings_for(item)) {
+                    ring();
+                }
+            },
             changed = state.changed() => if changed.is_err() {
                 return;
             },
@@ -192,6 +229,7 @@ mod tests {
     struct List {
         quest_loaded: bool,
         register_on_accept: Option<&'static str>,
+        rings: u32,
         loading: bool,
         waiting: Vec<Drop>,
         accepted: Vec<&'static str>,
@@ -290,13 +328,25 @@ mod tests {
         });
         let (quests, quest_receiver) = watch::channel(quests::State::default());
         let subscriber = events.clone();
+        let rings = list.clone();
         tokio::task::spawn_local(run(
             loader,
             move |wants| subscriber.subscribe(wants),
             receiver,
             quest_receiver,
+            move || rings.borrow_mut().rings += 1,
         ));
         (list, events, rules, quests)
+    }
+
+    fn drop_item(events: &Events, drop: &Drop) {
+        events.publish(&Event::ExtensionResponse {
+            packet: json!({ "type": "json", "dataObj": {
+                "cmd": "dropItem",
+                "items": { drop.id.to_string(): { "ItemID": drop.id, "sName": drop.name, "iQty": 1 } }
+            } })
+            .to_string(),
+        });
     }
 
     async fn settle() {
@@ -433,6 +483,34 @@ mod tests {
                 drop_prize();
                 settle().await;
                 assert_eq!(list.borrow().accepted, ["Prize"], "the quest loads first");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drop_with_a_sound_rings_even_while_the_rules_are_paused() {
+        LocalSet::new()
+            .run_until(async {
+                let (list, events, rules, _quests) = start(Vec::new());
+                register(&rules, "Gem");
+                rules.send_modify(|state| {
+                    state.set_sound(&ItemQuery::Name("gem".into()), true);
+                    state.set_sound(&ItemQuery::Name("Cape".into()), true);
+                    state.config.enabled = false;
+                });
+                assert_eq!(rules.borrow().sounds.len(), 1, "only listed drops ring");
+                settle().await;
+
+                drop_item(&events, &CAPE);
+                drop_item(&events, &GEM);
+                settle().await;
+                assert_eq!(list.borrow().rings, 1);
+
+                rules.send_modify(|state| state.unregister(&[ItemQuery::Name("GEM".into())]));
+                drop_item(&events, &GEM);
+                settle().await;
+                assert_eq!(list.borrow().rings, 1);
+                assert!(rules.borrow().sounds.is_empty());
             })
             .await;
     }

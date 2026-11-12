@@ -79,6 +79,7 @@ pub(crate) enum Output {
     Identity(Option<player::Identity>),
     SignIn(sign_in::Status),
     Stage(Option<view::StageFit>),
+    Beep,
 }
 
 #[derive(Clone)]
@@ -328,6 +329,7 @@ fn run(
         ),
     );
     let subscriber = bridge.clone();
+    let beeps = outputs.clone();
     spawn_local(
         &inbox,
         &tasks,
@@ -336,6 +338,9 @@ fn run(
             move |wants| subscriber.subscribe(wants),
             automation.watch_drops(),
             automation.watch_quests(),
+            move || {
+                let _ = beeps.try_send(Output::Beep);
+            },
         ),
     );
     let subscriber = bridge.clone();

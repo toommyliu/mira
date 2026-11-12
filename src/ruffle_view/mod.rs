@@ -152,6 +152,10 @@ impl RuffleView {
                 while let Ok(output) = outputs.recv().await {
                     let menu = match output {
                         Output::Menu(menu) => menu,
+                        Output::Beep => {
+                            objc2_app_kit::NSBeep();
+                            continue;
+                        }
                         Output::FrameClock(enabled) => {
                             if this
                                 .update(cx, |this: &mut Self, _| {

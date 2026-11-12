@@ -114,11 +114,11 @@ pub(super) fn serve_drops(automation: &Automation, request: DropRequest) -> Repl
             json!(null)
         }
         DropRequest::Unregister { items } => {
-            automation.update_drops(|state| unregister_items(&mut state.items, &items));
+            automation.update_drops(|state| state.unregister(&items));
             json!(null)
         }
         DropRequest::UnregisterAll => {
-            automation.update_drops(|state| state.items.clear());
+            automation.update_drops(|state| state.clear());
             json!(null)
         }
         DropRequest::Registered => json!(automation.drops().items),
