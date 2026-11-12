@@ -1,6 +1,7 @@
 mod account;
 mod client;
 mod environment;
+mod follower;
 mod game_bar;
 mod input;
 mod manager;
@@ -10,6 +11,7 @@ mod profiles;
 mod script;
 mod script_form;
 mod scripts;
+mod shown_tab;
 mod stats;
 mod text_input;
 mod ui;
@@ -48,6 +50,7 @@ use ruffle_core::backend::ui::MouseCursor;
 pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
+pub(crate) use follower::{OpenFollower, open as open_follower};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
@@ -477,12 +480,18 @@ impl RuffleView {
     }
 
     fn follow_moved_profile(&mut self, cx: &mut Context<Self>) {
-        let Some(name) = self.automation.auto_attack().profile else {
-            return;
-        };
-        if let Some(to) = cx.global::<crate::combat_profiles::Store>().moved_to(&name) {
+        let store = cx.global::<crate::combat_profiles::Store>();
+        if let Some(name) = self.automation.auto_attack().profile
+            && let Some(to) = store.moved_to(&name)
+        {
             self.automation
                 .update_auto_attack(|settings| settings.profile = to);
+        }
+        if let Some(name) = self.automation.follower().profile
+            && let Some(to) = store.moved_to(&name)
+        {
+            self.automation
+                .update_follower(|settings| settings.profile = to);
         }
     }
 

@@ -30,8 +30,8 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     army::Armies,
     automation::{
-        anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests,
-        register_items, settings::Automation, sign_in,
+        anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings,
+        quests, register_items, settings::Automation, sign_in,
     },
     bridge::{Bridge, Event, Packets},
     domain::{
@@ -317,6 +317,20 @@ fn run(
             counter_attacks.clone(),
             bridge.subscribe(rotation::wants),
             profiles.clone(),
+        ),
+    );
+    let subscriber = bridge.clone();
+    let following = Automation::clone(&automation);
+    spawn_local(
+        &inbox,
+        &tasks,
+        follower::run(
+            bridge.clone(),
+            move |wants| subscriber.subscribe(wants),
+            automation.watch_follower(),
+            counter_attacks.clone(),
+            profiles.clone(),
+            move |status| following.report_follower(status),
         ),
     );
     let subscriber = bridge.clone();

@@ -15,7 +15,15 @@ pub(crate) struct PlayerUpdate {
     pub(crate) cell: Option<String>,
     pub(crate) pad: Option<String>,
     pub(crate) state: Option<State>,
+    pub(crate) walk: Option<(f64, f64)>,
     pub(crate) joined: bool,
+}
+
+fn destination(x: Option<f64>, y: Option<f64>) -> Option<(f64, f64)> {
+    match (x, y) {
+        (Some(x), Some(y)) if (x, y) != (0.0, 0.0) => Some((x, y)),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize)]
@@ -36,6 +44,10 @@ struct Changes {
     pad: Option<String>,
     #[serde(rename = "intState", default, deserialize_with = "wire::integer")]
     state: Option<i32>,
+    #[serde(default, deserialize_with = "wire::number")]
+    tx: Option<f64>,
+    #[serde(default, deserialize_with = "wire::number")]
+    ty: Option<f64>,
     #[serde(rename = "strUsername")]
     everything: Option<IgnoredAny>,
 }
@@ -57,6 +69,7 @@ impl From<PlayerUpdatePacket> for PlayerUpdate {
             cell: packet.changes.cell,
             pad: packet.changes.pad,
             state: packet.changes.state.and_then(State::from_game),
+            walk: destination(packet.changes.tx, packet.changes.ty),
             joined: packet.changes.everything.is_some(),
         }
     }
@@ -89,12 +102,14 @@ impl From<PlayerUpdateLine> for PlayerUpdate {
         let state = field("intState")
             .and_then(|state| state.parse().ok())
             .and_then(State::from_game);
+        let number = |key: &str| field(key).and_then(|value| value.parse().ok());
         PlayerUpdate {
             username: line.username,
             afk,
             cell,
             pad,
             state,
+            walk: destination(number("tx"), number("ty")),
             joined: false,
         }
     }
@@ -133,8 +148,8 @@ impl Packet for ExitAreaLine {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub(crate) struct Position {
-    x: f64,
-    y: f64,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -143,9 +158,9 @@ pub(crate) struct RoomPlayer {
     name: String,
     username: String,
     user_id: i32,
-    position: Option<Position>,
+    pub(crate) position: Option<Position>,
     pub(crate) cell: String,
-    pad: String,
+    pub(crate) pad: String,
     hp: f64,
     max_hp: f64,
     mp: f64,

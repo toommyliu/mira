@@ -313,7 +313,7 @@ pub(crate) async fn enhance_item(
     }
     if let Some(map) = strategy.map()
         && !bridge::player::get_map(loader)?.is_some_and(|here| here.eq_ignore_ascii_case(map))
-        && !player::join(loader, Packets::subscribe(&subscribe), map, None, None).await?
+        && !player::join(loader, &subscribe, map, None, None).await?
     {
         return Ok(false);
     }

@@ -1344,8 +1344,15 @@ fn windows_panel(theme: &Theme, cx: &mut Context<RuffleView>) -> Stateful<Div> {
                 .child(*label)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.close_menu(window, cx);
-                    if *label == "Environment" {
-                        window.dispatch_action(Box::new(super::OpenEnvironment), cx);
+                    match *label {
+                        "Combat profiles" => {
+                            window.dispatch_action(Box::new(super::OpenCombatProfiles), cx)
+                        }
+                        "Environment" => {
+                            window.dispatch_action(Box::new(super::OpenEnvironment), cx)
+                        }
+                        "Follower" => window.dispatch_action(Box::new(super::OpenFollower), cx),
+                        _ => {}
                     }
                 }))
         },

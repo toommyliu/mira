@@ -4,6 +4,7 @@ pub(crate) mod auto_relogin;
 pub(crate) mod auto_zone;
 pub(crate) mod boosts;
 pub(crate) mod drops;
+pub(crate) mod follower;
 pub(crate) mod game_settings;
 pub(crate) mod quests;
 pub(crate) mod settings;

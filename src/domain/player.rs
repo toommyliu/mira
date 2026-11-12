@@ -1,16 +1,16 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use tokio::time::{Instant, timeout_at};
 
 use super::{
-    POLL, State, arrive, combat,
+    POLL, State, WarningLine, arrive, combat,
     inventory::{self, ItemQuery, Row},
     players, poll, wait_for_action, wait_until_ready, world,
 };
 use crate::bridge::{
-    self, CallError, Format, GameAction, Interruption, Loader, Packet, Packets, Value,
-    packets::wire,
+    self, CallError, Event, Format, GameAction, Interruption, Loader, Packet, Packets,
+    Subscription, Value, packets::wire,
 };
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -155,7 +155,7 @@ impl Packet for MoveToAreaPacket {
 
 pub(crate) async fn join(
     loader: &impl Loader,
-    moves: Packets<MoveToAreaPacket>,
+    subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     map: &str,
     cell: Option<&str>,
     pad: Option<&str>,
@@ -175,12 +175,16 @@ pub(crate) async fn join(
         return Ok(false);
     }
     let deadline = Instant::now() + JOIN_TIMEOUT;
-    moves.clear();
+    let moves = Packets::<MoveToAreaPacket>::subscribe(subscribe);
+    let warnings = Packets::<WarningLine>::subscribe(subscribe);
     bridge::player::join_map(loader, map, Some(cell), Some(pad))?;
-    if !matches!(
-        timeout_at(deadline, moves.next()).await,
-        Ok(Ok(_) | Err(Interruption::Lagged))
-    ) {
+    let moved = tokio::select! {
+        moved = timeout_at(deadline, moves.next()) => matches!(moved, Ok(Ok(_) | Err(Interruption::Lagged))),
+        Some(()) = warnings.answer(JOIN_TIMEOUT, |warning| {
+            (refused(&warning.message) == Some(Refusal::RoomFull)).then_some(())
+        }) => false,
+    };
+    if !moved {
         return Ok(false);
     }
     arrive(loader, deadline - Instant::now(), || {
@@ -199,28 +203,102 @@ pub(crate) async fn join(
     .await
 }
 
-pub(crate) async fn go_to(loader: &impl Loader, username: &str) -> Result<bool, CallError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Arrival {
+    Arrived,
+    Refused(Refusal),
+    Missed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    LockedZone,
+    RoomFull,
+    IgnoringGoto,
+}
+
+fn refused(message: &str) -> Option<Refusal> {
+    let message = message.to_lowercase();
+    if message.contains("a locked zone.") || message.contains("is not available.") {
+        Some(Refusal::LockedZone)
+    } else if message.contains("is full") {
+        Some(Refusal::RoomFull)
+    } else if message.contains("ignoring goto") {
+        Some(Refusal::IgnoringGoto)
+    } else {
+        None
+    }
+}
+
+#[derive(Deserialize)]
+struct ServerLine {
+    _cmd: IgnoredAny,
+    _room: IgnoredAny,
+    message: String,
+}
+
+impl Packet for ServerLine {
+    const FORMAT: Format = Format::Str;
+    const CMD: &'static str = "server";
+}
+
+pub(crate) async fn go_to(
+    loader: &impl Loader,
+    subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    username: &str,
+) -> Result<Arrival, CallError> {
     let username = username.trim();
     if username.is_empty() || !wait_until_ready(loader).await? || !ready_to_transfer(loader).await?
     {
-        return Ok(false);
+        return Ok(Arrival::Missed);
     }
+    let warnings = Packets::<WarningLine>::subscribe(subscribe);
+    let notices = Packets::<ServerLine>::subscribe(subscribe);
     bridge::player::go_to_player(loader, username)?;
-    arrive(loader, JOIN_TIMEOUT, || {
-        if !bridge::world::is_loaded(loader)? || !bridge::player::is_loaded(loader)? {
-            return Ok(None);
+    let arrived = async {
+        let landed = arrive(loader, JOIN_TIMEOUT, || {
+            if !bridge::world::is_loaded(loader)? || !bridge::player::is_loaded(loader)? {
+                return Ok(None);
+            }
+            let (Some(_), Some(cell)) = (
+                players::get(loader, username)?,
+                bridge::player::get_cell(loader)?,
+            ) else {
+                return Ok(None);
+            };
+            Ok(bridge::world::is_cell_ready(loader, &cell, None)?.then_some(true))
+        })
+        .await?;
+        if !landed {
+            return Ok(false);
         }
-        let (Some(target), Some(cell)) = (
-            players::get(loader, username)?,
-            bridge::player::get_cell(loader)?,
-        ) else {
-            return Ok(None);
+        let Some(target) = players::get(loader, username)? else {
+            return Ok(false);
         };
-        Ok((target.cell.eq_ignore_ascii_case(&cell)
-            && bridge::world::is_cell_ready(loader, &cell, None)?)
-        .then_some(true))
-    })
-    .await
+        let here = bridge::player::get_cell(loader)?.unwrap_or_default();
+        if target.cell.eq_ignore_ascii_case(&here) {
+            return Ok(true);
+        }
+        let pad = (!target.pad.is_empty()).then_some(target.pad.as_str());
+        jump(loader, &target.cell, pad).await
+    };
+    tokio::select! {
+        arrived = arrived => Ok(if arrived? { Arrival::Arrived } else { Arrival::Missed }),
+        refusal = refusal(&warnings, &notices) => Ok(Arrival::Refused(refusal)),
+    }
+}
+
+async fn refusal(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>) -> Refusal {
+    loop {
+        let message = tokio::select! {
+            Ok(warning) = warnings.next() => warning.message,
+            Ok(notice) = notices.next() => notice.message,
+            else => std::future::pending().await,
+        };
+        if let Some(refusal) = refused(&message) {
+            return refusal;
+        }
+    }
 }
 
 async fn ready_to_transfer(loader: &impl Loader) -> Result<bool, CallError> {
@@ -599,14 +677,9 @@ mod tests {
     async fn joining_finishes_once_the_server_moves_the_player_and_the_map_loads() {
         let (loader, place) = traveller(in_map("battleon", "Enter"));
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         let (joined, ()) = tokio::join!(
-            join(
-                &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
-                "yulgar-1234",
-                Some("Room"),
-                None
-            ),
+            join(&loader, &subscribe, "yulgar-1234", Some("Room"), None),
             transfer_later(&place, &events, "yulgar", "Room", 0),
         );
         assert_eq!(joined, Ok(true));
@@ -624,13 +697,7 @@ mod tests {
             ..in_map("battleon", "Enter")
         });
         let (joined, ()) = tokio::join!(
-            join(
-                &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
-                "yulgar-1234",
-                None,
-                None
-            ),
+            join(&loader, &subscribe, "yulgar-1234", None, None),
             transfer_later(&place, &events, "yulgar", "Enter", 0),
         );
         assert_eq!(joined, Ok(true));
@@ -642,13 +709,7 @@ mod tests {
                 ..in_map("battleon", "Enter")
             });
             let (joined, (), ()) = tokio::join!(
-                join(
-                    &loader,
-                    Packets::subscribe(|wants| events.subscribe(wants)),
-                    "yulgar-1234",
-                    None,
-                    None
-                ),
+                join(&loader, &subscribe, "yulgar-1234", None, None),
                 async {
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     if place.borrow().state == State::Dead {
@@ -673,12 +734,17 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn going_to_a_player_finishes_in_their_room_and_cell() {
+        let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         let (loader, place) = traveller(Place {
             friend: Some(("yulgar", "Room")),
             transfer_lock: 5,
             ..in_map("battleon", "Enter")
         });
-        assert_eq!(go_to(&loader, " player2 ").await, Ok(true));
+        assert_eq!(
+            go_to(&loader, &subscribe, " player2 ").await,
+            Ok(Arrival::Arrived)
+        );
         assert_eq!(place.borrow().gotos, [Value::String("player2".into())]);
 
         let (loader, place) = traveller(Place {
@@ -687,11 +753,11 @@ mod tests {
             ..in_map("battleon", "Enter")
         });
         let started = Instant::now();
-        let (arrived, ()) = tokio::join!(go_to(&loader, "player2"), async {
+        let (arrived, ()) = tokio::join!(go_to(&loader, &subscribe, "player2"), async {
             tokio::time::sleep(Duration::from_secs(10)).await;
             place.borrow_mut().state = State::Idle;
         });
-        assert_eq!(arrived, Ok(true));
+        assert_eq!(arrived, Ok(Arrival::Arrived));
         assert!(started.elapsed() >= Duration::from_secs(10));
         assert_eq!(place.borrow().gotos.len(), 1);
 
@@ -700,7 +766,10 @@ mod tests {
             state: State::Combat,
             ..in_map("battleon", "Enter")
         });
-        assert_eq!(go_to(&loader, "player2").await, Ok(true));
+        assert_eq!(
+            go_to(&loader, &subscribe, "player2").await,
+            Ok(Arrival::Arrived)
+        );
         {
             let place = place.borrow();
             assert_eq!(place.jumps, [vec!["Enter".into(), "Spawn".into()]]);
@@ -711,31 +780,69 @@ mod tests {
             friend: Some(("battleon", "r2")),
             ..in_map("battleon", "Enter")
         });
-        let started = Instant::now();
-        assert_eq!(go_to(&loader, "player2").await, Ok(false));
-        assert_eq!(started.elapsed(), JOIN_TIMEOUT);
-        assert_eq!(place.borrow().gotos.len(), 1);
+        assert_eq!(
+            go_to(&loader, &subscribe, "player2").await,
+            Ok(Arrival::Arrived)
+        );
+        {
+            let place = place.borrow();
+            assert_eq!(place.gotos.len(), 1);
+            assert_eq!(place.jumps, [vec!["r2".into(), "Spawn".into()]]);
+        }
 
         let (loader, place) = traveller(in_map("battleon", "Enter"));
-        assert_eq!(go_to(&loader, " ").await, Ok(false));
+        assert_eq!(go_to(&loader, &subscribe, " ").await, Ok(Arrival::Missed));
         assert!(place.borrow().gotos.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn going_to_a_player_stops_when_the_server_refuses() {
+        let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
+        let refusals = [
+            (
+                "warning",
+                "Cannot goto to player in a Locked zone.",
+                Refusal::LockedZone,
+            ),
+            (
+                "warning",
+                "Room join failed, destination room is full.",
+                Refusal::RoomFull,
+            ),
+            (
+                "server",
+                "Player2 is ignoring goto requests.",
+                Refusal::IgnoringGoto,
+            ),
+        ];
+        for (cmd, message, refusal) in refusals {
+            let (loader, _) = traveller(in_map("battleon", "Enter"));
+            let started = Instant::now();
+            let (arrived, ()) = tokio::join!(go_to(&loader, &subscribe, "player2"), async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let other = serde_json::json!({ "type": "str", "dataObj": ["server", "-1", "You joined \"battleon-1\""] });
+                let refused = serde_json::json!({ "type": "str", "dataObj": [cmd, "-1", message] });
+                for packet in [other, refused] {
+                    events.publish(&Event::ExtensionResponse {
+                        packet: packet.to_string(),
+                    });
+                }
+            });
+            assert_eq!(arrived, Ok(Arrival::Refused(refusal)));
+            assert_eq!(started.elapsed(), Duration::from_secs(1));
+        }
     }
 
     #[tokio::test(start_paused = true)]
     async fn joining_another_room_of_the_current_map_waits_for_the_transfer() {
         let (loader, place) = traveller(in_map("battleon", "Enter"));
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         let started = Instant::now();
         let ((joined, took), ()) = tokio::join!(
             async {
-                let joined = join(
-                    &loader,
-                    Packets::subscribe(|wants| events.subscribe(wants)),
-                    "battleon-5",
-                    None,
-                    None,
-                )
-                .await;
+                let joined = join(&loader, &subscribe, "battleon-5", None, None).await;
                 (joined, started.elapsed())
             },
             transfer_later(&place, &events, "battleon", "Enter", 0),
@@ -749,14 +856,9 @@ mod tests {
     async fn joining_waits_until_the_avatar_has_loaded() {
         let (loader, place) = traveller(in_map("battleon", "Enter"));
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         let (joined, ()) = tokio::join!(
-            join(
-                &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
-                "yulgar",
-                None,
-                None
-            ),
+            join(&loader, &subscribe, "yulgar", None, None),
             transfer_later(&place, &events, "yulgar", "Enter", 5),
         );
         assert_eq!(joined, Ok(true));
@@ -768,15 +870,9 @@ mod tests {
         for target in ["Battleon", "battleon-1"] {
             let (loader, place) = traveller(in_map("battleon", "Enter"));
             let events = Events::default();
+            let subscribe = |wants| events.subscribe(wants);
             assert_eq!(
-                join(
-                    &loader,
-                    Packets::subscribe(|wants| events.subscribe(wants)),
-                    target,
-                    Some("r2"),
-                    None
-                )
-                .await,
+                join(&loader, &subscribe, target, Some("r2"), None).await,
                 Ok(true),
                 "{target}"
             );
@@ -790,21 +886,35 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_join_the_server_never_answers_returns_false() {
+    async fn a_join_the_server_never_answers_or_refuses_returns_false() {
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         for target in ["yulgar", "battleon-5"] {
             let (loader, _) = traveller(in_map("battleon", "Enter"));
-            let moves = Packets::subscribe(|wants| events.subscribe(wants));
             events.publish(&Event::ExtensionResponse {
                 packet: r#"{"type":"json","dataObj":{"cmd":"moveToArea","areaName":"battleon-1"}}"#
                     .into(),
             });
             assert_eq!(
-                join(&loader, moves, target, None, None).await,
+                join(&loader, &subscribe, target, None, None).await,
                 Ok(false),
                 "{target}"
             );
         }
+
+        let (loader, _) = traveller(in_map("battleon", "Enter"));
+        let started = Instant::now();
+        let (joined, ()) = tokio::join!(
+            join(&loader, &subscribe, "yulgar-9999", None, None),
+            async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                events.publish(&Event::ExtensionResponse {
+                packet: serde_json::json!({ "type": "str", "dataObj": ["warning", "-1", "Room join failed, destination room is full."] }).to_string(),
+            });
+            }
+        );
+        assert_eq!(joined, Ok(false));
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
     }
 
     #[tokio::test(start_paused = true)]
@@ -816,16 +926,10 @@ mod tests {
         assert!(place.borrow().jumps.is_empty());
 
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         let ((joined, took), ()) = tokio::join!(
             async {
-                let joined = join(
-                    &loader,
-                    Packets::subscribe(|wants| events.subscribe(wants)),
-                    "yulgar",
-                    Some("Nowhere"),
-                    None,
-                )
-                .await;
+                let joined = join(&loader, &subscribe, "yulgar", Some("Nowhere"), None).await;
                 (joined, started.elapsed())
             },
             transfer_later(&place, &events, "yulgar", "Enter", 0),
@@ -841,15 +945,9 @@ mod tests {
             ..in_map("battleon", "Enter")
         });
         let events = Events::default();
+        let subscribe = |wants| events.subscribe(wants);
         assert_eq!(
-            join(
-                &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
-                "yulgar",
-                None,
-                None
-            )
-            .await,
+            join(&loader, &subscribe, "yulgar", None, None).await,
             Ok(false)
         );
         assert_eq!(jump(&loader, "r2", None).await, Ok(false));

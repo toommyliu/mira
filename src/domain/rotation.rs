@@ -302,6 +302,16 @@ impl Fighter {
         })
     }
 
+    pub(crate) fn chosen(name: Option<&str>, library: &watch::Receiver<Arc<Library>>) -> Self {
+        let Some(name) = name else {
+            return Self::fixed(Profile::generic());
+        };
+        Self::named(name.to_owned(), library.clone()).unwrap_or_else(|| {
+            tracing::warn!(profile = %name, "no combat profile has this name, so Generic is used");
+            Self::fixed(Profile::generic())
+        })
+    }
+
     pub(crate) fn listening(mut self, messages: Subscription) -> Self {
         self.messages = Some(messages);
         self

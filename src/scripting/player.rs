@@ -4,7 +4,10 @@ use serde_json::json;
 use super::calls::Reply;
 use crate::{
     bridge::{self, Event, Loader, Packets, Subscription},
-    domain::{self, auras, player::Boost},
+    domain::{
+        self, auras,
+        player::{Arrival, Boost},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -120,20 +123,13 @@ pub(super) async fn serve(
     Ok(match request {
         Request::Ready => json!(domain::ready(loader)?),
         Request::JoinMap { map, cell, pad } => json!(
-            domain::player::join(
-                loader,
-                Packets::subscribe(&subscribe),
-                &map,
-                cell.as_deref(),
-                pad.as_deref()
-            )
-            .await?
+            domain::player::join(loader, &subscribe, &map, cell.as_deref(), pad.as_deref()).await?
         ),
         Request::JumpToCell { cell, pad } => {
             json!(domain::player::jump(loader, &cell, pad.as_deref()).await?)
         }
         Request::GoToPlayer { username } => {
-            json!(domain::player::go_to(loader, &username).await?)
+            json!(domain::player::go_to(loader, &subscribe, &username).await? == Arrival::Arrived)
         }
         Request::WalkTo { x, y, speed } => {
             json!(domain::player::walk_and_arrive(loader, x as i32, y as i32, speed).await?)

@@ -1,24 +1,24 @@
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle,
     FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
     primitives::{
-        Button, Checkbox, CheckedState, Dialog, Flow, Icon, Input, InputEvent, Pose, Select,
-        Sortable, Switch, Tabs,
+        Button, Checkbox, CheckedState, Dialog, Flow, Icon, Input, InputEvent, Pose, Sortable,
+        Switch, Tabs,
         button::{Size, Variant},
     },
     theme::{LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
-use tokio::sync::watch;
 
 use super::{
-    BAR_HEIGHT, Client, RuffleView,
+    BAR_HEIGHT, Client,
     client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
+    shown_tab::{self, ShownTab, watch_changes},
 };
 use crate::{
     automation::{
@@ -164,20 +164,11 @@ impl Field {
     }
 }
 
-struct Followed {
-    id: EntityId,
-    view: WeakEntity<RuffleView>,
-    title: SharedString,
-    automation: Automation,
-    _watching: [Task<()>; 3],
-    _renamed: Subscription,
-}
-
 pub(crate) struct Environment {
     client: Entity<Client>,
     focus: FocusHandle,
     section: Section,
-    followed: Option<Followed>,
+    shown: Option<ShownTab>,
     inputs: [Entity<Input>; 4],
     confirm: Option<Confirm>,
     _subscriptions: Vec<Subscription>,
@@ -208,12 +199,12 @@ impl Environment {
                 )
             })
             .collect();
-        subscriptions.push(cx.observe(&client, |this, _, cx| this.follow(None, cx)));
+        subscriptions.push(cx.observe(&client, |this, _, cx| this.show(None, cx)));
         let mut environment = Self {
             client,
             focus: cx.focus_handle(),
             section: Section::Drops,
-            followed: None,
+            shown: None,
             inputs,
             confirm: None,
             _subscriptions: subscriptions,
@@ -223,56 +214,28 @@ impl Environment {
     }
 
     fn show_active(&mut self, cx: &mut Context<Self>) {
-        let active = self
-            .client
-            .read(cx)
-            .active_view(cx)
-            .map(|(view, _)| view.entity_id());
-        self.follow(active, cx);
+        let active = shown_tab::active(&self.client, cx);
+        self.show(active, cx);
     }
 
-    fn follow(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
-        let target = {
-            let client = self.client.read(cx);
-            wanted
-                .or(self.followed.as_ref().map(|followed| followed.id))
-                .and_then(|id| {
-                    client
-                        .titled_views(cx)
-                        .into_iter()
-                        .find(|(view, _)| view.entity_id() == id)
-                })
-                .or_else(|| client.active_view(cx))
-        };
-        let Some((view, title)) = target else {
-            self.followed = None;
+    fn show(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
+        let switched = shown_tab::show(
+            &mut self.shown,
+            &self.client,
+            wanted,
+            |this: &mut Self, cx| this.show(None, cx),
+            |automation, cx| {
+                vec![
+                    watch_changes(automation.watch_drops(), cx),
+                    watch_changes(automation.watch_quests(), cx),
+                    watch_changes(automation.watch_boosts(), cx),
+                ]
+            },
+            cx,
+        );
+        if switched {
             self.confirm = None;
-            return cx.notify();
-        };
-        if let Some(followed) = &mut self.followed
-            && followed.id == view.entity_id()
-        {
-            if followed.title != title {
-                followed.title = title;
-                cx.notify();
-            }
-            return;
         }
-        let automation = view.read(cx).automation.clone();
-        self.followed = Some(Followed {
-            id: view.entity_id(),
-            view: view.downgrade(),
-            title,
-            _watching: [
-                watch_changes(automation.watch_drops(), cx),
-                watch_changes(automation.watch_quests(), cx),
-                watch_changes(automation.watch_boosts(), cx),
-            ],
-            automation,
-            _renamed: cx.observe(&view, |this, _, cx| this.follow(None, cx)),
-        });
-        self.confirm = None;
-        cx.notify();
     }
 
     fn input(&self, field: Field) -> &Entity<Input> {
@@ -294,11 +257,7 @@ impl Environment {
     }
 
     fn add(&mut self, section: Section, cx: &mut Context<Self>) {
-        let Some(automation) = self
-            .followed
-            .as_ref()
-            .map(|followed| followed.automation.clone())
-        else {
+        let Some(automation) = self.shown.as_ref().map(|shown| shown.automation.clone()) else {
             return;
         };
         match section {
@@ -345,25 +304,25 @@ impl Environment {
     }
 
     fn fetch_boosts(&self, cx: &mut Context<Self>) {
-        if let Some(followed) = &self.followed {
-            let _ = followed
+        if let Some(shown) = &self.shown {
+            let _ = shown
                 .view
                 .update(cx, |view, _| view.session.command(Command::FetchBoosts));
         }
     }
 
     fn confirmed(&mut self, cx: &mut Context<Self>) {
-        let (Some(confirm), Some(followed)) = (self.confirm.take(), &self.followed) else {
+        let (Some(confirm), Some(shown)) = (self.confirm.take(), &self.shown) else {
             return;
         };
         match confirm {
-            Confirm::Clear(section) => section.clear(&followed.automation),
+            Confirm::Clear(section) => section.clear(&shown.automation),
             Confirm::ApplyToAll => {
                 for view in self.client.read(cx).views() {
-                    if view.entity_id() != followed.id {
+                    if view.entity_id() != shown.id {
                         view.read(cx)
                             .automation
-                            .copy_environment_from(&followed.automation);
+                            .copy_environment_from(&shown.automation);
                     }
                 }
             }
@@ -587,19 +546,6 @@ impl Environment {
     }
 }
 
-fn watch_changes<T: Send + Sync + 'static>(
-    mut changes: watch::Receiver<T>,
-    cx: &mut Context<Environment>,
-) -> Task<()> {
-    cx.spawn(async move |this, cx| {
-        while changes.changed().await.is_ok() {
-            if this.update(cx, |_, cx| cx.notify()).is_err() {
-                break;
-            }
-        }
-    })
-}
-
 fn positive_id(text: &str) -> Option<i32> {
     text.parse().ok().filter(|id| *id > 0)
 }
@@ -745,29 +691,17 @@ impl Render for Environment {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let tabs = self.client.read(cx).views().len();
-        let titled = self.client.read(cx).titled_views(cx);
         let followed = self
-            .followed
+            .shown
             .as_ref()
-            .map(|followed| (followed.id, followed.automation.clone()));
-        let picked = followed
-            .as_ref()
-            .and_then(|(id, _)| titled.iter().position(|(view, _)| view.entity_id() == *id));
-        let picker = Select::new(
+            .map(|shown| (shown.id, shown.automation.clone()));
+        let picker = shown_tab::picker(
             "environment-tab",
-            "Tab",
-            titled.iter().map(|(_, title)| title.clone()).collect(),
-            picked,
-        )
-        .placeholder("No tabs")
-        .width(px(200.0))
-        .on_select({
-            let this = cx.weak_entity();
-            let ids: Vec<EntityId> = titled.iter().map(|(view, _)| view.entity_id()).collect();
-            move |index, _, cx| {
-                let _ = this.update(cx, |this, cx| this.follow(Some(ids[index]), cx));
-            }
-        });
+            &self.client,
+            self.shown.as_ref(),
+            |this: &mut Self, id, cx| this.show(Some(id), cx),
+            cx,
+        );
         let (body, labels, clearable) = match &followed {
             Some((_, automation)) => {
                 let body = match self.section {

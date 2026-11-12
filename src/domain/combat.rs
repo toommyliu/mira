@@ -102,6 +102,55 @@ pub(crate) fn targets_countering(
         && matches!(target(loader)?, Some(Target::Monster(monster)) if counter_attacks.countering(monster.mon_map_id)))
 }
 
+pub(crate) fn fight_any(
+    loader: &impl Loader,
+    counter_attacks: &CounterAttacks,
+    fighter: &mut Fighter,
+    first: &[MonsterQuery],
+) -> Result<(), CallError> {
+    if !auth::in_game(loader)?
+        || counter_attacks.holds_skills(loader)?
+        || targets_countering(loader, counter_attacks)?
+    {
+        return Ok(());
+    }
+    let preferred =
+        world::first_available_mon_map_id(loader, first, |id| !counter_attacks.countering(id))?;
+    let attacked = match preferred {
+        Some(id) if targeting(loader, id)? => true,
+        Some(id) => {
+            fighter.restart();
+            attack_id(loader, id)?
+        }
+        None if bridge::combat::has_target(loader)? => true,
+        None => {
+            fighter.restart();
+            attack_any(loader, counter_attacks)?
+        }
+    };
+    if attacked {
+        fighter.act(loader)?;
+    }
+    Ok(())
+}
+
+fn targeting(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
+    Ok(matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == id))
+}
+
+fn attack_any(loader: &impl Loader, counter_attacks: &CounterAttacks) -> Result<bool, CallError> {
+    let Value::List(ids) = bridge::world::get_available_monster_map_ids(loader)? else {
+        return Ok(false);
+    };
+    match ids.into_iter().find_map(|id| match id {
+        Value::Number(id) if !counter_attacks.countering(id) => Some(id),
+        _ => None,
+    }) {
+        Some(id) => attack_id(loader, id),
+        None => Ok(false),
+    }
+}
+
 fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
     bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
 }

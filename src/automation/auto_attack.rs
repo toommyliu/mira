@@ -5,10 +5,9 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::bridge::{self, CallError, Loader, Subscription, Value};
+use crate::bridge::{Loader, Subscription};
 use crate::domain::{
-    auth,
-    combat::{TICK, selector, targets_countering},
+    combat::{self, TICK},
     counter_attack::CounterAttacks,
     profiles::{Library, Profile},
     rotation::Fighter,
@@ -33,7 +32,7 @@ pub(crate) async fn run(
     loop {
         let Settings { enabled, profile } = settings.borrow_and_update().clone();
         if chosen.as_ref() != Some(&profile) {
-            fighter.switch(choose(profile.as_deref(), &library));
+            fighter.switch(Fighter::chosen(profile.as_deref(), &library));
             chosen = Some(profile);
         }
         tokio::select! {
@@ -45,60 +44,13 @@ pub(crate) async fn run(
             }
             () = fighter.listen(&loader) => {}
             () = sleep_until(next), if enabled => {
-                if let Err(error) = attack(&loader, &counter_attacks, &mut fighter) {
+                if let Err(error) = combat::fight_any(&loader, &counter_attacks, &mut fighter, &[]) {
                     tracing::debug!(%error, "auto attack skipped a tick");
                 }
                 next = Instant::now() + TICK;
             }
         }
     }
-}
-
-fn choose(name: Option<&str>, library: &watch::Receiver<Arc<Library>>) -> Fighter {
-    let Some(name) = name else {
-        return Fighter::fixed(Profile::generic());
-    };
-    Fighter::named(name.to_owned(), library.clone()).unwrap_or_else(|| {
-        tracing::warn!(profile = %name, "no combat profile has this name, so auto attack uses Generic");
-        Fighter::fixed(Profile::generic())
-    })
-}
-
-fn attack(
-    loader: &impl Loader,
-    counter_attacks: &CounterAttacks,
-    fighter: &mut Fighter,
-) -> Result<(), CallError> {
-    if !auth::in_game(loader)?
-        || counter_attacks.holds_skills(loader)?
-        || targets_countering(loader, counter_attacks)?
-    {
-        return Ok(());
-    }
-    if !bridge::combat::has_target(loader)? {
-        fighter.restart();
-        if !target_any_monster(loader, counter_attacks)? {
-            return Ok(());
-        }
-    }
-    fighter.act(loader)?;
-    Ok(())
-}
-
-fn target_any_monster(
-    loader: &impl Loader,
-    counter_attacks: &CounterAttacks,
-) -> Result<bool, CallError> {
-    let Value::List(ids) = bridge::world::get_available_monster_map_ids(loader)? else {
-        return Ok(false);
-    };
-    let Some(id) = ids.into_iter().find_map(|id| match id {
-        Value::Number(id) if !counter_attacks.countering(id) => Some(id),
-        _ => None,
-    }) else {
-        return Ok(false);
-    };
-    bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
 }
 
 #[cfg(test)]
@@ -110,7 +62,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{Event, Events},
+        bridge::{Event, Events, Value},
         domain::testing::FakeLoader,
     };
 
