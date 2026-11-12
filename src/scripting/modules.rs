@@ -135,40 +135,41 @@ impl Modules {
 
     pub(super) fn rewrite_stack(&self, stack: &str) -> String {
         let maps = self.0.maps.borrow();
-        stack
+        let own: Vec<String> = stack
             .lines()
-            .map(|line| self.rewrite_frame(line, &maps))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .filter_map(|line| self.own_frame(line, &maps))
+            .collect();
+        if own.is_empty() {
+            stack.to_owned()
+        } else {
+            own.join("\n")
+        }
     }
 
-    fn rewrite_frame(&self, line: &str, maps: &HashMap<String, LineMap>) -> String {
+    fn own_frame(&self, line: &str, maps: &HashMap<String, LineMap>) -> Option<String> {
         let (prefix, location, suffix) = match (line.rfind('('), line.ends_with(')')) {
             (Some(open), true) => (&line[..=open], &line[open + 1..line.len() - 1], ")"),
-            _ => match line.find("at ") {
-                Some(at) => (&line[..at + 3], &line[at + 3..], ""),
-                None => return line.to_owned(),
-            },
+            _ => {
+                let at = line.find("at ")?;
+                (&line[..at + 3], &line[at + 3..], "")
+            }
         };
         let mut parts = location.rsplitn(3, ':');
         let (Some(column), Some(row), Some(file)) = (parts.next(), parts.next(), parts.next())
         else {
-            return line.to_owned();
+            return None;
         };
         let (Ok(row), Ok(column)) = (row.parse::<u32>(), column.parse::<u32>()) else {
-            return line.to_owned();
+            return None;
         };
         if file.starts_with(INTERNAL) {
-            return line.to_owned();
+            return None;
         }
         let (row, column) = maps
             .get(file)
             .and_then(|map| map.original(row, column))
             .unwrap_or((row, column));
-        format!(
-            "{prefix}{}:{row}:{column}{suffix}",
-            self.display(Path::new(file))
-        )
+        Some(format!("{prefix}{file}:{row}:{column}{suffix}"))
     }
 }
 

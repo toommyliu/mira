@@ -104,6 +104,7 @@ impl RuffleView {
         }
         let name: SharedString = super::account::file_name(&entry).into();
         let inbox = self.session.inbox();
+        let path = entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let started = Run::start(
             entry.clone(),
@@ -117,7 +118,11 @@ impl RuffleView {
             Box::new(move |message| inbox.post(Msg::Script(message))),
             move |outcome| {
                 if let Outcome::Failed { message, stack } = &outcome {
-                    tracing::warn!(target: "mira::script", stack = stack.as_deref().unwrap_or(""), "{message}");
+                    let stack = stack
+                        .as_deref()
+                        .map(|stack| format!("\n{stack}"))
+                        .unwrap_or_default();
+                    tracing::warn!(target: "mira::script", "{} failed: {message}{stack}", path.display());
                 }
                 let _ = finished.try_send(outcome);
             },
@@ -135,10 +140,13 @@ impl RuffleView {
                     stopping: false,
                 }
             }
-            Err(error) => Phase::Finished(Outcome::Failed {
-                message: error.to_string(),
-                stack: None,
-            }),
+            Err(error) => {
+                tracing::warn!(target: "mira::script", "{} failed: {error}", entry.display());
+                Phase::Finished(Outcome::Failed {
+                    message: error.to_string(),
+                    stack: None,
+                })
+            }
         };
         self.script = Script(Some(Loaded { entry, name, phase }));
         self.changed(cx);

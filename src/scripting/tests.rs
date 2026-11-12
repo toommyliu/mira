@@ -1117,7 +1117,39 @@ export default function* () {
     )
     .finish();
     assert_eq!(finished.logs, ["false"]);
-    assert_eq!(failure(&finished.outcome).0, "player.getHp threw: boom");
+    let (message, stack) = failure(&finished.outcome);
+    assert_eq!(message, "player.getHp threw: boom");
+    let main = fs::canonicalize(folder.0.join("main.ts")).unwrap();
+    assert_eq!(stack, format!("    at default ({}:5:17)", main.display()));
+}
+
+#[test]
+fn a_failed_call_with_no_script_frame_keeps_the_runtime_stack() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Army } from "mira";
+
+export default function* () {
+  yield* Army.joinMap("bossmap");
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| {
+            Some(Err(CallError::Threw {
+                callback: "army.sync",
+                message: "boom".into(),
+            }))
+        }),
+    )
+    .finish();
+    let (message, stack) = failure(&finished.outcome);
+    assert_eq!(message, "army.sync threw: boom");
+    assert!(stack.contains("internal:/"), "stack was {stack}");
 }
 
 #[test]
