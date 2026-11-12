@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Mira supports macOS only.");
 
+mod account_settings;
 mod accounts;
 mod army;
 mod automation;
@@ -47,6 +48,7 @@ fn main() -> anyhow::Result<()> {
             ruffle_view::bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             settings::init(data.join("settings.json"), set_menus, cx);
+            account_settings::init(data.join("account-settings"), cx);
             set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

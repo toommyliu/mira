@@ -18,7 +18,9 @@ const LOST_DIALOG: [&str; 3] = ["has been lost", "restart", "maintenance"];
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct Settings {
+    #[serde(skip)]
     pub(crate) enabled: bool,
+    #[serde(skip)]
     pub(crate) server: Option<String>,
     pub(crate) delay_seconds: u32,
     pub(crate) retries: u32,

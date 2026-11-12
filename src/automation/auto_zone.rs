@@ -67,8 +67,7 @@ impl Room {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Settings {
     pub(crate) enabled: bool,
     pub(crate) room: Option<Room>,

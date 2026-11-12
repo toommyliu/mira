@@ -66,6 +66,7 @@ impl RuffleView {
             username: account.username.clone(),
             queued: script,
         });
+        self.use_account_settings(account.id(), cx);
         self.status = None;
         self.session
             .sign_in(account.credentials(), account.server.clone());

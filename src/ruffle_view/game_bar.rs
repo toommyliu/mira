@@ -212,10 +212,7 @@ impl Field {
             Field::WalkSpeed => {
                 view.change_game_settings(|settings| settings.walk_speed = value, cx)
             }
-            Field::FrameRate => {
-                view.automation.set_frame_rate(value);
-                cx.notify();
-            }
+            Field::FrameRate => view.change_frame_rate(value, cx),
             Field::AddQuest => {
                 view.automation.update_quests(|state| {
                     state.register([Registered {
@@ -248,10 +245,7 @@ impl Field {
                 |settings| settings.walk_speed = GameSettings::default().walk_speed,
                 cx,
             ),
-            Field::FrameRate => {
-                view.automation.set_frame_rate(FrameRate::DEFAULT);
-                cx.notify();
-            }
+            Field::FrameRate => view.change_frame_rate(FrameRate::DEFAULT, cx),
             Field::CustomName => {
                 view.change_game_settings(|settings| settings.custom_name = None, cx)
             }

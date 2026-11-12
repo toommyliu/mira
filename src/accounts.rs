@@ -29,6 +29,10 @@ impl AccountId {
     pub(crate) fn of(username: &str) -> Self {
         Self(username.to_lowercase())
     }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Account {

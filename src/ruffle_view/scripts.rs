@@ -26,11 +26,16 @@ use super::{
     account::file_name,
     client::Tab,
     script_form::{
-        FieldSpec, Kind, Queued, ROOMS, SPECIFIC_ROOM, TabState, Value, room_note, room_valid,
+        FieldSpec, Kind, Queued, ROOMS, SPECIFIC_ROOM, TabState, Value, room_choice, room_note,
         sample_fields, summary,
     },
 };
-use crate::{scripting::SCRIPT_EXTENSIONS, settings};
+use crate::{
+    account_settings::{self, RoomNumber, Rooms, Scripts},
+    accounts::AccountId,
+    scripting::SCRIPT_EXTENSIONS,
+    settings,
+};
 
 actions!(mira, [OpenScripts]);
 
@@ -320,6 +325,8 @@ pub(super) struct Picker {
     scanning: Option<Task<()>>,
     search: Entity<Input>,
     room: Entity<Input>,
+    room_pending: bool,
+    room_error: bool,
     selected: usize,
     filter: Option<PathBuf>,
     pane: Pane,
@@ -363,14 +370,17 @@ impl Picker {
                 InputEvent::Submitted => this.run_selected(cx),
             }),
             cx.subscribe_in(&room, window, |this, room, event, window, cx| {
-                let number: SharedString = room.read(cx).text().to_owned().into();
-                let state = this.tab_state();
+                let number = room.read(cx).text().to_owned();
                 match event {
-                    InputEvent::Submitted if room_valid(&number) => window.blur(cx),
-                    InputEvent::Submitted => state.room_error = true,
+                    InputEvent::Submitted if RoomNumber::parse(&number).is_some() => {
+                        window.blur(cx)
+                    }
+                    InputEvent::Submitted => this.room_error = true,
                     InputEvent::Changed => {
-                        state.room_error = room_note(&number).is_err();
-                        state.room_number = number;
+                        this.room_error = room_note(&number).is_err();
+                        if this.room_choice(cx) == SPECIFIC_ROOM {
+                            this.choose_room_number(&number, cx);
+                        }
                     }
                 }
                 this.show_room_error(cx);
@@ -386,6 +396,8 @@ impl Picker {
             scanning: None,
             search,
             room,
+            room_pending: false,
+            room_error: false,
             selected: 0,
             filter: None,
             pane: Pane::Library,
@@ -398,17 +410,18 @@ impl Picker {
         }
     }
 
-    pub(super) fn show(&mut self, tab: usize, cx: &mut Context<Self>) {
+    pub(super) fn show(&mut self, tab: usize, account: Option<&AccountId>, cx: &mut Context<Self>) {
         self.open = true;
         self.tab = tab;
         self.pane = Pane::Library;
         self.queued = 0;
         self.search.update(cx, |search, cx| search.set_text("", cx));
-        let number = self
-            .tabs
-            .get(&tab)
-            .map(|state| state.room_number.clone())
-            .unwrap_or_default();
+        let number = match account.map(|account| account_settings::get(account, cx).scripts.rooms) {
+            Some(Rooms::Specific { number }) => number.get().to_string(),
+            _ => String::new(),
+        };
+        self.room_pending = false;
+        self.room_error = false;
         self.room.update(cx, |input, cx| input.set_text(number, cx));
         self.selected = 0;
         self.rescan(cx);
@@ -416,15 +429,55 @@ impl Picker {
     }
 
     fn show_room_error(&mut self, cx: &mut Context<Self>) {
-        let state = self.tab_state();
-        let invalid = state.room == SPECIFIC_ROOM && state.room_error;
+        let invalid = self.room_choice(cx) == SPECIFIC_ROOM && self.room_error;
         self.room
             .update(cx, |input, cx| input.set_invalid(invalid, cx));
         cx.notify();
     }
 
-    fn room_ready(&self) -> bool {
-        self.tabs.get(&self.tab).is_none_or(TabState::room_ready)
+    fn scripts(&self, cx: &App) -> Option<Scripts> {
+        let account = self.tab(cx)?.account?;
+        Some(account_settings::get(&account, cx).scripts)
+    }
+
+    fn change_scripts(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Scripts)) {
+        if let Some(account) = self.tab(cx).and_then(|tab| tab.account) {
+            account_settings::change(&account, cx, |settings| edit(&mut settings.scripts));
+        }
+        cx.notify();
+    }
+
+    fn room_choice(&self, cx: &App) -> usize {
+        if self.room_pending {
+            return SPECIFIC_ROOM;
+        }
+        room_choice(self.scripts(cx).unwrap_or_default().rooms)
+    }
+
+    fn choose_room(&mut self, choice: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let rooms = match choice {
+            0 => Rooms::Public,
+            1 => Rooms::RandomPrivate,
+            _ => {
+                let number = self.room.read(cx).text().to_owned();
+                self.room_error = room_note(&number).is_err();
+                self.choose_room_number(&number, cx);
+                window.focus(&self.room.focus_handle(cx), cx);
+                return self.show_room_error(cx);
+            }
+        };
+        self.room_pending = false;
+        self.change_scripts(cx, |scripts| scripts.rooms = rooms);
+        self.show_room_error(cx);
+    }
+
+    fn choose_room_number(&mut self, number: &str, cx: &mut Context<Self>) {
+        let Some(number) = RoomNumber::parse(number) else {
+            self.room_pending = true;
+            return;
+        };
+        self.room_pending = false;
+        self.change_scripts(cx, |scripts| scripts.rooms = Rooms::Specific { number });
     }
 
     fn close(&mut self, cx: &mut Context<Self>) {
@@ -515,7 +568,7 @@ impl Picker {
     }
 
     fn run_selected(&mut self, cx: &mut Context<Self>) {
-        if self.tab(cx).is_some_and(|tab| tab.running) || !self.form_valid() || !self.room_ready() {
+        if self.tab(cx).is_some_and(|tab| tab.running) || !self.form_valid() || self.room_pending {
             return;
         }
         if let Some(Row::Script(entry)) = self.rows(cx).get(self.selected) {
@@ -867,25 +920,19 @@ impl Picker {
                 return div().into_any_element();
             };
             let picker = picker.read(cx);
-            let state = picker.tabs.get(&picker.tab);
-            let (safe_start, restart, room, room_error) =
-                state.map_or((false, false, 0, false), |state| {
-                    (
-                        state.safe_start,
-                        state.restart,
-                        state.room,
-                        state.room_error,
-                    )
-                });
+            let scripts = picker.scripts(cx);
+            let editable = scripts.is_some();
+            let scripts = scripts.unwrap_or_default();
+            let room = picker.room_choice(cx);
+            let room_error = picker.room_error;
             let note = room_note(picker.room.read(cx).text());
             let room_input = picker.room.clone();
             let choose_room = this.clone();
-            let toggle = |set: fn(&mut TabState, bool)| {
+            let toggle = |set: fn(&mut Scripts, bool)| {
                 let this = this.clone();
                 move |on, _: &mut Window, cx: &mut App| {
                     let _ = this.update(cx, |this, cx| {
-                        set(this.tab_state(), on);
-                        cx.notify();
+                        this.change_scripts(cx, |scripts| set(scripts, on));
                     });
                 }
             };
@@ -895,21 +942,30 @@ impl Picker {
                 .flex()
                 .flex_col()
                 .gap(px(14.0))
+                .when(!editable, |options| {
+                    options.child(muted(&theme, "Log in to change script settings."))
+                })
                 .child(option_row(
                     &theme,
                     "Safe start and stop",
                     "Best effort attempt to start or stop the script at your house.",
-                    Switch::new("safe-start", "Safe start and stop", safe_start)
+                    Switch::new("safe-start", "Safe start and stop", scripts.safe_start_stop)
                         .hide_label()
-                        .on_toggle(toggle(|state, on| state.safe_start = on)),
+                        .disabled(!editable)
+                        .on_toggle(toggle(|scripts, on| scripts.safe_start_stop = on)),
                 ))
                 .child(option_row(
                     &theme,
                     "Restart after reconnecting",
                     "Restart the active script when the same account reconnects.",
-                    Switch::new("restart", "Restart after reconnecting", restart)
-                        .hide_label()
-                        .on_toggle(toggle(|state, on| state.restart = on)),
+                    Switch::new(
+                        "restart",
+                        "Restart after reconnecting",
+                        scripts.restart_after_reconnect,
+                    )
+                    .hide_label()
+                    .disabled(!editable)
+                    .on_toggle(toggle(|scripts, on| scripts.restart_after_reconnect = on)),
                 ))
                 .child(div().h(px(1.0)).bg(theme.hairline))
                 .child(
@@ -931,6 +987,7 @@ impl Picker {
                                     .enumerate()
                                     .map(|(index, label)| {
                                         let radio = Radio::new(label);
+                                        let radio = if editable { radio } else { radio.disabled() };
                                         match index {
                                             SPECIFIC_ROOM if room == SPECIFIC_ROOM => radio
                                                 .description(hint)
@@ -946,15 +1003,8 @@ impl Picker {
                                 Some(room),
                             )
                             .on_select(move |room, window, cx| {
-                                let _ = choose_room.update(cx, |this, cx| {
-                                    let state = this.tab_state();
-                                    state.room = room;
-                                    state.room_error = room_note(&state.room_number).is_err();
-                                    this.show_room_error(cx);
-                                    if room == SPECIFIC_ROOM {
-                                        window.focus(&this.room.focus_handle(cx), cx);
-                                    }
-                                });
+                                let _ = choose_room
+                                    .update(cx, |this, cx| this.choose_room(room, window, cx));
                             }),
                         ),
                 )
@@ -1325,7 +1375,7 @@ impl Render for Picker {
         let running = tab.as_ref().is_some_and(|tab| tab.running);
         let queued = self.queue().len();
         let queue_running = self.queue_running();
-        let room_ready = self.room_ready();
+        let room_ready = !self.room_pending;
         let queue_valid = self
             .queue()
             .iter()

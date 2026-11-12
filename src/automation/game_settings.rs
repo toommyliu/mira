@@ -39,8 +39,8 @@ impl RenderingMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(into = "RenderingMode")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "RenderingMode", from = "RenderingMode")]
 pub(crate) struct Rendering {
     mode: RenderingMode,
     resume: RenderingMode,
@@ -71,14 +71,22 @@ impl Rendering {
     }
 }
 
+impl From<RenderingMode> for Rendering {
+    fn from(mode: RenderingMode) -> Self {
+        let mut rendering = Rendering::default();
+        rendering.set(mode);
+        rendering
+    }
+}
+
 impl From<Rendering> for RenderingMode {
     fn from(rendering: Rendering) -> Self {
         rendering.mode()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub(crate) struct Settings {
     pub(crate) infinite_range: bool,
     pub(crate) provoke_cell: bool,
@@ -597,6 +605,40 @@ mod tests {
                 ticks(1).await;
                 let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
                 assert_eq!(drain(&sent), [set(2.0), set(48.0)]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_accounts_saved_frame_rate_returns_when_minimal_rendering_resumes() {
+        LocalSet::new()
+            .run_until(async {
+                let sent = Sent::default();
+                let log = sent.clone();
+                let loader = Rc::new(FakeLoader::new(move |callback, args| {
+                    if callback == "settings.setFrameRate" {
+                        log.borrow_mut().push((callback, args.to_vec()));
+                    }
+                    Ok(Value::Bool(true))
+                }));
+                let automation = crate::automation::settings::Automation::default();
+                tokio::task::spawn_local(run(
+                    loader,
+                    automation.watch_game_settings(),
+                    automation.watch_frame_rate(),
+                ));
+                let mut options = crate::account_settings::Options::default();
+                options.game.rendering.set(RenderingMode::Minimal);
+                options.frame_rate = Some(15);
+                options.apply_to(&automation);
+                ticks(1).await;
+                automation.update_game_settings(|settings| settings.rendering.resume());
+                ticks(1).await;
+                let sent = drain(&sent);
+                assert_eq!(
+                    sent.last(),
+                    Some(&("settings.setFrameRate", vec![Value::Number(15.0)]))
+                );
             })
             .await;
     }

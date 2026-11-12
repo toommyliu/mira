@@ -17,10 +17,9 @@ mod native;
 use std::{ops::Range, rc::Rc};
 
 use crate::{
-    automation::{
-        auto_attack, auto_relogin, auto_zone, game_settings,
-        settings::{Automation, Store},
-    },
+    account_settings::{self, Options},
+    accounts::AccountId,
+    automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
     ruffle::{
         Msg, Output, Runtime,
         context_menu::MenuSelection,
@@ -69,7 +68,8 @@ pub struct RuffleView {
     cursor: MouseCursor,
     marked: Option<Range<usize>>,
     modifiers: gpui::Modifiers,
-    automation: Store,
+    automation: Automation,
+    settings_account: Option<AccountId>,
     extras: Rc<extras::Store>,
     auto_relogin: auto_relogin::Phase,
     servers: Vec<String>,
@@ -94,7 +94,7 @@ impl RuffleView {
         let (failed, failures) = async_channel::bounded(1);
         let (outputs_tx, outputs) = async_channel::unbounded();
         let (stats_tx, mut stats) = tokio::sync::watch::channel(None);
-        let automation = Store::open(data.join("automation.json"));
+        let automation = Automation::default();
         let session = Runtime::spawn(
             native.surface(),
             data,
@@ -208,8 +208,14 @@ impl RuffleView {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
                                     let unlinked = this.account.is_none();
-                                    if unlinked && let Some(identity) = &identity {
-                                        cx.emit(Identified(identity.name.clone()));
+                                    if let Some(identity) = &identity {
+                                        this.use_account_settings(
+                                            AccountId::of(&identity.name),
+                                            cx,
+                                        );
+                                        if unlinked {
+                                            cx.emit(Identified(identity.name.clone()));
+                                        }
                                     }
                                     this.bar.identified(identity);
                                     if unlinked {
@@ -340,6 +346,7 @@ impl RuffleView {
                 marked: None,
                 modifiers: Default::default(),
                 automation,
+                settings_account: None,
                 extras,
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
@@ -395,16 +402,30 @@ impl RuffleView {
         bounds
     }
 
+    fn use_account_settings(&mut self, account: AccountId, cx: &mut Context<Self>) {
+        if self.settings_account.as_ref() == Some(&account) {
+            return;
+        }
+        account_settings::get(&account, cx)
+            .options
+            .apply_to(&self.automation);
+        self.settings_account = Some(account);
+        cx.notify();
+    }
+
+    fn save_options(&self, edit: impl FnOnce(&mut Options), cx: &mut Context<Self>) {
+        if let Some(account) = &self.settings_account {
+            account_settings::change(account, cx, |settings| edit(&mut settings.options));
+        }
+    }
+
     fn change_auto_relogin(
         &mut self,
         change: impl FnOnce(&mut auto_relogin::Settings),
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = self.automation.change(|automation| {
-            automation.update_auto_relogin(change);
-        }) {
-            tracing::error!(%error, "couldn't save automation settings");
-        }
+        let relogin = self.automation.update_auto_relogin(change);
+        self.save_options(|options| options.relogin = relogin, cx);
         cx.notify();
     }
 
@@ -425,11 +446,7 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_zone::Settings),
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = self.automation.change(|automation| {
-            automation.update_auto_zone(change);
-        }) {
-            tracing::error!(%error, "couldn't save automation settings");
-        }
+        self.automation.update_auto_zone(change);
         cx.notify();
     }
 
@@ -438,11 +455,7 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_attack::Settings),
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = self.automation.change(|automation| {
-            automation.update_auto_attack(change);
-        }) {
-            tracing::error!(%error, "couldn't save automation settings");
-        }
+        self.automation.update_auto_attack(change);
         cx.notify();
     }
 
@@ -451,7 +464,15 @@ impl RuffleView {
         change: impl FnOnce(&mut game_settings::Settings),
         cx: &mut Context<Self>,
     ) {
-        self.automation.update_game_settings(change);
+        let game = self.automation.update_game_settings(change);
+        self.save_options(|options| options.game = game, cx);
+        cx.notify();
+    }
+
+    fn change_frame_rate(&mut self, fps: u32, cx: &mut Context<Self>) {
+        if let Some(fps) = self.automation.set_frame_rate(fps) {
+            self.save_options(|options| options.frame_rate = Some(fps), cx);
+        }
         cx.notify();
     }
 

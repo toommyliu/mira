@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::SharedString;
 
+use crate::account_settings::{RoomNumber, Rooms};
+
 #[derive(Clone, Copy)]
 pub(super) enum Kind {
     Text { required: bool },
@@ -137,59 +139,27 @@ pub(super) struct Queued {
 pub(super) struct TabState {
     pub(super) queue: Vec<Queued>,
     pub(super) queue_running: bool,
-    pub(super) safe_start: bool,
-    pub(super) restart: bool,
-    pub(super) room: usize,
-    pub(super) room_number: SharedString,
-    pub(super) room_error: bool,
-}
-
-impl TabState {
-    pub(super) fn room_ready(&self) -> bool {
-        self.room != SPECIFIC_ROOM || room_valid(&self.room_number)
-    }
-}
-
-pub(super) fn room_valid(input: &str) -> bool {
-    !input.trim().is_empty() && room_note(input).is_ok()
 }
 
 pub(super) const ROOMS: [&str; 3] = ["Public rooms", "Random private room", "Specific room"];
 pub(super) const SPECIFIC_ROOM: usize = 2;
 
-pub(super) fn room_note(input: &str) -> Result<&'static str, &'static str> {
-    const RANGE: &str = "Enter a room number from 1 to 99,999.";
-    let input = input.trim();
-    if input.is_empty() {
-        return Ok(RANGE);
-    }
-    if !input.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(RANGE);
-    }
-    match input.parse::<u32>() {
-        Ok(1..=1_000) => Ok("This number selects a public room."),
-        Ok(1_001..=99_999) => Ok("This number selects a private room."),
-        _ => Err(RANGE),
+pub(super) fn room_choice(rooms: Rooms) -> usize {
+    match rooms {
+        Rooms::Public => 0,
+        Rooms::RandomPrivate => 1,
+        Rooms::Specific { .. } => SPECIFIC_ROOM,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_specific_room_needs_a_number_from_1_to_99999() {
-        let room = |room, number: &str| TabState {
-            room,
-            room_number: number.to_owned().into(),
-            ..TabState::default()
-        };
-        assert!(room(0, "").room_ready());
-        for number in ["1", "1000", "1001", "99999", " 42 "] {
-            assert!(room(SPECIFIC_ROOM, number).room_ready(), "{number}");
-        }
-        for number in ["", "0", "+5", "12a", "100000"] {
-            assert!(!room(SPECIFIC_ROOM, number).room_ready(), "{number}");
-        }
+pub(super) fn room_note(input: &str) -> Result<&'static str, &'static str> {
+    const RANGE: &str = "Enter a room number from 1 to 99,999.";
+    if input.trim().is_empty() {
+        return Ok(RANGE);
+    }
+    match RoomNumber::parse(input) {
+        Some(room) if room.is_private() => Ok("This number selects a private room."),
+        Some(_) => Ok("This number selects a public room."),
+        None => Err(RANGE),
     }
 }

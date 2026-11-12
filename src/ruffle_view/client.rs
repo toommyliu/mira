@@ -129,6 +129,7 @@ pub(super) struct Tab {
     pub(super) running: bool,
     pub(super) status: Option<SharedString>,
     pub(super) script: Option<PathBuf>,
+    pub(super) account: Option<AccountId>,
 }
 
 impl Session {
@@ -369,12 +370,14 @@ impl Client {
         self.sessions
             .iter()
             .map(|session| {
-                let script = &session.view.read(cx).script;
+                let view = session.view.read(cx);
+                let script = &view.script;
                 Tab {
                     number: session.number,
                     running: script.running(),
                     status: script.status().map(Into::into),
                     script: script.entry().cloned(),
+                    account: view.settings_account.clone(),
                 }
             })
             .collect()
@@ -386,15 +389,17 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.sessions.get(self.active).map(|session| session.number) else {
+        let Some(session) = self.sessions.get(self.active) else {
             return;
         };
+        let tab = session.number;
+        let account = session.view.read(cx).settings_account.clone();
         let client = cx.entity();
         let picker = self
             .scripts
             .get_or_insert_with(|| cx.new(|cx| Picker::new(&client, folder, tab, window, cx)))
             .clone();
-        picker.update(cx, |picker, cx| picker.show(tab, cx));
+        picker.update(cx, |picker, cx| picker.show(tab, account.as_ref(), cx));
     }
 
     pub(super) fn start_script_in(&mut self, tab: usize, script: PathBuf, cx: &mut Context<Self>) {
