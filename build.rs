@@ -6,7 +6,9 @@ fn main() {
     for input in [
         "scripts/build-runtime.ts",
         "packages/mira/src",
+        "packages/mira/globals.d.ts",
         "packages/mira/package.json",
+        "packages/mira/tsconfig.json",
         "pnpm-lock.yaml",
     ] {
         println!("cargo::rerun-if-changed={}", manifest.join(input).display());
@@ -22,6 +24,10 @@ fn main() {
         .arg(out.join("mira"))
         .arg("--table")
         .arg(out.join("runtime_assets.rs"))
+        .arg("--types")
+        .arg(out.join("types"))
+        .arg("--types-table")
+        .arg(out.join("script_types.rs"))
         .status()
         .unwrap_or_else(|error| panic!("couldn't run node to build the script runtime: {error}"));
     if !status.success() {

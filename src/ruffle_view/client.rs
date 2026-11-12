@@ -386,6 +386,7 @@ impl Client {
     pub(crate) fn open_scripts(
         &mut self,
         folder: PathBuf,
+        types: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -397,7 +398,9 @@ impl Client {
         let client = cx.entity();
         let picker = self
             .scripts
-            .get_or_insert_with(|| cx.new(|cx| Picker::new(&client, folder, tab, window, cx)))
+            .get_or_insert_with(|| {
+                cx.new(|cx| Picker::new(&client, folder, types, tab, window, cx))
+            })
             .clone();
         picker.update(cx, |picker, cx| picker.show(tab, account.as_ref(), cx));
     }

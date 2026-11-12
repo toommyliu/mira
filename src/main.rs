@@ -15,9 +15,11 @@ mod ruffle_view;
 mod scripting;
 mod settings;
 
+use std::{iter, path::PathBuf};
+
 use gpui::{
-    App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowOptions, actions, point, px, size,
+    App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
+    WindowBackgroundAppearance, WindowBounds, WindowOptions, actions, point, px, size,
 };
 
 actions!(mira, [Quit]);
@@ -34,6 +36,7 @@ fn main() -> anyhow::Result<()> {
         .join("Mira");
     let armies = army::Armies::new(documents.join("armies"));
     let scripts = documents.join("scripts");
+    let types = data.join("types");
     gpui_platform::application()
         .with_assets(mira_ui::Assets)
         .run(move |cx| {
@@ -52,6 +55,17 @@ fn main() -> anyhow::Result<()> {
             settings::init(data.join("settings.json"), set_menus, cx);
             account_settings::init(data.join("account-settings"), cx);
             combat_profiles::init(data.join("combat-profiles.json"), cx);
+            let installed = types.clone();
+            let folders: Vec<_> = iter::once(scripts.clone())
+                .chain(settings::script_folders(cx).iter().cloned())
+                .collect();
+            cx.background_spawn(async move {
+                if let Err(error) = scripting::install_types(&installed) {
+                    tracing::warn!(%error, path = %installed.display(), "couldn't install the script types");
+                }
+                scripting::link_types(folders.iter().map(PathBuf::as_path), &installed);
+            })
+            .detach();
             set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -92,11 +106,11 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
-                let folder = scripts.clone();
+                let (folder, types) = (scripts.clone(), types.clone());
                 cx.defer(move |cx| {
                     let _ = main.update(cx, |client, window, cx| {
                         window.activate_window();
-                        client.open_scripts(folder, window, cx);
+                        client.open_scripts(folder, types, window, cx);
                     });
                 });
             });

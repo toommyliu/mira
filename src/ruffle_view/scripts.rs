@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs, io,
+    fs, io, iter,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -33,7 +33,7 @@ use super::{
 use crate::{
     account_settings::{self, RoomNumber, Rooms, Scripts},
     accounts::AccountId,
-    scripting::SCRIPT_EXTENSIONS,
+    scripting::{self, SCRIPT_EXTENSIONS},
     settings,
 };
 
@@ -319,6 +319,7 @@ pub(super) struct Picker {
     client: WeakEntity<Client>,
     folder: PathBuf,
     packages: PathBuf,
+    types: PathBuf,
     open: bool,
     tab: usize,
     library: Option<Library>,
@@ -349,6 +350,7 @@ impl Picker {
     pub(super) fn new(
         client: &Entity<Client>,
         folder: PathBuf,
+        types: PathBuf,
         tab: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -390,6 +392,7 @@ impl Picker {
             client: client.downgrade(),
             packages: folder.with_file_name("packages"),
             folder,
+            types,
             open: false,
             tab,
             library: None,
@@ -489,7 +492,12 @@ impl Picker {
         let built_in = self.folder.clone();
         let added = settings::script_folders(cx).to_vec();
         let packages = self.packages.clone();
-        let scanned = cx.background_spawn(async move { scan_all(&built_in, &added, &packages) });
+        let types = self.types.clone();
+        let scanned = cx.background_spawn(async move {
+            let folders = iter::once(&built_in).chain(&added);
+            scripting::link_types(folders.map(PathBuf::as_path), &types);
+            scan_all(&built_in, &added, &packages)
+        });
         self.scanning = Some(cx.spawn(async move |this, cx| {
             let scanned = scanned.await;
             let _ = this.update(cx, |this, cx| {

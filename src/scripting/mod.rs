@@ -18,11 +18,13 @@ mod players;
 mod quests;
 mod runtime;
 mod shops;
+mod typings;
 mod world;
 
 pub(crate) use calls::{Calls, RunId, ToPlayer, answer};
 pub(crate) use limits::Limits;
 pub(crate) use modules::SCRIPT_EXTENSIONS;
 pub(crate) use runtime::{Level, Limit, Outcome, Run};
+pub(crate) use typings::{install_types, link_types};
 #[cfg(test)]
 mod tests;
