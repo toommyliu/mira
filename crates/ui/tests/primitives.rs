@@ -383,6 +383,28 @@ fn status_label_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
     assert!(bounds.size.height > mira_ui::theme::LINE_BODY);
 }
 
+struct NarrowSwitch;
+
+impl Render for NarrowSwitch {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(gpui::px(160.0)).flex().flex_col().child(
+            div().debug_selector(|| "switch".into()).child(
+                mira_ui::primitives::Switch::new("safe-start", "Safe start and stop", false)
+                    .description("Best effort attempt to start or stop the script at your house."),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn switch_description_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| NarrowSwitch);
+    cx.run_until_parked();
+    let one_line = gpui::px(6.0) + mira_ui::theme::LINE_BODY + mira_ui::theme::LINE_SMALL;
+    assert!(cx.debug_bounds("switch").unwrap().size.height > one_line);
+}
+
 struct Host {
     renders: Rc<Cell<usize>>,
 }

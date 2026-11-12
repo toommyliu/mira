@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Toggled, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use super::label::caption;
+use super::label::caption_with;
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _,
     nav::{self, Axis, Step},
@@ -18,6 +18,8 @@ const BOX: f32 = 14.0;
 pub struct Radio {
     label: SharedString,
     description: Option<SharedString>,
+    accessory: Option<AnyElement>,
+    invalid: bool,
     disabled: bool,
 }
 
@@ -26,8 +28,20 @@ impl Radio {
         Self {
             label: label.into(),
             description: None,
+            accessory: None,
+            invalid: false,
             disabled: false,
         }
+    }
+
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
+        self
+    }
+
+    pub fn accessory(mut self, accessory: impl IntoElement) -> Self {
+        self.accessory = Some(accessory.into_any_element());
+        self
     }
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
@@ -171,7 +185,13 @@ impl RenderOnce for RadioGroup {
                                 dot.child(div().size(px(6.0)).rounded_full().bg(theme.on_inverse))
                             }),
                     )
-                    .child(caption(choice.label, choice.description, cx))
+                    .child(caption_with(
+                        choice.label,
+                        choice.description,
+                        choice.invalid,
+                        choice.accessory,
+                        cx,
+                    ))
                     .when_some(on_select.filter(|_| !disabled), |radio, on_select| {
                         radio.on_click(move |_, window, cx| {
                             window.focus(&focus, cx);
