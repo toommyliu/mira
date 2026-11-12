@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc};
 use gpui::{
     Context, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent, Keystroke,
     ParentElement as _, Render, SharedString, Styled as _, TestAppContext, VisualTestContext,
-    Window, div,
+    Window, div, prelude::FluentBuilder as _,
 };
 use mira_ui::{
     FOCUS_SCOPE,
@@ -428,4 +428,200 @@ fn clicking_a_tooltip_trigger_leaves_focus_where_it_was(cx: &mut TestAppContext)
     );
     let focus = view.read_with(cx, |view, _| view.focus.clone());
     assert!(cx.update(|window, _| focus.is_focused(window)));
+}
+
+type Moves = Rc<std::cell::RefCell<Vec<(usize, usize, usize)>>>;
+
+struct Rows {
+    lists: usize,
+    count: usize,
+    pinned: usize,
+    scroll: Option<gpui::ScrollHandle>,
+    moves: Moves,
+}
+
+impl Render for Rows {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{Flow, Sortable};
+        div().flex().children((0..self.lists).map(|list| {
+            let moves = self.moves.clone();
+            let rows = Sortable::new(
+                div()
+                    .id(("rows", list))
+                    .w(gpui::px(100.0))
+                    .flex()
+                    .flex_col()
+                    .when(self.scroll.is_some(), |rows| rows.h(gpui::px(60.0))),
+                Flow::Column,
+                0..self.count,
+                |_, _, _| div().h(gpui::px(20.0)).into_any_element(),
+                move |from, to, _, _| moves.borrow_mut().push((list, from, to)),
+            )
+            .pin_first(self.pinned);
+            match &self.scroll {
+                Some(scroll) => rows.scrolls(scroll),
+                None => rows,
+            }
+        }))
+    }
+}
+
+fn rows(lists: usize, pinned: usize, cx: &mut TestAppContext) -> (Moves, &mut VisualTestContext) {
+    show(lists, 4, pinned, None, cx)
+}
+
+fn show(
+    lists: usize,
+    count: usize,
+    pinned: usize,
+    scroll: Option<gpui::ScrollHandle>,
+    cx: &mut TestAppContext,
+) -> (Moves, &mut VisualTestContext) {
+    cx.update(mira_ui::init);
+    let moves = Moves::default();
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        Rows {
+            lists,
+            count,
+            pinned,
+            scroll,
+            moves: Rc::clone(&moves),
+        }
+    });
+    cx.run_until_parked();
+    (moves, cx)
+}
+
+fn hold(cx: &mut VisualTestContext, x: f32, y: f32) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.simulate_mouse_move(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    }
+}
+
+fn lift(cx: &mut VisualTestContext, x: f32, from_y: f32, to_y: f32) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    let start = point(px(x), px(from_y));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        start + point(px(0.0), px(5.0)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(point(px(x), px(to_y)), MouseButton::Left, Modifiers::none());
+}
+
+fn release(cx: &mut VisualTestContext, x: f32, y: f32) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.simulate_mouse_up(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_dragged_row_lands_on_the_row_nearest_its_center(cx: &mut TestAppContext) {
+    let (moves, cx) = rows(1, 0, cx);
+    lift(cx, 10.0, 10.0, 60.0);
+    release(cx, 10.0, 60.0);
+    assert_eq!(*moves.borrow(), [(0, 0, 2)]);
+}
+
+#[gpui::test]
+fn escape_puts_a_dragged_row_back(cx: &mut TestAppContext) {
+    let (moves, cx) = rows(1, 0, cx);
+    lift(cx, 10.0, 10.0, 60.0);
+    press(cx, "escape");
+    release(cx, 10.0, 60.0);
+    assert!(moves.borrow().is_empty());
+}
+
+#[gpui::test]
+fn releasing_outside_the_list_drops_at_the_end_the_row_was_held_against(cx: &mut TestAppContext) {
+    let (moves, cx) = rows(2, 0, cx);
+    lift(cx, 10.0, 10.0, 500.0);
+    release(cx, 150.0, 500.0);
+    assert_eq!(*moves.borrow(), [(0, 0, 3)]);
+}
+
+#[gpui::test]
+fn releasing_a_row_where_it_started_reorders_nothing(cx: &mut TestAppContext) {
+    let (moves, cx) = rows(1, 0, cx);
+    lift(cx, 10.0, 10.0, 14.0);
+    release(cx, 10.0, 14.0);
+    assert!(moves.borrow().is_empty());
+}
+
+#[gpui::test]
+fn pinned_rows_stay_first(cx: &mut TestAppContext) {
+    let (moves, cx) = rows(1, 1, cx);
+    lift(cx, 10.0, 10.0, 60.0);
+    release(cx, 10.0, 60.0);
+    lift(cx, 10.0, 50.0, -100.0);
+    release(cx, 10.0, -100.0);
+    assert_eq!(*moves.borrow(), [(0, 2, 1)]);
+}
+
+#[gpui::test]
+fn holding_a_row_against_the_bottom_edge_scrolls_to_the_end(cx: &mut TestAppContext) {
+    let scroll = gpui::ScrollHandle::new();
+    let (moves, cx) = show(1, 8, 0, Some(scroll.clone()), cx);
+    lift(cx, 10.0, 10.0, 58.0);
+    hold(cx, 10.0, 58.0);
+    release(cx, 10.0, 58.0);
+    assert_eq!(*moves.borrow(), [(0, 0, 7)]);
+}
+
+#[gpui::test]
+fn a_row_grabbed_at_the_edge_waits_for_a_move_toward_it(cx: &mut TestAppContext) {
+    let scroll = gpui::ScrollHandle::new();
+    let (_, cx) = show(1, 8, 0, Some(scroll.clone()), cx);
+    lift(cx, 10.0, 45.0, 50.0);
+    hold(cx, 10.0, 50.0);
+    assert_eq!(scroll.offset().y, gpui::px(0.0));
+}
+
+struct Panes {
+    virtual_rows: bool,
+}
+
+impl Render for Panes {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{List, ListItem, VirtualList};
+        let item = |index: usize| ListItem::new(format!("Script {index}"));
+        let height = gpui::px(200.0);
+        div().w(gpui::px(300.0)).child(if self.virtual_rows {
+            VirtualList::new("library", "Library", 3, item)
+                .height(height)
+                .into_any_element()
+        } else {
+            List::new("queue", "Queue", (0..3).map(item).collect(), None)
+                .height(height)
+                .on_reorder(|_, _, _, _| {})
+                .into_any_element()
+        })
+    }
+}
+
+#[gpui::test]
+fn virtual_and_plain_lists_space_their_rows_alike(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let mut last_row = |virtual_rows: bool| {
+        let (_, cx) = cx.add_window_view(|_, _| Panes { virtual_rows });
+        cx.run_until_parked();
+        cx.debug_bounds("row-2")
+    };
+    assert_eq!(last_row(true), last_row(false));
+}
+
+#[gpui::test]
+fn dragging_the_last_row_up_keeps_a_bottom_scrolled_list_in_place(cx: &mut TestAppContext) {
+    use gpui::{point, px};
+    let scroll = gpui::ScrollHandle::new();
+    let (_, cx) = show(1, 8, 0, Some(scroll.clone()), cx);
+    scroll.set_offset(point(px(0.0), px(-100.0)));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    lift(cx, 10.0, 45.0, 38.0);
+    assert_eq!(scroll.offset().y, px(-100.0));
 }

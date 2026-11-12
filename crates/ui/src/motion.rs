@@ -139,6 +139,16 @@ pub fn travel(id: impl Into<ElementId>, target: f32, window: &mut Window, cx: &m
     tween(id, None, target, TRAVEL, ease_out, window, cx)
 }
 
+pub fn travel_from(
+    id: impl Into<ElementId>,
+    from: f32,
+    target: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    tween(id, Some(from), target, TRAVEL, ease_out, window, cx)
+}
+
 pub fn glide(
     id: impl Into<ElementId>,
     from: Option<f32>,

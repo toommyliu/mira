@@ -18,6 +18,7 @@ mod radio_group;
 mod scrollbar;
 mod select;
 mod slider;
+mod sortable;
 mod spinner;
 mod switch;
 mod table;
@@ -32,6 +33,7 @@ pub(crate) mod layer {
     pub const DIALOG: usize = 3;
     pub const POPUP: usize = 4;
     pub const TOOLTIP: usize = 5;
+    pub const DRAG: usize = 6;
 }
 
 pub use alert::Alert;
@@ -53,6 +55,7 @@ pub use radio_group::{Radio, RadioGroup};
 pub use scrollbar::Scrollbar;
 pub use select::Select;
 pub use slider::Slider;
+pub use sortable::{Flow, Pose, Sortable};
 pub use spinner::Spinner;
 pub use switch::Switch;
 pub use table::{Column, Sort, Table};

@@ -7,6 +7,9 @@ publish = false
 [workspace]
 members = ["crates/ui"]
 
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+
 [workspace.dependencies]
 anyhow = "1"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "985bbf42e684ef5b5a9312a6abf075aeafbaf5b9", default-features = false }
@@ -48,6 +51,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 swf = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }

@@ -7,12 +7,14 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
-use super::Scrollbar;
+use super::{Flow, Pose, Scrollbar, Sortable};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, Theme,
     nav::{self, Axis, Step},
     theme::{LINE_BODY, LINE_SMALL, ROW, TEXT_BODY, TEXT_SMALL, tabular},
 };
+
+type ReorderHandler = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
 
 #[derive(Clone)]
 pub struct ListItem {
@@ -57,6 +59,8 @@ pub struct List {
     height: Option<Pixels>,
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
+    on_reorder: Option<ReorderHandler>,
+    pinned: usize,
 }
 
 impl List {
@@ -74,11 +78,23 @@ impl List {
             height: None,
             on_select: None,
             on_activate: None,
+            on_reorder: None,
+            pinned: 0,
         }
     }
 
     pub fn height(mut self, height: Pixels) -> Self {
         self.height = Some(height);
+        self
+    }
+
+    pub fn on_reorder(mut self, f: impl Fn(usize, usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_reorder = Some(Rc::new(f));
+        self
+    }
+
+    pub fn pin_first(mut self, count: usize) -> Self {
+        self.pinned = count;
         self
     }
 
@@ -149,15 +165,16 @@ impl Options {
         }
     }
 
-    fn row(&self, index: usize, item: ListItem) -> Stateful<Div> {
+    fn row(&self, index: usize, item: ListItem, pose: Pose) -> Stateful<Div> {
         let theme = &self.theme;
-        let current = self.selected == Some(index);
+        let current = self.selected == Some(index) && pose != Pose::Lifted;
         let focus = self.focus.clone();
         let on_select = self.on_select.clone();
         let on_activate = self.on_activate.clone();
         let disabled = item.disabled;
         div()
             .id(index)
+            .debug_selector(move || format!("row-{index}"))
             .role(Role::ListBoxOption)
             .aria_label(item.title.clone())
             .when_some(item.detail.clone(), |row, detail| {
@@ -180,7 +197,7 @@ impl Options {
             .when(current && self.ring, |row| {
                 row.child(theme.focus_ring(theme.radius.item))
             })
-            .when(!current && !disabled, |row| {
+            .when(!current && !disabled && pose == Pose::Rest, |row| {
                 row.hover(|style| style.bg(theme.fill))
             })
             .when(!disabled, |row| {
@@ -283,15 +300,33 @@ impl RenderOnce for List {
             .flex_col()
             .gap(px(1.0))
             .p(px(4.0))
-            .when_some(self.height, |list, height| list.h(height))
-            .overflow_y_scroll()
-            .track_scroll(&scroll)
-            .children(
-                items
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| options.row(index, item.clone())),
-            );
+            .when_some(self.height, |list, height| list.h(height));
+        let list = match self.on_reorder {
+            Some(reorder) => Sortable::new(
+                list,
+                Flow::Column,
+                0..items.len(),
+                move |(index, pose), _, _| {
+                    options
+                        .row(index, items[index].clone(), pose)
+                        .into_any_element()
+                },
+                move |from, to, window, cx| reorder(from, to, window, cx),
+            )
+            .scrolls(&scroll)
+            .pin_first(self.pinned)
+            .into_any_element(),
+            None => list
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .children(
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| options.row(index, item.clone(), Pose::Rest)),
+                )
+                .into_any_element(),
+        };
         div()
             .relative()
             .on_scroll(contain_scroll)
@@ -391,7 +426,13 @@ impl RenderOnce for VirtualList {
             .child(
                 uniform_list((self.id, "rows"), self.count, move |range, _, _| {
                     range
-                        .map(|index| render_options.row(index, source(index)).mb(px(1.0)))
+                        .map(|index| {
+                            div().pb(px(1.0)).child(render_options.row(
+                                index,
+                                source(index),
+                                Pose::Rest,
+                            ))
+                        })
                         .collect()
                 })
                 .track_scroll(&scroll)

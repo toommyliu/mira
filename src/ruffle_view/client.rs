@@ -3,11 +3,10 @@ use std::{path::PathBuf, rc::Rc, time::Duration};
 use anyhow::Context as _;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyDownEvent, Modifiers, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render, Role, ScrollHandle,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    Window, actions, anchored, deferred, div, point, prelude::FluentBuilder as _, px,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement as _,
+    Pixels, Render, Role, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -19,8 +18,7 @@ use super::{
 use mira_ui::{
     ActiveTheme as _, PointerCursor as _, Theme, Tone,
     components::format_keystroke,
-    motion,
-    primitives::{HoverCard, Icon, Tooltip, attach_card, icon, sidebar_icon},
+    primitives::{Flow, HoverCard, Icon, Pose, Sortable, Tooltip, attach_card, icon, sidebar_icon},
     theme::{CONTROL_SM, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
 
@@ -66,18 +64,6 @@ fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Ve
         .collect()
 }
 
-fn rest_top(slot: Pixels, from: usize, index: usize) -> Pixels {
-    slot + (TAB_ROW + TAB_GAP) * (index as f32 - from as f32)
-}
-
-fn drop_index(row_centers: &[f32], from: usize, center: f32) -> usize {
-    row_centers
-        .iter()
-        .enumerate()
-        .filter(|&(index, &row)| index != from && row < center)
-        .count()
-}
-
 fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
     shortcuts
         .iter()
@@ -116,8 +102,6 @@ pub struct Client {
     active: usize,
     layout: Layout,
     sidebar: Sidebar,
-    dragging: Option<TabDrag>,
-    drags: usize,
     numbered: usize,
     focus: FocusHandle,
     tab_scroll: ScrollHandle,
@@ -169,14 +153,6 @@ enum Layout {
     Grid,
 }
 
-#[derive(Clone, Copy)]
-struct TabDrag {
-    number: usize,
-    generation: usize,
-    grab: Pixels,
-    top: Pixels,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sidebar {
     Hidden,
@@ -216,8 +192,6 @@ impl Client {
             active: 0,
             layout: Layout::Single,
             sidebar: Sidebar::Hidden,
-            dragging: None,
-            drags: 0,
             numbered: 0,
             focus: cx.focus_handle(),
             tab_scroll: ScrollHandle::new(),
@@ -454,14 +428,7 @@ impl Client {
         cx.notify();
     }
 
-    fn move_session(&mut self, number: usize, to: usize, cx: &mut Context<Self>) {
-        let Some(from) = self.sessions.iter().position(|s| s.number == number) else {
-            return;
-        };
-        let to = to.min(self.sessions.len() - 1);
-        if from == to {
-            return;
-        }
+    fn move_session(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         let active = self.sessions[self.active].number;
         let session = self.sessions.remove(from);
         self.sessions.insert(to, session);
@@ -471,94 +438,6 @@ impl Client {
             .position(|s| s.number == active)
             .unwrap_or(0);
         cx.notify();
-    }
-
-    fn drag_tab(&mut self, pointer: Pixels, cx: &mut Context<Self>) {
-        if let Some(drag) = self.dragging.as_mut() {
-            drag.top = pointer - drag.grab;
-            cx.notify();
-        }
-    }
-
-    fn drop_tab(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.dragging.take() else {
-            return;
-        };
-        if let Some((_, to)) = self.drag_target(drag) {
-            self.move_session(drag.number, to, cx);
-        }
-        cx.notify();
-    }
-
-    fn cancel_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !cx.has_active_drag() || self.dragging.take().is_none() {
-            return false;
-        }
-        cx.stop_active_drag(window);
-        cx.notify();
-        true
-    }
-
-    fn drag_target(&self, drag: TabDrag) -> Option<(usize, usize)> {
-        let (from, slot) = self.drag_slot(drag)?;
-        let centers: Vec<_> = (0..self.sessions.len())
-            .map(|index| f32::from(rest_top(slot, from, index) + TAB_ROW / 2.0))
-            .collect();
-        let center = f32::from(drag.top + TAB_ROW / 2.0);
-        Some((from, drop_index(&centers, from, center)))
-    }
-
-    fn drag_slot(&self, drag: TabDrag) -> Option<(usize, Pixels)> {
-        let from = self
-            .sessions
-            .iter()
-            .position(|session| session.number == drag.number)?;
-        let slot = self.tab_scroll.bounds_for_item(from)?.top() + self.tab_scroll.offset().y;
-        Some((from, slot))
-    }
-
-    fn lifted_top(&self, drag: TabDrag) -> Option<Pixels> {
-        let (from, slot) = self.drag_slot(drag)?;
-        let list = self.tab_scroll.bounds();
-        let first = rest_top(slot, from, 0);
-        let last = rest_top(slot, from, self.sessions.len().checked_sub(1)?);
-        let min = first.max(list.top());
-        let max = last.min(list.bottom() - TAB_ROW).max(min);
-        Some(drag.top.max(min).min(max))
-    }
-
-    fn lifted_tab(&self, theme: &Theme, cx: &App) -> Option<impl IntoElement + use<>> {
-        let drag = self.dragging.filter(|_| cx.has_active_drag())?;
-        let index = self
-            .sessions
-            .iter()
-            .position(|session| session.number == drag.number)?;
-        let session = &self.sessions[index];
-        let row = self.tab_scroll.bounds_for_item(index)?;
-        let top = self.lifted_top(drag)?;
-        Some(deferred(
-            anchored().position(point(row.left(), top)).child(
-                div()
-                    .flex()
-                    .w(row.size.width)
-                    .h(TAB_ROW)
-                    .px(TAB_PADDING)
-                    .pt(TAB_TOP)
-                    .pb(TAB_BOTTOM)
-                    .rounded(theme.radius.item)
-                    .bg(theme.overlay)
-                    .shadow(theme.floating())
-                    .text_size(TEXT_BODY)
-                    .text_color(theme.text)
-                    .child(tab_face(
-                        theme,
-                        &session.title(cx),
-                        session.view.read(cx).glance(),
-                        index == self.active,
-                        None,
-                    )),
-            ),
-        ))
     }
 
     fn modifiers_changed(&mut self, modifiers: Modifiers, cx: &mut Context<Self>) {
@@ -609,20 +488,34 @@ impl Client {
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let shortcuts = self.shortcut_tabs();
-        let drag = self.dragging.filter(|_| cx.has_active_drag());
-        let target = drag.and_then(|drag| Some((drag.generation, self.drag_target(drag)?)));
-        let tabs: Vec<_> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .map(|(index, session)| {
-                let hint = self
-                    .shortcut_hints
+        let hints: Rc<[Option<usize>]> = (0..self.sessions.len())
+            .map(|index| {
+                self.shortcut_hints
                     .then(|| shortcut_for(&shortcuts, index))
-                    .flatten();
-                self.tab(&theme, index, session, hint, target, window, cx)
+                    .flatten()
             })
             .collect();
+        let client = cx.weak_entity();
+        let tabs = Sortable::new(
+            div()
+                .id("tabs")
+                .flex()
+                .flex_col()
+                .gap(TAB_GAP)
+                .px(px(8.0))
+                .py(px(4.0)),
+            Flow::Column,
+            self.sessions.iter().map(|session| session.number),
+            cx.processor(move |this, (index, pose), window, cx| {
+                this.tab(index, pose, hints[index], window, cx)
+            }),
+            move |from, to, _, cx| {
+                client
+                    .update(cx, |client, cx| client.move_session(from, to, cx))
+                    .ok();
+            },
+        )
+        .scrolls(&self.tab_scroll);
         div()
             .flex()
             .flex_col()
@@ -660,23 +553,7 @@ impl Client {
                     ))
                     .child(self.grid_toggle(&theme, cx)),
             )
-            .child(
-                div()
-                    .id("tabs")
-                    .flex()
-                    .flex_col()
-                    .gap(TAB_GAP)
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.tab_scroll)
-                    .on_drag_move(
-                        cx.listener(|this, event: &DragMoveEvent<DraggedTab>, _, cx| {
-                            this.drag_tab(event.event.position.y, cx)
-                        }),
-                    )
-                    .children(tabs),
-            )
+            .child(tabs)
             .child(drag_area().flex_1())
             .child(
                 div().flex_none().p(px(8.0)).child(
@@ -699,19 +576,19 @@ impl Client {
                         }),
                 ),
             )
-            .children(self.lifted_tab(&theme, cx))
     }
 
     fn tab(
         &self,
-        theme: &Theme,
         index: usize,
-        session: &Session,
+        pose: Pose,
         hint: Option<usize>,
-        target: Option<(usize, (usize, usize))>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let theme = &cx.theme().clone();
+        let session = &self.sessions[index];
+        let hint = hint.filter(|_| pose == Pose::Rest);
         let active = index == self.active;
         let title = session.title(cx);
         let glance = session.view.read(cx).glance();
@@ -732,45 +609,22 @@ impl Client {
                 tab.aria_description(description)
             })
             .aria_selected(active)
-            .child(tab_face(
-                theme,
-                &title,
-                glance,
-                active,
-                hint.filter(|_| target.is_none()),
-            ));
-        let row = match tab_card(title, session.view.read(cx).details()) {
-            Some(card) => attach_card(row, ("tab-card", session.number), card, window, cx),
-            None => row,
-        };
-        let Some((generation, (from, to))) = target else {
-            return self.resting_tab(row, theme, index, session, hint, cx);
-        };
-        if index == from {
-            return row.invisible().into_any_element();
+            .child(tab_face(theme, &title, glance, active, hint));
+        match pose {
+            Pose::Rest => {
+                let row = match tab_card(title, session.view.read(cx).details()) {
+                    Some(card) => attach_card(row, ("tab-card", session.number), card, window, cx),
+                    None => row,
+                };
+                self.resting_tab(row, theme, index, session, hint, cx)
+            }
+            Pose::Sorting if active => row
+                .bg(theme.selected)
+                .text_color(theme.text)
+                .into_any_element(),
+            Pose::Sorting => row.text_color(theme.text_secondary).into_any_element(),
+            Pose::Lifted => row.text_color(theme.text).into_any_element(),
         }
-        let shift = if from < index && index <= to {
-            -1.0
-        } else if to <= index && index < from {
-            1.0
-        } else {
-            0.0
-        };
-        let offset = motion::travel(
-            ("tab-shift", generation * 1_000_000 + session.number),
-            shift * f32::from(TAB_ROW + TAB_GAP),
-            window,
-            cx,
-        );
-        row.top(px(offset))
-            .map(|tab| {
-                if active {
-                    tab.bg(theme.selected).text_color(theme.text)
-                } else {
-                    tab.text_color(theme.text_secondary)
-                }
-            })
-            .into_any_element()
     }
 
     fn resting_tab(
@@ -822,33 +676,6 @@ impl Client {
                 )
             })
             .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
-            .on_drag(
-                DraggedTab {
-                    number: session.number,
-                },
-                {
-                    let client = cx.weak_entity();
-                    move |tab, grabbed_at, _, cx| {
-                        let _ = client.update(cx, |client, cx| {
-                            let top = client
-                                .tab_scroll
-                                .bounds_for_item(index)
-                                .map_or(Pixels::ZERO, |row| {
-                                    row.top() + client.tab_scroll.offset().y
-                                });
-                            client.drags += 1;
-                            client.dragging = Some(TabDrag {
-                                number: tab.number,
-                                generation: client.drags,
-                                grab: grabbed_at.y,
-                                top,
-                            });
-                            cx.notify();
-                        });
-                        cx.new(|_| tab.clone())
-                    }
-                },
-            )
             .into_any_element()
     }
 
@@ -982,17 +809,6 @@ impl Client {
                         }
                     })),
             )
-    }
-}
-
-#[derive(Clone)]
-struct DraggedTab {
-    number: usize,
-}
-
-impl Render for DraggedTab {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
     }
 }
 
@@ -1154,12 +970,6 @@ impl Render for Client {
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
-            .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| this.drop_tab(cx)))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && this.cancel_drag(window, cx) {
-                    cx.stop_propagation();
-                }
-            }))
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {
                     this.select(index, window, cx)
@@ -1222,15 +1032,6 @@ mod tests {
             fully_visible((0.0, 1000.0), 0.0, &tabs),
             (0..9).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn a_dragged_tab_lands_after_every_row_whose_center_it_passed() {
-        let rows = [10.0, 40.0, 70.0, 100.0];
-        assert_eq!(drop_index(&rows, 1, -50.0), 0);
-        assert_eq!(drop_index(&rows, 1, 30.0), 1);
-        assert_eq!(drop_index(&rows, 1, 80.0), 2);
-        assert_eq!(drop_index(&rows, 1, 500.0), 3);
     }
 
     #[test]
