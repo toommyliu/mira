@@ -75,6 +75,18 @@ const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const millis = (duration: Duration.Input | undefined): number | undefined =>
   duration === undefined ? undefined : Math.ceil(Duration.toMillis(duration));
 
+const wireStep = <S extends PriorityStep>(step: S) => ({
+  ...step,
+  pauseAfter: millis(step.pauseAfter),
+});
+
+const wireProfile = (profile: Profile) => ({
+  ...profile,
+  triggers: profile.triggers?.map((trigger) => ({ ...trigger, within: millis(trigger.within) })),
+  priority: profile.priority?.map(wireStep),
+  steps: profile.steps.map(wireStep),
+});
+
 export type Server = {
   readonly name: string;
   readonly players: number;
@@ -268,14 +280,63 @@ export type SkillOptions = {
   readonly force?: boolean;
   readonly waitUntilReady?: boolean;
 };
+/** A number is points, and a string like `"60%"` is a percent of the maximum. */
+export type Amount = number | `${number}%`;
+type Bound<T> =
+  | { readonly atMost: T; readonly atLeast?: never }
+  | { readonly atLeast: T; readonly atMost?: never };
+export type Condition =
+  | ({ readonly type: "hp"; readonly of: "me" | "anyAlly" } & Bound<Amount>)
+  | ({ readonly type: "mp" } & Bound<Amount>)
+  | ({
+      readonly type: "aura";
+      readonly on: "me" | "target";
+      readonly name: string;
+      /** Defaults to `"stacks"`. A missing aura counts as 0 on either measure. */
+      readonly measure?: "stacks" | "value";
+    } & Bound<number>);
+export type Trigger = {
+  /** Matched against combat and server messages, ignoring case and extra spaces. */
+  readonly includes: string;
+  readonly skill: Skill;
+  /** A matching message casts the skill once, as soon as it's ready, unless this much time passes after the latest match. Matches heard before the cast share it. */
+  readonly within: Duration.Input;
+};
+export type PriorityStep = {
+  readonly skill: Skill;
+  /** Every condition must hold. */
+  readonly when?: readonly Condition[];
+  /** Holds every skill for this long after this one casts. */
+  readonly pauseAfter?: Duration.Input;
+};
+export type Step = PriorityStep & { readonly onCooldown?: "skip" | "wait" };
+export type Profile = {
+  readonly onCooldown: "skip" | "wait";
+  /** Answered before priority and rotation, and not held by a pause. */
+  readonly triggers?: readonly Trigger[];
+  /** Checked first on every attempt, top to bottom. They never wait for a cooldown. */
+  readonly priority?: readonly PriorityStep[];
+  /** Cast in turn from where the last cast left off. `"wait"` holds the turn until that skill's cooldown ends. */
+  readonly steps: readonly Step[];
+};
+
 export type KillOptions = {
-  /** Used in this order, skipping any on cooldown. Defaults to `[1, 2, 3, 4]`. */
-  readonly skills?: readonly Skill[];
   /** Time between skill attempts. Defaults to 200 ms, and anything under 50 ms counts as 50 ms. */
   readonly skillInterval?: Duration.Input;
   /** Attacked first, in this order, while any is alive in the cell. The kill still ends when its own target dies. */
   readonly targetPriority?: readonly MonsterQuery[];
-};
+} & (
+  | {
+      /** Used in this order, skipping any on cooldown. Defaults to `[1, 2, 3, 4]`. */
+      readonly skills?: readonly Skill[];
+      readonly profile?: never;
+    }
+  | {
+      /** A saved combat profile's name, or a profile. Saving that profile while the kill runs applies the change. */
+      readonly profile: string | Profile;
+      readonly skills?: never;
+    }
+);
 
 export type HuntOptions = {
   /** Picks the cell with the most live matches. Ties go to your own cell. */
@@ -299,8 +360,13 @@ export const Combat = {
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
   exit: () => combat<boolean>("exit"),
-  kill: (query: MonsterQuery, { skillInterval, ...options }: KillOptions = {}) =>
-    combat<boolean>("kill", { query, ...options, skillIntervalMs: millis(skillInterval) }),
+  kill: (query: MonsterQuery, { skillInterval, profile, ...options }: KillOptions = {}) =>
+    combat<boolean>("kill", {
+      query,
+      ...options,
+      skillIntervalMs: millis(skillInterval),
+      profile: typeof profile === "object" ? wireProfile(profile) : profile,
+    }),
   hunt: (query: MonsterQuery, options: HuntOptions = {}) =>
     combat<Monster | null>("hunt", { query, ...options }),
 };

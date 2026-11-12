@@ -14,6 +14,7 @@ use super::{
     player,
     players::{self, RoomPlayer},
     poll,
+    rotation::Fighter,
     world::{self, Monster, MonsterQuery},
 };
 use crate::bridge::{
@@ -27,8 +28,8 @@ const EXIT_TIMEOUT: Duration = Duration::from_millis(2_500);
 const STAY_IDLE: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_ROTATION: [Skill; 4] = [Skill(1), Skill(2), Skill(3), Skill(4)];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "u8")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 pub(crate) struct Skill(u8);
 
 impl Skill {
@@ -38,6 +39,12 @@ impl Skill {
 
     fn consumable(self) -> bool {
         self.0 == 5
+    }
+}
+
+impl From<Skill> for u8 {
+    fn from(skill: Skill) -> Self {
+        skill.0
     }
 }
 
@@ -312,7 +319,7 @@ pub(crate) async fn kill(
     fights: Packets<CtPacket>,
     counter_attacks: &CounterAttacks,
     query: &MonsterQuery,
-    skills: &[Skill],
+    mut fighter: Fighter,
     interval: Duration,
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
@@ -334,7 +341,7 @@ pub(crate) async fn kill(
         &fights,
         counter_attacks,
         id,
-        skills,
+        &mut fighter,
         interval,
         priority,
     )
@@ -362,12 +369,11 @@ async fn fight(
     fights: &Packets<CtPacket>,
     counter_attacks: &CounterAttacks,
     id: f64,
-    skills: &[Skill],
+    fighter: &mut Fighter,
     interval: Duration,
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     let cell = bridge::player::get_cell(loader)?;
-    let mut next = 0;
     loop {
         if !auth::in_game(loader)? || bridge::player::get_cell(loader)? != cell {
             return Ok(false);
@@ -378,7 +384,7 @@ async fn fight(
                 attack_id(loader, wanted)?;
             }
             if !counter_attacks.holds_skills(loader)? {
-                use_next_skill(loader, skills, &mut next)?;
+                fighter.act(loader)?;
             }
         }
         let tick = sleep(interval);
@@ -393,6 +399,7 @@ async fn fight(
                     },
                     Err(Interruption::Disconnected) => return Ok(false),
                 },
+                () = fighter.listen(loader) => {}
                 () = &mut tick => break,
             }
         }
@@ -409,25 +416,6 @@ impl<L: Loader> Drop for Engaged<'_, L> {
     }
 }
 
-pub(crate) fn use_next_skill(
-    loader: &impl Loader,
-    skills: &[Skill],
-    next: &mut usize,
-) -> Result<(), CallError> {
-    for offset in 0..skills.len() {
-        let index = (*next + offset) % skills.len();
-        let skill = skills[index].index();
-        if bridge::combat::get_skill_cooldown_remaining(loader, skill)? > 0 {
-            continue;
-        }
-        if bridge::combat::use_skill(loader, &skill.to_string(), None, None)? {
-            *next = (index + 1) % skills.len();
-            break;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn selector(key: &str, value: Value) -> Value {
     Value::Object([(key.to_owned(), value)].into())
 }
@@ -441,7 +429,7 @@ mod tests {
     use super::*;
     use crate::{
         bridge::{Event, Events},
-        domain::{counter_attack::Signal, testing::FakeLoader},
+        domain::{counter_attack::Signal, profiles::Profile, testing::FakeLoader},
     };
 
     struct Monster {
@@ -565,6 +553,13 @@ mod tests {
                     Value::Bool(fight.cell == "r2" && alive)
                 }
                 "combat.getSkillCooldownRemaining" => number(fight.cooldown()),
+                "combat.getSnapshot" => {
+                    let skill = row(&[
+                        ("cooldown", number(fight.cooldown())),
+                        ("castable", Value::Bool(true)),
+                    ]);
+                    row(&[("skills", Value::List(vec![skill; 6]))])
+                }
                 "player.getAuras" => Value::List(Vec::new()),
                 "combat.getConsumableSkillItem" => fight.slotted.map_or(Value::Null, |id| {
                     row(&[("itemId", number(id)), ("ready", Value::Bool(true))])
@@ -655,7 +650,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &CounterAttacks::default(),
                 &named("frogzard"),
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 Duration::from_millis(700),
                 &[],
             )
@@ -684,7 +679,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &CounterAttacks::default(),
                 &named("Frogzard"),
-                &[Skill(3), Skill(1)],
+                Fighter::fixed(Profile::from_skills(&[Skill(3), Skill(1)])),
                 TICK,
                 &[named("Dragon"), named("Slime")],
             )
@@ -714,7 +709,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &counter_attacks,
                 &frogzard,
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
             ),
@@ -736,7 +731,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &CounterAttacks::default(),
                 &named("Dragon"),
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
             )
@@ -760,7 +755,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &CounterAttacks::default(),
                 &named("Frogzard"),
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
             )
@@ -785,7 +780,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &counter_attacks,
                 &MonsterQuery::MonMapId { mon_map_id: 3.0 },
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
             ),
@@ -1206,7 +1201,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &countering(&[3]),
                 &named("Frogzard"),
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[named("Slime")],
             )
@@ -1233,7 +1228,7 @@ mod tests {
                 Packets::subscribe(|wants| events.subscribe(wants)),
                 &counter_attacks,
                 &frogzard,
-                &DEFAULT_ROTATION,
+                Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
             )

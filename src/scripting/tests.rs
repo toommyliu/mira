@@ -1540,7 +1540,7 @@ export default function* () {
 
 #[test]
 fn combat_player_and_aura_requests_reach_the_player_typed() {
-    use crate::domain::world::MonsterQuery;
+    use crate::domain::{profiles::ProfileChoice, world::MonsterQuery};
 
     let folder = Folder::new(&[(
         "main.ts",
@@ -1559,6 +1559,15 @@ export default function* () {
   yield* Combat.kill("*");
   yield* Combat.kill("Boss", { skills: [3, 1, 5], targetPriority: [{ monMapId: 1 }, "Orb"] });
   yield* Combat.kill("Boss", { skillInterval: "1.5 seconds" });
+  yield* Combat.kill("Boss", { profile: "Boss healer" });
+  yield* Combat.kill("Boss", {
+    profile: {
+      onCooldown: "wait",
+      triggers: [{ includes: "prepares", skill: 3, within: "1.5 seconds" }],
+      priority: [{ skill: 2, pauseAfter: "0.5 seconds" }],
+      steps: [{ skill: 1, when: [{ type: "hp", of: "anyAlly", atMost: "60%" }] }, { skill: 4 }],
+    },
+  });
   yield* Combat.hunt("Frogzard");
   yield* Combat.hunt({ monMapId: 4 }, { preferMostMatches: true });
   yield* Player.getAuras();
@@ -1610,6 +1619,7 @@ export default function* () {
             skills: None,
             skill_interval_ms: None,
             target_priority: None,
+            profile: None,
         },
         C::Kill {
             query: MonsterQuery::Name("Boss".into()),
@@ -1619,12 +1629,39 @@ export default function* () {
                 MonsterQuery::MonMapId { mon_map_id: 1.0 },
                 MonsterQuery::Name("Orb".into()),
             ]),
+            profile: None,
         },
         C::Kill {
             query: MonsterQuery::Name("Boss".into()),
             skills: None,
             skill_interval_ms: Some(1500),
             target_priority: None,
+            profile: None,
+        },
+        C::Kill {
+            query: MonsterQuery::Name("Boss".into()),
+            skills: None,
+            skill_interval_ms: None,
+            target_priority: None,
+            profile: Some(ProfileChoice::Named("Boss healer".into())),
+        },
+        C::Kill {
+            query: MonsterQuery::Name("Boss".into()),
+            skills: None,
+            skill_interval_ms: None,
+            target_priority: None,
+            profile: Some(ProfileChoice::Inline(
+                serde_json::from_value(serde_json::json!({
+                    "onCooldown": "wait",
+                    "triggers": [{ "includes": "prepares", "skill": 3, "within": 1500 }],
+                    "priority": [{ "skill": 2, "pauseAfter": 500 }],
+                    "steps": [
+                        { "skill": 1, "when": [{ "type": "hp", "of": "anyAlly", "atMost": "60%" }] },
+                        { "skill": 4 }
+                    ]
+                }))
+                .unwrap(),
+            )),
         },
         C::Hunt {
             query: MonsterQuery::Name("Frogzard".into()),

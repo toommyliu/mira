@@ -11,7 +11,9 @@ pub(crate) mod inventory;
 pub(crate) mod packets;
 pub(crate) mod player;
 pub(crate) mod players;
+pub(crate) mod profiles;
 pub(crate) mod quests;
+pub(crate) mod rotation;
 pub(crate) mod shops;
 #[cfg(test)]
 pub(crate) mod testing;

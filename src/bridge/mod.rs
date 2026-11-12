@@ -48,6 +48,8 @@ pub(crate) enum CallError {
     Decode(#[from] DecodeError),
     #[error(transparent)]
     Army(#[from] crate::army::ArmyError),
+    #[error(transparent)]
+    Profile(#[from] crate::domain::profiles::ProfileError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

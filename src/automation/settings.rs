@@ -49,7 +49,7 @@ impl Automation {
     }
 
     pub(crate) fn auto_attack(&self) -> auto_attack::Settings {
-        *self.attack.borrow()
+        self.attack.borrow().clone()
     }
 
     pub(crate) fn watch_auto_attack(&self) -> watch::Receiver<auto_attack::Settings> {

@@ -40,6 +40,8 @@ use crate::{
         bank,
         counter_attack::{self, CounterAttacks},
         player,
+        profiles::Library,
+        rotation,
         world::{self, Location},
     },
     scripting::{self, Calls, ToPlayer},
@@ -120,6 +122,7 @@ impl Runtime {
         stats: tokio::sync::watch::Sender<Option<stats::Report>>,
         automation: Automation,
         extras: tokio::sync::watch::Receiver<extras::Extras>,
+        profiles: tokio::sync::watch::Receiver<Arc<Library>>,
         armies: Armies,
         display_frames: bool,
     ) -> std::io::Result<Self> {
@@ -142,6 +145,7 @@ impl Runtime {
                     stats,
                     automation,
                     extras,
+                    profiles,
                     armies,
                     display_frames,
                 ) {
@@ -206,6 +210,7 @@ fn run(
     stats: tokio::sync::watch::Sender<Option<stats::Report>>,
     automation: Automation,
     extras: tokio::sync::watch::Receiver<extras::Extras>,
+    profiles: tokio::sync::watch::Receiver<Arc<Library>>,
     armies: Armies,
     display_frames: bool,
 ) -> anyhow::Result<()> {
@@ -308,6 +313,8 @@ fn run(
             bridge.clone(),
             automation.watch_auto_attack(),
             counter_attacks.clone(),
+            bridge.subscribe(rotation::wants),
+            profiles.clone(),
         ),
     );
     let subscriber = bridge.clone();
@@ -450,6 +457,7 @@ fn run(
                             armies.clone(),
                             counter_attacks.clone(),
                             cooldown.clone(),
+                            profiles.clone(),
                             state,
                             call,
                         ),

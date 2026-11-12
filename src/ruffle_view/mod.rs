@@ -104,6 +104,7 @@ impl RuffleView {
             stats_tx,
             Automation::clone(&automation),
             extras.watch(),
+            crate::combat_profiles::watch(cx),
             armies,
             native.supports_display_frames(),
         )?;

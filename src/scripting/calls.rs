@@ -1,4 +1,8 @@
-use std::{collections::HashMap, rc::Rc, sync::mpsc};
+use std::{
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, mpsc},
+};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -14,8 +18,9 @@ use crate::{
     army::Armies,
     automation::settings::Automation,
     bridge::{Bridge, CallError},
-    domain::{CombatCooldown, auth::Logins, counter_attack::CounterAttacks},
+    domain::{CombatCooldown, auth::Logins, counter_attack::CounterAttacks, profiles::Library},
 };
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RunId(pub(crate) u64);
@@ -143,6 +148,7 @@ pub(crate) async fn answer(
     armies: Armies,
     counter_attacks: CounterAttacks,
     cooldown: CombatCooldown,
+    profiles: watch::Receiver<Arc<Library>>,
     state: Rc<RunState>,
     call: Call,
 ) {
@@ -160,6 +166,7 @@ pub(crate) async fn answer(
             &armies,
             &counter_attacks,
             &cooldown,
+            &profiles,
             run,
             &state,
             request,
@@ -175,6 +182,7 @@ async fn serve(
     armies: &Armies,
     counter_attacks: &CounterAttacks,
     cooldown: &CombatCooldown,
+    profiles: &watch::Receiver<Arc<Library>>,
     run: RunId,
     state: &RunState,
     request: Request,
@@ -208,6 +216,7 @@ async fn serve(
                 bridge,
                 |wants| bridge.subscribe(wants),
                 counter_attacks,
+                profiles,
                 request,
             )
             .await

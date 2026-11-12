@@ -1,42 +1,73 @@
-use tokio::{sync::watch, time::sleep};
+use std::sync::Arc;
 
-use crate::bridge::{self, CallError, Loader, Value};
-use crate::domain::{
-    auth,
-    combat::{DEFAULT_ROTATION, TICK, selector, targets_countering, use_next_skill},
-    counter_attack::CounterAttacks,
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep_until},
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+use crate::bridge::{self, CallError, Loader, Subscription, Value};
+use crate::domain::{
+    auth,
+    combat::{TICK, selector, targets_countering},
+    counter_attack::CounterAttacks,
+    profiles::{Library, Profile},
+    rotation::Fighter,
+};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Settings {
     pub(crate) enabled: bool,
+    pub(crate) profile: Option<String>,
 }
 
 pub(crate) async fn run(
     loader: impl Loader,
     mut settings: watch::Receiver<Settings>,
     counter_attacks: CounterAttacks,
+    messages: Subscription,
+    library: watch::Receiver<Arc<Library>>,
 ) {
-    let mut next = 0;
+    let mut fighter = Fighter::fixed(Profile::generic()).listening(messages);
+    let mut chosen = None;
+    let mut next = Instant::now() + TICK;
     loop {
-        let enabled = settings.borrow_and_update().enabled;
+        let Settings { enabled, profile } = settings.borrow_and_update().clone();
+        if chosen.as_ref() != Some(&profile) {
+            fighter.switch(choose(profile.as_deref(), &library));
+            chosen = Some(profile);
+        }
         tokio::select! {
-            changed = settings.changed() => if changed.is_err() {
-                return;
-            },
-            () = sleep(TICK), if enabled => {
-                if let Err(error) = attack(&loader, &counter_attacks, &mut next) {
+            changed = settings.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                next = Instant::now() + TICK;
+            }
+            () = fighter.listen(&loader) => {}
+            () = sleep_until(next), if enabled => {
+                if let Err(error) = attack(&loader, &counter_attacks, &mut fighter) {
                     tracing::debug!(%error, "auto attack skipped a tick");
                 }
+                next = Instant::now() + TICK;
             }
         }
     }
 }
 
+fn choose(name: Option<&str>, library: &watch::Receiver<Arc<Library>>) -> Fighter {
+    let Some(name) = name else {
+        return Fighter::fixed(Profile::generic());
+    };
+    Fighter::named(name.to_owned(), library.clone()).unwrap_or_else(|| {
+        tracing::warn!(profile = %name, "no combat profile has this name, so auto attack uses Generic");
+        Fighter::fixed(Profile::generic())
+    })
+}
+
 fn attack(
     loader: &impl Loader,
     counter_attacks: &CounterAttacks,
-    next: &mut usize,
+    fighter: &mut Fighter,
 ) -> Result<(), CallError> {
     if !auth::in_game(loader)?
         || counter_attacks.holds_skills(loader)?
@@ -44,10 +75,14 @@ fn attack(
     {
         return Ok(());
     }
-    if !bridge::combat::has_target(loader)? && !target_any_monster(loader, counter_attacks)? {
-        return Ok(());
+    if !bridge::combat::has_target(loader)? {
+        fighter.restart();
+        if !target_any_monster(loader, counter_attacks)? {
+            return Ok(());
+        }
     }
-    use_next_skill(loader, &DEFAULT_ROTATION, next)
+    fighter.act(loader)?;
+    Ok(())
 }
 
 fn target_any_monster(
@@ -70,10 +105,14 @@ fn target_any_monster(
 mod tests {
     use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-    use tokio::task::LocalSet;
+    use serde_json::json;
+    use tokio::{task::LocalSet, time::sleep};
 
     use super::*;
-    use crate::domain::testing::FakeLoader;
+    use crate::{
+        bridge::{Event, Events},
+        domain::testing::FakeLoader,
+    };
 
     #[derive(Default)]
     struct Fight {
@@ -85,7 +124,21 @@ mod tests {
         cast: Vec<i32>,
     }
 
-    fn start(fight: Fight, enabled: bool) -> (Rc<RefCell<Fight>>, watch::Sender<Settings>) {
+    struct Started {
+        fight: Rc<RefCell<Fight>>,
+        settings: watch::Sender<Settings>,
+        library: watch::Sender<Arc<Library>>,
+        events: Rc<Events>,
+    }
+
+    fn on(enabled: bool) -> Settings {
+        Settings {
+            enabled,
+            profile: None,
+        }
+    }
+
+    fn start(fight: Fight, settings: Settings, library: Library) -> Started {
         let fight = Rc::new(RefCell::new(fight));
         let state = fight.clone();
         let loader = FakeLoader::new(move |callback, args| {
@@ -108,13 +161,32 @@ mod tests {
                     fight.target = Some(*id);
                     Value::Bool(true)
                 }
-                "combat.getSkillCooldownRemaining" => {
-                    let [Value::Number(skill)] = args else {
-                        panic!("cooldown needs a skill: {args:?}");
+                "combat.getSnapshot" => {
+                    let skill = |slot: i32| {
+                        Value::Object(
+                            [
+                                (
+                                    "cooldown".to_owned(),
+                                    Value::Number(f64::from(
+                                        fight.cooling.get(&slot).copied().unwrap_or(0),
+                                    )),
+                                ),
+                                ("castable".to_owned(), Value::Bool(fight.target.is_some())),
+                            ]
+                            .into(),
+                        )
                     };
-                    Value::Number(f64::from(
-                        fight.cooling.get(&(*skill as i32)).copied().unwrap_or(0),
-                    ))
+                    Value::Object(
+                        [
+                            ("hp".to_owned(), Value::Number(100.0)),
+                            ("maxHp".to_owned(), Value::Number(100.0)),
+                            (
+                                "skills".to_owned(),
+                                Value::List((0..6).map(skill).collect()),
+                            ),
+                        ]
+                        .into(),
+                    )
                 }
                 "combat.useSkill" => {
                     let Value::String(skill) = &args[0] else {
@@ -126,9 +198,34 @@ mod tests {
                 other => panic!("unexpected call {other}"),
             })
         });
-        let (settings, receiver) = watch::channel(Settings { enabled });
-        tokio::task::spawn_local(run(loader, receiver, CounterAttacks::default()));
-        (fight, settings)
+        let (settings, receiver) = watch::channel(settings);
+        let (library, profiles) = watch::channel(Arc::new(library));
+        let events = Rc::new(Events::default());
+        tokio::task::spawn_local(run(
+            loader,
+            receiver,
+            CounterAttacks::default(),
+            events.subscribe(crate::domain::rotation::wants),
+            profiles,
+        ));
+        Started {
+            fight,
+            settings,
+            library,
+            events,
+        }
+    }
+
+    fn library(profiles: &[(&str, serde_json::Value)]) -> Library {
+        let mut library = Library::default();
+        for (name, profile) in profiles {
+            library.put(
+                None,
+                (*name).to_owned(),
+                serde_json::from_value(profile.clone()).unwrap(),
+            );
+        }
+        library
     }
 
     async fn ticks(count: u32) {
@@ -139,16 +236,17 @@ mod tests {
     async fn it_targets_a_monster_and_rotates_through_skills_one_to_four() {
         LocalSet::new()
             .run_until(async {
-                let (fight, _settings) = start(
+                let started = start(
                     Fight {
                         in_game: true,
                         monsters: vec![7.0, 9.0],
                         ..Fight::default()
                     },
-                    true,
+                    on(true),
+                    Library::default(),
                 );
                 ticks(5).await;
-                let fight = fight.borrow();
+                let fight = started.fight.borrow();
                 assert_eq!(fight.targeted, [7.0]);
                 assert_eq!(fight.cast, [1, 2, 3, 4, 1]);
             })
@@ -159,17 +257,18 @@ mod tests {
     async fn skills_on_cooldown_are_skipped() {
         LocalSet::new()
             .run_until(async {
-                let (fight, _settings) = start(
+                let started = start(
                     Fight {
                         in_game: true,
                         monsters: vec![7.0],
                         cooling: HashMap::from([(2, 3000), (4, 1500)]),
                         ..Fight::default()
                     },
-                    true,
+                    on(true),
+                    Library::default(),
                 );
                 ticks(4).await;
-                assert_eq!(fight.borrow().cast, [1, 3, 1, 3]);
+                assert_eq!(started.fight.borrow().cast, [1, 3, 1, 3]);
             })
             .await;
     }
@@ -178,18 +277,40 @@ mod tests {
     async fn a_live_target_is_kept() {
         LocalSet::new()
             .run_until(async {
-                let (fight, _settings) = start(
+                let started = start(
                     Fight {
                         in_game: true,
                         monsters: vec![7.0],
                         target: Some(3.0),
                         ..Fight::default()
                     },
-                    true,
+                    on(true),
+                    Library::default(),
                 );
                 ticks(3).await;
-                assert!(fight.borrow().targeted.is_empty());
-                assert_eq!(fight.borrow().cast.len(), 3);
+                assert!(started.fight.borrow().targeted.is_empty());
+                assert_eq!(started.fight.borrow().cast.len(), 3);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_rotation_starts_over_on_a_new_target() {
+        LocalSet::new()
+            .run_until(async {
+                let started = start(
+                    Fight {
+                        in_game: true,
+                        monsters: vec![7.0],
+                        ..Fight::default()
+                    },
+                    on(true),
+                    Library::default(),
+                );
+                ticks(2).await;
+                started.fight.borrow_mut().target = None;
+                ticks(2).await;
+                assert_eq!(started.fight.borrow().cast, [1, 2, 1, 2]);
             })
             .await;
     }
@@ -198,35 +319,106 @@ mod tests {
     async fn it_waits_while_off_out_of_game_or_with_nothing_to_fight() {
         LocalSet::new()
             .run_until(async {
-                let (off, settings) = start(
+                let off = start(
                     Fight {
                         in_game: true,
                         monsters: vec![7.0],
                         ..Fight::default()
                     },
-                    false,
+                    on(false),
+                    Library::default(),
                 );
-                let (loading, _loading) = start(
+                let loading = start(
                     Fight {
                         monsters: vec![7.0],
                         ..Fight::default()
                     },
-                    true,
+                    on(true),
+                    Library::default(),
                 );
-                let (empty, _empty) = start(
+                let empty = start(
                     Fight {
                         in_game: true,
                         ..Fight::default()
                     },
-                    true,
+                    on(true),
+                    Library::default(),
                 );
                 ticks(5).await;
-                for fight in [&off, &loading, &empty] {
-                    assert!(fight.borrow().cast.is_empty());
+                for started in [&off, &loading, &empty] {
+                    assert!(started.fight.borrow().cast.is_empty());
                 }
-                settings.send_replace(Settings { enabled: true });
+                off.settings.send_replace(on(true));
                 ticks(1).await;
-                assert_eq!(off.borrow().cast, [1]);
+                assert_eq!(off.fight.borrow().cast, [1]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_chosen_profile_is_used_and_picks_up_saved_changes() {
+        LocalSet::new()
+            .run_until(async {
+                let started = start(
+                    Fight {
+                        in_game: true,
+                        monsters: vec![7.0],
+                        ..Fight::default()
+                    },
+                    Settings {
+                        enabled: true,
+                        profile: Some("solo".into()),
+                    },
+                    library(&[(
+                        "Solo",
+                        json!({ "onCooldown": "skip", "steps": [{ "skill": 3 }] }),
+                    )]),
+                );
+                ticks(2).await;
+                started.library.send_replace(Arc::new(library(&[(
+                    "Solo",
+                    json!({ "onCooldown": "skip", "steps": [{ "skill": 2 }] }),
+                )])));
+                sleep(TICK * 2).await;
+                started.settings.send_replace(Settings {
+                    enabled: true,
+                    profile: Some("Missing".into()),
+                });
+                ticks(2).await;
+                assert_eq!(started.fight.borrow().cast, [3, 3, 2, 2, 1, 2]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_message_fires_its_trigger() {
+        LocalSet::new()
+            .run_until(async {
+                let started = start(
+                    Fight {
+                        in_game: true,
+                        monsters: vec![7.0],
+                        ..Fight::default()
+                    },
+                    Settings {
+                        enabled: true,
+                        profile: Some("Boss".into()),
+                    },
+                    library(&[(
+                        "Boss",
+                        json!({
+                            "onCooldown": "skip",
+                            "triggers": [{ "includes": "prepares", "skill": 4, "within": 1000 }],
+                            "steps": [{ "skill": 1 }]
+                        }),
+                    )]),
+                );
+                ticks(2).await;
+                started.events.publish(&Event::ExtensionResponse {
+                    packet: r#"{"type":"json","dataObj":{"cmd":"ct","anims":[{"msg":"The boss prepares a slam!","cInf":"m:7","tInf":"p:1"}]}}"#.into(),
+                });
+                ticks(2).await;
+                assert_eq!(started.fight.borrow().cast, [1, 1, 4, 1]);
             })
             .await;
     }

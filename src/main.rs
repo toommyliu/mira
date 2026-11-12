@@ -6,6 +6,7 @@ mod accounts;
 mod army;
 mod automation;
 mod bridge;
+mod combat_profiles;
 mod domain;
 mod logging;
 mod net;
@@ -49,6 +50,7 @@ fn main() -> anyhow::Result<()> {
             cx.on_action(|_: &Quit, cx| cx.quit());
             settings::init(data.join("settings.json"), set_menus, cx);
             account_settings::init(data.join("account-settings"), cx);
+            combat_profiles::init(data.join("combat-profiles.json"), cx);
             set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

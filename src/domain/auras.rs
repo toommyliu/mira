@@ -60,7 +60,23 @@ impl Aura {
         &self.name
     }
 
-    fn is_named(&self, name: &str) -> bool {
+    pub(crate) fn stack(&self) -> i32 {
+        self.stack
+    }
+
+    pub(crate) fn number(&self) -> Option<f64> {
+        match &self.value {
+            Some(AuraValue::Number(number)) => Some(*number),
+            Some(AuraValue::Text(text)) => text
+                .trim()
+                .parse()
+                .ok()
+                .filter(|number: &f64| number.is_finite()),
+            None => None,
+        }
+    }
+
+    pub(crate) fn is_named(&self, name: &str) -> bool {
         self.name.to_lowercase() == name.to_lowercase()
     }
 }
