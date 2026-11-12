@@ -4,6 +4,8 @@ mod game_bar;
 mod input;
 mod manager;
 mod menu;
+mod profile_form;
+mod profiles;
 mod script;
 mod script_form;
 mod scripts;
@@ -45,6 +47,9 @@ use ruffle_core::backend::ui::MouseCursor;
 pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
+pub(crate) use profiles::{
+    OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
+};
 pub(crate) use scripts::OpenScripts;
 pub(crate) use ui::BAR_HEIGHT;
 

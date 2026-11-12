@@ -44,12 +44,12 @@ actions!(
 #[action(namespace = mira, no_json)]
 struct SelectSession(usize);
 
-const SIDEBAR_WIDTH: Pixels = px(208.0);
-const TAB_ROW: Pixels = px(56.0);
-const TAB_GAP: Pixels = px(4.0);
-const TAB_PADDING: Pixels = px(8.0);
-const TAB_TOP: Pixels = px(8.0);
-const TAB_BOTTOM: Pixels = px(10.0);
+pub(super) const SIDEBAR_WIDTH: Pixels = px(208.0);
+pub(super) const TAB_ROW: Pixels = px(56.0);
+pub(super) const TAB_GAP: Pixels = px(4.0);
+pub(super) const TAB_PADDING: Pixels = px(8.0);
+pub(super) const TAB_TOP: Pixels = px(8.0);
+pub(super) const TAB_BOTTOM: Pixels = px(10.0);
 const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
@@ -874,7 +874,7 @@ impl Client {
     }
 }
 
-fn tab_face(
+pub(super) fn tab_face(
     theme: &Theme,
     label: &SharedString,
     glance: Option<Glance>,
@@ -936,7 +936,7 @@ fn shortcut_badge(theme: &Theme, number: usize) -> impl IntoElement {
         .child(format!("⌘{number}"))
 }
 
-fn control(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
+pub(super) fn control(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
     ui::pressable(
         theme,
         div()

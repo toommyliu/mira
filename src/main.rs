@@ -47,6 +47,7 @@ fn main() -> anyhow::Result<()> {
             mira_ui::init(cx);
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
             ruffle_view::bind_keys(cx);
+            ruffle_view::bind_profile_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             settings::init(data.join("settings.json"), set_menus, cx);
             account_settings::init(data.join("account-settings"), cx);
@@ -99,6 +100,9 @@ fn main() -> anyhow::Result<()> {
                     });
                 });
             });
+            cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
+                cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
+            });
             cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
                 let (client, accounts, device) =
                     (client.clone(), accounts.clone(), manager_device.clone());
@@ -125,6 +129,7 @@ fn set_menus(cx: &mut App) {
                 MenuItem::action("Settings…", settings::OpenSettings),
                 MenuItem::action("Accounts", ruffle_view::OpenAccounts),
                 MenuItem::action("Run Script…", ruffle_view::OpenScripts),
+                MenuItem::action("Combat Profiles…", ruffle_view::OpenCombatProfiles),
                 MenuItem::separator(),
                 MenuItem::action("Quit Mira", Quit),
             ],
