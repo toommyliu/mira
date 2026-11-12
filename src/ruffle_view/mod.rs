@@ -83,7 +83,7 @@ pub struct RuffleView {
     script: script::Script,
     account: Option<account::Link>,
     status: Option<crate::automation::sign_in::Status>,
-    _subscriptions: [Subscription; 3],
+    _subscriptions: [Subscription; 4],
 }
 
 impl RuffleView {
@@ -306,6 +306,10 @@ impl RuffleView {
             .detach();
             let focus = cx.focus_handle();
             let subscriptions = [
+                cx.observe_global::<crate::combat_profiles::Store>(|this: &mut Self, cx| {
+                    this.follow_moved_profile(cx);
+                    cx.notify();
+                }),
                 cx.on_focus(&focus, window, |this: &mut Self, window, _| {
                     this.session
                         .send(ViewEvent::Focus(window.is_window_active()));
@@ -461,8 +465,19 @@ impl RuffleView {
         change: impl FnOnce(&mut auto_attack::Settings),
         cx: &mut Context<Self>,
     ) {
-        self.automation.update_auto_attack(change);
+        let attack = self.automation.update_auto_attack(change);
+        self.save_options(|options| options.auto_attack_profile = attack.profile, cx);
         cx.notify();
+    }
+
+    fn follow_moved_profile(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.automation.auto_attack().profile else {
+            return;
+        };
+        if let Some(to) = cx.global::<crate::combat_profiles::Store>().moved_to(&name) {
+            self.automation
+                .update_auto_attack(|settings| settings.profile = to);
+        }
     }
 
     fn change_game_settings(

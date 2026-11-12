@@ -3,12 +3,16 @@ use std::{fs, io, path::PathBuf, sync::Arc};
 use gpui::{App, BorrowAppContext as _, Global};
 use tokio::sync::watch;
 
-use crate::domain::profiles::{Issue, Library, Profile};
+use crate::{
+    account_settings,
+    domain::profiles::{Issue, Library, Profile, same_name},
+};
 
 pub(crate) struct Store {
     path: PathBuf,
     library: watch::Sender<Arc<Library>>,
     issues: Vec<Issue>,
+    moved: Vec<(String, Option<String>)>,
 }
 
 impl Global for Store {}
@@ -34,6 +38,7 @@ impl Store {
             path,
             library: watch::Sender::new(Arc::new(library)),
             issues,
+            moved: Vec::new(),
         }
     }
 
@@ -46,6 +51,21 @@ impl Store {
         fs::rename(temporary, &self.path)?;
         self.library.send_replace(Arc::new(library));
         Ok(())
+    }
+
+    pub(crate) fn moved_to(&self, name: &str) -> Option<Option<String>> {
+        let mut current = Some(name.to_owned());
+        let mut moved = false;
+        for (from, to) in &self.moved {
+            if current
+                .as_deref()
+                .is_some_and(|current| same_name(current, from))
+            {
+                current.clone_from(to);
+                moved = true;
+            }
+        }
+        moved.then_some(current)
     }
 }
 
@@ -72,16 +92,29 @@ pub(crate) fn save(
     cx: &mut App,
 ) -> io::Result<()> {
     let mut library = Library::clone(&cx.global::<Store>().library.borrow());
-    library.put(previous, name, profile);
-    commit(library, cx)
+    library.put(previous, name.clone(), profile);
+    let renamed = previous
+        .filter(|previous| !same_name(previous, &name))
+        .map(|previous| (previous.to_owned(), Some(name)));
+    commit(library, renamed, cx)
 }
 
 pub(crate) fn delete(name: &str, cx: &mut App) -> io::Result<()> {
     let mut library = Library::clone(&cx.global::<Store>().library.borrow());
     library.remove(name);
-    commit(library, cx)
+    commit(library, Some((name.to_owned(), None)), cx)
 }
 
-fn commit(library: Library, cx: &mut App) -> io::Result<()> {
-    cx.update_global::<Store, _>(|store, _| store.write(library))
+fn commit(
+    library: Library,
+    moved: Option<(String, Option<String>)>,
+    cx: &mut App,
+) -> io::Result<()> {
+    cx.update_global::<Store, _>(|store, _| store.write(library))?;
+    if let Some((from, to)) = moved {
+        account_settings::move_auto_attack_profile(&from, to.as_deref(), cx);
+        cx.global_mut::<Store>().moved.push((from, to));
+        cx.defer(|cx| cx.global_mut::<Store>().moved.clear());
+    }
+    Ok(())
 }

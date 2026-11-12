@@ -30,9 +30,11 @@ use crate::{
         settings::Automation,
         unregister_items,
     },
+    combat_profiles,
     domain::{
         inventory::ItemQuery,
         player::Identity,
+        profiles,
         world::{Location, PADS},
     },
     ruffle::Command,
@@ -59,6 +61,7 @@ pub(super) enum BarMenu {
     Script,
     Jump,
     Environment,
+    AutoAttack,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -74,7 +77,11 @@ impl BarMenu {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
             BarMenu::Options => Some(Submenu::Rendering),
-            BarMenu::Windows | BarMenu::Script | BarMenu::Jump | BarMenu::Environment => None,
+            BarMenu::Windows
+            | BarMenu::Script
+            | BarMenu::Jump
+            | BarMenu::Environment
+            | BarMenu::AutoAttack => None,
         }
     }
 }
@@ -331,7 +338,7 @@ pub(super) struct BarState {
     location: Option<Location>,
     identity: Option<Identity>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 7]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 8]>>,
     submenu_rows: Rc<Cell<[Bounds<Pixels>; 3]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -902,25 +909,16 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             true,
         ))
         .child(super::client::drag_area().flex_1())
-        .child(
-            bar_control(&theme, "auto-attack", live)
-                .flex_none()
-                .role(Role::Switch)
-                .aria_label("Auto attack")
-                .aria_toggled(if attack {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                })
-                .gap(px(8.0))
-                .child("Auto attack")
-                .child(ui::switch(&theme, attack))
-                .when(live, |control| {
-                    control.on_click(cx.listener(move |this, _, _, cx| {
-                        this.change_auto_attack(|settings| settings.enabled = !attack, cx)
-                    }))
-                }),
-        )
+        .child(trigger(
+            &theme,
+            view,
+            BarMenu::AutoAttack,
+            "Auto attack",
+            Some(Detail::Text(profile_label(view).into())),
+            Some(attack),
+            cx,
+            true,
+        ))
         .child(trigger(
             &theme,
             view,
@@ -999,6 +997,7 @@ fn trigger(
         BarMenu::Script => "script",
         BarMenu::Jump => "jump",
         BarMenu::Environment => "environment",
+        BarMenu::AutoAttack => "auto-attack",
     };
     div()
         .map(|slot| {
@@ -1074,6 +1073,7 @@ pub(super) fn overlay(
         BarMenu::Script => script_panel(&theme, view, cx),
         BarMenu::Jump => travel_panel(&theme, view, cx),
         BarMenu::Environment => environment_panel(&theme, view, cx),
+        BarMenu::AutoAttack => attack_panel(&theme, view, cx),
     }
     .track_focus(&view.bar.focus)
     .on_key_down(cx.listener(RuffleView::panel_key_down))
@@ -1334,6 +1334,66 @@ const WINDOWS: [&str; 5] = [
     "Loader/grabber",
     "Packets",
 ];
+
+fn profile_label(view: &RuffleView) -> String {
+    view.automation
+        .auto_attack()
+        .profile
+        .unwrap_or_else(|| profiles::GENERIC.to_owned())
+}
+
+fn attack_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
+    let attack = view.automation.auto_attack();
+    let live = view.in_game();
+    let chosen = attack.profile;
+    let library = combat_profiles::library(cx);
+    let names: Vec<Option<String>> = std::iter::once(None)
+        .chain(library.names().map(|name| Some(name.to_owned())))
+        .collect();
+    let editing = chosen.clone();
+    ui::panel(theme, "auto-attack-panel", px(220.0))
+        .child(
+            toggle_row(
+                theme,
+                "auto-attack-enabled",
+                "Auto attack",
+                attack.enabled,
+                live,
+            )
+            .when(live, |row| {
+                row.on_click(cx.listener(|this, _, _, cx| {
+                    this.change_auto_attack(|settings| settings.enabled = !settings.enabled, cx)
+                }))
+            }),
+        )
+        .child(ui::separator(theme))
+        .child(ui::section(theme, "Profile"))
+        .children(names.into_iter().enumerate().map(|(index, name)| {
+            let selected = match (&name, &chosen) {
+                (None, None) => true,
+                (Some(name), Some(chosen)) => profiles::same_name(name, chosen),
+                _ => false,
+            };
+            let label = name.clone().unwrap_or_else(|| profiles::GENERIC.to_owned());
+            choice_row(theme, ("profile", index), label, selected).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    let name = name.clone();
+                    this.change_auto_attack(|settings| settings.profile = name, cx);
+                    this.close_menu(window, cx);
+                },
+            ))
+        }))
+        .child(ui::separator(theme))
+        .child(
+            ui::pressable(theme, ui::row(theme, "edit-profiles"))
+                .role(Role::MenuItem)
+                .child("Edit profiles…")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_menu(window, cx);
+                    super::open_combat_profiles(editing.clone(), cx);
+                })),
+        )
+}
 
 fn windows_panel(theme: &Theme, cx: &mut Context<RuffleView>) -> Stateful<Div> {
     ui::panel(theme, "windows-panel", px(200.0)).children(WINDOWS.iter().enumerate().map(

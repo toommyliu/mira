@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     accounts::AccountId,
     automation::{auto_relogin, game_settings, settings::Automation},
+    domain::profiles::same_name,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +95,7 @@ pub(crate) struct Options {
     pub(crate) game: game_settings::Settings,
     pub(crate) frame_rate: Option<u32>,
     pub(crate) relogin: auto_relogin::Settings,
+    pub(crate) auto_attack_profile: Option<String>,
 }
 
 impl Options {
@@ -102,6 +104,9 @@ impl Options {
             automation.set_frame_rate(fps);
         }
         automation.update_game_settings(|settings| *settings = self.game.clone());
+        automation.update_auto_attack(|settings| {
+            settings.profile.clone_from(&self.auto_attack_profile);
+        });
         automation.update_auto_relogin(|settings| {
             *settings = auto_relogin::Settings {
                 enabled: settings.enabled,
@@ -170,6 +175,27 @@ impl Store {
         fs::rename(temporary, path)
     }
 
+    fn move_auto_attack_profile(&mut self, from: &str, to: Option<&str>) -> io::Result<()> {
+        let using: Vec<AccountId> = self
+            .accounts
+            .iter()
+            .filter(|(_, settings)| {
+                settings
+                    .options
+                    .auto_attack_profile
+                    .as_deref()
+                    .is_some_and(|name| same_name(name, from))
+            })
+            .map(|(account, _)| account.clone())
+            .collect();
+        for account in using {
+            self.change(&account, |settings| {
+                settings.options.auto_attack_profile = to.map(str::to_owned);
+            })?;
+        }
+        Ok(())
+    }
+
     fn path_of(&self, account: &AccountId) -> io::Result<PathBuf> {
         let name = account.as_str();
         if name.is_empty() || name.contains(['/', '\0']) {
@@ -200,6 +226,12 @@ pub(crate) fn get(account: &AccountId, cx: &App) -> AccountSettings {
 
 pub(crate) fn change(account: &AccountId, cx: &mut App, edit: impl FnOnce(&mut AccountSettings)) {
     if let Err(error) = cx.global_mut::<Store>().change(account, edit) {
+        tracing::error!(%error, "couldn't save account settings");
+    }
+}
+
+pub(crate) fn move_auto_attack_profile(from: &str, to: Option<&str>, cx: &mut App) {
+    if let Err(error) = cx.global_mut::<Store>().move_auto_attack_profile(from, to) {
         tracing::error!(%error, "couldn't save account settings");
     }
 }
@@ -345,6 +377,34 @@ mod tests {
         assert_eq!(relogin.server.as_deref(), Some("Twilly"));
         assert_eq!(relogin.retries, 7);
         assert_eq!(automation.game_settings().walk_speed, 20);
+    }
+
+    #[test]
+    fn renaming_or_deleting_a_profile_follows_every_account_that_uses_it() {
+        let folder = temporary_folder();
+        let mut store = Store::open(folder.clone());
+        let (alice, bob, carol) = (
+            AccountId::of("alice"),
+            AccountId::of("bob"),
+            AccountId::of("carol"),
+        );
+        for (account, profile) in [(&alice, "Boss"), (&bob, "boss"), (&carol, "Solo")] {
+            store
+                .change(account, |settings| {
+                    settings.options.auto_attack_profile = Some(profile.into())
+                })
+                .unwrap();
+        }
+        store
+            .move_auto_attack_profile("BOSS", Some("Raid"))
+            .unwrap();
+        store.move_auto_attack_profile("Solo", None).unwrap();
+        let reopened = Store::open(folder.clone());
+        let profile = |account| reopened.get(account).options.auto_attack_profile;
+        assert_eq!(profile(&alice).as_deref(), Some("Raid"));
+        assert_eq!(profile(&bob).as_deref(), Some("Raid"));
+        assert_eq!(profile(&carol), None);
+        fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
