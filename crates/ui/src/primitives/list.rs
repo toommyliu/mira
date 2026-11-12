@@ -300,7 +300,9 @@ impl RenderOnce for List {
             .flex_col()
             .gap(px(1.0))
             .p(px(4.0))
-            .when_some(self.height, |list, height| list.h(height));
+            .when_some(self.height, |list, height| {
+                list.h(height).pr(Scrollbar::GUTTER)
+            });
         let list = match self.on_reorder {
             Some(reorder) => Sortable::new(
                 list,
@@ -407,6 +409,13 @@ impl RenderOnce for VirtualList {
             on_activate: self.on_activate,
             theme: cx.theme().clone(),
         };
+        let shown = window.use_keyed_state((self.id.clone(), "shown"), cx, |_, _| None);
+        if self.selected.is_some() && *shown.read(cx) != self.selected {
+            shown.update(cx, |shown, _| *shown = self.selected);
+            if let Some(selected) = self.selected {
+                scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
+            }
+        }
         let reveal = scroll.clone();
         let lookup = self.row.clone();
         let render_options = options.clone();
@@ -437,7 +446,8 @@ impl RenderOnce for VirtualList {
                 })
                 .track_scroll(&scroll)
                 .size_full()
-                .p(px(4.0)),
+                .p(px(4.0))
+                .pr(Scrollbar::GUTTER),
             )
             .child(bar)
     }
