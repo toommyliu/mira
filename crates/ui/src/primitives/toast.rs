@@ -224,7 +224,7 @@ impl Toaster {
         let stack = cx.global::<Stack>().0.clone();
         let focus = nav::focus_handle("toasts-focus", window, cx);
         let reduce = cx.reduce_motion();
-        let focused = focus.contains_focused(window, cx) && window.last_input_was_keyboard();
+        let focused = focus.contains_focused(window, cx) && nav::keyboard_input(window, cx);
         let (shown, expanded, heights) = stack.update(cx, |toasts, cx| {
             toasts.prune(reduce);
             if toasts.shown.is_empty() {

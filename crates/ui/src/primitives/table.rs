@@ -101,7 +101,7 @@ impl Table {
 impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let selected = self.selected;
         let count = self.rows.len();
@@ -178,7 +178,7 @@ impl RenderOnce for Table {
                             })
                             .when_some(on_sort, |header, on_sort| {
                                 let focus = header_focus[index].clone();
-                                let ring = nav::keyboard_focused(&focus, window);
+                                let ring = nav::keyboard_focused(&focus, window, cx);
                                 header
                                     .track_focus(&focus.tab_stop(true))
                                     .relative()

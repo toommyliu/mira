@@ -73,7 +73,7 @@ impl RenderOnce for Slider {
             })
             .read(cx)
             .clone();
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let (value, min, max, step) = (self.value, self.min, self.max, self.step);
         let fraction = ((value - min) / (max - min)).clamp(0.0, 1.0);

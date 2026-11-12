@@ -43,7 +43,7 @@ impl RenderOnce for Popover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = menu::state(&self.id, window, cx);
         let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
-        let ring = nav::keyboard_focused(&trigger_focus, window);
+        let ring = nav::keyboard_focused(&trigger_focus, window, cx);
         let (is_open, panel_focus) = {
             let state = state.read(cx);
             (state.is_open(), state.focus())

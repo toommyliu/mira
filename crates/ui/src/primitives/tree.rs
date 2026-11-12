@@ -101,7 +101,7 @@ impl RenderOnce for Tree {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let state =
             window.use_keyed_state((self.id.clone(), "tree"), cx, |_, _| TreeState::default());
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let nodes = Rc::new(self.nodes);
         let (expanded, selected) = {

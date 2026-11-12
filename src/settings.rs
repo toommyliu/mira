@@ -217,6 +217,7 @@ impl Render for SettingsWindow {
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
+            .child(mira_ui::nav::pointer_probe())
             .child(
                 drag_area()
                     .flex_none()

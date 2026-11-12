@@ -23,6 +23,7 @@ actions!(ui, [FocusNext, FocusPrevious]);
 pub fn init(cx: &mut App) {
     cx.set_global(Theme::for_window(cx.window_appearance()));
     Toaster::init(cx);
+    nav::track_input(cx);
     primitives::input::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, Some(FOCUS_SCOPE)),

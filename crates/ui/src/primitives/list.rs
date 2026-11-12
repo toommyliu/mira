@@ -281,7 +281,7 @@ impl RenderOnce for List {
         let options = Options {
             count: self.items.len(),
             selected: self.selected,
-            ring: nav::keyboard_focused(&focus, window),
+            ring: nav::keyboard_focused(&focus, window, cx),
             focus,
             on_select: self.on_select,
             on_activate: self.on_activate,
@@ -401,7 +401,7 @@ impl RenderOnce for VirtualList {
         let options = Options {
             count: self.count,
             selected: self.selected,
-            ring: nav::keyboard_focused(&focus, window),
+            ring: nav::keyboard_focused(&focus, window, cx),
             focus,
             on_select: self.on_select,
             on_activate: self.on_activate,

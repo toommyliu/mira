@@ -181,7 +181,7 @@ impl Button {
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let ring = !self.disabled && nav::keyboard_focused(&focus, window);
+        let ring = !self.disabled && nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let inert = self.disabled || self.busy;
         let pressed = self.selected == Some(true);

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    App, Bounds, FocusHandle, Global, IntoElement, KeyDownEvent, Pixels, ScrollHandle, Styled as _,
-    Window, WindowId, canvas, px,
+    App, Bounds, DispatchPhase, FocusHandle, Global, IntoElement, KeyDownEvent, MouseDownEvent,
+    Pixels, ScrollHandle, Styled as _, Window, WindowId, canvas, px,
 };
 
 const REVEAL_MARGIN: Pixels = px(24.0);
@@ -23,6 +23,52 @@ pub fn set_scroll_root(handle: &ScrollHandle, window: &Window, cx: &mut App) {
 
 pub(crate) fn request_reveal(cx: &mut App) {
     cx.default_global::<Reveal>().pending = true;
+}
+
+#[derive(Default)]
+struct KeyboardWindows(HashSet<WindowId>);
+
+impl Global for KeyboardWindows {}
+
+pub(crate) fn track_input(cx: &mut App) {
+    cx.intercept_keystrokes(|_, window, cx| set_keyboard(true, window, cx))
+        .detach();
+    cx.on_window_closed(|cx, id| {
+        cx.default_global::<KeyboardWindows>().0.remove(&id);
+    })
+    .detach();
+}
+
+pub fn pointer_probe() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| {
+            window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture {
+                    set_keyboard(false, window, cx);
+                }
+            });
+        },
+    )
+    .absolute()
+}
+
+fn set_keyboard(keyboard: bool, window: &mut Window, cx: &mut App) {
+    let id = window.window_handle().window_id();
+    let windows = &mut cx.default_global::<KeyboardWindows>().0;
+    let changed = if keyboard {
+        windows.insert(id)
+    } else {
+        windows.remove(&id)
+    };
+    if changed {
+        window.refresh();
+    }
+}
+
+pub fn keyboard_input(window: &Window, cx: &App) -> bool {
+    cx.try_global::<KeyboardWindows>()
+        .is_some_and(|windows| windows.0.contains(&window.window_handle().window_id()))
 }
 
 pub(crate) fn reveal_probe() -> impl IntoElement {
@@ -207,8 +253,8 @@ pub fn typeahead(
         .copied()
 }
 
-pub fn keyboard_focused(handle: &FocusHandle, window: &Window) -> bool {
-    handle.is_focused(window) && window.last_input_was_keyboard()
+pub fn keyboard_focused(handle: &FocusHandle, window: &Window, cx: &App) -> bool {
+    handle.is_focused(window) && keyboard_input(window, cx)
 }
 
 pub fn focus_first(container: &FocusHandle, window: &mut Window, cx: &mut App) {

@@ -21,7 +21,7 @@ pub(crate) fn labelled(
     cx: &mut App,
 ) -> (gpui::Stateful<gpui::Div>, bool) {
     let focus = nav::focus_handle((id.clone(), "focus"), window, cx);
-    let ring = !disabled && nav::keyboard_focused(&focus, window);
+    let ring = !disabled && nav::keyboard_focused(&focus, window, cx);
     let theme = cx.theme();
     let row = div()
         .id(id)

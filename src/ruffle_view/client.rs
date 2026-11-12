@@ -952,6 +952,7 @@ impl Render for Client {
             .track_focus(&self.focus)
             .flex()
             .size_full()
+            .child(mira_ui::nav::pointer_probe())
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
                 if let Err(error) = this.open_session(None, window, cx) {
                     tracing::error!(%error, "couldn't open a session");

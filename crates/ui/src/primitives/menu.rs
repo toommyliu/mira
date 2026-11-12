@@ -906,7 +906,7 @@ impl RenderOnce for Menu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = state(&self.id, window, cx);
         let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
-        let ring = nav::keyboard_focused(&trigger_focus, window);
+        let ring = nav::keyboard_focused(&trigger_focus, window, cx);
         let is_open = state.read(cx).open;
         let shown = presence(&state, window, cx).is_some();
         let theme = cx.theme().clone();

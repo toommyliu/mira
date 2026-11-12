@@ -75,7 +75,7 @@ impl RadioGroup {
 impl RenderOnce for RadioGroup {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let enabled: Rc<[bool]> = self.choices.iter().map(|c| !c.disabled).collect();
         let count = self.choices.len();

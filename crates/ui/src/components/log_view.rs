@@ -60,7 +60,7 @@ impl RenderOnce for LogView {
             scroll.scroll_to_bottom();
         }
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let bar = Scrollbar::new((self.id.clone(), "scrollbar"), scroll.clone());
         let lines = div()

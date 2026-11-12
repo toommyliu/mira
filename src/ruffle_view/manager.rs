@@ -1066,6 +1066,7 @@ impl Render for Manager {
             .role(Role::Group)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
+            .child(mira_ui::nav::pointer_probe())
             .child(self.toolbar(&theme, cx))
             .children(self.notice.clone().map(|notice| {
                 div()

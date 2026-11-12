@@ -430,6 +430,54 @@ fn clicking_a_tooltip_trigger_leaves_focus_where_it_was(cx: &mut TestAppContext)
     assert!(cx.update(|window, _| focus.is_focused(window)));
 }
 
+struct FocusRing {
+    root: FocusHandle,
+    target: FocusHandle,
+}
+
+impl Render for FocusRing {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.root)
+            .size_full()
+            .child(mira_ui::nav::pointer_probe())
+            .child(div().track_focus(&self.target).size(gpui::px(20.0)))
+    }
+}
+
+#[gpui::test]
+fn the_focus_ring_survives_pointer_moves_until_a_click(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.focus_handle();
+        window.activate_window();
+        window.focus(&root, cx);
+        FocusRing {
+            root,
+            target: cx.focus_handle().tab_stop(true),
+        }
+    });
+    cx.run_until_parked();
+    let target = view.read_with(cx, |view, _| view.target.clone());
+    let ring = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| mira_ui::nav::keyboard_focused(&target, window, cx))
+    };
+    let at = gpui::point(gpui::px(100.0), gpui::px(100.0));
+
+    press(cx, "tab");
+    assert!(ring(cx));
+
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    assert!(ring(cx));
+
+    cx.simulate_mouse_down(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    assert!(!ring(cx));
+
+    press(cx, "tab");
+    assert!(ring(cx));
+}
+
 type Moves = Rc<std::cell::RefCell<Vec<(usize, usize, usize)>>>;
 
 struct Rows {

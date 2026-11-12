@@ -87,7 +87,7 @@ impl ToggleGroup {
 impl RenderOnce for ToggleGroup {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let ring = nav::keyboard_focused(&focus, window);
+        let ring = nav::keyboard_focused(&focus, window, cx);
         let count = self.options.len().max(1);
         let layout = window
             .use_keyed_state((self.id.clone(), "layout"), cx, |_, _| {
