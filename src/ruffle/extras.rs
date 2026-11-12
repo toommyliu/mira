@@ -17,7 +17,7 @@ impl Extra {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Extra::CopyMenus => "Copy menus",
+            Extra::CopyMenus => "Right-click menus",
             Extra::ChatHistory => "Chat history",
             Extra::BankSearch => "Bank search",
         }
@@ -26,7 +26,7 @@ impl Extra {
     pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Extra::CopyMenus => {
-                "Right-click a monster, drop, quest, shop title, or a shop, inventory or bank item to copy its name, ID or details."
+                "Adds contextual menus to monsters, items, shops, quests, and drops for more actions."
             }
             Extra::ChatHistory => {
                 "Press Up and Down in the chat box to bring back messages you've sent."
