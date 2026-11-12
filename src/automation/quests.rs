@@ -1,7 +1,10 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::{sync::watch, time::sleep};
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep},
+};
 
 use crate::{
     bridge::{self, CallError, Event, Loader, Packets, Subscription},
@@ -9,6 +12,11 @@ use crate::{
 };
 
 const CHECK_EVERY: Duration = Duration::from_secs(5);
+const BACKOFF: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -106,6 +114,33 @@ impl State {
     }
 }
 
+#[derive(Default)]
+struct Memory {
+    warned: Vec<i32>,
+    failures: HashMap<i32, (Instant, usize)>,
+}
+
+impl Memory {
+    fn cooling(&self, quest_id: i32) -> bool {
+        self.failures.get(&quest_id).is_some_and(|(at, strikes)| {
+            Instant::now() < *at + BACKOFF[(strikes - 1).min(BACKOFF.len() - 1)]
+        })
+    }
+
+    fn settled(&mut self, quest_id: i32, done: bool) {
+        if done {
+            self.failures.remove(&quest_id);
+            return;
+        }
+        let strikes = self
+            .failures
+            .get(&quest_id)
+            .map_or(0, |(_, strikes)| *strikes);
+        self.failures
+            .insert(quest_id, (Instant::now(), strikes + 1));
+    }
+}
+
 fn gained_items(event: &Event) -> bool {
     Packets::<AddItemsPacket>::wants(event) || Packets::<GetDropPacket>::wants(event)
 }
@@ -116,11 +151,11 @@ pub(crate) async fn run(
     mut state: watch::Receiver<State>,
 ) {
     let gained = subscribe(gained_items);
-    let mut warned = HashSet::new();
+    let mut memory = Memory::default();
     loop {
         let current = state.borrow_and_update().clone();
         let active = current.config.enabled && !current.quests.is_empty();
-        if active && let Err(error) = settle(&loader, &subscribe, &state, &mut warned).await {
+        if active && let Err(error) = settle(&loader, &subscribe, &state, &mut memory).await {
             tracing::debug!(%error, "registered quests skipped a check");
         }
         tokio::select! {
@@ -137,14 +172,14 @@ async fn settle(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     state: &watch::Receiver<State>,
-    warned: &mut HashSet<i32>,
+    memory: &mut Memory,
 ) -> Result<(), CallError> {
     if !domain::ready(loader)? {
         return Ok(());
     }
     let quest_ids = state.borrow().quest_ids();
     quests::load_batch(loader, &quest_ids, true).await?;
-    while advance(loader, subscribe, state, warned).await? {}
+    while advance(loader, subscribe, state, memory).await? {}
     Ok(())
 }
 
@@ -164,7 +199,7 @@ async fn advance(
     loader: &impl Loader,
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     state: &watch::Receiver<State>,
-    warned: &mut HashSet<i32>,
+    memory: &mut Memory,
 ) -> Result<bool, CallError> {
     let mut acted = false;
     let quest_ids = state.borrow().quest_ids();
@@ -172,12 +207,16 @@ async fn advance(
         let Some(Registered { reward_item_id, .. }) = still_registered(state, quest_id) else {
             continue;
         };
+        if memory.cooling(quest_id) {
+            continue;
+        }
         if !bridge::quests::is_in_progress(loader, quest_id)? {
             if bridge::quests::is_available(loader, quest_id)? {
                 let accept = quests::accept(loader, subscribe, quest_id, true);
                 let Some(accepted) = unless_changed(state, accept).await? else {
                     return Ok(false);
                 };
+                memory.settled(quest_id, accepted);
                 acted |= accepted;
             }
             continue;
@@ -188,7 +227,8 @@ async fn advance(
         if reward_item_id.is_none()
             && quests::quest(loader, quest_id)?.is_some_and(|quest| quest.needs_reward_choice())
         {
-            if warned.insert(quest_id) {
+            if !memory.warned.contains(&quest_id) {
+                memory.warned.push(quest_id);
                 tracing::warn!(
                     quest_id,
                     "a registered quest needs a reward pick to complete"
@@ -201,6 +241,7 @@ async fn advance(
         let Some(completed) = unless_changed(state, complete).await? else {
             return Ok(false);
         };
+        memory.settled(quest_id, completed);
         acted |= completed;
     }
     Ok(acted)
@@ -237,6 +278,7 @@ mod tests {
         has_items: bool,
         choice: bool,
         unregister_on_complete: bool,
+        refuse_complete: bool,
         action_blocked: bool,
         accepted: u32,
         completed: Vec<(f64, f64)>,
@@ -304,6 +346,12 @@ mod tests {
                         panic!("complete needs turn-ins and a reward: {args:?}");
                     };
                     log.completed.push((*turn_ins, *reward));
+                    if log.refuse_complete {
+                        publisher.publish(&packet(
+                            json!({ "cmd": "ccqr", "QuestID": 7, "bSuccess": 0 }),
+                        ));
+                        return Ok(Value::Bool(true));
+                    }
                     log.in_progress = false;
                     log.has_items = false;
                     if log.unregister_on_complete {
@@ -324,6 +372,10 @@ mod tests {
             receiver,
         ));
         (log, events, settings)
+    }
+
+    fn gain_items(events: &Events) {
+        events.publish(&packet(json!({ "cmd": "addItems", "items": {} })));
     }
 
     async fn settle() {
@@ -350,7 +402,7 @@ mod tests {
                 assert!(log.borrow().completed.is_empty());
 
                 log.borrow_mut().has_items = true;
-                events.publish(&packet(json!({ "cmd": "addItems", "items": {} })));
+                gain_items(&events);
                 settle().await;
                 let log = log.borrow();
                 assert_eq!(log.completed, [(3.0, -1.0)]);
@@ -431,6 +483,42 @@ mod tests {
                     log.borrow().completed.is_empty(),
                     "a turn-in waiting on the cooldown is dropped when its quest is unregistered"
                 );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_turn_in_waits_before_trying_again() {
+        LocalSet::new()
+            .run_until(async {
+                let (log, events, state) = start(Log {
+                    in_progress: true,
+                    has_items: true,
+                    refuse_complete: true,
+                    ..Log::default()
+                });
+                register(&state, None);
+                settle().await;
+                assert_eq!(log.borrow().completed.len(), 1);
+
+                gain_items(&events);
+                settle().await;
+                assert_eq!(
+                    log.borrow().completed.len(),
+                    1,
+                    "new items don't retry a refused turn-in right away"
+                );
+
+                sleep(CHECK_EVERY).await;
+                assert_eq!(log.borrow().completed.len(), 2);
+
+                log.borrow_mut().refuse_complete = false;
+                sleep(Duration::from_secs(3)).await;
+                gain_items(&events);
+                settle().await;
+                assert_eq!(log.borrow().completed.len(), 2, "the backoff grows");
+                sleep(CHECK_EVERY).await;
+                assert_eq!(log.borrow().completed.len(), 3);
             })
             .await;
     }
