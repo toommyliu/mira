@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, ElementId, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, RenderOnce, Role, SharedString,
+    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div,
     prelude::FluentBuilder as _, px,
 };
@@ -41,7 +41,9 @@ pub struct Dialog {
     open: bool,
     alert: bool,
     title: SharedString,
+    width: Pixels,
     description: Option<SharedString>,
+    accessory: Option<AnyElement>,
     body: Option<AnyElement>,
     actions: Vec<AnyElement>,
     on_close: Option<CloseHandler>,
@@ -54,7 +56,9 @@ impl Dialog {
             open,
             alert: false,
             title: title.into(),
+            width: px(420.0),
             description: None,
+            accessory: None,
             body: None,
             actions: Vec::new(),
             on_close: None,
@@ -66,8 +70,18 @@ impl Dialog {
         self
     }
 
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = width;
+        self
+    }
+
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn accessory(mut self, accessory: impl IntoElement) -> Self {
+        self.accessory = Some(accessory.into_any_element());
         self
     }
 
@@ -132,7 +146,11 @@ impl RenderOnce for Dialog {
         let theme = cx.theme().clone();
         let close = self.on_close.clone();
         let dismiss = self.on_close.clone().filter(|_| !self.alert);
-        let dismissable = dismiss.is_some();
+        let close_size = if self.accessory.is_some() {
+            Size::Medium
+        } else {
+            Size::Small
+        };
         let backdrop_close = dismiss.clone();
         let close_id = self.id.clone();
         let next_focus = focus.clone();
@@ -190,10 +208,11 @@ impl RenderOnce for Dialog {
                                 .flex()
                                 .flex_col()
                                 .gap(px(16.0))
-                                .w(px(420.0))
+                                .w(self.width)
                                 .p(px(20.0))
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.overlay)
+                                .text_color(theme.text)
                                 .border_1()
                                 .border_color(theme.border)
                                 .shadow(theme.floating())
@@ -202,16 +221,41 @@ impl RenderOnce for Dialog {
                                         .flex()
                                         .flex_col()
                                         .gap(px(6.0))
-                                        .when(dismissable, |header| header.pr(px(28.0)))
                                         .child(
                                             div()
-                                                .id((self.id.clone(), "title"))
-                                                .role(Role::Heading)
-                                                .aria_level(2)
-                                                .text_size(TEXT_TITLE)
-                                                .line_height(LINE_TITLE)
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(self.title),
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap(px(12.0))
+                                                .child(
+                                                    div()
+                                                        .id((self.id.clone(), "title"))
+                                                        .role(Role::Heading)
+                                                        .aria_level(2)
+                                                        .min_w_0()
+                                                        .text_size(TEXT_TITLE)
+                                                        .line_height(LINE_TITLE)
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(self.title),
+                                                )
+                                                .when_some(self.accessory, |row, accessory| {
+                                                    row.child(
+                                                        div().flex_1().min_w_0().child(accessory),
+                                                    )
+                                                })
+                                                .when_some(dismiss, |row, dismiss| {
+                                                    row.child(
+                                                        Button::icon(
+                                                            (close_id, "close"),
+                                                            Icon::X,
+                                                            "Close",
+                                                        )
+                                                        .size(close_size)
+                                                        .on_click(move |_, window, cx| {
+                                                            dismiss(window, cx)
+                                                        }),
+                                                    )
+                                                }),
                                         )
                                         .when_some(self.description, |header, description| {
                                             header.child(
@@ -232,15 +276,6 @@ impl RenderOnce for Dialog {
                                             .gap(px(8.0))
                                             .pt(px(4.0))
                                             .children(self.actions),
-                                    )
-                                })
-                                .when_some(dismiss, |panel, dismiss| {
-                                    panel.child(
-                                        div().absolute().top(px(14.0)).right(px(14.0)).child(
-                                            Button::icon((close_id, "close"), Icon::X, "Close")
-                                                .size(Size::Small)
-                                                .on_click(move |_, window, cx| dismiss(window, cx)),
-                                        ),
                                     )
                                 }),
                             From::Below,

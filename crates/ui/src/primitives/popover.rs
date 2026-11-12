@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
@@ -17,6 +17,7 @@ pub struct Popover {
     label: SharedString,
     content: Content,
     align: menu::Align,
+    width: Pixels,
 }
 
 impl Popover {
@@ -30,7 +31,13 @@ impl Popover {
             label: label.into(),
             content: Rc::new(content),
             align: menu::Align::Start,
+            width: px(280.0),
         }
+    }
+
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = width;
+        self
     }
 
     pub fn align(mut self, align: menu::Align) -> Self {
@@ -61,11 +68,19 @@ impl RenderOnce for Popover {
             });
         }
         let theme = cx.theme().clone();
+        let close_to_trigger = {
+            let trigger_focus = trigger_focus.clone();
+            move |state: &gpui::Entity<menu::MenuState>, window: &mut Window, cx: &mut App| {
+                menu::close(state, false, window, cx);
+                window.focus(&trigger_focus, cx);
+            }
+        };
         let toggle = {
             let state = state.clone();
+            let close_to_trigger = close_to_trigger.clone();
             move |window: &mut Window, cx: &mut App| {
                 if state.read(cx).is_open() {
-                    menu::close(&state, true, window, cx);
+                    close_to_trigger(&state, window, cx);
                 } else {
                     menu::open(&state, None, None, window, cx);
                 }
@@ -123,7 +138,7 @@ impl RenderOnce for Popover {
                                 .track_focus(&panel_focus)
                                 .on_key_down(move |event, window, cx| {
                                     if event.keystroke.key == "escape" {
-                                        menu::close(&key_state, true, window, cx);
+                                        close_to_trigger(&key_state, window, cx);
                                         cx.stop_propagation();
                                     }
                                 })
@@ -132,7 +147,7 @@ impl RenderOnce for Popover {
                                         menu::close(&out_state, false, window, cx)
                                     }
                                 })
-                                .w(px(280.0))
+                                .w(self.width)
                                 .p(px(16.0))
                                 .rounded(theme.radius.panel)
                                 .bg(theme.overlay)

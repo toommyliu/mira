@@ -109,6 +109,45 @@ fn dialog_moves_tab_between_its_controls_without_a_focus_scope(cx: &mut TestAppC
     assert_eq!(pressed.get(), Some("leave"));
 }
 
+struct SearchAndOptions {
+    search: gpui::Entity<mira_ui::primitives::Input>,
+}
+
+impl Render for SearchAndOptions {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            Dialog::new("scripts", true, "Run script")
+                .accessory(div().w(gpui::px(200.0)).child(self.search.clone()))
+                .body(div().debug_selector(|| "options".into()).child(
+                    mira_ui::primitives::Popover::new("options", "Options", |_, _| {
+                        mira_ui::primitives::Switch::new("safe", "Safe start and stop", false)
+                            .into_any_element()
+                    }),
+                )),
+        )
+    }
+}
+
+#[gpui::test]
+fn toggling_a_popover_in_a_dialog_keeps_focus_off_the_dialog_search(cx: &mut TestAppContext) {
+    use gpui::{AppContext as _, Focusable as _};
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        SearchAndOptions {
+            search: cx.new(|cx| mira_ui::primitives::Input::new("Search", cx).search()),
+        }
+    });
+    cx.run_until_parked();
+    let trigger = cx.debug_bounds("options").unwrap().center();
+    let search = view.read_with(cx, |view, cx| view.search.focus_handle(cx));
+    for _ in 0..2 {
+        cx.simulate_click(trigger, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(!cx.update(|window, _| search.is_focused(window)));
+    }
+}
+
 struct RoomThenGo {
     focus: FocusHandle,
     pressed: Rc<Cell<bool>>,
