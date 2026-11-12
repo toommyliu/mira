@@ -1,5 +1,6 @@
 mod account;
 mod client;
+mod environment;
 mod game_bar;
 mod input;
 mod manager;
@@ -46,6 +47,7 @@ use ruffle_core::backend::ui::MouseCursor;
 
 pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
+pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,

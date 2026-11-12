@@ -23,16 +23,11 @@ use crate::{
     automation::{
         auto_relogin::Phase,
         auto_zone::Room,
-        drops::Config as DropConfig,
         game_settings::{FrameRate, RenderingMode, Settings as GameSettings},
-        quests::{Config as QuestConfig, Registered},
-        register_items,
         settings::Automation,
-        unregister_items,
     },
     combat_profiles,
     domain::{
-        inventory::ItemQuery,
         player::Identity,
         profiles,
         world::{Location, PADS},
@@ -42,9 +37,7 @@ use crate::{
 
 const LAST_SERVER: &str = "Last server";
 const MAX_DIGITS: usize = 3;
-const MAX_QUEST_DIGITS: usize = 6;
 const MAX_TEXT: usize = 32;
-const MAX_ITEM_NAME: usize = 64;
 const SUBMENU_WIDTH: Pixels = px(200.0);
 const SUBMENU_MAX_HEIGHT: Pixels = px(360.0);
 const SUBMENU_OVERLAP: Pixels = px(2.0);
@@ -60,7 +53,6 @@ pub(super) enum BarMenu {
     AutoRelogin,
     Script,
     Jump,
-    Environment,
     AutoAttack,
 }
 
@@ -77,11 +69,7 @@ impl BarMenu {
             BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
             BarMenu::Options => Some(Submenu::Rendering),
-            BarMenu::Windows
-            | BarMenu::Script
-            | BarMenu::Jump
-            | BarMenu::Environment
-            | BarMenu::AutoAttack => None,
+            BarMenu::Windows | BarMenu::Script | BarMenu::Jump | BarMenu::AutoAttack => None,
         }
     }
 }
@@ -96,9 +84,6 @@ enum Field {
     FrameRate,
     CustomName,
     CustomGuild,
-    AddQuest,
-    AddDrop,
-    AddBoost,
 }
 
 impl Field {
@@ -110,7 +95,6 @@ impl Field {
     ];
     const MOVEMENT: [Field; 2] = [Field::WalkSpeed, Field::FrameRate];
     const IDENTITY: [Field; 2] = [Field::CustomName, Field::CustomGuild];
-    const ADD: [Field; 3] = [Field::AddQuest, Field::AddDrop, Field::AddBoost];
 
     fn label(self) -> &'static str {
         match self {
@@ -122,9 +106,6 @@ impl Field {
             Field::FrameRate => "Frame rate",
             Field::CustomName => "Name",
             Field::CustomGuild => "Guild",
-            Field::AddQuest => "Add quest ID",
-            Field::AddDrop => "Add drop",
-            Field::AddBoost => "Add boost",
         }
     }
 
@@ -135,31 +116,16 @@ impl Field {
         }
     }
 
-    fn placeholder(self) -> &'static str {
-        match self {
-            Field::AddDrop | Field::AddBoost => "Item name",
-            _ => "",
-        }
-    }
-
     fn is_text(self) -> bool {
-        matches!(
-            self,
-            Field::CustomName | Field::CustomGuild | Field::AddDrop | Field::AddBoost
-        )
+        matches!(self, Field::CustomName | Field::CustomGuild)
     }
 
     fn steps(self) -> bool {
-        !self.is_text() && self != Field::AddQuest
+        !self.is_text()
     }
 
     fn max_len(self) -> usize {
-        match self {
-            Field::AddQuest => MAX_QUEST_DIGITS,
-            Field::AddDrop | Field::AddBoost => MAX_ITEM_NAME,
-            _ if self.is_text() => MAX_TEXT,
-            _ => MAX_DIGITS,
-        }
+        if self.is_text() { MAX_TEXT } else { MAX_DIGITS }
     }
 
     fn value(self, automation: &Automation) -> String {
@@ -177,7 +143,6 @@ impl Field {
                 .unwrap_or_default(),
             Field::CustomName => game().custom_name.unwrap_or_default(),
             Field::CustomGuild => game().custom_guild.unwrap_or_default(),
-            Field::AddQuest | Field::AddDrop | Field::AddBoost => String::new(),
         }
     }
 
@@ -189,18 +154,6 @@ impl Field {
             Field::CustomGuild => {
                 return view
                     .change_game_settings(|settings| settings.custom_guild = Some(text), cx);
-            }
-            Field::AddDrop => {
-                view.automation.update_drops(|state| {
-                    register_items(&mut state.items, vec![ItemQuery::Name(text)])
-                });
-                return cx.notify();
-            }
-            Field::AddBoost => {
-                view.automation.update_boosts(|state| {
-                    register_items(&mut state.items, vec![ItemQuery::Name(text)])
-                });
-                return cx.notify();
             }
             _ => {}
         }
@@ -220,16 +173,7 @@ impl Field {
                 view.change_game_settings(|settings| settings.walk_speed = value, cx)
             }
             Field::FrameRate => view.change_frame_rate(value, cx),
-            Field::AddQuest => {
-                view.automation.update_quests(|state| {
-                    state.register([Registered {
-                        quest_id: value as i32,
-                        reward_item_id: None,
-                    }])
-                });
-                cx.notify();
-            }
-            Field::CustomName | Field::CustomGuild | Field::AddDrop | Field::AddBoost => {}
+            Field::CustomName | Field::CustomGuild => {}
         }
     }
 
@@ -277,7 +221,6 @@ impl Field {
     fn after(self, backwards: bool, automation: &Automation) -> Field {
         let group: &[Field] = match self {
             Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
-            Field::AddQuest | Field::AddDrop | Field::AddBoost => &Field::ADD,
             _ => &[
                 Field::WalkSpeed,
                 Field::FrameRate,
@@ -996,7 +939,6 @@ fn trigger(
         BarMenu::AutoRelogin => "auto-relogin",
         BarMenu::Script => "script",
         BarMenu::Jump => "jump",
-        BarMenu::Environment => "environment",
         BarMenu::AutoAttack => "auto-attack",
     };
     div()
@@ -1072,7 +1014,6 @@ pub(super) fn overlay(
         BarMenu::AutoRelogin => relogin_panel(&theme, view, cx),
         BarMenu::Script => script_panel(&theme, view, cx),
         BarMenu::Jump => travel_panel(&theme, view, cx),
-        BarMenu::Environment => environment_panel(&theme, view, cx),
         BarMenu::AutoAttack => attack_panel(&theme, view, cx),
     }
     .track_focus(&view.bar.focus)
@@ -1401,311 +1342,14 @@ fn windows_panel(theme: &Theme, cx: &mut Context<RuffleView>) -> Stateful<Div> {
             ui::pressable(theme, ui::row(theme, ("window", index)))
                 .role(Role::MenuItem)
                 .child(*label)
-                .on_click(cx.listener(|this, _, window, cx| this.close_menu(window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_menu(window, cx);
+                    if *label == "Environment" {
+                        window.dispatch_action(Box::new(super::OpenEnvironment), cx);
+                    }
+                }))
         },
     ))
-}
-
-fn environment_value(view: &RuffleView) -> Option<SharedString> {
-    let (quests, drops, boosts) = (
-        view.automation.quests(),
-        view.automation.drops(),
-        view.automation.boosts(),
-    );
-    let registered = quests.quests.len() + drops.items.len() + boosts.items.len();
-    let rules = DropConfig {
-        enabled: drops.config.enabled,
-        ..DropConfig::default()
-    } != drops.config;
-    match (registered, rules) {
-        (0, false) => None,
-        (0, true) => Some("Drop rules".into()),
-        (count, _) => Some(format!("{count} registered").into()),
-    }
-}
-
-type QuestToggle = (
-    &'static str,
-    &'static str,
-    fn(&mut QuestConfig) -> &mut bool,
-);
-type DropToggle = (&'static str, &'static str, fn(&mut DropConfig) -> &mut bool);
-
-const DROP_KINDS: [DropToggle; 4] = [
-    ("drops-ac", "AC", |c| &mut c.accept_ac),
-    ("drops-ac-member", "AC, members only", |c| {
-        &mut c.accept_ac_member_only
-    }),
-    ("drops-non-ac", "Non-AC", |c| &mut c.accept_non_ac),
-    ("drops-non-ac-member", "Non-AC, members only", |c| {
-        &mut c.accept_non_ac_member_only
-    }),
-];
-
-const QUEST_DROPS: [QuestToggle; 2] = [
-    ("quests-rewards", "Accept rewards", |c| {
-        &mut c.accept_rewards
-    }),
-    ("quests-requirements", "Accept requirements", |c| {
-        &mut c.accept_requirements
-    }),
-];
-
-fn item_label(query: &ItemQuery) -> SharedString {
-    match query {
-        ItemQuery::Name(name) => name.clone().into(),
-        ItemQuery::ItemId { item_id } => format!("Item {item_id}").into(),
-    }
-}
-
-fn registered_row(
-    theme: &Theme,
-    (kind, index): (&'static str, usize),
-    label: SharedString,
-    detail: Option<SharedString>,
-    remove: impl Fn(&mut RuffleView, &mut Context<RuffleView>) + 'static,
-    cx: &mut Context<RuffleView>,
-) -> Stateful<Div> {
-    ui::row(theme, (kind, index))
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .gap(px(6.0))
-                .overflow_hidden()
-                .child(div().truncate().child(label.clone()))
-                .children(
-                    detail.map(|detail| div().text_color(theme.text_secondary).child(detail)),
-                ),
-        )
-        .child(
-            div()
-                .id(gpui::ElementId::named_usize(
-                    format!("{kind}-remove"),
-                    index,
-                ))
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .size(px(20.0))
-                .rounded(theme.radius.control)
-                .pointer_cursor(theme)
-                .hover(|style| style.bg(theme.fill_hover))
-                .active(|style| style.bg(theme.fill_pressed))
-                .role(Role::Button)
-                .aria_label(SharedString::from(format!("Unregister {label}")))
-                .child(ui::glyph(Glyph::Close, theme.text_secondary))
-                .on_click(cx.listener(move |this, _, _, cx| remove(this, cx))),
-        )
-}
-
-fn unregister_all_row(
-    theme: &Theme,
-    id: &'static str,
-    clear: fn(&Automation),
-    cx: &mut Context<RuffleView>,
-) -> Stateful<Div> {
-    ui::pressable(theme, ui::row(theme, id))
-        .role(Role::MenuItem)
-        .text_color(theme.text_secondary)
-        .child("Unregister all")
-        .on_click(cx.listener(move |this, _, _, cx| {
-            clear(&this.automation);
-            cx.notify();
-        }))
-}
-
-fn environment_panel(
-    theme: &Theme,
-    view: &RuffleView,
-    cx: &mut Context<RuffleView>,
-) -> Stateful<Div> {
-    let quests = view.automation.quests();
-    let drops = view.automation.drops();
-    let boosts = view.automation.boosts();
-    ui::panel(theme, "environment-panel", px(392.0))
-        .max_h(px(560.0))
-        .overflow_y_scroll()
-        .child(ui::section(theme, "Quests"))
-        .child(
-            toggle_row(
-                theme,
-                "quests-enabled",
-                "Accept and complete",
-                quests.config.enabled,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.automation
-                    .update_quests(|state| state.config.enabled = !state.config.enabled);
-                cx.notify();
-            })),
-        )
-        .child(
-            div()
-                .grid()
-                .grid_cols(2)
-                .children(QUEST_DROPS.map(|(id, label, setting)| {
-                    let mut config = quests.config;
-                    toggle_row(theme, id, label, *setting(&mut config), true).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.automation.update_quests(|state| {
-                                let on = setting(&mut state.config);
-                                *on = !*on;
-                            });
-                            cx.notify();
-                        },
-                    ))
-                })),
-        )
-        .children(quests.quests.iter().enumerate().map(|(index, registered)| {
-            let quest_id = registered.quest_id;
-            registered_row(
-                theme,
-                ("quest", index),
-                format!("Quest {quest_id}").into(),
-                registered
-                    .reward_item_id
-                    .map(|reward| format!("reward {reward}").into()),
-                move |this, cx| {
-                    this.automation
-                        .update_quests(|state| state.unregister(&[quest_id]));
-                    cx.notify();
-                },
-                cx,
-            )
-        }))
-        .child(field_row(theme, view, Field::AddQuest, cx))
-        .when(!quests.quests.is_empty(), |panel| {
-            panel.child(unregister_all_row(
-                theme,
-                "quests-clear",
-                |automation| {
-                    automation.update_quests(|state| state.quests.clear());
-                },
-                cx,
-            ))
-        })
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Drops"))
-        .child(
-            toggle_row(
-                theme,
-                "drops-enabled",
-                "Accept and reject",
-                drops.config.enabled,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.automation
-                    .update_drops(|state| state.config.enabled = !state.config.enabled);
-                cx.notify();
-            })),
-        )
-        .children(drops.items.iter().enumerate().map(|(index, query)| {
-            let removed = query.clone();
-            registered_row(
-                theme,
-                ("drop", index),
-                item_label(query),
-                None,
-                move |this, cx| {
-                    this.automation.update_drops(|state| {
-                        unregister_items(&mut state.items, std::slice::from_ref(&removed))
-                    });
-                    cx.notify();
-                },
-                cx,
-            )
-        }))
-        .child(field_row(theme, view, Field::AddDrop, cx))
-        .when(!drops.items.is_empty(), |panel| {
-            panel.child(unregister_all_row(
-                theme,
-                "drops-clear",
-                |automation| {
-                    automation.update_drops(|state| state.items.clear());
-                },
-                cx,
-            ))
-        })
-        .child(ui::section(theme, "Accept unregistered drops"))
-        .child(
-            div()
-                .grid()
-                .grid_cols(2)
-                .children(DROP_KINDS.map(|(id, label, setting)| {
-                    let mut config = drops.config;
-                    toggle_row(theme, id, label, *setting(&mut config), true).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.automation.update_drops(|state| {
-                                let on = setting(&mut state.config);
-                                *on = !*on;
-                            });
-                            cx.notify();
-                        },
-                    ))
-                })),
-        )
-        .child(
-            toggle_row(
-                theme,
-                "drops-reject",
-                "Reject everything else",
-                drops.config.reject_others,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.automation
-                    .update_drops(|state| state.config.reject_others = !state.config.reject_others);
-                cx.notify();
-            })),
-        )
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Boosts"))
-        .child(
-            toggle_row(
-                theme,
-                "boosts-enabled",
-                "Use boosts",
-                boosts.config.enabled,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.automation
-                    .update_boosts(|state| state.config.enabled = !state.config.enabled);
-                cx.notify();
-            })),
-        )
-        .children(boosts.items.iter().enumerate().map(|(index, query)| {
-            let removed = query.clone();
-            registered_row(
-                theme,
-                ("boost", index),
-                item_label(query),
-                None,
-                move |this, cx| {
-                    this.automation.update_boosts(|state| {
-                        unregister_items(&mut state.items, std::slice::from_ref(&removed))
-                    });
-                    cx.notify();
-                },
-                cx,
-            )
-        }))
-        .child(field_row(theme, view, Field::AddBoost, cx))
-        .when(!boosts.items.is_empty(), |panel| {
-            panel.child(unregister_all_row(
-                theme,
-                "boosts-clear",
-                |automation| {
-                    automation.update_boosts(|state| state.items.clear());
-                },
-                cx,
-            ))
-        })
 }
 
 fn travel_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
@@ -1982,8 +1626,7 @@ fn field_input(
             Field::CustomName => identity
                 .map(|identity| identity.name.clone())
                 .or_else(|| view.username().map(str::to_owned)),
-            Field::CustomGuild => identity.and_then(|identity| identity.guild.clone()),
-            _ => Some(field.placeholder().to_owned()),
+            _ => identity.and_then(|identity| identity.guild.clone()),
         };
         ui::text_field(
             theme,

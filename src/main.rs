@@ -114,6 +114,11 @@ fn main() -> anyhow::Result<()> {
                     });
                 });
             });
+            let environment_client = client.clone();
+            cx.on_action(move |_: &ruffle_view::OpenEnvironment, cx| {
+                let client = environment_client.clone();
+                cx.defer(move |cx| ruffle_view::open_environment(client, cx));
+            });
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
             });
@@ -144,6 +149,7 @@ fn set_menus(cx: &mut App) {
                 MenuItem::action("Accounts", ruffle_view::OpenAccounts),
                 MenuItem::action("Run Script…", ruffle_view::OpenScripts),
                 MenuItem::action("Combat Profiles…", ruffle_view::OpenCombatProfiles),
+                MenuItem::action("Environment…", ruffle_view::OpenEnvironment),
                 MenuItem::separator(),
                 MenuItem::action("Quit Mira", Quit),
             ],

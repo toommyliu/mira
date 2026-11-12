@@ -31,7 +31,7 @@ use crate::{
     army::Armies,
     automation::{
         anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, game_settings, quests,
-        settings::Automation, sign_in,
+        register_items, settings::Automation, sign_in,
     },
     bridge::{Bridge, Event, Packets},
     domain::{
@@ -88,6 +88,7 @@ pub(crate) enum Command {
     OpenBank,
     ReloadMap,
     SetSpawnPoint,
+    FetchBoosts,
 }
 
 #[derive(Clone)]
@@ -526,7 +527,7 @@ fn run(
                 Some(Msg::Command(command)) => spawn_local(
                     &inbox,
                     &tasks,
-                    run_command(commands_bridge.clone(), command),
+                    run_command(commands_bridge.clone(), automation.clone(), command),
                 ),
                 Some(Msg::Frame) => {
                     inbox.frame_pending.store(false, Ordering::Relaxed);
@@ -641,8 +642,11 @@ fn run(
     Ok(())
 }
 
-async fn run_command(bridge: Bridge, command: Command) {
+async fn run_command(bridge: Bridge, automation: Automation, command: Command) {
     let done = match command {
+        Command::FetchBoosts => boosts::fetch(&bridge).await.map(|found| {
+            automation.update_boosts(|state| register_items(&mut state.items, found));
+        }),
         Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
         Command::OpenBank => bank::open(&bridge).await.map(drop),
         Command::ReloadMap => world::reload(&bridge).await.map(drop),

@@ -117,6 +117,28 @@ impl Automation {
         update(&self.boosts, change)
     }
 
+    pub(crate) fn copy_environment_from(&self, source: &Automation) {
+        let quests = source.quests();
+        self.update_quests(|state| {
+            state.quests = quests.quests;
+            state.config = quests::Config {
+                enabled: state.config.enabled,
+                ..quests.config
+            };
+        });
+        let drops = source.drops();
+        self.update_drops(|state| {
+            state.items = drops.items;
+            state.sounds = drops.sounds;
+            state.config = drops::Config {
+                enabled: state.config.enabled,
+                ..drops.config
+            };
+        });
+        let boosts = source.boosts();
+        self.update_boosts(|state| state.items = boosts.items);
+    }
+
     pub(crate) fn frame_rate(&self) -> Option<u32> {
         self.frame_rate.borrow().map(|rate| rate.fps)
     }
@@ -162,4 +184,49 @@ fn update<T: Clone + PartialEq>(sender: &watch::Sender<T>, change: impl FnOnce(&
         *current != before
     });
     stored.expect("send_if_modified always runs its closure")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{automation::quests::Registered, domain::inventory::ItemQuery};
+
+    #[test]
+    fn copying_an_environment_replaces_lists_and_rules_but_keeps_each_switch() {
+        let source = Automation::default();
+        source.update_quests(|state| {
+            state.register([Registered {
+                quest_id: 7,
+                reward_item_id: Some(50),
+            }]);
+            state.config.accept_rewards = true;
+        });
+        source.update_drops(|state| {
+            state.items = vec![ItemQuery::Name("Gem".into())];
+            state.set_sound(&ItemQuery::Name("Gem".into()), true);
+            state.config.reject_others = true;
+        });
+        source.update_boosts(|state| {
+            state.items = vec![ItemQuery::Name("XP Boost".into())];
+            state.config.enabled = false;
+        });
+
+        let target = Automation::default();
+        target.update_drops(|state| {
+            state.items = vec![ItemQuery::Name("Cape".into())];
+            state.config.enabled = false;
+        });
+        target.copy_environment_from(&source);
+
+        assert_eq!(target.quests(), source.quests());
+        let drops = target.drops();
+        assert_eq!(
+            (drops.items, drops.sounds),
+            (source.drops().items, source.drops().sounds)
+        );
+        assert!(drops.config.reject_others);
+        assert!(!drops.config.enabled, "the target's pause stays");
+        assert_eq!(target.boosts().items, source.boosts().items);
+        assert!(target.boosts().config.enabled);
+    }
 }

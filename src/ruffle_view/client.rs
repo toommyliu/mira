@@ -366,6 +366,25 @@ impl Client {
         }
     }
 
+    pub(super) fn active_view(&self, cx: &App) -> Option<(Entity<RuffleView>, SharedString)> {
+        let session = self.sessions.get(self.active)?;
+        Some((session.view.clone(), session.title(cx)))
+    }
+
+    pub(super) fn titled_views(&self, cx: &App) -> Vec<(Entity<RuffleView>, SharedString)> {
+        self.sessions
+            .iter()
+            .map(|session| (session.view.clone(), session.title(cx)))
+            .collect()
+    }
+
+    pub(super) fn views(&self) -> Vec<Entity<RuffleView>> {
+        self.sessions
+            .iter()
+            .map(|session| session.view.clone())
+            .collect()
+    }
+
     pub(super) fn tabs(&self, cx: &App) -> Vec<Tab> {
         self.sessions
             .iter()

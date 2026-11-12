@@ -6,7 +6,7 @@ use tokio::{sync::watch, time::sleep};
 use crate::{
     bridge::{CallError, Event, Loader, Subscription},
     domain::{
-        self,
+        self, bank,
         inventory::{self, ItemQuery},
         player,
     },
@@ -30,6 +30,19 @@ impl Default for Config {
 pub(crate) struct State {
     pub(crate) items: Vec<ItemQuery>,
     pub(crate) config: Config,
+}
+
+pub(crate) async fn fetch(loader: &impl Loader) -> Result<Vec<ItemQuery>, CallError> {
+    if !domain::ready(loader)? {
+        return Ok(Vec::new());
+    }
+    let mut items = inventory::items(loader)?;
+    items.extend(bank::items(loader).await?);
+    Ok(items
+        .iter()
+        .filter(|item| item.boost().is_some())
+        .map(|item| ItemQuery::Name(item.name().to_owned()))
+        .collect())
 }
 
 pub(crate) async fn run(
@@ -234,5 +247,44 @@ mod tests {
                 assert!(avatar.borrow().used.is_empty());
             })
             .await;
+    }
+
+    #[tokio::test]
+    async fn fetching_lists_the_boosts_in_the_inventory_and_bank() {
+        let row = |id: f64, name: &str, category: &str, link: &str| {
+            Value::Object(
+                [
+                    ("itemId", Value::Number(id)),
+                    ("name", Value::String(name.into())),
+                    ("category", Value::String(category.into())),
+                    ("link", Value::String(link.into())),
+                ]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+            )
+        };
+        let loader = FakeLoader::new(move |callback, _| {
+            Ok(match callback {
+                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" | "bank.isLoaded" => {
+                    Value::Bool(true)
+                }
+                "inventory.getItems" => Value::List(vec![
+                    row(1.0, "Short XP Boost", "ServerUse", "xpboost::20"),
+                    row(4.0, "Potion", "Item", ""),
+                ]),
+                "bank.getItems" => {
+                    Value::List(vec![row(3.0, "Gold Boost", "ServerUse", "gboost::60")])
+                }
+                other => panic!("unexpected call {other}"),
+            })
+        });
+        assert_eq!(
+            fetch(&loader).await,
+            Ok(vec![
+                ItemQuery::Name("Short XP Boost".into()),
+                ItemQuery::Name("Gold Boost".into()),
+            ])
+        );
     }
 }
