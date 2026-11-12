@@ -50,11 +50,12 @@ impl Appearance {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
     appearance: Appearance,
     pointer_cursors: bool,
+    script_folders: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -66,7 +67,7 @@ impl Settings {
         }
     }
 
-    fn save(self, path: &Path) -> io::Result<()> {
+    fn save(&self, path: &Path) -> io::Result<()> {
         let temporary = path.with_extension("tmp");
         fs::write(&temporary, serde_json::to_vec_pretty(&self)?)?;
         fs::rename(temporary, path)
@@ -126,13 +127,42 @@ pub(crate) fn appearance_menu(cx: &App) -> MenuItem {
     })
 }
 
+pub(crate) fn script_folders(cx: &App) -> &[PathBuf] {
+    &cx.global::<Store>().settings.script_folders
+}
+
+pub(crate) fn add_script_folder(folder: PathBuf, cx: &mut App) {
+    change(cx, |settings| {
+        if !settings.script_folders.contains(&folder) {
+            settings.script_folders.push(folder);
+        }
+    });
+}
+
+pub(crate) fn replace_script_folder(old: &Path, new: PathBuf, cx: &mut App) {
+    change(cx, |settings| {
+        let folders = &mut settings.script_folders;
+        if folders.contains(&new) {
+            folders.retain(|kept| kept != old);
+        } else if let Some(slot) = folders.iter_mut().find(|kept| *kept == old) {
+            *slot = new;
+        }
+    });
+}
+
+pub(crate) fn remove_script_folder(folder: &Path, cx: &mut App) {
+    change(cx, |settings| {
+        settings.script_folders.retain(|kept| kept != folder);
+    });
+}
+
 fn choose(appearance: Appearance, cx: &mut App) {
     change(cx, |settings| settings.appearance = appearance);
 }
 
 fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
     let store = cx.global_mut::<Store>();
-    let before = store.settings;
+    let before = store.settings.clone();
     edit(&mut store.settings);
     if store.settings == before {
         return;
@@ -146,7 +176,7 @@ fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
 }
 
 fn apply(cx: &mut App) {
-    let settings = cx.global::<Store>().settings;
+    let settings = &cx.global::<Store>().settings;
     let mut theme = match settings.appearance {
         Appearance::System => Theme::for_window(cx.window_appearance()),
         Appearance::Light => Theme::light(),
@@ -200,7 +230,7 @@ struct SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let settings = cx.global::<Store>().settings;
+        let settings = &cx.global::<Store>().settings;
         let appearances = Appearance::ALL
             .map(|appearance| SharedString::from(appearance.label()))
             .to_vec();
@@ -276,6 +306,7 @@ mod tests {
         let chosen = Settings {
             appearance: Appearance::Dark,
             pointer_cursors: true,
+            script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
@@ -284,7 +315,7 @@ mod tests {
             Settings::load(&path).unwrap(),
             Settings {
                 appearance: Appearance::Light,
-                pointer_cursors: false,
+                ..Settings::default()
             }
         );
         fs::remove_file(path).unwrap();

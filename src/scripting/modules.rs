@@ -26,7 +26,7 @@ pub(super) const INTERNAL: &str = "internal:/";
 pub(super) const PRELUDE: &str = "internal:/mira/prelude.js";
 pub(super) const BOOTSTRAP: &str = "internal:/mira/bootstrap.js";
 
-const SCRIPT_EXTENSIONS: [&str; 4] = ["ts", "mts", "js", "mjs"];
+pub(crate) const SCRIPT_EXTENSIONS: [&str; 4] = ["ts", "mts", "js", "mjs"];
 
 fn asset(path: &str) -> Option<&'static str> {
     ASSETS

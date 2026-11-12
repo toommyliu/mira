@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gpui::{Context, EventEmitter, PathPromptOptions, SharedString, Window};
+use gpui::{Context, EventEmitter, SharedString};
 
 use super::RuffleView;
 use crate::{
@@ -22,7 +22,6 @@ struct Loaded {
 }
 
 enum Phase {
-    Ready,
     Running { run: Run, stopping: bool },
     Finished(Outcome),
 }
@@ -48,6 +47,10 @@ impl Script {
         )
     }
 
+    pub(super) fn entry(&self) -> Option<&PathBuf> {
+        self.0.as_ref().map(|loaded| &loaded.entry)
+    }
+
     pub(super) fn loaded(&self) -> Option<&SharedString> {
         self.0.as_ref().map(|loaded| &loaded.name)
     }
@@ -68,7 +71,6 @@ impl Script {
     pub(super) fn status(&self) -> Option<String> {
         let Loaded { name, phase, .. } = self.0.as_ref()?;
         match phase {
-            Phase::Ready => None,
             Phase::Running {
                 stopping: false, ..
             } => Some(format!("Running {name}")),
@@ -90,34 +92,6 @@ impl Script {
 }
 
 impl RuffleView {
-    pub(super) fn load_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_menu(window, cx);
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Load".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = chosen.await else {
-                return;
-            };
-            if let Some(entry) = paths.into_iter().next() {
-                let _ = this.update(cx, |this, cx| {
-                    if !this.script.running() {
-                        this.script = Script(Some(Loaded {
-                            name: super::account::file_name(&entry).into(),
-                            entry,
-                            phase: Phase::Ready,
-                        }));
-                        this.changed(cx);
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
         if let Some(loaded) = &self.script.0 {
             self.start_script(loaded.entry.clone(), cx);

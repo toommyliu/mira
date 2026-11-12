@@ -871,7 +871,7 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             &theme,
             view,
             BarMenu::Script,
-            "Script",
+            "Scripts",
             None,
             None,
             cx,
@@ -1305,16 +1305,15 @@ fn script_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) 
         .when_some(view.script.status(), |panel, text| {
             panel.child(div().pt(px(6.0)).child(ui::status(theme, text)))
         });
-    if view.script.running() {
-        return panel.child(
+    let panel = if view.script.running() {
+        panel.child(
             ui::pressable(theme, ui::row(theme, "script-stop"))
                 .role(Role::MenuItem)
                 .child("Stop")
                 .on_click(cx.listener(|this, _, _, cx| this.stop_script(cx))),
-        );
-    }
-    panel
-        .when_some(view.script.loaded(), |panel, name| {
+        )
+    } else {
+        panel.when_some(view.script.loaded(), |panel, name| {
             panel.child(
                 ui::pressable(theme, ui::row(theme, "script-start"))
                     .role(Role::MenuItem)
@@ -1322,12 +1321,16 @@ fn script_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) 
                     .on_click(cx.listener(|this, _, _, cx| this.start_loaded_script(cx))),
             )
         })
-        .child(
-            ui::pressable(theme, ui::row(theme, "script-load"))
-                .role(Role::MenuItem)
-                .child("Load script…")
-                .on_click(cx.listener(|this, _, window, cx| this.load_script(window, cx))),
-        )
+    };
+    panel.child(
+        ui::pressable(theme, ui::row(theme, "script-run"))
+            .role(Role::MenuItem)
+            .child("Run script…")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.close_menu(window, cx);
+                window.dispatch_action(Box::new(super::OpenScripts), cx);
+            })),
+    )
 }
 
 const WINDOWS: [&str; 5] = [

@@ -27,12 +27,11 @@ fn main() -> anyhow::Result<()> {
         .join("Mira");
     std::fs::create_dir_all(&data)?;
     let device = net::device_id(&data.join("device-id"))?;
-    let armies = army::Armies::new(
-        dirs::document_dir()
-            .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
-            .join("Mira")
-            .join("armies"),
-    );
+    let documents = dirs::document_dir()
+        .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
+        .join("Mira");
+    let armies = army::Armies::new(documents.join("armies"));
+    let scripts = documents.join("scripts");
     gpui_platform::application()
         .with_assets(mira_ui::Assets)
         .run(move |cx| {
@@ -87,6 +86,15 @@ fn main() -> anyhow::Result<()> {
                 cx.quit();
                 return;
             };
+            cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
+                let folder = scripts.clone();
+                cx.defer(move |cx| {
+                    let _ = main.update(cx, |client, window, cx| {
+                        window.activate_window();
+                        client.open_scripts(folder, window, cx);
+                    });
+                });
+            });
             cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
                 let (client, accounts, device) =
                     (client.clone(), accounts.clone(), manager_device.clone());
@@ -112,6 +120,7 @@ fn set_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Settings…", settings::OpenSettings),
                 MenuItem::action("Accounts", ruffle_view::OpenAccounts),
+                MenuItem::action("Run Script…", ruffle_view::OpenScripts),
                 MenuItem::separator(),
                 MenuItem::action("Quit Mira", Quit),
             ],

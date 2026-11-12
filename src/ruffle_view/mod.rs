@@ -5,6 +5,8 @@ mod input;
 mod manager;
 mod menu;
 mod script;
+mod script_form;
+mod scripts;
 mod stats;
 mod text_input;
 mod ui;
@@ -44,6 +46,7 @@ use ruffle_core::backend::ui::MouseCursor;
 pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
+pub(crate) use scripts::OpenScripts;
 pub(crate) use ui::BAR_HEIGHT;
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);

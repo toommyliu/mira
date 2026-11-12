@@ -13,6 +13,7 @@ use super::{
     Changed, Details, Glance, Identified, RuffleView, Summary,
     manager::OpenAccounts,
     script::CloseTab,
+    scripts::{OpenScripts, Picker},
     ui::{self, Glyph},
 };
 use mira_ui::{
@@ -80,6 +81,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("ctrl-tab", NextSession, None),
         gpui::KeyBinding::new("ctrl-shift-tab", PreviousSession, None),
         gpui::KeyBinding::new("cmd-shift-a", OpenAccounts, None),
+        gpui::KeyBinding::new("cmd-shift-s", OpenScripts, None),
         gpui::KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
     ]);
     cx.bind_keys(
@@ -107,6 +109,7 @@ pub struct Client {
     tab_scroll: ScrollHandle,
     shortcut_hints: bool,
     shortcut_hint_delay: Option<Task<()>>,
+    scripts: Option<Entity<Picker>>,
     _activation: Subscription,
 }
 
@@ -119,6 +122,13 @@ struct Session {
     _changes: Subscription,
     _identified: Subscription,
     _close: Subscription,
+}
+
+pub(super) struct Tab {
+    pub(super) number: usize,
+    pub(super) running: bool,
+    pub(super) status: Option<SharedString>,
+    pub(super) script: Option<PathBuf>,
 }
 
 impl Session {
@@ -197,6 +207,7 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
+            scripts: None,
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if !window.is_window_active() {
                     this.hide_shortcut_hints(cx);
@@ -351,6 +362,52 @@ impl Client {
             self.sessions[index]
                 .view
                 .update(cx, |view, cx| view.cancel_script(cx));
+        }
+    }
+
+    pub(super) fn tabs(&self, cx: &App) -> Vec<Tab> {
+        self.sessions
+            .iter()
+            .map(|session| {
+                let script = &session.view.read(cx).script;
+                Tab {
+                    number: session.number,
+                    running: script.running(),
+                    status: script.status().map(Into::into),
+                    script: script.entry().cloned(),
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn open_scripts(
+        &mut self,
+        folder: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.sessions.get(self.active).map(|session| session.number) else {
+            return;
+        };
+        let client = cx.entity();
+        let picker = self
+            .scripts
+            .get_or_insert_with(|| cx.new(|cx| Picker::new(&client, folder, tab, window, cx)))
+            .clone();
+        picker.update(cx, |picker, cx| picker.show(tab, cx));
+    }
+
+    pub(super) fn start_script_in(&mut self, tab: usize, script: PathBuf, cx: &mut Context<Self>) {
+        if let Some(session) = self.sessions.iter().find(|session| session.number == tab) {
+            session
+                .view
+                .update(cx, |view, cx| view.start_script(script, cx));
+        }
+    }
+
+    pub(super) fn stop_script_in(&mut self, tab: usize, cx: &mut Context<Self>) {
+        if let Some(session) = self.sessions.iter().find(|session| session.number == tab) {
+            session.view.update(cx, |view, cx| view.cancel_script(cx));
         }
     }
 
@@ -976,6 +1033,7 @@ impl Render for Client {
                     this.select(index, window, cx)
                 }
             }))
+            .children(self.scripts.clone())
             .when(self.sidebar == Sidebar::Full, |root| {
                 root.child(self.sidebar(window, cx))
             })
