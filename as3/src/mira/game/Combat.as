@@ -212,13 +212,13 @@ package mira.game {
     public static function canUseSkill(index:int):Boolean {
       var world:Object = Main.Game.world;
       var skill:Object = world.actions && world.actions.active ? world.actions.active[index] : null;
+      return skill != null && isCastable(world, skill) && !isCoolingDown(world, skill);
+    }
+
+    private static function isCastable(world:Object, skill:Object):Boolean {
       var self:Object = world.myAvatar;
       var leaf:Object = self.dataLeaf;
-      if (!skill || !skill.isOK || skill.skillLock || skill.lock || leaf.intState == 0) {
-        return false;
-      }
-
-      if (isCoolingDown(world, skill)) {
+      if (!skill.isOK || skill.skillLock || skill.lock || leaf.intState == 0) {
         return false;
       }
 
@@ -251,6 +251,46 @@ package mira.game {
       }
 
       return !("filter" in skill && "sRace" in target.objData) || target.objData.sRace.toLowerCase() == skill.filter.toLowerCase();
+    }
+
+    [BridgeExport]
+    public static function getSnapshot():Object {
+      var world:Object = Main.Game.world;
+      var self:Object = world.myAvatar;
+      if (!self || !self.dataLeaf || !world.actions || !world.actions.active) {
+        return null;
+      }
+
+      var leaf:Object = self.dataLeaf;
+      var skills:Array = [];
+      for (var index:int = 0; index <= CONSUMABLE_SKILL_INDEX; index++) {
+        var skill:Object = world.actions.active[index];
+        skills.push(skill ? { cooldown: getSkillCooldownRemainingValue(skill), castable: isCastable(world, skill) } : null);
+      }
+
+      var target:Object = self.target;
+      var targetRow:Object = null;
+      if (target != null && target != self && target.dataLeaf != null) {
+        targetRow = { auras: Auras.rows(target.dataLeaf) };
+      }
+
+      var allies:Array = [];
+      for each (var other:Object in world.uoTree) {
+        if (other && other.strUsername != leaf.strUsername && other.strFrame == leaf.strFrame && other.intHP > 0) {
+          allies.push({ hp: other.intHP, maxHp: other.intHPMax });
+        }
+      }
+
+      return {
+        hp: leaf.intHP,
+        maxHp: leaf.intHPMax,
+        mp: leaf.intMP,
+        maxMp: leaf.intMPMax,
+        auras: Auras.rows(leaf),
+        target: targetRow,
+        allies: allies,
+        skills: skills
+      };
     }
 
     [BridgeTsParamType("selector: FlashTypes.MonsterSelector")]

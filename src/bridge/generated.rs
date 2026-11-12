@@ -219,6 +219,12 @@ pub(crate) mod combat {
         Ok(decode("combat.getSkillCooldownRemaining", reply)?)
     }
 
+    pub(crate) fn get_snapshot(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("combat.getSnapshot", call_args)?;
+        Ok(decode("combat.getSnapshot", reply)?)
+    }
+
     pub(crate) fn get_target(loader: &impl Loader) -> Result<Value, CallError> {
         let call_args = vec![];
         let reply = loader.call("combat.getTarget", call_args)?;

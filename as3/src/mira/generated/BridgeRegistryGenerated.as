@@ -47,6 +47,7 @@ package mira.generated
       external.externalize("combat.castConsumableOnMonster", Combat.castConsumableOnMonster);
       external.externalize("combat.getConsumableSkillItem", Combat.getConsumableSkillItem);
       external.externalize("combat.getSkillCooldownRemaining", Combat.getSkillCooldownRemaining);
+      external.externalize("combat.getSnapshot", Combat.getSnapshot);
       external.externalize("combat.getTarget", Combat.getTarget);
       external.externalize("combat.hasTarget", Combat.hasTarget);
       external.externalize("combat.useSkill", Combat.useSkill);
