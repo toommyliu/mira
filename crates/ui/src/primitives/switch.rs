@@ -12,9 +12,7 @@ use crate::{ActiveTheme as _, motion, theme::mix};
 const TRACK_W: f32 = 28.0;
 const TRACK_H: f32 = 16.0;
 const THUMB: f32 = 12.0;
-const STRETCH: f32 = 4.0;
 const DRAG: Pixels = px(6.0);
-const SWITCH_GROUP: &str = "switch";
 
 #[derive(IntoElement)]
 pub struct Switch {
@@ -87,9 +85,7 @@ impl RenderOnce for Switch {
             })
             .read(cx)
             .clone();
-        let pressable = !self.disabled;
         row.role(Role::Switch)
-            .group(SWITCH_GROUP)
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
             .child(
                 div()
@@ -103,19 +99,8 @@ impl RenderOnce for Switch {
                     .when(ring, |control| control.child(theme.focus_ring(px(8.0))))
                     .child(
                         div()
-                            .id("thumb")
                             .ml(px(travel))
                             .size(px(THUMB))
-                            .when(pressable, |thumb| {
-                                // GPUI tracks a group press only for elements with their own hitbox.
-                                // The empty hover style gives the thumb one.
-                                thumb.group_hover(SWITCH_GROUP, |style| style).group_active(
-                                    SWITCH_GROUP,
-                                    move |style| {
-                                        style.w(px(THUMB + STRETCH)).ml(px(travel - STRETCH * t))
-                                    },
-                                )
-                            })
                             .rounded_full()
                             .bg(theme.knob)
                             .shadow(theme.raised()),
