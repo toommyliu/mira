@@ -1,22 +1,22 @@
 use gpui::{
-    App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight,
-    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
-    Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
     components::Chips,
     h_flex,
     primitives::{Align, Input, InputEvent, Select, Switch},
-    theme::{DISABLED_OPACITY, ROW, TEXT_BODY},
+    theme::TEXT_BODY,
     v_flex,
 };
 
 use super::{
     Client,
     client::CloseSession,
+    form::{note, row, section, switch_row},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
@@ -35,7 +35,6 @@ const HEIGHT: f32 = 340.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 240.0;
 const COLUMNS_FROM: Pixels = px(560.0);
-const LABEL_WIDTH: Pixels = px(96.0);
 const MAX_NAME: usize = 32;
 const MAX_LIST: usize = 256;
 
@@ -349,11 +348,11 @@ impl Follower {
         self.add_monster
             .update(cx, |input, cx| input.set_disabled(!settings.fight, cx));
         let status = if unnamed {
-            Some(("Needs a player name".to_owned(), theme.text_tertiary))
+            Some(("Needs a player name".into(), theme.text_tertiary))
         } else {
             live_status(&settings, automation.follower_status()).map(|(text, tone)| {
                 let (_, _, color) = theme.tone(tone);
-                (text, color)
+                (text.into(), color)
             })
         };
         let player = div().child(self.target.clone()).on_key_down(cx.listener(
@@ -369,18 +368,11 @@ impl Follower {
                 "Follow",
                 "Goes wherever they go, across maps and cells.",
                 status,
-                follow,
+                follow.hide_label(),
                 theme,
             ))
             .child(row("Player", true, player))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .gap(px(12.0))
-                    .min_h(ROW)
-                    .child(row_label("Copy walk", true))
-                    .child(copy_walk.hide_label()),
-            )
+            .child(switch_row("Copy walk", true, copy_walk))
             .child(self.entries(Entries::Maps, &settings, automation, true, theme));
         let fighting = v_flex()
             .gap(px(8.0))
@@ -388,7 +380,7 @@ impl Follower {
                 "Fight",
                 "Attacks monsters in their cell with this profile.",
                 None,
-                fight,
+                fight.hide_label(),
                 theme,
             ))
             .child(row(
@@ -492,73 +484,6 @@ fn profile_select(settings: &Settings, automation: &Automation, cx: &App) -> Sel
         let profile = names[index].clone();
         choosing.update_follower(|settings| settings.profile = profile);
     })
-}
-
-fn note(text: &'static str, enabled: bool, theme: &Theme) -> Div {
-    div()
-        .text_small()
-        .text_color(theme.text_tertiary)
-        .when(!enabled, |note| note.opacity(DISABLED_OPACITY))
-        .child(text)
-}
-
-fn section(
-    title: &'static str,
-    subtitle: &'static str,
-    status: Option<(String, Hsla)>,
-    switch: Switch,
-    theme: &Theme,
-) -> Div {
-    let header = h_flex()
-        .gap(px(12.0))
-        .min_h(ROW)
-        .child(
-            div()
-                .flex_none()
-                .font_weight(FontWeight::MEDIUM)
-                .child(title),
-        )
-        .child(
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .justify_end()
-                .gap(px(10.0))
-                .when_some(status, |row, (text, color)| {
-                    row.child(
-                        div()
-                            .id("follow-status")
-                            .role(Role::Status)
-                            .aria_label(text.clone())
-                            .min_w_0()
-                            .truncate()
-                            .text_small()
-                            .text_color(color)
-                            .child(text),
-                    )
-                })
-                .child(switch.hide_label()),
-        );
-    v_flex()
-        .gap(px(4.0))
-        .child(header)
-        .child(note(subtitle, true, theme))
-}
-
-fn row_label(label: &'static str, enabled: bool) -> Div {
-    div()
-        .min_w_0()
-        .truncate()
-        .when(!enabled, |label| label.opacity(DISABLED_OPACITY))
-        .child(label)
-}
-
-fn row(label: &'static str, enabled: bool, control: impl IntoElement) -> Div {
-    h_flex()
-        .gap(px(12.0))
-        .min_h(ROW)
-        .child(row_label(label, enabled).flex_none().w(LABEL_WIDTH))
-        .child(div().flex_1().min_w_0().child(control))
 }
 
 fn live_status(settings: &Settings, status: Status) -> Option<(String, Tone)> {

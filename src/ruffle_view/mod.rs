@@ -2,6 +2,7 @@ mod account;
 mod client;
 mod environment;
 mod follower;
+mod form;
 mod game_bar;
 mod input;
 mod loader_grabber;
