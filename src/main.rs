@@ -124,6 +124,11 @@ fn main() -> anyhow::Result<()> {
                 let client = follower_client.clone();
                 cx.defer(move |cx| ruffle_view::open_follower(client, cx));
             });
+            let packets_client = client.clone();
+            cx.on_action(move |_: &ruffle_view::OpenPackets, cx| {
+                let client = packets_client.clone();
+                cx.defer(move |cx| ruffle_view::open_packets(client, cx));
+            });
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
             });
@@ -156,6 +161,7 @@ fn set_menus(cx: &mut App) {
                 MenuItem::action("Combat Profiles…", ruffle_view::OpenCombatProfiles),
                 MenuItem::action("Environment…", ruffle_view::OpenEnvironment),
                 MenuItem::action("Follower…", ruffle_view::OpenFollower),
+                MenuItem::action("Packets…", ruffle_view::OpenPackets),
                 MenuItem::separator(),
                 MenuItem::action("Quit Mira", Quit),
             ],

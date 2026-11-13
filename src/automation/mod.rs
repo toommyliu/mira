@@ -6,9 +6,11 @@ pub(crate) mod boosts;
 pub(crate) mod drops;
 pub(crate) mod follower;
 pub(crate) mod game_settings;
+pub(crate) mod packets;
 pub(crate) mod quests;
 pub(crate) mod settings;
 pub(crate) mod sign_in;
+pub(crate) mod spammer;
 
 use crate::domain::inventory::ItemQuery;
 

@@ -1,6 +1,8 @@
 use tokio::sync::watch;
 
-use super::{auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings, quests};
+use super::{
+    auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings, quests, spammer,
+};
 
 #[derive(Clone, Default)]
 pub(crate) struct Automation {
@@ -14,6 +16,9 @@ pub(crate) struct Automation {
     quests: watch::Sender<quests::State>,
     drops: watch::Sender<drops::State>,
     boosts: watch::Sender<boosts::State>,
+    capture: watch::Sender<bool>,
+    spammer: watch::Sender<spammer::Settings>,
+    spammer_status: watch::Sender<spammer::Status>,
 }
 
 impl Automation {
@@ -148,6 +153,53 @@ impl Automation {
 
     pub(crate) fn update_boosts(&self, change: impl FnOnce(&mut boosts::State)) -> boosts::State {
         update(&self.boosts, change)
+    }
+
+    pub(crate) fn capturing(&self) -> bool {
+        *self.capture.borrow()
+    }
+
+    pub(crate) fn watch_capture(&self) -> watch::Receiver<bool> {
+        self.capture.subscribe()
+    }
+
+    pub(crate) fn set_capture(&self, on: bool) {
+        self.capture.send_if_modified(|capturing| {
+            let changed = *capturing != on;
+            *capturing = on;
+            changed
+        });
+    }
+
+    pub(crate) fn spammer(&self) -> spammer::Settings {
+        self.spammer.borrow().clone()
+    }
+
+    pub(crate) fn watch_spammer(&self) -> watch::Receiver<spammer::Settings> {
+        self.spammer.subscribe()
+    }
+
+    pub(crate) fn update_spammer(
+        &self,
+        change: impl FnOnce(&mut spammer::Settings),
+    ) -> spammer::Settings {
+        update(&self.spammer, change)
+    }
+
+    pub(crate) fn spammer_status(&self) -> spammer::Status {
+        self.spammer_status.borrow().clone()
+    }
+
+    pub(crate) fn watch_spammer_status(&self) -> watch::Receiver<spammer::Status> {
+        self.spammer_status.subscribe()
+    }
+
+    pub(crate) fn report_spammer(&self, status: spammer::Status) {
+        self.spammer_status.send_if_modified(|current| {
+            let changed = *current != status;
+            *current = status;
+            changed
+        });
     }
 
     pub(crate) fn copy_environment_from(&self, source: &Automation) {

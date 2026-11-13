@@ -31,15 +31,18 @@ use crate::{
     army::Armies,
     automation::{
         anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings,
-        quests, register_items, settings::Automation, sign_in,
+        packets::{self as packet_capture, Captured},
+        quests, register_items,
+        settings::Automation,
+        sign_in, spammer,
     },
-    bridge::{Bridge, Event, Packets},
+    bridge::{Bridge, CallError, Event, Packets},
     domain::{
         CombatCooldown,
         auth::{Credentials, Logins},
         bank,
         counter_attack::{self, CounterAttacks},
-        player,
+        packets, player,
         profiles::Library,
         rotation,
         world::{self, Location},
@@ -80,11 +83,20 @@ pub(crate) enum Output {
     SignIn(sign_in::Status),
     Stage(Option<view::StageFit>),
     Beep,
+    Packets(Vec<Captured>),
 }
 
 #[derive(Clone)]
 pub(crate) enum Command {
-    Jump { cell: String, pad: String },
+    Jump {
+        cell: String,
+        pad: String,
+    },
+    SendPacket {
+        target: packets::Target,
+        packet: String,
+        sent: async_channel::Sender<Result<packets::Delivery, CallError>>,
+    },
     OpenBank,
     ReloadMap,
     SetSpawnPoint,
@@ -408,6 +420,33 @@ fn run(
         &tasks,
         game_settings::log_hidden_ads(bridge.subscribe(game_settings::wants)),
     );
+    let spammer_reports = automation.clone();
+    let spammer_stops = automation.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        spammer::run(
+            bridge.clone(),
+            automation.watch_spammer(),
+            move |status| spammer_reports.report_spammer(status),
+            move || {
+                spammer_stops.update_spammer(|settings| settings.enabled = false);
+            },
+        ),
+    );
+    let capture_bridge = bridge.clone();
+    let captured = outputs.clone();
+    spawn_local(
+        &inbox,
+        &tasks,
+        packet_capture::capture(
+            move || capture_bridge.subscribe(packet_capture::wants),
+            automation.watch_capture(),
+            move |batch| {
+                let _ = captured.try_send(Output::Packets(batch));
+            },
+        ),
+    );
     let loading = bridge.subscribe(|event| matches!(event, Event::Progress { .. } | Event::Loaded));
     let loading_bridge = bridge.clone();
     let loading_outputs = outputs.clone();
@@ -663,6 +702,14 @@ async fn run_command(bridge: Bridge, automation: Automation, command: Command) {
         }),
         Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
         Command::OpenBank => bank::open(&bridge).await.map(drop),
+        Command::SendPacket {
+            target,
+            packet,
+            sent,
+        } => {
+            let _ = sent.try_send(packets::send(&bridge, target, &packet));
+            Ok(())
+        }
         Command::ReloadMap => world::reload(&bridge).await.map(drop),
         Command::SetSpawnPoint => world::set_spawn_point(&bridge, None, None).await.map(drop),
     };

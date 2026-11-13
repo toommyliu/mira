@@ -6,6 +6,8 @@ mod game_bar;
 mod input;
 mod manager;
 mod menu;
+mod packet_log;
+mod packets;
 mod profile_form;
 mod profiles;
 mod script;
@@ -52,6 +54,7 @@ pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
+pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
@@ -79,6 +82,7 @@ pub struct RuffleView {
     marked: Option<Range<usize>>,
     modifiers: gpui::Modifiers,
     automation: Automation,
+    packets: Entity<packet_log::PacketLog>,
     settings_account: Option<AccountId>,
     extras: Rc<extras::Store>,
     auto_relogin: auto_relogin::Phase,
@@ -159,6 +163,17 @@ impl RuffleView {
                         Output::Menu(menu) => menu,
                         Output::Beep => {
                             objc2_app_kit::NSBeep();
+                            continue;
+                        }
+                        Output::Packets(batch) => {
+                            let Ok(log) = this.read_with(cx, |this: &Self, _| this.packets.clone())
+                            else {
+                                break;
+                            };
+                            log.update(cx, |log, cx| {
+                                log.extend(batch);
+                                cx.notify();
+                            });
                             continue;
                         }
                         Output::FrameClock(enabled) => {
@@ -365,6 +380,7 @@ impl RuffleView {
                 marked: None,
                 modifiers: Default::default(),
                 automation,
+                packets: cx.new(|_| packet_log::PacketLog::default()),
                 settings_account: None,
                 extras,
                 auto_relogin: auto_relogin::Phase::Off,

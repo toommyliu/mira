@@ -1352,6 +1352,7 @@ fn windows_panel(theme: &Theme, cx: &mut Context<RuffleView>) -> Stateful<Div> {
                             window.dispatch_action(Box::new(super::OpenEnvironment), cx)
                         }
                         "Follower" => window.dispatch_action(Box::new(super::OpenFollower), cx),
+                        "Packets" => window.dispatch_action(Box::new(super::OpenPackets), cx),
                         _ => {}
                     }
                 }))
