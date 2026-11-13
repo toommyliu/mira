@@ -1250,3 +1250,62 @@ fn shift_f10_on_an_empty_tab_list_does_nothing(cx: &mut TestAppContext) {
     press(cx, "tab");
     press(cx, "shift-f10");
 }
+
+struct Maps {
+    focus: FocusHandle,
+    items: Vec<SharedString>,
+}
+
+impl Render for Maps {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child({
+                let (removing, moving) = (cx.weak_entity(), cx.weak_entity());
+                mira_ui::components::Chips::new("maps", "Maps", self.items.clone())
+                    .on_remove(move |index, _, cx| {
+                        let _ = removing.update(cx, |this, cx| {
+                            this.items.remove(index);
+                            cx.notify();
+                        });
+                    })
+                    .on_reorder(move |from, to, _, cx| {
+                        let _ = moving.update(cx, |this, cx| {
+                            let item = this.items.remove(from);
+                            this.items.insert(to, item);
+                            cx.notify();
+                        });
+                    })
+            })
+    }
+}
+
+#[gpui::test]
+fn chips_move_with_arrows_reorder_with_option_and_remove_from_the_keyboard(
+    cx: &mut TestAppContext,
+) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Maps {
+            focus,
+            items: ["battleon", "yulgar", "doomwood", "swordhaven"]
+                .map(SharedString::from)
+                .to_vec(),
+        }
+    });
+    cx.run_until_parked();
+    let items = |cx: &mut VisualTestContext| view.read_with(cx, |maps, _| maps.items.clone());
+    for key in ["tab", "right", "down", "alt-left", "right", "enter"] {
+        press(cx, key);
+    }
+    assert_eq!(items(cx), ["battleon", "doomwood", "swordhaven"]);
+    for key in ["up", "backspace"] {
+        press(cx, key);
+    }
+    assert_eq!(items(cx), ["battleon", "swordhaven"]);
+}
