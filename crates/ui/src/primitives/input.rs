@@ -959,7 +959,12 @@ impl gpui::Element for TextElement {
         let field = self.field.read(cx);
         let style = window.text_style();
         let (text, color) = if field.content.is_empty() {
-            (field.placeholder.clone(), theme.text_tertiary)
+            let color = if field.disabled {
+                theme.text_disabled
+            } else {
+                theme.text_tertiary
+            };
+            (field.placeholder.clone(), color)
         } else {
             (field.display_text(), style.color)
         };
