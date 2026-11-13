@@ -748,7 +748,7 @@ impl Render for Lines {
         let feed = self.0.borrow();
         let lines = feed.lines.clone();
         div().w(gpui::px(300.0)).child(
-            LogView::new("log", "Log", lines.len(), move |index| {
+            LogView::new("log", "Log", lines.len(), move |index, _| {
                 LogEntry::new("info", lines[index].clone())
             })
             .dropped(feed.dropped)

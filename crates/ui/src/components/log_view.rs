@@ -45,8 +45,8 @@ impl LogEntry {
     }
 }
 
-type RowSource = Rc<dyn Fn(usize) -> LogEntry>;
-type MenuSource = Rc<dyn Fn(usize) -> Vec<MenuItem>>;
+type RowSource = Rc<dyn Fn(usize, &mut App) -> LogEntry>;
+type MenuSource = Rc<dyn Fn(usize, &mut App) -> Vec<MenuItem>>;
 
 #[derive(IntoElement)]
 pub struct LogView {
@@ -67,7 +67,7 @@ impl LogView {
         id: impl Into<ElementId>,
         label: impl Into<SharedString>,
         count: usize,
-        row: impl Fn(usize) -> LogEntry + 'static,
+        row: impl Fn(usize, &mut App) -> LogEntry + 'static,
     ) -> Self {
         Self {
             id: id.into(),
@@ -108,7 +108,7 @@ impl LogView {
         self
     }
 
-    pub fn menu(mut self, items: impl Fn(usize) -> Vec<MenuItem> + 'static) -> Self {
+    pub fn menu(mut self, items: impl Fn(usize, &mut App) -> Vec<MenuItem> + 'static) -> Self {
         self.menu = Some(Rc::new(items));
         self
     }
@@ -184,7 +184,7 @@ impl RenderOnce for LogView {
                 let theme = cx.theme().clone();
                 range
                     .map(|index| {
-                        let entry = row_source(index);
+                        let entry = row_source(index, cx);
                         let current = selected == Some(index);
                         let focus = row_focus.clone();
                         let on_select = on_select.clone();
@@ -253,7 +253,7 @@ impl RenderOnce for LogView {
                                     SharedString::from((dropped + index as u64).to_string()),
                                 ),
                                 "Line actions",
-                                menu(index),
+                                menu(index, cx),
                                 line,
                             )
                             .into_any_element(),
