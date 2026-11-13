@@ -12,6 +12,7 @@ pub(crate) struct Automation {
     frame_rate: watch::Sender<Option<game_settings::FrameRate>>,
     quests: watch::Sender<quests::State>,
     drops: watch::Sender<drops::State>,
+    quest_items: watch::Sender<Vec<String>>,
     boosts: watch::Sender<boosts::State>,
     capture: watch::Sender<bool>,
     spammer: watch::Sender<spammer::Settings>,
@@ -123,6 +124,22 @@ impl Automation {
 
     pub(crate) fn update_drops(&self, change: impl FnOnce(&mut drops::State)) -> drops::State {
         update(&self.drops, change)
+    }
+
+    pub(crate) fn quest_items(&self) -> Vec<String> {
+        self.quest_items.borrow().clone()
+    }
+
+    pub(crate) fn watch_quest_items(&self) -> watch::Receiver<Vec<String>> {
+        self.quest_items.subscribe()
+    }
+
+    pub(crate) fn report_quest_items(&self, names: Vec<String>) {
+        self.quest_items.send_if_modified(|current| {
+            let changed = *current != names;
+            *current = names;
+            changed
+        });
     }
 
     pub(crate) fn boosts(&self) -> boosts::State {

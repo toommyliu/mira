@@ -53,7 +53,7 @@ impl ItemQuery {
     }
 }
 
-fn same_name(a: &str, b: &str) -> bool {
+pub(crate) fn same_name(a: &str, b: &str) -> bool {
     a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
@@ -180,6 +180,10 @@ fn gear_boost(value: Value) -> Option<GearBoost> {
 }
 
 impl Item {
+    pub(crate) fn item_id(&self) -> i32 {
+        self.item_id
+    }
+
     pub(crate) fn query(&self) -> ItemQuery {
         ItemQuery::ItemId {
             item_id: self.item_id,

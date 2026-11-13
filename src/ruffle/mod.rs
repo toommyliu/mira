@@ -101,6 +101,10 @@ pub(crate) enum Command {
     ReloadMap,
     SetSpawnPoint,
     FetchBoosts,
+    QuestPickups {
+        after: quests::State,
+        waiting: async_channel::Sender<Result<Vec<drops::Waiting>, CallError>>,
+    },
     Grabber(grabber::Job),
 }
 
@@ -368,6 +372,18 @@ fn run(
             automation.watch_quests(),
             move || {
                 let _ = beeps.try_send(Output::Beep);
+            },
+            {
+                let automation = automation.clone();
+                move |released: &[i32]| {
+                    automation.update_drops(|state| {
+                        state.held.retain(|id| !released.contains(id));
+                    });
+                }
+            },
+            {
+                let automation = automation.clone();
+                move |names: &[String]| automation.report_quest_items(names.to_vec())
             },
         ),
     );
@@ -711,6 +727,12 @@ async fn run_command(
         Command::FetchBoosts => boosts::fetch(&bridge).await.map(|found| {
             automation.update_boosts(|state| register_items(&mut state.items, found));
         }),
+        Command::QuestPickups { after, waiting } => {
+            let before = automation.quests();
+            let found = drops::newly_taken(&bridge, &automation.drops(), &before, &after).await;
+            let _ = waiting.try_send(found);
+            Ok(())
+        }
         Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
         Command::OpenBank => bank::open(&bridge).await.map(drop),
         Command::SendPacket {

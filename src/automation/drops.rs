@@ -7,7 +7,7 @@ use crate::{
     domain::{
         self,
         drops::{self, DropItemPacket, DroppedItem},
-        inventory::{Item, ItemQuery},
+        inventory::{Item, ItemQuery, same_name},
     },
 };
 
@@ -58,7 +58,15 @@ impl Config {
 pub(crate) struct State {
     pub(crate) items: Vec<ItemQuery>,
     pub(crate) sounds: Vec<ItemQuery>,
+    pub(crate) held: Vec<i32>,
     pub(crate) config: Config,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Waiting {
+    pub(crate) item_id: i32,
+    pub(crate) name: String,
+    pub(crate) quantity: i32,
 }
 
 impl State {
@@ -68,8 +76,8 @@ impl State {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.items.clear();
-        self.sounds.clear();
+        let items = std::mem::take(&mut self.items);
+        unregister_items(&mut self.sounds, &items);
     }
 
     pub(crate) fn rings(&self, query: &ItemQuery) -> bool {
@@ -78,16 +86,21 @@ impl State {
 
     pub(crate) fn set_sound(&mut self, query: &ItemQuery, on: bool) {
         unregister_items(&mut self.sounds, std::slice::from_ref(query));
-        if on && self.items.iter().any(|item| item.same(query)) {
+        if on {
             self.sounds.push(query.clone());
         }
     }
 
-    fn rings_for(&self, dropped: &DroppedItem) -> bool {
-        self.sounds.iter().any(|sound| match sound {
-            ItemQuery::Name(_) => sound.same(&ItemQuery::Name(dropped.name.clone())),
+    fn rings_for(&self, dropped: &DroppedItem, quest_items: &[String]) -> bool {
+        let matches = |query: &ItemQuery| match query {
+            ItemQuery::Name(name) => same_name(name, &dropped.name),
             ItemQuery::ItemId { item_id } => dropped.item_id == Some(*item_id),
-        })
+        };
+        let shown = self.items.iter().any(matches)
+            || quest_items
+                .iter()
+                .any(|name| same_name(name, &dropped.name));
+        shown && self.sounds.iter().any(matches)
     }
 }
 
@@ -102,19 +115,48 @@ pub(crate) async fn run(
     mut state: watch::Receiver<State>,
     mut quest_state: watch::Receiver<quests::State>,
     ring: impl Fn(),
+    release: impl Fn(&[i32]),
+    report: impl Fn(&[String]),
 ) {
     let dropped = Packets::<DropItemPacket>::subscribe(&subscribe);
+    let mut quest_items = Vec::new();
     loop {
         state.borrow_and_update();
         quest_state.borrow_and_update();
-        if let Err(error) = settle(&loader, &subscribe, &state, &quest_state).await {
+        let checked = settle(
+            &loader,
+            &subscribe,
+            &state,
+            &quest_state,
+            &release,
+            &report,
+            &mut quest_items,
+        )
+        .await;
+        if let Err(error) = checked {
             tracing::debug!(%error, "drop rules skipped a check");
         }
         tokio::select! {
             packet = dropped.next() => if let Ok(packet) = packet {
-                let state = state.borrow();
-                if packet.items.iter().any(|item| state.rings_for(item)) {
+                let (rings, dropped_again) = {
+                    let state = state.borrow();
+                    let rings = packet
+                        .items
+                        .iter()
+                        .any(|item| state.rings_for(item, &quest_items));
+                    let again: Vec<i32> = state
+                        .held
+                        .iter()
+                        .copied()
+                        .filter(|id| packet.items.iter().any(|item| item.item_id == Some(*id)))
+                        .collect();
+                    (rings, again)
+                };
+                if rings {
                     ring();
+                }
+                if !dropped_again.is_empty() {
+                    release(&dropped_again);
                 }
             },
             changed = state.changed() => if changed.is_err() {
@@ -132,12 +174,18 @@ async fn settle(
     subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
     live: &watch::Receiver<State>,
     live_quests: &watch::Receiver<quests::State>,
+    release: &impl Fn(&[i32]),
+    report: &impl Fn(&[String]),
+    quest_items: &mut Vec<String>,
 ) -> Result<(), CallError> {
     let state = live.borrow().clone();
     let quests = live_quests.borrow().clone();
     let config = state.config;
     let quest_drops = !quests.quests.is_empty()
         && (quests.config.accept_rewards || quests.config.accept_requirements);
+    if !quest_drops {
+        show(quest_items, &[], report);
+    }
     if !config.enabled
         || (state.items.is_empty() && !quest_drops && !config.acts_on_unregistered())
         || !domain::has_avatar(loader)?
@@ -145,9 +193,25 @@ async fn settle(
         return Ok(());
     }
     let (quest_names, all_quests_loaded) = quests.drop_names(loader).await?;
+    let quest_names = distinct(quest_names);
+    show(quest_items, &quest_names, report);
+    let waiting = drops::items(loader)?;
+    let gone: Vec<i32> = state
+        .held
+        .iter()
+        .copied()
+        .filter(|id| !waiting.iter().any(|item| item.item_id() == *id))
+        .collect();
+    if !gone.is_empty() {
+        release(&gone);
+        return Ok(());
+    }
     let mut registered = state.items;
     registered.extend(quest_names.into_iter().map(ItemQuery::Name));
-    for item in drops::items(loader)? {
+    for item in waiting {
+        if state.held.contains(&item.item_id()) {
+            continue;
+        }
         let action = if registered.iter().any(|query| item.matches(query)) || config.accepts(&item)
         {
             Action::Accept
@@ -177,6 +241,54 @@ async fn settle(
         }
     }
     Ok(())
+}
+
+fn distinct(names: Vec<String>) -> Vec<String> {
+    let mut distinct: Vec<String> = Vec::new();
+    for name in names {
+        if !distinct.iter().any(|known| same_name(known, &name)) {
+            distinct.push(name);
+        }
+    }
+    distinct
+}
+
+fn show(quest_items: &mut Vec<String>, names: &[String], report: &impl Fn(&[String])) {
+    if quest_items.as_slice() != names {
+        *quest_items = names.to_vec();
+        report(names);
+    }
+}
+
+pub(crate) async fn newly_taken(
+    loader: &impl Loader,
+    drops: &State,
+    before: &quests::State,
+    after: &quests::State,
+) -> Result<Vec<Waiting>, CallError> {
+    if !drops.config.enabled || !domain::has_avatar(loader)? {
+        return Ok(Vec::new());
+    }
+    let queries =
+        |names: Vec<String>| -> Vec<ItemQuery> { names.into_iter().map(ItemQuery::Name).collect() };
+    let before = queries(before.drop_names(loader).await?.0);
+    let after = queries(after.drop_names(loader).await?.0);
+    Ok(drops::items(loader)?
+        .into_iter()
+        .filter(|item| {
+            let taken = |queries: &[ItemQuery]| queries.iter().any(|query| item.matches(query));
+            taken(&after)
+                && !taken(&before)
+                && !taken(&drops.items)
+                && !drops.config.accepts(item)
+                && !drops.held.contains(&item.item_id())
+        })
+        .map(|item| Waiting {
+            item_id: item.item_id(),
+            name: item.name().to_owned(),
+            quantity: item.quantity,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -234,6 +346,7 @@ mod tests {
         waiting: Vec<Drop>,
         accepted: Vec<&'static str>,
         rejected: Vec<&'static str>,
+        quest_items: Vec<String>,
     }
 
     fn object(fields: Vec<(&str, Value)>) -> Value {
@@ -273,17 +386,12 @@ mod tests {
         watch::Sender<quests::State>,
     );
 
-    fn start(waiting: Vec<Drop>) -> Fixture {
-        let list = Rc::new(RefCell::new(List {
-            waiting,
-            ..List::default()
-        }));
-        let (rules, receiver) = watch::channel(State::default());
-        let rules = Rc::new(rules);
-        let script = rules.clone();
-        let events = Rc::new(Events::default());
-        let (state, publisher) = (list.clone(), events.clone());
-        let loader = FakeLoader::new(move |callback, args| {
+    fn fake(
+        state: Rc<RefCell<List>>,
+        script: Rc<watch::Sender<State>>,
+        publisher: Rc<Events>,
+    ) -> FakeLoader {
+        FakeLoader::new(move |callback, args| {
             let mut list = state.borrow_mut();
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" => Value::Bool(true),
@@ -325,16 +433,31 @@ mod tests {
                 }
                 other => panic!("unexpected call {other} {args:?}"),
             })
-        });
+        })
+    }
+
+    fn start(waiting: Vec<Drop>) -> Fixture {
+        let list = Rc::new(RefCell::new(List {
+            waiting,
+            ..List::default()
+        }));
+        let (rules, receiver) = watch::channel(State::default());
+        let rules = Rc::new(rules);
+        let events = Rc::new(Events::default());
+        let loader = fake(list.clone(), rules.clone(), events.clone());
         let (quests, quest_receiver) = watch::channel(quests::State::default());
         let subscriber = events.clone();
-        let rings = list.clone();
+        let (rings, releasing, reporting) = (list.clone(), rules.clone(), list.clone());
         tokio::task::spawn_local(run(
             loader,
             move |wants| subscriber.subscribe(wants),
             receiver,
             quest_receiver,
             move || rings.borrow_mut().rings += 1,
+            move |released: &[i32]| {
+                releasing.send_modify(|state| state.held.retain(|id| !released.contains(id)));
+            },
+            move |names: &[String]| reporting.borrow_mut().quest_items = names.to_vec(),
         ));
         (list, events, rules, quests)
     }
@@ -498,19 +621,122 @@ mod tests {
                     state.set_sound(&ItemQuery::Name("Cape".into()), true);
                     state.config.enabled = false;
                 });
-                assert_eq!(rules.borrow().sounds.len(), 1, "only listed drops ring");
                 settle().await;
 
                 drop_item(&events, &CAPE);
                 drop_item(&events, &GEM);
                 settle().await;
-                assert_eq!(list.borrow().rings, 1);
+                assert_eq!(list.borrow().rings, 1, "only shown drops ring");
 
                 rules.send_modify(|state| state.unregister(&[ItemQuery::Name("GEM".into())]));
                 drop_item(&events, &GEM);
                 settle().await;
                 assert_eq!(list.borrow().rings, 1);
-                assert!(rules.borrow().sounds.is_empty());
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_drop_waits_untouched_until_it_drops_again_or_leaves_the_list() {
+        LocalSet::new()
+            .run_until(async {
+                let (list, events, rules, _quests) = start(vec![GEM, CAPE]);
+                rules.send_modify(|state| {
+                    register_items(&mut state.items, vec![ItemQuery::Name("Gem".into())]);
+                    state.config.reject_others = true;
+                    state.held = vec![1];
+                });
+                settle().await;
+                assert!(list.borrow().accepted.is_empty());
+                assert_eq!(list.borrow().rejected, ["Cape"]);
+                assert_eq!(rules.borrow().held, [1]);
+
+                drop_item(&events, &GEM);
+                settle().await;
+                assert_eq!(list.borrow().accepted, ["Gem"]);
+                assert!(rules.borrow().held.is_empty());
+
+                rules.send_modify(|state| state.held = vec![1]);
+                settle().await;
+                assert!(
+                    rules.borrow().held.is_empty(),
+                    "a hold ends once its drop leaves the list"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn turning_on_quest_rewards_reports_the_waiting_drops_nothing_else_picks_up() {
+        let list = Rc::new(RefCell::new(List {
+            waiting: vec![GEM, CAPE, PRIZE],
+            ..List::default()
+        }));
+        let loader = fake(
+            list,
+            Rc::new(watch::channel(State::default()).0),
+            Rc::new(Events::default()),
+        );
+        let mut drops = State::default();
+        register_items(&mut drops.items, vec![ItemQuery::Name("Gem".into())]);
+        drops.config.accept_ac = true;
+        let before = quests::State {
+            quests: vec![Registered {
+                quest_id: 7,
+                reward_item_id: None,
+            }],
+            ..quests::State::default()
+        };
+        let mut after = before.clone();
+        after.config.accept_rewards = true;
+        let names = |waiting: Vec<Waiting>| -> Vec<String> {
+            waiting.into_iter().map(|waiting| waiting.name).collect()
+        };
+
+        let waiting = newly_taken(&loader, &drops, &before, &after).await;
+        assert_eq!(waiting.map(names), Ok(vec!["Prize".to_owned()]));
+        let waiting = newly_taken(&loader, &drops, &after, &after).await;
+        assert_eq!(waiting.map(names), Ok(Vec::new()), "already picked up");
+
+        drops.held = vec![4];
+        let waiting = newly_taken(&loader, &drops, &before, &after).await;
+        assert_eq!(waiting.map(names), Ok(Vec::new()), "held drops stay");
+
+        drops.held.clear();
+        drops.config.enabled = false;
+        let waiting = newly_taken(&loader, &drops, &before, &after).await;
+        assert_eq!(waiting.map(names), Ok(Vec::new()), "nothing is picked up");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_beep_on_a_quest_item_rings_only_while_its_quest_box_is_ticked() {
+        LocalSet::new()
+            .run_until(async {
+                let (list, events, rules, quests) = start(Vec::new());
+                quests.send_modify(|state| {
+                    state.register([Registered {
+                        quest_id: 7,
+                        reward_item_id: None,
+                    }]);
+                    state.config.accept_rewards = true;
+                });
+                rules.send_modify(|state| state.set_sound(&ItemQuery::Name("prize".into()), true));
+                settle().await;
+                assert_eq!(list.borrow().quest_items, ["Prize"]);
+                drop_item(&events, &PRIZE);
+                settle().await;
+                assert_eq!(list.borrow().rings, 1);
+
+                quests.send_modify(|state| state.config.accept_rewards = false);
+                settle().await;
+                assert!(list.borrow().quest_items.is_empty());
+                drop_item(&events, &PRIZE);
+                settle().await;
+                assert_eq!(
+                    list.borrow().rings,
+                    1,
+                    "its pill is gone, so it stays quiet"
+                );
             })
             .await;
     }
