@@ -103,8 +103,7 @@ pub(crate) async fn run(
     }
 }
 
-pub(crate) fn parse_monsters(text: &str) -> Vec<MonsterQuery> {
-    let mut queries: Vec<MonsterQuery> = Vec::new();
+pub(crate) fn add_monsters(queries: &mut Vec<MonsterQuery>, text: &str) {
     for entry in text
         .split(',')
         .map(str::trim)
@@ -132,22 +131,16 @@ pub(crate) fn parse_monsters(text: &str) -> Vec<MonsterQuery> {
             queries.push(query);
         }
     }
-    queries
 }
 
-pub(crate) fn format_monsters(queries: &[MonsterQuery]) -> String {
-    queries
-        .iter()
-        .map(|query| match query {
-            MonsterQuery::Name(name) => name.clone(),
-            MonsterQuery::MonMapId { mon_map_id } => format!("id:{mon_map_id}"),
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+pub(crate) fn monster_label(query: &MonsterQuery) -> String {
+    match query {
+        MonsterQuery::Name(name) => name.clone(),
+        MonsterQuery::MonMapId { mon_map_id } => format!("id:{mon_map_id}"),
+    }
 }
 
-pub(crate) fn parse_maps(text: &str) -> Vec<String> {
-    let mut maps: Vec<String> = Vec::new();
+pub(crate) fn add_maps(maps: &mut Vec<String>, text: &str) {
     for map in text
         .split([',', '\n'])
         .map(str::trim)
@@ -157,7 +150,6 @@ pub(crate) fn parse_maps(text: &str) -> Vec<String> {
             maps.push(map.to_owned());
         }
     }
-    maps
 }
 
 async fn follow(
@@ -851,7 +843,7 @@ mod tests {
                         ..world(at("battleon", "Enter"), Some(at("battleon", "Enter")))
                     },
                     Settings {
-                        attack_first: parse_monsters("staff of inversion"),
+                        attack_first: vec![MonsterQuery::Name("staff of inversion".into())],
                         ..following(true)
                     },
                 );
@@ -876,7 +868,7 @@ mod tests {
                 for typed in ["d", "do", "doo", "doom"] {
                     started.settings.send_modify(|settings| {
                         settings.fallbacks = vec![typed.into()];
-                        settings.attack_first = parse_monsters(typed);
+                        settings.attack_first = vec![MonsterQuery::Name(typed.into())];
                     });
                     sleep(Duration::from_millis(100)).await;
                 }
@@ -918,22 +910,24 @@ mod tests {
     }
 
     #[test]
-    fn typed_lists_are_split_trimmed_and_deduplicated() {
+    fn typed_entries_are_split_trimmed_and_added_once() {
+        let mut monsters = vec![MonsterQuery::Name("Staff".into())];
+        add_monsters(&mut monsters, " staff, id.3 ,Escherion,, ID:3, id:x");
         assert_eq!(
-            parse_monsters(" Staff, id.3 ,staff,, ID:3, id:x"),
+            monsters,
             [
                 MonsterQuery::Name("Staff".into()),
                 MonsterQuery::MonMapId { mon_map_id: 3.0 },
+                MonsterQuery::Name("Escherion".into()),
                 MonsterQuery::Name("id:x".into()),
             ]
         );
         assert_eq!(
-            format_monsters(&parse_monsters("Staff, id-3")),
-            "Staff, id:3"
+            monsters.iter().map(monster_label).collect::<Vec<_>>(),
+            ["Staff", "id:3", "Escherion", "id:x"]
         );
-        assert_eq!(
-            parse_maps("ultra-9999,\n Ultra-9999 , tercess"),
-            ["ultra-9999", "tercess"]
-        );
+        let mut maps = vec!["ultra-9999".to_owned()];
+        add_maps(&mut maps, "Ultra-9999,\n tercess , TERCESS");
+        assert_eq!(maps, ["ultra-9999", "tercess"]);
     }
 }

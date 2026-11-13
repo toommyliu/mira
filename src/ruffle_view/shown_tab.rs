@@ -37,6 +37,20 @@ pub(super) struct ShownTab {
     _renamed: Subscription,
 }
 
+#[cfg(test)]
+impl ShownTab {
+    pub(super) fn fake(title: &'static str, automation: Automation) -> Self {
+        Self {
+            id: EntityId::from(1),
+            view: WeakEntity::new_invalid(),
+            automation,
+            title: title.into(),
+            _watching: Vec::new(),
+            _renamed: Subscription::new(|| {}),
+        }
+    }
+}
+
 fn resolve(
     target: Target,
     tabs: &[EntityId],

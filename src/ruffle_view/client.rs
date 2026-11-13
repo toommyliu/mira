@@ -252,6 +252,28 @@ impl Client {
         Ok(client)
     }
 
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
+        cx.new(|cx| Client {
+            extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
+            data: folder.to_path_buf(),
+            accounts: folder.join("accounts.json"),
+            device: reqwest::header::HeaderValue::from_static("test"),
+            armies: Armies::new(folder.join("armies")),
+            sessions: Vec::new(),
+            active: 0,
+            layout: Layout::Single,
+            sidebar: Sidebar::Hidden,
+            numbered: 0,
+            focus: cx.focus_handle(),
+            tab_scroll: ScrollHandle::new(),
+            shortcut_hints: false,
+            shortcut_hint_delay: None,
+            scripts: None,
+            _activation: Subscription::new(|| {}),
+        })
+    }
+
     fn open_session(
         &mut self,
         account: Option<&Account>,
