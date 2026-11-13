@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "effect-tsgo tsrs --noEmit",
+    "typecheck": "effect-tsgo tsrs --noEmit && effect-tsgo tsrs -p test --noEmit",
     "lint": "oxlint .",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check ."

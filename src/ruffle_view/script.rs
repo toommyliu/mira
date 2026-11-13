@@ -5,7 +5,7 @@ use gpui::{Context, EventEmitter, SharedString};
 use super::RuffleView;
 use crate::{
     ruffle::Msg,
-    scripting::{Level, Limit, Limits, Outcome, Run},
+    scripting::{Launch, Level, Limit, Limits, Outcome, Run},
 };
 
 pub(super) struct CloseTab;
@@ -16,7 +16,7 @@ impl EventEmitter<CloseTab> for RuffleView {}
 pub(super) struct Script(Option<Loaded>);
 
 struct Loaded {
-    entry: PathBuf,
+    launch: Launch,
     name: SharedString,
     phase: Phase,
 }
@@ -48,7 +48,7 @@ impl Script {
     }
 
     pub(super) fn entry(&self) -> Option<&PathBuf> {
-        self.0.as_ref().map(|loaded| &loaded.entry)
+        self.0.as_ref().map(|loaded| &loaded.launch.entry)
     }
 
     pub(super) fn loaded(&self) -> Option<&SharedString> {
@@ -94,20 +94,20 @@ impl Script {
 impl RuffleView {
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
         if let Some(loaded) = &self.script.0 {
-            self.start_script(loaded.entry.clone(), cx);
+            self.start_script(loaded.launch.clone(), cx);
         }
     }
 
-    pub(super) fn start_script(&mut self, entry: PathBuf, cx: &mut Context<Self>) {
+    pub(super) fn start_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
         if self.script.running() {
             return;
         }
-        let name: SharedString = super::account::file_name(&entry).into();
+        let name: SharedString = super::account::file_name(&launch.entry).into();
         let inbox = self.session.inbox();
-        let path = entry.clone();
+        let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let started = Run::start(
-            entry.clone(),
+            launch.clone(),
             Limits::default(),
             Box::new(|level, message| match level {
                 Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
@@ -141,14 +141,18 @@ impl RuffleView {
                 }
             }
             Err(error) => {
-                tracing::warn!(target: "mira::script", "{} failed: {error}", entry.display());
+                tracing::warn!(target: "mira::script", "{} failed: {error}", launch.entry.display());
                 Phase::Finished(Outcome::Failed {
                     message: error.to_string(),
                     stack: None,
                 })
             }
         };
-        self.script = Script(Some(Loaded { entry, name, phase }));
+        self.script = Script(Some(Loaded {
+            launch,
+            name,
+            phase,
+        }));
         self.changed(cx);
     }
 

@@ -77,6 +77,10 @@ impl Clock {
                 .compare_exchange(0, self.now(), Ordering::SeqCst, Ordering::SeqCst);
     }
 
+    pub(super) fn stop_requested(&self) -> bool {
+        self.stop_requested.load(Ordering::SeqCst) != 0 || self.stop.load(Ordering::SeqCst)
+    }
+
     pub(super) fn stop_now(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }

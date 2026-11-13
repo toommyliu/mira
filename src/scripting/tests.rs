@@ -8,7 +8,7 @@ use std::{
 use serde_json::json;
 
 use super::{
-    Level, Limit, Limits, Outcome, Run, ToPlayer,
+    Launch, Level, Limit, Limits, Outcome, Run, Supplied, ToPlayer, Values,
     auth::Request as A,
     automation::{ReloginRequest as AR, SettingsRequest as GS},
     bank::Request as B,
@@ -87,12 +87,31 @@ impl Started {
 }
 
 fn start(folder: &Folder, entry: &str, limits: Limits, player: Player) -> Started {
+    start_with(
+        folder,
+        entry,
+        Supplied::Values(Values::new()),
+        limits,
+        player,
+    )
+}
+
+fn start_with(
+    folder: &Folder,
+    entry: &str,
+    inputs: Supplied,
+    limits: Limits,
+    player: Player,
+) -> Started {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let sink = logs.clone();
     let (finished, outcome) = mpsc::channel();
     let started = Instant::now();
     let run = Run::start(
-        folder.0.join(entry),
+        Launch {
+            entry: folder.0.join(entry),
+            inputs,
+        },
         limits,
         Box::new(move |level, message| {
             let prefix = if level == Level::Error { "error: " } else { "" };
@@ -171,6 +190,47 @@ fn run(files: &[(&str, &str)]) -> Finished {
     let folder = Folder::new(files);
     run_in(&folder, files[0].0, Limits::default(), None)
 }
+
+fn run_with_inputs(files: &[(&str, &str)], inputs: Supplied) -> Finished {
+    let folder = Folder::new(files);
+    start_with(
+        &folder,
+        files[0].0,
+        inputs,
+        Limits::default(),
+        Box::new(|_| {}),
+    )
+    .finish()
+}
+
+fn supplied(values: serde_json::Value) -> Supplied {
+    Supplied::Values(values.as_object().unwrap().clone())
+}
+
+const HUNT_INPUTS: &str = r#"import { Script, type Inputs } from "mira";
+import { describe } from "./describe.ts";
+
+export const inputs = {
+  monster: { type: "string", label: "Monster", required: true, default: "Frogzard" },
+  kills: { type: "number", label: "Kills", integer: true, min: 1 },
+  rate: { type: "number", label: "Rate", default: 0.5 },
+  potions: { type: "boolean", label: "Potions" },
+  daily: { type: "select", label: "Daily", options: ["All", "Class"], default: "All" },
+  buy: { type: "select", label: "Buy", options: ["A", "B", "C"], multiple: true },
+} as const satisfies Inputs;
+
+console.log(`top level ${describe()}`);
+
+export default function* () {
+  const values = Script.inputs<typeof inputs>();
+  console.log(`run ${values.monster} ${values.kills} ${values.rate} ${values.potions} ${values.daily} ${values.buy.join("+")}`);
+}
+"#;
+
+const DESCRIBE: &str = r#"import { Script } from "mira";
+
+export const describe = (): string => JSON.stringify(Script.inputs());
+"#;
 
 fn failure(outcome: &Outcome) -> (&str, &str) {
     match outcome {
@@ -260,6 +320,130 @@ fn the_default_export_must_be_runnable() {
     let finished = run(&[("main.js", "export default 42;\n")]);
     let (message, _) = failure(&finished.outcome);
     assert!(message.contains("generator function or an Effect"));
+}
+
+#[test]
+fn a_script_reads_the_inputs_it_was_launched_with() {
+    let finished = run_with_inputs(
+        &[("hunt.ts", HUNT_INPUTS), ("describe.ts", DESCRIBE)],
+        supplied(json!({ "kills": 12, "buy": ["C", "A"], "removed": true })),
+    );
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            r#"top level {"monster":"Frogzard","kills":12,"rate":0.5,"potions":false,"daily":"All","buy":["A","C"]}"#,
+            "run Frogzard 12 0.5 false All A+C",
+        ]
+    );
+}
+
+#[test]
+fn an_effect_default_export_reads_inputs_too() {
+    let finished = run_with_inputs(
+        &[(
+            "main.ts",
+            r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export const inputs = { target: { type: "string", label: "Target" } };
+
+export default Effect.sync(() => console.log(`target ${Script.inputs().target}`));
+"#,
+        )],
+        supplied(json!({ "target": "Dummy" })),
+    );
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["target Dummy"]);
+}
+
+#[test]
+fn inputs_cannot_be_changed_by_the_script() {
+    let finished = run_with_inputs(
+        &[(
+            "main.ts",
+            r#"import { Script } from "mira";
+
+export const inputs = {
+  kills: { type: "number", label: "Kills", default: 5 },
+  buy: { type: "select", label: "Buy", options: ["A", "B"], multiple: true, default: ["A"] },
+};
+
+export default function* () {
+  const values = Script.inputs() as { kills: number; buy: string[] };
+  for (const change of [() => { values.kills = 1; }, () => { values.buy.push("B"); }]) {
+    try {
+      change();
+    } catch (error) {
+      console.log(String(error));
+    }
+  }
+  console.log(`${values.kills} ${values.buy.join("+")}`);
+}
+"#,
+        )],
+        supplied(json!({})),
+    );
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs.len(), 3, "{:?}", finished.logs);
+    assert!(
+        finished.logs[..2]
+            .iter()
+            .all(|log| log.starts_with("TypeError"))
+    );
+    assert_eq!(finished.logs[2], "5 A");
+}
+
+#[test]
+fn missing_or_invalid_inputs_stop_the_script_before_any_of_it_runs() {
+    let files = [("hunt.ts", HUNT_INPUTS), ("describe.ts", DESCRIBE)];
+    let missing = run_with_inputs(&files, supplied(json!({})));
+    assert_eq!(
+        failure(&missing.outcome).0,
+        "hunt.ts needs inputs: Kills. Open Scripts to fill them in."
+    );
+    assert!(missing.logs.is_empty(), "{:?}", missing.logs);
+
+    let invalid = run_with_inputs(&files, supplied(json!({ "kills": 0, "daily": "Gold" })));
+    assert_eq!(
+        failure(&invalid.outcome).0,
+        r#"hunt.ts: Kills must be at least 1 (got 0); Daily isn't one of the options (got "Gold"). Open Scripts to review its inputs."#
+    );
+    assert!(invalid.logs.is_empty(), "{:?}", invalid.logs);
+
+    let broken = run_with_inputs(
+        &[(
+            "hunt.ts",
+            "console.log(\"ran\");\nexport const inputs = { kills: { type: \"number\", label: \"Kills\", min: 1, default: 0 } };\nexport default function* () {}\n",
+        )],
+        supplied(json!({})),
+    );
+    assert_eq!(
+        failure(&broken.outcome).0,
+        "hunt.ts:2:83: inputs.kills.default must be at least 1"
+    );
+    assert!(broken.logs.is_empty(), "{:?}", broken.logs);
+}
+
+#[test]
+fn unreadable_saved_inputs_only_stop_scripts_that_declare_inputs() {
+    let declared = run_with_inputs(
+        &[("hunt.ts", HUNT_INPUTS), ("describe.ts", DESCRIBE)],
+        Supplied::StoreUnreadable,
+    );
+    assert_eq!(
+        failure(&declared.outcome).0,
+        "hunt.ts didn't start: saved script inputs couldn't be read. Open Scripts to recover them."
+    );
+    let plain = run_with_inputs(
+        &[(
+            "main.ts",
+            "import { Script } from \"mira\";\nexport default function* () { console.log(JSON.stringify(Script.inputs())); }\n",
+        )],
+        Supplied::StoreUnreadable,
+    );
+    assert_eq!(plain.outcome, Outcome::Completed);
+    assert_eq!(plain.logs, ["{}"]);
 }
 
 #[test]

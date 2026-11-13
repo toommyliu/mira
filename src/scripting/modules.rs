@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::HashMap,
     fs,
     path::{Component, Path, PathBuf},
@@ -19,6 +19,8 @@ use rquickjs::{
     loader::{ImportAttributes, Loader, Resolver},
     module::Declared,
 };
+
+use super::inputs::position;
 
 include!(concat!(env!("OUT_DIR"), "/runtime_assets.rs"));
 
@@ -40,6 +42,7 @@ pub(super) struct Modules(Rc<Shared>);
 
 struct Shared {
     root: PathBuf,
+    entry: OnceCell<(String, String)>,
     maps: RefCell<HashMap<String, LineMap>>,
 }
 
@@ -47,12 +50,17 @@ impl Modules {
     pub(super) fn new(root: PathBuf) -> Self {
         Self(Rc::new(Shared {
             root,
+            entry: OnceCell::new(),
             maps: RefCell::default(),
         }))
     }
 
     pub(super) fn entry(&self, path: &Path) -> std::result::Result<String, String> {
         self.user_path(path)
+    }
+
+    pub(super) fn retain_entry(&self, name: String, text: String) {
+        let _ = self.0.entry.set((name, text));
     }
 
     fn user_path(&self, path: &Path) -> std::result::Result<String, String> {
@@ -74,7 +82,7 @@ impl Modules {
         Ok(path.to_string_lossy().into_owned())
     }
 
-    fn display(&self, path: &Path) -> String {
+    pub(super) fn display(&self, path: &Path) -> String {
         path.strip_prefix(&self.0.root)
             .unwrap_or(path)
             .display()
@@ -121,8 +129,11 @@ impl Modules {
                 .ok_or_else(|| format!("{name} isn't part of Mira's runtime"));
         }
         let path = Path::new(name);
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("couldn't read {}: {error}", self.display(path)))?;
+        let text = match self.0.entry.get() {
+            Some((entry, text)) if entry == name => text.clone(),
+            _ => fs::read_to_string(path)
+                .map_err(|error| format!("couldn't read {}: {error}", self.display(path)))?,
+        };
         match path.extension().and_then(|extension| extension.to_str()) {
             Some("ts" | "mts") => {
                 let (code, map) = strip_types(&self.display(path), &text)?;
@@ -273,16 +284,6 @@ fn strip_types(display: &str, text: &str) -> std::result::Result<(String, LineMa
         .collect();
     tokens.sort_unstable();
     Ok((generated.code, LineMap(tokens)))
-}
-
-fn position(text: &str, offset: usize) -> (usize, usize) {
-    let before = &text[..offset.min(text.len())];
-    let row = before.matches('\n').count() + 1;
-    let column = before
-        .rfind('\n')
-        .map_or(before.len(), |newline| before.len() - newline - 1)
-        + 1;
-    (row, column)
 }
 
 pub(super) struct ModuleResolver(pub(super) Modules);
