@@ -23,7 +23,7 @@ const DEFAULT_CELL: &str = "Enter";
 const DEFAULT_PAD: &str = "Spawn";
 const OUTFIT_SLOTS: [&str; 8] = ["Weapon", "ar", "ba", "co", "he", "mi", "pe", "None"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Boost {
     Gold,

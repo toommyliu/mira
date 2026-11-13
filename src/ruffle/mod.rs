@@ -100,7 +100,11 @@ pub(crate) enum Command {
     OpenBank,
     ReloadMap,
     SetSpawnPoint,
-    FetchBoosts,
+    FetchBoosts(async_channel::Sender<Result<Vec<boosts::Owned>, CallError>>),
+    TakeBoosts {
+        picked: Vec<boosts::Owned>,
+        missed: async_channel::Sender<Result<Vec<String>, CallError>>,
+    },
     QuestPickups {
         after: quests::State,
         waiting: async_channel::Sender<Result<Vec<drops::Waiting>, CallError>>,
@@ -724,13 +728,22 @@ async fn run_command(
     command: Command,
 ) {
     let done = match command {
-        Command::FetchBoosts => boosts::fetch(&bridge).await.map(|found| {
-            automation.update_boosts(|state| register_items(&mut state.items, found));
-        }),
+        Command::FetchBoosts(found) => {
+            let _ = found.try_send(boosts::fetch(&bridge).await);
+            Ok(())
+        }
         Command::QuestPickups { after, waiting } => {
             let before = automation.quests();
             let found = drops::newly_taken(&bridge, &automation.drops(), &before, &after).await;
             let _ = waiting.try_send(found);
+            Ok(())
+        }
+        Command::TakeBoosts { picked, missed } => {
+            let taken = boosts::take(&bridge, |wants| bridge.subscribe(wants), picked).await;
+            let _ = missed.try_send(taken.map(|taken| {
+                automation.update_boosts(|state| register_items(&mut state.items, taken.usable));
+                taken.missed
+            }));
             Ok(())
         }
         Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),

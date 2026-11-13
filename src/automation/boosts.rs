@@ -7,7 +7,7 @@ use crate::{
     bridge::{CallError, Event, Loader, Subscription},
     domain::{
         self, bank,
-        inventory::{self, ItemQuery},
+        inventory::{self, ItemQuery, same_name},
         player,
     },
 };
@@ -32,17 +32,71 @@ pub(crate) struct State {
     pub(crate) config: Config,
 }
 
-pub(crate) async fn fetch(loader: &impl Loader) -> Result<Vec<ItemQuery>, CallError> {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Owned {
+    pub(crate) name: String,
+    pub(crate) kind: player::Boost,
+    pub(crate) quantity: i32,
+    pub(crate) banked: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Taken {
+    pub(crate) usable: Vec<ItemQuery>,
+    pub(crate) missed: Vec<String>,
+}
+
+pub(crate) async fn fetch(loader: &impl Loader) -> Result<Vec<Owned>, CallError> {
     if !domain::ready(loader)? {
         return Ok(Vec::new());
     }
-    let mut items = inventory::items(loader)?;
-    items.extend(bank::items(loader).await?);
-    Ok(items
-        .iter()
-        .filter(|item| item.boost().is_some())
-        .map(|item| ItemQuery::Name(item.name().to_owned()))
-        .collect())
+    let carried = inventory::items(loader)?
+        .into_iter()
+        .map(|item| (item, false));
+    let banked = bank::items(loader)
+        .await?
+        .into_iter()
+        .map(|item| (item, true));
+    let mut owned: Vec<Owned> = Vec::new();
+    for (item, banked) in carried.chain(banked) {
+        let Some(kind) = item.boost() else {
+            continue;
+        };
+        if owned
+            .iter()
+            .any(|known| same_name(&known.name, item.name()))
+        {
+            continue;
+        }
+        owned.push(Owned {
+            name: item.name().to_owned(),
+            kind,
+            quantity: item.quantity,
+            banked,
+        });
+    }
+    owned.sort_by_cached_key(|boost| (boost.kind, boost.name.to_lowercase()));
+    Ok(owned)
+}
+
+pub(crate) async fn take(
+    loader: &impl Loader,
+    subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    picked: Vec<Owned>,
+) -> Result<Taken, CallError> {
+    let mut taken = Taken {
+        usable: Vec::new(),
+        missed: Vec::new(),
+    };
+    for boost in picked {
+        let query = ItemQuery::Name(boost.name.clone());
+        if !boost.banked || bank::withdraw(loader, &subscribe, &query).await? {
+            taken.usable.push(query);
+        } else {
+            taken.missed.push(boost.name);
+        }
+    }
+    Ok(taken)
 }
 
 pub(crate) async fn run(
@@ -249,42 +303,119 @@ mod tests {
             .await;
     }
 
+    fn item_row(id: f64, name: &str, link: &str, quantity: f64) -> Value {
+        let category = if link.is_empty() { "Item" } else { "ServerUse" };
+        Value::Object(
+            [
+                ("itemId", Value::Number(id)),
+                ("name", Value::String(name.into())),
+                ("category", Value::String(category.into())),
+                ("link", Value::String(link.into())),
+                ("quantity", Value::Number(quantity)),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+        )
+    }
+
+    fn owned_boost(name: &str, kind: player::Boost, quantity: i32, banked: bool) -> Owned {
+        Owned {
+            name: name.into(),
+            kind,
+            quantity,
+            banked,
+        }
+    }
+
     #[tokio::test]
-    async fn fetching_lists_the_boosts_in_the_inventory_and_bank() {
-        let row = |id: f64, name: &str, category: &str, link: &str| {
-            Value::Object(
-                [
-                    ("itemId", Value::Number(id)),
-                    ("name", Value::String(name.into())),
-                    ("category", Value::String(category.into())),
-                    ("link", Value::String(link.into())),
-                ]
-                .into_iter()
-                .map(|(key, value)| (key.to_owned(), value))
-                .collect(),
-            )
-        };
+    async fn fetching_lists_owned_boosts_by_kind_and_where_they_are() {
         let loader = FakeLoader::new(move |callback, _| {
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" | "bank.isLoaded" => {
                     Value::Bool(true)
                 }
                 "inventory.getItems" => Value::List(vec![
-                    row(1.0, "Short XP Boost", "ServerUse", "xpboost::20"),
-                    row(4.0, "Potion", "Item", ""),
+                    item_row(1.0, "Short XP Boost", "xpboost::20", 3.0),
+                    item_row(4.0, "Potion", "", 9.0),
+                    item_row(3.0, "Gold Boost", "gboost::60", 1.0),
                 ]),
-                "bank.getItems" => {
-                    Value::List(vec![row(3.0, "Gold Boost", "ServerUse", "gboost::60")])
-                }
+                "bank.getItems" => Value::List(vec![
+                    item_row(3.0, "Gold Boost", "gboost::60", 1.0),
+                    item_row(2.0, "Long XP Boost", "xpboost::60", 7.0),
+                    item_row(5.0, "Class Boost", "cpboost::60", 2.0),
+                ]),
                 other => panic!("unexpected call {other}"),
             })
         });
         assert_eq!(
             fetch(&loader).await,
             Ok(vec![
-                ItemQuery::Name("Short XP Boost".into()),
-                ItemQuery::Name("Gold Boost".into()),
+                owned_boost("Gold Boost", player::Boost::Gold, 1, false),
+                owned_boost("Long XP Boost", player::Boost::Xp, 7, true),
+                owned_boost("Short XP Boost", player::Boost::Xp, 3, false),
+                owned_boost("Class Boost", player::Boost::ClassPoints, 2, true),
             ])
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn taking_withdraws_banked_picks_and_reports_the_ones_left_in_the_bank() {
+        let events = Rc::new(Events::default());
+        let publisher = events.clone();
+        let bank = [(2.0, "Long XP Boost"), (5.0, "Class Boost")];
+        let loader = FakeLoader::new(move |callback, args| {
+            let find = || {
+                let [Value::Object(selector)] = args else {
+                    panic!("{callback} needs a selector: {args:?}");
+                };
+                bank.iter().find(|(id, name)| match selector.get("itemId") {
+                    Some(Value::Number(wanted)) => id == wanted,
+                    _ => matches!(selector.get("name"), Some(Value::String(wanted)) if wanted == name),
+                })
+            };
+            Ok(match callback {
+                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" | "bank.isLoaded" => {
+                    Value::Bool(true)
+                }
+                "bank.getItem" => find().map_or(Value::Null, |(id, name)| {
+                    item_row(*id, name, "xpboost::60", 1.0)
+                }),
+                "bank.withdraw" => {
+                    let (id, name) = find().expect("only banked boosts are withdrawn");
+                    if *name == "Long XP Boost" {
+                        publisher.publish(&Event::ExtensionResponse {
+                            packet: json!({ "type": "json", "dataObj": {
+                                "cmd": "bankToInv", "ItemID": id.to_string()
+                            } })
+                            .to_string(),
+                        });
+                    }
+                    Value::Bool(true)
+                }
+                other => panic!("unexpected call {other} {args:?}"),
+            })
+        });
+        let taken = take(
+            &loader,
+            |wants| events.subscribe(wants),
+            vec![
+                owned_boost("Short XP Boost", player::Boost::Xp, 3, false),
+                owned_boost("Long XP Boost", player::Boost::Xp, 7, true),
+                owned_boost("Class Boost", player::Boost::ClassPoints, 2, true),
+            ],
+        )
+        .await;
+        assert_eq!(
+            taken,
+            Ok(Taken {
+                usable: vec![
+                    ItemQuery::Name("Short XP Boost".into()),
+                    ItemQuery::Name("Long XP Boost".into()),
+                ],
+                missed: vec!["Class Boost".into()],
+            })
+        );
+        assert_eq!(loader.count("bank.withdraw"), 2);
     }
 }
