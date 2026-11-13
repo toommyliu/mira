@@ -84,22 +84,24 @@ pub(crate) fn send(
     if let Err(problem) = check(target, packet) {
         return Ok(Delivery::Refused(problem));
     }
+    if !auth::in_game(loader)? {
+        return Ok(Delivery::NotInGame);
+    }
     let packet = packet.trim();
-    let sent = match (target, client_format(packet)) {
+    let filled = fill(loader, packet)?;
+    match (target, client_format(packet)) {
         (Target::Client, Some(format)) => {
-            let ready = auth::in_game(loader)?;
-            if ready {
-                bridge::flash::send_client_packet(loader, &fill(loader, packet)?, format)?;
-            }
-            ready
+            bridge::flash::send_client_packet(loader, &filled, format)?;
         }
-        _ => send_to_server(loader, &fill(loader, packet)?)?,
-    };
-    Ok(if sent {
-        Delivery::Sent
-    } else {
-        Delivery::NotInGame
-    })
+        _ => {
+            bridge::flash::call_game_function(
+                loader,
+                "sfc.sendString",
+                vec![Value::String(filled)],
+            )?;
+        }
+    }
+    Ok(Delivery::Sent)
 }
 
 const ROOM: &str = "{room}";
@@ -228,6 +230,18 @@ mod tests {
             sent.borrow()[0].1[1],
             Value::String("%xt%zm%cmd%16842%tfer%Artix%battleon-1234%{other}%".into())
         );
+
+        let loading = FakeLoader::new(|callback, _| match callback {
+            "auth.isLoggedIn" => Ok(Value::Bool(true)),
+            "world.isLoaded" => Ok(Value::Bool(false)),
+            other => panic!("{other} was called while the map loaded"),
+        });
+        for target in [Target::Server, Target::Client] {
+            assert_eq!(
+                send(&loading, target, "%xt%zm%cmd%{room}%"),
+                Ok(Delivery::NotInGame)
+            );
+        }
     }
 
     #[test]
