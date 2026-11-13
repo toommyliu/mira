@@ -903,6 +903,46 @@ pub(crate) fn drag_area() -> gpui::Div {
         })
 }
 
+pub(crate) fn bar(cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(2.0))
+        .h(super::BAR_HEIGHT)
+        .pr(BAR_PADDING)
+        .bg(theme.base)
+        .border_b_1()
+        .border_color(theme.border)
+}
+
+pub(crate) fn window_bar(cx: &App) -> gpui::Div {
+    bar(cx).child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
+}
+
+pub(crate) fn bar_title(title: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    drag_area()
+        .flex_none()
+        .flex()
+        .items_center()
+        .px(px(8.0))
+        .text_size(TEXT_BODY)
+        .line_height(LINE_BODY)
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(cx.theme().text_secondary)
+        .child(title.into())
+}
+
+pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
+    div()
+        .flex_none()
+        .mx(px(4.0))
+        .w(px(1.0))
+        .h(px(16.0))
+        .bg(cx.theme().hairline)
+}
+
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inset = bar_inset(window, self.sidebar.width());

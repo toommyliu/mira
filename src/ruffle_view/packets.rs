@@ -2,8 +2,8 @@ use std::time::{Duration, SystemTime};
 
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, EntityId, FocusHandle,
-    Focusable as _, FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    Focusable as _, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, size,
 };
@@ -19,8 +19,8 @@ use mira_ui::{
 };
 
 use super::{
-    BAR_HEIGHT, Client, RuffleView,
-    client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
+    Client, RuffleView,
+    client::{CloseSession, bar_title, drag_area, window_bar},
     packet_log::{Filter, Line, Packet, PacketLog, Visible},
     shown_tab::{self, ShownTab, watch_changes},
 };
@@ -1044,20 +1044,9 @@ impl Render for Packets {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .h(BAR_HEIGHT)
-                    .pr(px(16.0))
-                    .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
-                    .child(
-                        drag_area()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Packets")),
-                    )
+                window_bar(cx)
+                    .child(bar_title("Packets", cx))
+                    .child(drag_area().flex_1())
                     .child(picker),
             )
             .child(

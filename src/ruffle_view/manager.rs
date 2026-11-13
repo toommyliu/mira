@@ -14,7 +14,7 @@ use reqwest::header::HeaderValue;
 use super::{
     Client, State, Summary,
     account::file_name,
-    client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
+    client::{CloseSession, drag_area, window_bar},
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
@@ -65,7 +65,7 @@ pub(crate) fn open(
         titlebar: Some(TitlebarOptions {
             title: Some("Accounts".into()),
             appears_transparent: true,
-            traffic_light_position: Some(gpui::point(px(12.0), px(15.0))),
+            traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
         window_min_size: Some(size(px(640.0), px(360.0))),
@@ -558,24 +558,18 @@ impl Manager {
                     cx: &mut Context<Self>| {
             let targets = selected.clone();
             Button::new(id, label)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .text_size(TEXT_BODY)
                 .disabled(!any)
                 .on_click(cx.listener(move |this, _, _, cx| run(this, targets.clone(), cx)))
         };
         let check_all =
             cx.listener(|this, checked: &bool, _, cx| this.set_all_checked(*checked, cx));
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(6.0))
-            .h(px(44.0))
-            .pr(px(12.0))
-            .border_b_1()
-            .border_color(theme.hairline)
-            .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
+        window_bar(cx)
             .when(total > 0, |toolbar| {
                 toolbar.child(
-                    div().mr(px(4.0)).child(
+                    div().px(px(8.0)).child(
                         Checkbox::new("check-all", "Select all", all)
                             .on_toggle(move |checked, window, cx| check_all(&checked, window, cx)),
                     ),
@@ -601,6 +595,7 @@ impl Manager {
             )
             .child(
                 Button::new("add-account", "Add account")
+                    .size(Size::Small)
                     .disabled(self.accounts.is_err())
                     .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
             )

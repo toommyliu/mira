@@ -24,7 +24,7 @@ use mira_ui::{
 use super::{
     BAR_HEIGHT,
     account::Glance,
-    client::{CloseSession, SIDEBAR_WIDTH, drag_area, tab_face},
+    client::{CloseSession, SIDEBAR_WIDTH, bar, bar_title, drag_area, tab_face},
     profile_form::{Form, FormStep, FormTrigger, Item, Kind, Rule},
 };
 use crate::{
@@ -1485,24 +1485,10 @@ impl Render for Editor {
                     .min_w_0()
                     .h_full()
                     .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap(px(8.0))
-                            .h(BAR_HEIGHT)
-                            .pl(px(16.0))
-                            .pr(px(8.0))
-                            .border_b_1()
-                            .border_color(theme.hairline)
-                            .child(
-                                drag_area()
-                                    .flex_1()
-                                    .flex()
-                                    .items_center()
-                                    .text_color(theme.text_secondary)
-                                    .child("Combat Profiles"),
-                            )
+                        bar(cx)
+                            .pl(px(8.0))
+                            .child(bar_title("Combat Profiles", cx))
+                            .child(drag_area().flex_1())
                             .child(
                                 Button::new("save-profile", "Save")
                                     .variant(Variant::Primary)

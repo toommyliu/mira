@@ -1,5 +1,5 @@
 use gpui::{
-    App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle, FontWeight,
+    App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
@@ -11,8 +11,8 @@ use mira_ui::{
 };
 
 use super::{
-    BAR_HEIGHT, Client,
-    client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
+    Client,
+    client::{CloseSession, bar_title, drag_area, window_bar},
     shown_tab::{self, ShownTab, watch_changes},
 };
 use crate::{
@@ -358,20 +358,9 @@ impl Render for Follower {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .h(BAR_HEIGHT)
-                    .pr(px(16.0))
-                    .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
-                    .child(
-                        drag_area()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Follower")),
-                    )
+                window_bar(cx)
+                    .child(bar_title("Follower", cx))
+                    .child(drag_area().flex_1())
                     .child(picker),
             )
             .child(

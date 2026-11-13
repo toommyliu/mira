@@ -714,14 +714,7 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                 jump_panel(location, &this, close, window, cx)
             }
         })
-        .child(
-            div()
-                .flex_none()
-                .mx(px(4.0))
-                .w(px(1.0))
-                .h(px(16.0))
-                .bg(theme.hairline),
-        )
+        .child(super::client::bar_separator(cx))
         .child(
             Button::new("bank", "Bank")
                 .variant(Variant::Ghost)

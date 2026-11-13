@@ -4,10 +4,9 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, FontWeight, Global,
-    InteractiveElement as _, IntoElement, KeyBinding, Menu, MenuItem, ParentElement as _, Render,
-    SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
-    actions, div, px, size,
+    App, AppContext as _, Bounds, Context, FocusHandle, Global, InteractiveElement as _,
+    IntoElement, KeyBinding, Menu, MenuItem, ParentElement as _, Render, SharedString, Styled as _,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
@@ -17,7 +16,7 @@ use mira_ui::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::ruffle_view::{CloseSession, drag_area};
+use crate::ruffle_view::{CloseSession, bar_title, drag_area, window_bar};
 
 actions!(
     settings,
@@ -204,7 +203,7 @@ fn open(cx: &mut App) {
         titlebar: Some(TitlebarOptions {
             title: Some("Settings".into()),
             appears_transparent: true,
-            traffic_light_position: Some(gpui::point(px(12.0), px(15.0))),
+            traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
         is_resizable: false,
@@ -249,17 +248,12 @@ impl Render for SettingsWindow {
             .on_action(|_: &CloseSession, window, _| window.remove_window())
             .child(mira_ui::nav::pointer_probe())
             .child(
-                drag_area()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(44.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Settings"),
+                window_bar(cx)
+                    .child(bar_title("Settings", cx))
+                    .child(drag_area().flex_1()),
             )
             .child(
-                div().px(px(16.0)).child(
+                div().px(px(16.0)).pt(px(12.0)).child(
                     Group::new()
                         .title("Appearance")
                         .row(

@@ -18,7 +18,7 @@ use mira_ui::{
 
 use super::{
     BAR_HEIGHT, Client,
-    client::{CloseSession, TRAFFIC_LIGHTS_WIDTH, drag_area},
+    client::{CloseSession, bar_title, drag_area, window_bar},
     shown_tab::{self, ShownTab},
 };
 use crate::{
@@ -987,20 +987,9 @@ impl Render for LoaderGrabber {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .h(BAR_HEIGHT)
-                    .pr(px(16.0))
-                    .child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
-                    .child(
-                        drag_area().flex_1().flex().items_center().child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Loader/grabber"),
-                        ),
-                    )
+                window_bar(cx)
+                    .child(bar_title("Loader/grabber", cx))
+                    .child(drag_area().flex_1())
                     .child(picker),
             )
             .child(self.loader_row(&theme, cx))

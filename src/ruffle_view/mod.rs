@@ -50,7 +50,7 @@ use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
 pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
-pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
+pub(crate) use client::{Client, CloseSession, bar_title, bind_keys, drag_area, window_bar};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
 pub(crate) use game_bar::BAR_HEIGHT;
