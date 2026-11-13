@@ -5,6 +5,7 @@ use crate::assets::{HEAVY, SIDEBAR, SIDEBAR_OPEN};
 #[derive(Clone, Copy, PartialEq, Eq, Debug, IntoElement)]
 pub enum Icon {
     ArrowDown,
+    ArrowDownToLine,
     ArrowLeft,
     ArrowRight,
     ArrowUp,
@@ -14,6 +15,7 @@ pub enum Icon {
     ChevronRight,
     ChevronUp,
     Clock,
+    Ellipsis,
     LayoutGrid,
     Minus,
     Pin,
@@ -29,6 +31,7 @@ impl Icon {
     fn path(self) -> &'static str {
         match self {
             Icon::ArrowDown => "icons/arrow-down.svg",
+            Icon::ArrowDownToLine => "icons/arrow-down-to-line.svg",
             Icon::ArrowLeft => "icons/arrow-left.svg",
             Icon::ArrowRight => "icons/arrow-right.svg",
             Icon::ArrowUp => "icons/arrow-up.svg",
@@ -38,6 +41,7 @@ impl Icon {
             Icon::ChevronRight => "icons/chevron-right.svg",
             Icon::ChevronUp => "icons/chevron-up.svg",
             Icon::Clock => "icons/clock.svg",
+            Icon::Ellipsis => "icons/ellipsis.svg",
             Icon::LayoutGrid => "icons/layout-grid.svg",
             Icon::Minus => "icons/minus.svg",
             Icon::Pin => "icons/pin.svg",

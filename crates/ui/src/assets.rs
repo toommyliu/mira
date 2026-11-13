@@ -19,6 +19,9 @@ impl AssetSource for Assets {
         };
         let icon = match path {
             "icons/arrow-down.svg" => include_str!("../assets/icons/lucide/arrow-down.svg"),
+            "icons/arrow-down-to-line.svg" => {
+                include_str!("../assets/icons/lucide/arrow-down-to-line.svg")
+            }
             "icons/arrow-left.svg" => include_str!("../assets/icons/lucide/arrow-left.svg"),
             "icons/arrow-right.svg" => include_str!("../assets/icons/lucide/arrow-right.svg"),
             "icons/arrow-up.svg" => include_str!("../assets/icons/lucide/arrow-up.svg"),
@@ -28,6 +31,7 @@ impl AssetSource for Assets {
             "icons/chevron-right.svg" => include_str!("../assets/icons/lucide/chevron-right.svg"),
             "icons/chevron-up.svg" => include_str!("../assets/icons/lucide/chevron-up.svg"),
             "icons/clock.svg" => include_str!("../assets/icons/lucide/clock.svg"),
+            "icons/ellipsis.svg" => include_str!("../assets/icons/lucide/ellipsis.svg"),
             "icons/layout-grid.svg" => include_str!("../assets/icons/lucide/layout-grid.svg"),
             "icons/minus.svg" => include_str!("../assets/icons/lucide/minus.svg"),
             "icons/pin.svg" => include_str!("../assets/icons/lucide/pin.svg"),
