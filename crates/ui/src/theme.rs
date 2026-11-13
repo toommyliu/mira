@@ -20,9 +20,10 @@ pub const LINE_DISPLAY: Pixels = px(28.0);
 pub const SYSTEM_SANS: &str = ".SystemUIFont";
 pub const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
 
-pub const CONTROL_SM: Pixels = px(24.0);
-pub const CONTROL_MD: Pixels = px(28.0);
-pub const ROW: Pixels = px(28.0);
+pub const CONTROL_XS: Pixels = px(20.0);
+pub const CONTROL_SM: Pixels = px(22.0);
+pub const CONTROL_MD: Pixels = px(26.0);
+pub const ROW: Pixels = px(26.0);
 
 #[derive(Clone, Copy)]
 pub struct Radii {
@@ -35,13 +36,13 @@ pub struct Radii {
 
 impl Radii {
     pub fn scaled(scale: f32) -> Self {
-        let panel = px(12.0) * scale;
+        let panel = px(8.0) * scale;
         Self {
             tag: px(4.0) * scale,
-            item: (px(6.0) * scale).min(Self::inside(panel, PANEL_INSET)),
-            control: px(8.0) * scale,
+            item: (px(4.0) * scale).min(Self::inside(panel, PANEL_INSET)),
+            control: px(6.0) * scale,
             panel,
-            dialog: px(16.0) * scale,
+            dialog: px(12.0) * scale,
         }
     }
 
@@ -107,43 +108,45 @@ impl Global for Theme {}
 
 impl Theme {
     pub fn dark() -> Self {
-        let ink = |alpha| oklch(0.919, 0.0, 0.0, alpha);
-        let gray = |lightness| oklch(lightness, 0.0, 0.0, 1.0);
+        let ink = |alpha| oklch(0.97, 0.004, 265.0, alpha);
+        let gray = |lightness| oklch(lightness, 0.003, 265.0, 1.0);
+        let raised = |lightness| oklch(lightness, 0.006, 286.0, 1.0);
+        let muted = |lightness, chroma| oklch(lightness, chroma, 262.0, 1.0);
         Self {
             radius: Radii::scaled(1.0),
-            base: gray(0.17),
-            well: gray(0.135),
-            surface: gray(0.19),
-            overlay: gray(0.215),
-            fill: ink(0.05),
-            fill_hover: ink(0.067),
+            base: gray(0.172),
+            well: gray(0.139),
+            surface: gray(0.194),
+            overlay: raised(0.228),
+            fill: ink(0.045),
+            fill_hover: ink(0.07),
             fill_pressed: ink(0.11),
-            selected: ink(0.118),
-            hairline: ink(0.075),
-            border: ink(0.12),
-            border_strong: ink(0.2),
-            text: gray(0.87),
-            text_secondary: gray(0.62),
-            text_tertiary: gray(0.5),
-            text_disabled: gray(0.38),
-            inverse: gray(0.87),
-            inverse_hover: gray(0.93),
-            on_inverse: gray(0.17),
-            knob: gray(0.9),
-            thumb: gray(0.3),
-            accent: oklch(0.697, 0.12, 249.0, 1.0),
-            accent_soft: oklch(0.697, 0.12, 249.0, 0.14),
-            accent_text: oklch(0.78, 0.09, 249.0, 1.0),
-            warning: oklch(0.83, 0.14, 78.0, 1.0),
-            warning_soft: oklch(0.83, 0.14, 78.0, 0.12),
-            warning_text: oklch(0.86, 0.12, 80.0, 1.0),
-            danger: oklch(0.6, 0.2, 25.0, 1.0),
-            danger_hover: oklch(0.65, 0.2, 25.0, 1.0),
-            danger_soft: oklch(0.65, 0.2, 25.0, 0.14),
-            danger_text: oklch(0.75, 0.15, 25.0, 1.0),
+            selected: ink(0.085),
+            hairline: ink(0.06),
+            border: ink(0.1),
+            border_strong: ink(0.17),
+            text: oklch(0.955, 0.002, 265.0, 1.0),
+            text_secondary: muted(0.84, 0.014),
+            text_tertiary: muted(0.66, 0.014),
+            text_disabled: muted(0.5, 0.012),
+            inverse: raised(0.922),
+            inverse_hover: raised(0.985),
+            on_inverse: gray(0.172),
+            knob: oklch(0.97, 0.002, 265.0, 1.0),
+            thumb: raised(0.28),
+            accent: oklch(0.623, 0.2, 279.0, 1.0),
+            accent_soft: oklch(0.623, 0.2, 279.0, 0.16),
+            accent_text: oklch(0.75, 0.12, 278.0, 1.0),
+            warning: oklch(0.8, 0.15, 78.0, 1.0),
+            warning_soft: oklch(0.8, 0.15, 78.0, 0.12),
+            warning_text: oklch(0.85, 0.12, 84.0, 1.0),
+            danger: oklch(0.575, 0.19, 24.0, 1.0),
+            danger_hover: oklch(0.62, 0.19, 24.0, 1.0),
+            danger_soft: oklch(0.65, 0.19, 24.0, 0.14),
+            danger_text: oklch(0.74, 0.14, 24.0, 1.0),
             on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: gray(0.62),
-            backdrop: oklch(0.05, 0.0, 0.0, 0.55),
+            focus: muted(0.66, 0.014),
+            backdrop: oklch(0.05, 0.0, 0.0, 0.6),
             pointer_cursor: false,
             stack_tint: 0.06,
             shadow_alpha: 0.5,
@@ -151,42 +154,43 @@ impl Theme {
     }
 
     pub fn light() -> Self {
-        let ink = |alpha| oklch(0.191, 0.0, 0.0, alpha);
-        let gray = |lightness| oklch(lightness, 0.0, 0.0, 1.0);
+        let ink = |alpha| oklch(0.25, 0.01, 270.0, alpha);
+        let gray = |lightness, chroma| oklch(lightness, chroma, 265.0, 1.0);
+        let text = |lightness, chroma, hue| oklch(lightness, chroma, hue, 1.0);
         Self {
             radius: Radii::scaled(1.0),
-            base: gray(0.98),
-            well: gray(0.935),
-            surface: gray(0.997),
-            overlay: gray(1.0),
-            fill: ink(0.045),
-            fill_hover: ink(0.067),
-            fill_pressed: ink(0.11),
-            selected: ink(0.09),
-            hairline: ink(0.075),
-            border: ink(0.15),
-            border_strong: ink(0.26),
-            text: gray(0.26),
-            text_secondary: gray(0.47),
-            text_tertiary: gray(0.6),
-            text_disabled: gray(0.72),
-            inverse: gray(0.26),
-            inverse_hover: gray(0.34),
-            on_inverse: gray(0.997),
-            knob: gray(1.0),
-            thumb: gray(1.0),
-            accent: oklch(0.565, 0.13, 243.0, 1.0),
-            accent_soft: oklch(0.565, 0.13, 243.0, 0.12),
-            accent_text: oklch(0.5, 0.11, 243.0, 1.0),
-            warning: oklch(0.72, 0.15, 70.0, 1.0),
+            base: gray(0.968, 0.003),
+            well: gray(0.945, 0.003),
+            surface: gray(0.985, 0.002),
+            overlay: gray(0.992, 0.002),
+            fill: ink(0.04),
+            fill_hover: ink(0.065),
+            fill_pressed: ink(0.1),
+            selected: ink(0.075),
+            hairline: ink(0.07),
+            border: ink(0.12),
+            border_strong: ink(0.22),
+            text: text(0.29, 0.012, 270.0),
+            text_secondary: text(0.4, 0.014, 262.0),
+            text_tertiary: text(0.54, 0.012, 285.0),
+            text_disabled: text(0.68, 0.008, 285.0),
+            inverse: text(0.29, 0.012, 270.0),
+            inverse_hover: text(0.24, 0.012, 270.0),
+            on_inverse: gray(0.985, 0.002),
+            knob: gray(0.995, 0.001),
+            thumb: gray(0.995, 0.001),
+            accent: oklch(0.6, 0.2, 280.0, 1.0),
+            accent_soft: oklch(0.6, 0.2, 280.0, 0.1),
+            accent_text: oklch(0.5, 0.2, 278.0, 1.0),
+            warning: oklch(0.75, 0.16, 70.0, 1.0),
             warning_soft: oklch(0.75, 0.15, 75.0, 0.16),
-            warning_text: oklch(0.48, 0.11, 65.0, 1.0),
-            danger: oklch(0.56, 0.2, 25.0, 1.0),
-            danger_hover: oklch(0.51, 0.19, 25.0, 1.0),
+            warning_text: oklch(0.5, 0.11, 65.0, 1.0),
+            danger: oklch(0.57, 0.2, 25.0, 1.0),
+            danger_hover: oklch(0.52, 0.19, 25.0, 1.0),
             danger_soft: oklch(0.6, 0.2, 25.0, 0.1),
-            danger_text: oklch(0.5, 0.17, 25.0, 1.0),
+            danger_text: oklch(0.51, 0.18, 25.0, 1.0),
             on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: gray(0.55),
+            focus: text(0.56, 0.012, 262.0),
             backdrop: ink(0.28),
             pointer_cursor: false,
             stack_tint: 0.01,
