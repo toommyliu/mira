@@ -30,6 +30,22 @@ impl FakeLoader {
     }
 }
 
+pub(crate) fn value(json: serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(flag) => Value::Bool(flag),
+        serde_json::Value::Number(number) => Value::Number(number.as_f64().unwrap()),
+        serde_json::Value::String(text) => Value::String(text),
+        serde_json::Value::Array(items) => Value::List(items.into_iter().map(value).collect()),
+        serde_json::Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, field)| (key, value(field)))
+                .collect(),
+        ),
+    }
+}
+
 impl<L: Loader> Loader for std::rc::Rc<L> {
     fn call(&self, callback: &'static str, args: Vec<Value>) -> Result<Value, CallError> {
         (**self).call(callback, args)

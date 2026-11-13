@@ -43,13 +43,13 @@ impl MonsterQuery {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Monster {
     pub(crate) mon_map_id: f64,
-    monster_id: f64,
-    name: String,
-    race: String,
+    pub(super) monster_id: f64,
+    pub(super) name: String,
+    pub(super) race: String,
     pub(crate) cell: String,
-    hp: f64,
-    max_hp: f64,
-    level: f64,
+    pub(super) hp: f64,
+    pub(super) max_hp: f64,
+    pub(super) level: f64,
     state: Option<State>,
     auras: Vec<Aura>,
     #[serde(skip)]
@@ -60,10 +60,10 @@ pub(crate) struct Monster {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Drop {
-    item_id: i32,
-    name: String,
-    quantity: i32,
-    rate: Option<f64>,
+    pub(super) item_id: i32,
+    pub(super) name: String,
+    pub(super) quantity: i32,
+    pub(super) rate: Option<f64>,
     boosted_rate: Option<f64>,
     event_drop: bool,
     quest_gated: bool,

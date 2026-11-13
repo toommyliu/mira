@@ -122,6 +122,16 @@ package mira.game {
       Main.Game.world.sendLoadShopRequest(shopId);
     }
 
+    [BridgeExport]
+    public static function loadHairShop(shopId:int):void {
+      Main.Game.world.sendLoadHairShopRequest(shopId);
+    }
+
+    [BridgeExport]
+    public static function openArmorCustomizer():void {
+      Main.Game.openArmorCustomize();
+    }
+
     private static function isEnhancement(item:Object):Boolean {
       return String(item.sType).toLowerCase() == "enhancement";
     }

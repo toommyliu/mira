@@ -6,6 +6,7 @@ pub(crate) mod counter_attack;
 pub(crate) mod drops;
 pub(crate) mod enhancements;
 pub(crate) mod events;
+pub(crate) mod grabber;
 pub(crate) mod house;
 pub(crate) mod inventory;
 pub(crate) mod packets;

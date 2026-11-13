@@ -125,10 +125,11 @@ package mira.generated
       external.externalize("quests.accept", Quests.accept);
       external.externalize("quests.canComplete", Quests.canComplete);
       external.externalize("quests.complete", Quests.complete);
+      external.externalize("quests.fakeComplete", Quests.fakeComplete);
       external.externalize("quests.get", Quests.get);
       external.externalize("quests.getAccepted", Quests.getAccepted);
+      external.externalize("quests.getLoaded", Quests.getLoaded);
       external.externalize("quests.getMaxTurnIns", Quests.getMaxTurnIns);
-      external.externalize("quests.getTree", Quests.getTree);
       external.externalize("quests.isAvailable", Quests.isAvailable);
       external.externalize("quests.isInProgress", Quests.isInProgress);
       external.externalize("quests.load", Quests.load);
@@ -157,6 +158,8 @@ package mira.generated
       external.externalize("shops.getShop", Shops.getShop);
       external.externalize("shops.isOpen", Shops.isOpen);
       external.externalize("shops.load", Shops.load);
+      external.externalize("shops.loadHairShop", Shops.loadHairShop);
+      external.externalize("shops.openArmorCustomizer", Shops.openArmorCustomizer);
       external.externalize("shops.sell", Shops.sell);
       external.externalize("tempInventory.getItem", TempInventory.getItem);
       external.externalize("tempInventory.getItems", TempInventory.getItems);

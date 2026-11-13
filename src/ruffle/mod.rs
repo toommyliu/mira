@@ -42,7 +42,7 @@ use crate::{
         auth::{Credentials, Logins},
         bank,
         counter_attack::{self, CounterAttacks},
-        packets, player,
+        grabber, packets, player,
         profiles::Library,
         rotation,
         world::{self, Location},
@@ -101,6 +101,7 @@ pub(crate) enum Command {
     ReloadMap,
     SetSpawnPoint,
     FetchBoosts,
+    Grabber(grabber::Job),
 }
 
 #[derive(Clone)]
@@ -580,7 +581,12 @@ fn run(
                 Some(Msg::Command(command)) => spawn_local(
                     &inbox,
                     &tasks,
-                    run_command(commands_bridge.clone(), automation.clone(), command),
+                    run_command(
+                        commands_bridge.clone(),
+                        automation.clone(),
+                        cooldown.clone(),
+                        command,
+                    ),
                 ),
                 Some(Msg::Frame) => {
                     inbox.frame_pending.store(false, Ordering::Relaxed);
@@ -695,7 +701,12 @@ fn run(
     Ok(())
 }
 
-async fn run_command(bridge: Bridge, automation: Automation, command: Command) {
+async fn run_command(
+    bridge: Bridge,
+    automation: Automation,
+    cooldown: CombatCooldown,
+    command: Command,
+) {
     let done = match command {
         Command::FetchBoosts => boosts::fetch(&bridge).await.map(|found| {
             automation.update_boosts(|state| register_items(&mut state.items, found));
@@ -712,6 +723,10 @@ async fn run_command(bridge: Bridge, automation: Automation, command: Command) {
         }
         Command::ReloadMap => world::reload(&bridge).await.map(drop),
         Command::SetSpawnPoint => world::set_spawn_point(&bridge, None, None).await.map(drop),
+        Command::Grabber(job) => {
+            grabber::run(&bridge, |wants| bridge.subscribe(wants), &cooldown, job).await;
+            Ok(())
+        }
     };
     if let Err(error) = done {
         tracing::warn!(%error, "a game bar command failed");

@@ -37,20 +37,28 @@ pub(crate) enum RewardKind {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct QuestReward {
     #[serde(flatten)]
-    item: ItemCount,
-    kind: RewardKind,
-    drop_chance: f64,
+    pub(super) item: ItemCount,
+    pub(super) kind: RewardKind,
+    pub(super) drop_chance: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Quest {
-    id: i32,
-    name: String,
-    cadence: Cadence,
-    once: bool,
-    requirements: Vec<ItemCount>,
-    rewards: Vec<QuestReward>,
+    pub(super) id: i32,
+    pub(super) name: String,
+    pub(super) cadence: Cadence,
+    pub(super) once: bool,
+    pub(super) requirements: Vec<ItemCount>,
+    pub(super) rewards: Vec<QuestReward>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuestStatus {
+    Available,
+    InProgress,
+    Done,
+    Locked,
 }
 
 impl Quest {
@@ -117,6 +125,31 @@ pub(crate) fn quest(loader: &impl Loader, quest_id: i32) -> Result<Option<Quest>
 
 pub(crate) fn accepted(loader: &impl Loader) -> Result<Vec<Quest>, CallError> {
     Ok(rows(bridge::quests::get_accepted(loader)?, quest_from))
+}
+
+pub(crate) fn loaded_quests(loader: &impl Loader) -> Result<Vec<(Quest, QuestStatus)>, CallError> {
+    Ok(rows(bridge::quests::get_loaded(loader)?, |value| {
+        let status = match &value {
+            Value::Object(fields) => match fields.get("status") {
+                Some(Value::String(status)) => match status.as_str() {
+                    "inProgress" => QuestStatus::InProgress,
+                    "done" => QuestStatus::Done,
+                    "locked" => QuestStatus::Locked,
+                    _ => QuestStatus::Available,
+                },
+                _ => QuestStatus::Available,
+            },
+            _ => return None,
+        };
+        Some((quest_from(value)?, status))
+    }))
+}
+
+pub(crate) async fn fake_complete(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
+    if !load(loader, quest_id, true).await? {
+        return Ok(false);
+    }
+    bridge::quests::fake_complete(loader, quest_id)
 }
 
 fn loaded(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {

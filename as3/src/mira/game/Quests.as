@@ -1,6 +1,5 @@
 package mira.game {
   import mira.Main;
-  import flash.utils.ByteArray;
   import flash.utils.getTimer;
 
   [BridgeNamespace("quests")]
@@ -149,60 +148,44 @@ package mira.game {
     }
 
     [BridgeExport]
-    public static function getTree():Array
-    {
-      var game:Object = Main.Game;
-      var quests:Array = [];
-      for each (var q:Object in game.world.questTree)
-      {
-        var quest:Object = cloneObject(q);
-        var requirements:Array = [];
-        var rewards:Array = [];
-
-        if (q.turnin != null && q.oItems != null)
-        {
-          for each (var req:Object in q.turnin)
-          {
-            var _req:Object = new Object();
-            var item:Object = q.oItems[req.ItemID];
-            _req.sName = item.sName;
-            _req.ItemID = item.ItemID;
-            _req.iQty = req.iQty;
-            requirements.push(_req);
-          }
+    public static function getLoaded():Array {
+      var rows:Array = [];
+      for each (var quest:Object in Main.Game.world.questTree) {
+        if (quest) {
+          var loaded:Object = row(quest);
+          loaded.status = status(quest);
+          rows.push(loaded);
         }
-
-        quest.RequiredItems = requirements;
-
-        if (q.reward != null && q.oRewards != null)
-        {
-          for each (var rew:Object in q.reward)
-          {
-            for each (var rewContainer:* in q.oRewards)
-            {
-              for each (var _item:Object in rewContainer)
-              {
-                if (_item.ItemID != null && _item.ItemID == rew.ItemID)
-                {
-                  var reward:Object = new Object();
-                  reward.sName = _item.sName;
-                  reward.ItemID = rew.ItemID;
-                  reward.iQty = rew.iQty;
-                  reward.DropChance = String(rew.iRate) + "%";
-                  rewards.push(reward);
-                }
-              }
-            }
-          }
-        }
-
-        quest.Rewards = rewards;
-        quests.push(quest);
       }
 
-      return quests;
+      return rows;
     }
 
+    private static function status(quest:Object):String {
+      var world:Object = Main.Game.world;
+      if (world.isQuestInProgress(quest.QuestID)) {
+        return "inProgress";
+      }
+
+      if (quest.bOnce == 1 && quest.iSlot >= 0 && world.getQuestValue(quest.iSlot) >= quest.iValue) {
+        return "done";
+      }
+
+      return canAccept(quest) ? "available" : "locked";
+    }
+
+    // The client counts a quest as done once its slot holds the quest's value, until the server sends quest values again.
+    [BridgeExport]
+    public static function fakeComplete(questId:int):Boolean {
+      var quest:Object = find(questId);
+      if (!quest || quest.iSlot < 0) {
+        return false;
+      }
+
+      var packet:Object = {t: "xt", b: {r: -1, o: {cmd: "updateQuest", iIndex: quest.iSlot, iValue: quest.iValue}}};
+      Main.sendClientPacket(JSON.stringify(packet), "json");
+      return true;
+    }
 
     [BridgeExport]
     public static function isInProgress(questId:int):Boolean {
@@ -317,14 +300,6 @@ package mira.game {
 
       Main.Game.world.abandonQuest(questId);
       return true;
-    }
-
-    private static function cloneObject(source:Object):Object
-    {
-      var ba:ByteArray = new ByteArray();
-      ba.writeObject(source);
-      ba.position = 0;
-      return ba.readObject();
     }
   }
 }

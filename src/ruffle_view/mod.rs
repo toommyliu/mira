@@ -4,6 +4,7 @@ mod environment;
 mod follower;
 mod game_bar;
 mod input;
+mod loader_grabber;
 mod manager;
 mod menu;
 mod packet_log;
@@ -53,6 +54,7 @@ pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
+pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{

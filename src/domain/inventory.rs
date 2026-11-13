@@ -86,8 +86,8 @@ pub(crate) struct Item {
     name: String,
     description: String,
     pub(crate) quantity: i32,
-    max_stack: i32,
-    category: String,
+    pub(super) max_stack: i32,
+    pub(super) category: String,
     slot: String,
     link: String,
     meta: String,
@@ -100,14 +100,14 @@ pub(crate) struct Item {
     coins: bool,
     pool: ItemPool,
     class_rank: Option<i32>,
-    enhancement: Option<Enhancement>,
+    pub(super) enhancement: Option<Enhancement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Enhancement {
     id: i32,
-    level: i32,
+    pub(super) level: i32,
     pattern_id: Option<i32>,
     proc_id: Option<i32>,
     dps: Option<i32>,
@@ -251,18 +251,18 @@ impl Item {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TempItem {
-    item_id: i32,
-    name: String,
+    pub(super) item_id: i32,
+    pub(super) name: String,
     pub(crate) quantity: i32,
-    max_stack: i32,
+    pub(super) max_stack: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ItemCount {
-    item_id: i32,
-    name: String,
-    quantity: i32,
+    pub(super) item_id: i32,
+    pub(super) name: String,
+    pub(super) quantity: i32,
 }
 
 impl ItemCount {

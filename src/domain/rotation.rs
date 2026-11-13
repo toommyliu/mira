@@ -400,22 +400,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    fn value(json: serde_json::Value) -> Value {
-        match json {
-            serde_json::Value::Null => Value::Null,
-            serde_json::Value::Bool(flag) => Value::Bool(flag),
-            serde_json::Value::Number(number) => Value::Number(number.as_f64().unwrap()),
-            serde_json::Value::String(text) => Value::String(text),
-            serde_json::Value::Array(items) => Value::List(items.into_iter().map(value).collect()),
-            serde_json::Value::Object(fields) => Value::Object(
-                fields
-                    .into_iter()
-                    .map(|(key, field)| (key, value(field)))
-                    .collect(),
-            ),
-        }
-    }
+    use crate::domain::testing::value;
 
     fn profile(json: serde_json::Value) -> Profile {
         serde_json::from_value(json).unwrap()

@@ -40,19 +40,19 @@ impl ShopItemQuery {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ShopItem {
-    shop_item_id: i32,
-    item_id: i32,
-    name: String,
+    pub(super) shop_item_id: i32,
+    pub(super) item_id: i32,
+    pub(super) name: String,
     description: String,
-    category: String,
-    quantity: i32,
+    pub(super) category: String,
+    pub(super) quantity: i32,
     max_stack: i32,
-    cost: i32,
-    coins: bool,
-    member: bool,
-    level: i32,
-    faction: Option<FactionRequirement>,
-    requirements: Vec<ItemCount>,
+    pub(super) cost: i32,
+    pub(super) coins: bool,
+    pub(super) member: bool,
+    pub(super) level: i32,
+    pub(super) faction: Option<FactionRequirement>,
+    pub(super) requirements: Vec<ItemCount>,
     #[serde(skip)]
     enhancement: Option<(Slot, Kind)>,
 }
@@ -60,18 +60,18 @@ pub(crate) struct ShopItem {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct FactionRequirement {
     id: i32,
-    name: String,
-    rep: i32,
+    pub(super) name: String,
+    pub(super) rep: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Shop {
-    id: i32,
-    name: String,
-    merge: bool,
-    limited: bool,
-    house: bool,
+    pub(super) id: i32,
+    pub(super) name: String,
+    pub(super) merge: bool,
+    pub(super) limited: bool,
+    pub(super) house: bool,
     pub(crate) items: Vec<ShopItem>,
 }
 
@@ -189,6 +189,25 @@ pub(crate) async fn load(loader: &impl Loader, shop_id: i32) -> Result<bool, Cal
         Ok(bridge::shops::is_open(loader, Some(shop_id))?.then_some(true))
     })
     .await
+}
+
+pub(crate) async fn load_hair_shop(loader: &impl Loader, shop_id: i32) -> Result<bool, CallError> {
+    if shop_id <= 0
+        || !wait_until_ready(loader).await?
+        || !wait_for_action(loader, GameAction::LoadHairShop).await?
+    {
+        return Ok(false);
+    }
+    bridge::shops::load_hair_shop(loader, shop_id)?;
+    Ok(true)
+}
+
+pub(crate) async fn open_armor_customizer(loader: &impl Loader) -> Result<bool, CallError> {
+    if !wait_until_ready(loader).await? {
+        return Ok(false);
+    }
+    bridge::shops::open_armor_customizer(loader)?;
+    Ok(true)
 }
 
 #[derive(Deserialize)]

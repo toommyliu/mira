@@ -852,6 +852,12 @@ pub(crate) mod quests {
         Ok(decode("quests.complete", reply)?)
     }
 
+    pub(crate) fn fake_complete(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
+        let call_args = vec![Value::Number(f64::from(quest_id))];
+        let reply = loader.call("quests.fakeComplete", call_args)?;
+        Ok(decode("quests.fakeComplete", reply)?)
+    }
+
     pub(crate) fn get(loader: &impl Loader, quest_id: i32) -> Result<Value, CallError> {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.get", call_args)?;
@@ -864,16 +870,16 @@ pub(crate) mod quests {
         Ok(decode("quests.getAccepted", reply)?)
     }
 
+    pub(crate) fn get_loaded(loader: &impl Loader) -> Result<Value, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("quests.getLoaded", call_args)?;
+        Ok(decode("quests.getLoaded", reply)?)
+    }
+
     pub(crate) fn get_max_turn_ins(loader: &impl Loader, quest_id: i32) -> Result<i32, CallError> {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.getMaxTurnIns", call_args)?;
         Ok(decode("quests.getMaxTurnIns", reply)?)
-    }
-
-    pub(crate) fn get_tree(loader: &impl Loader) -> Result<Value, CallError> {
-        let call_args = vec![];
-        let reply = loader.call("quests.getTree", call_args)?;
-        Ok(decode("quests.getTree", reply)?)
     }
 
     pub(crate) fn is_available(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
@@ -1078,6 +1084,18 @@ pub(crate) mod shops {
         let call_args = vec![Value::Number(f64::from(shop_id))];
         let reply = loader.call("shops.load", call_args)?;
         Ok(decode("shops.load", reply)?)
+    }
+
+    pub(crate) fn load_hair_shop(loader: &impl Loader, shop_id: i32) -> Result<(), CallError> {
+        let call_args = vec![Value::Number(f64::from(shop_id))];
+        let reply = loader.call("shops.loadHairShop", call_args)?;
+        Ok(decode("shops.loadHairShop", reply)?)
+    }
+
+    pub(crate) fn open_armor_customizer(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
+        let reply = loader.call("shops.openArmorCustomizer", call_args)?;
+        Ok(decode("shops.openArmorCustomizer", reply)?)
     }
 
     pub(crate) fn sell(
