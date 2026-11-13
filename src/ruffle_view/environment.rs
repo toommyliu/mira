@@ -687,7 +687,7 @@ fn list_box(theme: &Theme, rows: Vec<AnyElement>, empty: &'static str) -> AnyEle
 }
 
 impl Render for Environment {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let tabs = self.client.read(cx).views().len();
         let followed = self
@@ -756,7 +756,7 @@ impl Render for Environment {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                window_bar(cx)
+                window_bar(window, cx)
                     .child(bar_title("Environment", cx))
                     .child(drag_area().flex_1())
                     .child(picker),

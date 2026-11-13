@@ -987,7 +987,7 @@ impl Render for LoaderGrabber {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                window_bar(cx)
+                window_bar(window, cx)
                     .child(bar_title("Loader/grabber", cx))
                     .child(drag_area().flex_1())
                     .child(picker),

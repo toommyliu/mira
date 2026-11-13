@@ -227,7 +227,7 @@ struct SettingsWindow {
 }
 
 impl Render for SettingsWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let settings = &cx.global::<Store>().settings;
         let appearances = Appearance::ALL
@@ -248,7 +248,7 @@ impl Render for SettingsWindow {
             .on_action(|_: &CloseSession, window, _| window.remove_window())
             .child(mira_ui::nav::pointer_probe())
             .child(
-                window_bar(cx)
+                window_bar(window, cx)
                     .child(bar_title("Settings", cx))
                     .child(drag_area().flex_1()),
             )

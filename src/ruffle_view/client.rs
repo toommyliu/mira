@@ -724,7 +724,7 @@ impl Client {
         };
         div()
             .absolute()
-            .left(sidebar_toggle_left(window))
+            .left(traffic_lights_inset(window))
             .top((super::BAR_HEIGHT - CONTROL_SM) / 2.0)
             .occlude()
             .child(
@@ -879,7 +879,7 @@ pub(super) fn tab_face(
         )
 }
 
-fn sidebar_toggle_left(window: &Window) -> Pixels {
+fn traffic_lights_inset(window: &Window) -> Pixels {
     if window.is_fullscreen() {
         BAR_PADDING
     } else {
@@ -888,7 +888,7 @@ fn sidebar_toggle_left(window: &Window) -> Pixels {
 }
 
 fn bar_inset(window: &Window, sidebar_width: Pixels) -> Pixels {
-    (sidebar_toggle_left(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
+    (traffic_lights_inset(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
 }
 
 pub(crate) fn drag_area() -> gpui::Div {
@@ -917,8 +917,8 @@ pub(crate) fn bar(cx: &App) -> gpui::Div {
         .border_color(theme.border)
 }
 
-pub(crate) fn window_bar(cx: &App) -> gpui::Div {
-    bar(cx).child(drag_area().flex_none().w(TRAFFIC_LIGHTS_WIDTH))
+pub(crate) fn window_bar(window: &Window, cx: &App) -> gpui::Div {
+    bar(cx).child(drag_area().flex_none().w(traffic_lights_inset(window)))
 }
 
 pub(crate) fn bar_title(title: impl Into<SharedString>, cx: &App) -> gpui::Div {

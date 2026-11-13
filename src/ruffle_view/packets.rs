@@ -1006,7 +1006,7 @@ fn detail(theme: &Theme, packet: &Packet, cx: &mut Context<Packets>) -> Div {
 }
 
 impl Render for Packets {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let picker = shown_tab::picker(
             "packets-tab",
@@ -1044,7 +1044,7 @@ impl Render for Packets {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                window_bar(cx)
+                window_bar(window, cx)
                     .child(bar_title("Packets", cx))
                     .child(drag_area().flex_1())
                     .child(picker),

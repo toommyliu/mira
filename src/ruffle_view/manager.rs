@@ -535,7 +535,12 @@ fn choose_script(cx: &mut Context<Manager>) -> impl Future<Output = Option<PathB
 }
 
 impl Manager {
-    fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn toolbar(
+        &self,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let selected = self.checked_accounts();
         let any = !selected.is_empty();
         let total = self
@@ -566,7 +571,7 @@ impl Manager {
         };
         let check_all =
             cx.listener(|this, checked: &bool, _, cx| this.set_all_checked(*checked, cx));
-        window_bar(cx)
+        window_bar(window, cx)
             .when(total > 0, |toolbar| {
                 toolbar.child(
                     div().px(px(8.0)).child(
@@ -1060,7 +1065,7 @@ impl Render for Manager {
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
             .child(mira_ui::nav::pointer_probe())
-            .child(self.toolbar(&theme, cx))
+            .child(self.toolbar(&theme, window, cx))
             .children(self.notice.clone().map(|notice| {
                 div()
                     .flex_none()

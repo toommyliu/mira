@@ -326,7 +326,7 @@ fn status_text(settings: &Settings, status: Status) -> Option<String> {
 }
 
 impl Render for Follower {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let picker = shown_tab::picker(
             "follower-tab",
@@ -358,7 +358,7 @@ impl Render for Follower {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(
-                window_bar(cx)
+                window_bar(window, cx)
                     .child(bar_title("Follower", cx))
                     .child(drag_area().flex_1())
                     .child(picker),
