@@ -1,11 +1,11 @@
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, EntityId, FocusHandle,
-    Focusable as _, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable as _,
+    Global, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TitlebarOptions, WeakEntity,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _,
+    px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
@@ -20,7 +20,7 @@ use mira_ui::{
 
 use super::{
     Client, RuffleView,
-    client::{CloseSession, bar_title, drag_area, window_bar},
+    client::CloseSession,
     packet_log::{Filter, Line, Packet, PacketLog, Visible},
     shown_tab::{self, ShownTab, watch_changes},
 };
@@ -44,12 +44,12 @@ struct Open(WindowHandle<Packets>);
 
 impl Global for Open {}
 
-pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
+pub(crate) fn open(client: Entity<Client>, target: shown_tab::Target, cx: &mut App) {
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
         && handle
             .update(cx, |packets, window, cx| {
                 window.activate_window();
-                packets.show_active(cx);
+                packets.retarget(target, cx);
             })
             .is_ok()
     {
@@ -71,7 +71,7 @@ pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let packets = cx.new(|cx| Packets::new(client, window, cx));
+        let packets = cx.new(|cx| Packets::new(client, target, window, cx));
         window.focus(&packets.read(cx).focus.clone(), cx);
         packets
     }) {
@@ -89,6 +89,7 @@ enum Page {
 pub(crate) struct Packets {
     client: Entity<Client>,
     focus: FocusHandle,
+    tab: shown_tab::Target,
     shown: Option<ShownTab>,
     log: Option<Entity<PacketLog>>,
     _log_changes: Option<Subscription>,
@@ -110,7 +111,12 @@ pub(crate) struct Packets {
 }
 
 impl Packets {
-    fn new(client: Entity<Client>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        client: Entity<Client>,
+        tab: shown_tab::Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search = cx.new(|cx| {
             Input::new("Search packets", cx)
                 .placeholder("Search")
@@ -151,7 +157,7 @@ impl Packets {
                     }
                 }
             }),
-            cx.observe(&client, |this, _, cx| this.show(None, cx)),
+            cx.observe(&client, |this, _, cx| this.show(cx)),
             cx.on_release(|this, cx| {
                 for view in this.client.read(cx).views() {
                     view.read(cx).automation.set_capture(false);
@@ -161,6 +167,7 @@ impl Packets {
         let mut packets = Self {
             client,
             focus: cx.focus_handle(),
+            tab,
             shown: None,
             log: None,
             _log_changes: None,
@@ -180,21 +187,21 @@ impl Packets {
             delay,
             _subscriptions: subscriptions,
         };
-        packets.show_active(cx);
+        packets.show(cx);
         packets
     }
 
-    fn show_active(&mut self, cx: &mut Context<Self>) {
-        let active = shown_tab::active(&self.client, cx);
-        self.show(active, cx);
+    fn retarget(&mut self, tab: shown_tab::Target, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.show(cx);
     }
 
-    fn show(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
+    fn show(&mut self, cx: &mut Context<Self>) {
         let switched = shown_tab::show(
             &mut self.shown,
+            &mut self.tab,
             &self.client,
-            wanted,
-            |this: &mut Self, cx| this.show(None, cx),
+            |this: &mut Self, cx| this.show(cx),
             |automation, cx| {
                 vec![
                     watch_changes(automation.watch_capture(), cx),
@@ -1008,11 +1015,13 @@ fn detail(theme: &Theme, packet: &Packet, cx: &mut Context<Packets>) -> Div {
 impl Render for Packets {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let picker = shown_tab::picker(
-            "packets-tab",
+        let header = shown_tab::header(
+            "Packets",
             &self.client,
             self.shown.as_ref(),
-            |this: &mut Self, id, cx| this.show(Some(id), cx),
+            self.tab,
+            Self::retarget,
+            window,
             cx,
         );
         let automation = self.automation().cloned();
@@ -1043,12 +1052,7 @@ impl Render for Packets {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
-            .child(
-                window_bar(window, cx)
-                    .child(bar_title("Packets", cx))
-                    .child(drag_area().flex_1())
-                    .child(picker),
-            )
+            .child(header)
             .child(
                 div().flex_none().px(px(20.0)).child(
                     Tabs::new("packets-pages", "Pages", labels.len(), move |index| {

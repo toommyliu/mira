@@ -1,7 +1,7 @@
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, EntityId,
-    FocusHandle, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, size,
 };
@@ -18,8 +18,8 @@ use mira_ui::{
 
 use super::{
     BAR_HEIGHT, Client,
-    client::{CloseSession, bar_title, drag_area, window_bar},
-    shown_tab::{self, ShownTab},
+    client::CloseSession,
+    shown_tab::{self, ShownTab, Target},
 };
 use crate::{
     automation::{quests::Registered, register_items},
@@ -47,12 +47,12 @@ struct Open(WindowHandle<LoaderGrabber>);
 
 impl gpui::Global for Open {}
 
-pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
+pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
         && handle
             .update(cx, |grabber, window, cx| {
                 window.activate_window();
-                grabber.show_active(cx);
+                grabber.retarget(target, cx);
             })
             .is_ok()
     {
@@ -74,7 +74,7 @@ pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let grabber = cx.new(|cx| LoaderGrabber::new(client, cx));
+        let grabber = cx.new(|cx| LoaderGrabber::new(client, target, cx));
         window.focus(&grabber.read(cx).focus.clone(), cx);
         grabber
     }) {
@@ -97,6 +97,7 @@ enum Drops {
 pub(crate) struct LoaderGrabber {
     client: Entity<Client>,
     focus: FocusHandle,
+    tab: Target,
     shown: Option<ShownTab>,
     kind: LoadKind,
     ids: Entity<Input>,
@@ -116,7 +117,7 @@ pub(crate) struct LoaderGrabber {
 }
 
 impl LoaderGrabber {
-    fn new(client: Entity<Client>, cx: &mut Context<Self>) -> Self {
+    fn new(client: Entity<Client>, tab: Target, cx: &mut Context<Self>) -> Self {
         let kind = LoadKind::Shop;
         let (ids, ids_events) = ids_input(kind, "", cx);
         let search = cx.new(|cx| {
@@ -131,11 +132,12 @@ impl LoaderGrabber {
                     cx.notify();
                 }
             }),
-            cx.observe(&client, |this, _, cx| this.show(None, cx)),
+            cx.observe(&client, |this, _, cx| this.show(cx)),
         ];
         let mut grabber = Self {
             client,
             focus: cx.focus_handle(),
+            tab,
             shown: None,
             kind,
             ids,
@@ -153,21 +155,21 @@ impl LoaderGrabber {
             _ids_events: ids_events,
             _subscriptions: subscriptions,
         };
-        grabber.show_active(cx);
+        grabber.show(cx);
         grabber
     }
 
-    fn show_active(&mut self, cx: &mut Context<Self>) {
-        let active = shown_tab::active(&self.client, cx);
-        self.show(active, cx);
+    fn retarget(&mut self, tab: Target, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.show(cx);
     }
 
-    fn show(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
+    fn show(&mut self, cx: &mut Context<Self>) {
         let switched = shown_tab::show(
             &mut self.shown,
+            &mut self.tab,
             &self.client,
-            wanted,
-            |this: &mut Self, cx| this.show(None, cx),
+            |this: &mut Self, cx| this.show(cx),
             |_, _| Vec::new(),
             cx,
         );
@@ -925,11 +927,13 @@ fn empty_note(source: Source) -> Empty {
 impl Render for LoaderGrabber {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let picker = shown_tab::picker(
-            "grabber-tab",
+        let header = shown_tab::header(
+            "Loader/grabber",
             &self.client,
             self.shown.as_ref(),
-            |this: &mut Self, id, cx| this.show(Some(id), cx),
+            self.tab,
+            Self::retarget,
+            window,
             cx,
         );
         let entries = self.shown_entries(cx);
@@ -986,12 +990,7 @@ impl Render for LoaderGrabber {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
-            .child(
-                window_bar(window, cx)
-                    .child(bar_title("Loader/grabber", cx))
-                    .child(drag_area().flex_1())
-                    .child(picker),
-            )
+            .child(header)
             .child(self.loader_row(&theme, cx))
             .child(body)
             .child(

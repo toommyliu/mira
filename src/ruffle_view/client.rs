@@ -3,14 +3,15 @@ use std::{path::PathBuf, rc::Rc, time::Duration};
 use anyhow::Context as _;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement as _,
-    Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, Modifiers, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, actions,
+    div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
-    Changed, Details, Glance, Identified, RuffleView, Summary,
+    Changed, Details, Glance, Identified, RuffleView, Summary, Target,
     manager::OpenAccounts,
     script::CloseTab,
     scripts::{OpenScripts, Picker},
@@ -20,7 +21,7 @@ use mira_ui::{
     components::format_keystroke,
     h_flex,
     primitives::{
-        Button, HoverCard, Icon, Kbd, Tab as TabItem, Tabs,
+        Button, HoverCard, Icon, Kbd, MenuItem, Tab as TabItem, Tabs,
         button::{Size, Variant},
     },
     theme::{CONTROL_SM, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
@@ -141,10 +142,32 @@ impl Session {
 
 struct SessionTab {
     number: usize,
+    view: EntityId,
     title: SharedString,
     glance: Option<Glance>,
     details: Details,
     hint: Option<usize>,
+}
+
+type OpenTool = fn(Entity<Client>, Target, &mut App);
+
+fn tool_menu(client: &WeakEntity<Client>, view: EntityId, title: &SharedString) -> Vec<MenuItem> {
+    let tools: [(&str, OpenTool); 4] = [
+        ("Environment", super::open_environment),
+        ("Follower", super::open_follower),
+        ("Loader/grabber", super::open_loader_grabber),
+        ("Packets", super::open_packets),
+    ];
+    std::iter::once(MenuItem::header(format!("Open for {title}")))
+        .chain(tools.into_iter().map(|(label, open)| {
+            let client = client.clone();
+            MenuItem::action(label, move |_, cx| {
+                if let Some(client) = client.upgrade() {
+                    cx.defer(move |cx| open(client, Target::Pinned(view), cx));
+                }
+            })
+        }))
+        .collect()
 }
 
 fn tab_card(
@@ -590,6 +613,7 @@ impl Client {
                 let view = session.view.read(cx);
                 SessionTab {
                     number: session.number,
+                    view: session.view.entity_id(),
                     title: session.title(cx),
                     glance: view.glance(),
                     details: view.details(),
@@ -627,6 +651,11 @@ impl Client {
                 Some(card) => tab.child(card.child(face)),
                 None => tab.child(face),
             };
+            let tab = tab.menu({
+                let client = client.clone();
+                let (view, title) = (row.view, row.title.clone());
+                move |_, _| tool_menu(&client, view, &title)
+            });
             if row.hint.is_some() {
                 return tab;
             }

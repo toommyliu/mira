@@ -117,22 +117,30 @@ fn main() -> anyhow::Result<()> {
             let environment_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenEnvironment, cx| {
                 let client = environment_client.clone();
-                cx.defer(move |cx| ruffle_view::open_environment(client, cx));
+                cx.defer(move |cx| {
+                    ruffle_view::open_environment(client, ruffle_view::Target::Selected, cx)
+                });
             });
             let follower_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenFollower, cx| {
                 let client = follower_client.clone();
-                cx.defer(move |cx| ruffle_view::open_follower(client, cx));
+                cx.defer(move |cx| {
+                    ruffle_view::open_follower(client, ruffle_view::Target::Selected, cx)
+                });
             });
             let grabber_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenLoaderGrabber, cx| {
                 let client = grabber_client.clone();
-                cx.defer(move |cx| ruffle_view::open_loader_grabber(client, cx));
+                cx.defer(move |cx| {
+                    ruffle_view::open_loader_grabber(client, ruffle_view::Target::Selected, cx)
+                });
             });
             let packets_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenPackets, cx| {
                 let client = packets_client.clone();
-                cx.defer(move |cx| ruffle_view::open_packets(client, cx));
+                cx.defer(move |cx| {
+                    ruffle_view::open_packets(client, ruffle_view::Target::Selected, cx)
+                });
             });
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));

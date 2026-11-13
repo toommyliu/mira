@@ -1,8 +1,8 @@
 use gpui::{
-    App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
+    App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
@@ -12,8 +12,8 @@ use mira_ui::{
 
 use super::{
     Client,
-    client::{CloseSession, bar_title, drag_area, window_bar},
-    shown_tab::{self, ShownTab, watch_changes},
+    client::CloseSession,
+    shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
     automation::{
@@ -35,12 +35,12 @@ struct Open(WindowHandle<Follower>);
 
 impl gpui::Global for Open {}
 
-pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
+pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
         && handle
             .update(cx, |follower, window, cx| {
                 window.activate_window();
-                follower.show_active(cx);
+                follower.retarget(target, cx);
             })
             .is_ok()
     {
@@ -62,7 +62,7 @@ pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let follower = cx.new(|cx| Follower::new(client, window, cx));
+        let follower = cx.new(|cx| Follower::new(client, target, window, cx));
         window.focus(&follower.read(cx).focus.clone(), cx);
         follower
     }) {
@@ -74,6 +74,7 @@ pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
 pub(crate) struct Follower {
     client: Entity<Client>,
     focus: FocusHandle,
+    tab: Target,
     shown: Option<ShownTab>,
     target: Entity<Input>,
     fallbacks: Entity<Input>,
@@ -82,7 +83,12 @@ pub(crate) struct Follower {
 }
 
 impl Follower {
-    fn new(client: Entity<Client>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        client: Entity<Client>,
+        tab: Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let target = cx.new(|cx| {
             Input::new("Player", cx)
                 .placeholder("Player name")
@@ -116,32 +122,33 @@ impl Follower {
                     this.change(|settings| settings.attack_first = monsters);
                 }
             }),
-            cx.observe(&client, |this, _, cx| this.show(None, cx)),
+            cx.observe(&client, |this, _, cx| this.show(cx)),
         ];
         let mut follower = Self {
             client,
             focus: cx.focus_handle(),
+            tab,
             shown: None,
             target,
             fallbacks,
             attack_first,
             _subscriptions: subscriptions,
         };
-        follower.show_active(cx);
+        follower.show(cx);
         follower
     }
 
-    fn show_active(&mut self, cx: &mut Context<Self>) {
-        let active = shown_tab::active(&self.client, cx);
-        self.show(active, cx);
+    fn retarget(&mut self, tab: Target, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.show(cx);
     }
 
-    fn show(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
+    fn show(&mut self, cx: &mut Context<Self>) {
         let switched = shown_tab::show(
             &mut self.shown,
+            &mut self.tab,
             &self.client,
-            wanted,
-            |this: &mut Self, cx| this.show(None, cx),
+            |this: &mut Self, cx| this.show(cx),
             |automation, cx| {
                 vec![
                     watch_changes(automation.watch_follower(), cx),
@@ -328,11 +335,13 @@ fn status_text(settings: &Settings, status: Status) -> Option<String> {
 impl Render for Follower {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let picker = shown_tab::picker(
-            "follower-tab",
+        let header = shown_tab::header(
+            "Follower",
             &self.client,
             self.shown.as_ref(),
-            |this: &mut Self, id, cx| this.show(Some(id), cx),
+            self.tab,
+            Self::retarget,
+            window,
             cx,
         );
         let body = match self.automation().cloned() {
@@ -357,12 +366,7 @@ impl Render for Follower {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
-            .child(
-                window_bar(window, cx)
-                    .child(bar_title("Follower", cx))
-                    .child(drag_area().flex_1())
-                    .child(picker),
-            )
+            .child(header)
             .child(
                 div()
                     .id("follower-body")

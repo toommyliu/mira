@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle, Global,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Global,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
@@ -16,8 +16,8 @@ use mira_ui::{
 
 use super::{
     Client,
-    client::{CloseSession, bar_title, drag_area, window_bar},
-    shown_tab::{self, ShownTab, watch_changes},
+    client::CloseSession,
+    shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
     automation::{
@@ -44,12 +44,12 @@ struct Open(WindowHandle<Environment>);
 
 impl Global for Open {}
 
-pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
+pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
         && handle
             .update(cx, |environment, window, cx| {
                 window.activate_window();
-                environment.show_active(cx);
+                environment.retarget(target, cx);
             })
             .is_ok()
     {
@@ -71,7 +71,7 @@ pub(crate) fn open(client: Entity<Client>, cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let environment = cx.new(|cx| Environment::new(client, window, cx));
+        let environment = cx.new(|cx| Environment::new(client, target, window, cx));
         window.focus(&environment.read(cx).focus.clone(), cx);
         environment
     }) {
@@ -167,6 +167,7 @@ pub(crate) struct Environment {
     client: Entity<Client>,
     focus: FocusHandle,
     section: Section,
+    target: Target,
     shown: Option<ShownTab>,
     inputs: [Entity<Input>; 4],
     confirm: Option<Confirm>,
@@ -174,7 +175,12 @@ pub(crate) struct Environment {
 }
 
 impl Environment {
-    fn new(client: Entity<Client>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        client: Entity<Client>,
+        target: Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let inputs = Field::ALL.map(|field| {
             cx.new(|cx| {
                 Input::new(field.placeholder(), cx)
@@ -198,31 +204,32 @@ impl Environment {
                 )
             })
             .collect();
-        subscriptions.push(cx.observe(&client, |this, _, cx| this.show(None, cx)));
+        subscriptions.push(cx.observe(&client, |this, _, cx| this.show(cx)));
         let mut environment = Self {
             client,
             focus: cx.focus_handle(),
             section: Section::Drops,
+            target,
             shown: None,
             inputs,
             confirm: None,
             _subscriptions: subscriptions,
         };
-        environment.show_active(cx);
+        environment.show(cx);
         environment
     }
 
-    fn show_active(&mut self, cx: &mut Context<Self>) {
-        let active = shown_tab::active(&self.client, cx);
-        self.show(active, cx);
+    fn retarget(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.target = target;
+        self.show(cx);
     }
 
-    fn show(&mut self, wanted: Option<EntityId>, cx: &mut Context<Self>) {
+    fn show(&mut self, cx: &mut Context<Self>) {
         let switched = shown_tab::show(
             &mut self.shown,
+            &mut self.target,
             &self.client,
-            wanted,
-            |this: &mut Self, cx| this.show(None, cx),
+            |this: &mut Self, cx| this.show(cx),
             |automation, cx| {
                 vec![
                     watch_changes(automation.watch_drops(), cx),
@@ -694,11 +701,13 @@ impl Render for Environment {
             .shown
             .as_ref()
             .map(|shown| (shown.id, shown.automation.clone()));
-        let picker = shown_tab::picker(
-            "environment-tab",
+        let header = shown_tab::header(
+            "Environment",
             &self.client,
             self.shown.as_ref(),
-            |this: &mut Self, id, cx| this.show(Some(id), cx),
+            self.target,
+            Self::retarget,
+            window,
             cx,
         );
         let (body, labels, clearable) = match &followed {
@@ -755,12 +764,7 @@ impl Render for Environment {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
-            .child(
-                window_bar(window, cx)
-                    .child(bar_title("Environment", cx))
-                    .child(drag_area().flex_1())
-                    .child(picker),
-            )
+            .child(header)
             .child(
                 div().flex_none().px(px(20.0)).child(
                     Tabs::new(
