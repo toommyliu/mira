@@ -284,11 +284,11 @@ pub(crate) async fn go_to(
     };
     tokio::select! {
         arrived = arrived => Ok(if arrived? { Arrival::Arrived } else { Arrival::Missed }),
-        refusal = refusal(&warnings, &notices) => Ok(Arrival::Refused(refusal)),
+        answer = answer(&warnings, &notices) => Ok(answer),
     }
 }
 
-async fn refusal(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>) -> Refusal {
+async fn answer(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>) -> Arrival {
     loop {
         let message = tokio::select! {
             Ok(warning) = warnings.next() => warning.message,
@@ -296,7 +296,10 @@ async fn refusal(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>)
             else => std::future::pending().await,
         };
         if let Some(refusal) = refused(&message) {
-            return refusal;
+            return Arrival::Refused(refusal);
+        }
+        if message.to_lowercase().contains("could not be found") {
+            return Arrival::Missed;
         }
     }
 }
@@ -796,27 +799,32 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn going_to_a_player_stops_when_the_server_refuses() {
+    async fn going_to_a_player_stops_when_the_server_refuses_or_cannot_find_them() {
         let events = Events::default();
         let subscribe = |wants| events.subscribe(wants);
-        let refusals = [
+        let answers = [
             (
                 "warning",
                 "Cannot goto to player in a Locked zone.",
-                Refusal::LockedZone,
+                Arrival::Refused(Refusal::LockedZone),
             ),
             (
                 "warning",
                 "Room join failed, destination room is full.",
-                Refusal::RoomFull,
+                Arrival::Refused(Refusal::RoomFull),
             ),
             (
                 "server",
                 "Player2 is ignoring goto requests.",
-                Refusal::IgnoringGoto,
+                Arrival::Refused(Refusal::IgnoringGoto),
+            ),
+            (
+                "warning",
+                "Player 'player2' could not be found.",
+                Arrival::Missed,
             ),
         ];
-        for (cmd, message, refusal) in refusals {
+        for (cmd, message, answer) in answers {
             let (loader, _) = traveller(in_map("battleon", "Enter"));
             let started = Instant::now();
             let (arrived, ()) = tokio::join!(go_to(&loader, &subscribe, "player2"), async {
@@ -829,7 +837,7 @@ mod tests {
                     });
                 }
             });
-            assert_eq!(arrived, Ok(Arrival::Refused(refusal)));
+            assert_eq!(arrived, Ok(answer));
             assert_eq!(started.elapsed(), Duration::from_secs(1));
         }
     }
