@@ -136,6 +136,7 @@ pub struct Button {
     selected: Option<bool>,
     expanded: Option<bool>,
     tooltip: Option<SharedString>,
+    focus: Option<gpui::FocusHandle>,
     on_click: Option<ClickHandler>,
     on_press: Option<PressHandler>,
     on_key_down: Option<KeyHandler>,
@@ -161,6 +162,7 @@ impl Button {
             selected: None,
             expanded: None,
             tooltip: None,
+            focus: None,
             on_click: None,
             on_press: None,
             on_key_down: None,
@@ -247,8 +249,9 @@ impl Button {
         self
     }
 
-    pub(crate) fn focus_handle(&self, window: &mut Window, cx: &mut App) -> gpui::FocusHandle {
-        nav::focus_handle((self.id.clone(), "focus"), window, cx)
+    pub(crate) fn focus(mut self, focus: gpui::FocusHandle) -> Self {
+        self.focus = Some(focus);
+        self
     }
 
     pub(crate) fn label(&self) -> &SharedString {
@@ -269,8 +272,11 @@ impl Styled for Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focus = match self.focus.take() {
+            Some(focus) => focus,
+            None => nav::focus_handle((self.id.clone(), "focus"), window, cx),
+        };
         let ring = !self.disabled && nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let inert = self.disabled || self.busy;
@@ -373,7 +379,7 @@ impl RenderOnce for Button {
             })
             .when(self.busy, |button| button.aria_description("Working"))
             .when(!self.disabled, |button| {
-                button.track_focus(&focus.tab_stop(true))
+                button.track_focus(&focus.clone().tab_stop(true))
             })
             .relative()
             .flex_none()
@@ -425,7 +431,12 @@ impl RenderOnce for Button {
             .when_some(
                 self.on_key_down.filter(|_| !inert),
                 |button, on_key_down| {
-                    button.on_key_down(move |event, window, cx| on_key_down(event, window, cx))
+                    let own = focus.clone();
+                    button.on_key_down(move |event, window, cx| {
+                        if own.is_focused(window) {
+                            on_key_down(event, window, cx)
+                        }
+                    })
                 },
             )
             .child(content)

@@ -8,8 +8,8 @@ use gpui::{
 use super::{
     Button, Icon,
     menu::{
-        Align, MenuItem, PopupKind, WINDOW_MARGIN, attach, item_over_trigger, popup, presence,
-        state, trigger_handlers, trigger_probe,
+        Align, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
+        item_over_trigger, popup, presence, state, trigger_handlers, trigger_probe,
     },
 };
 use crate::{ActiveTheme as _, IndexHandler, motion};
@@ -230,18 +230,30 @@ impl RenderOnce for Select {
                     .left(-offset.x)
                     .child(
                         deferred(
-                            anchored()
-                                .snap_to_window_with_margin(WINDOW_MARGIN)
-                                .child(panel(motion::From::Above, min_width + offset.x, window)),
+                            anchored().snap_to_window_with_margin(WINDOW_MARGIN).child(
+                                div()
+                                    .relative()
+                                    .child(dismiss_probe(&state, dismiss(&state)))
+                                    .child(panel(
+                                        motion::From::Above,
+                                        min_width + offset.x,
+                                        window,
+                                    )),
+                            ),
                         )
                         .with_priority(super::layer::POPUP),
                     )
                     .into_any_element(),
             ),
             None => trigger.attach(
-                attach(self.align, &state, window, cx, |from, window| {
-                    panel(from, min_width, window)
-                })
+                attach(
+                    self.align,
+                    &state,
+                    dismiss(&state),
+                    window,
+                    cx,
+                    |from, window| panel(from, min_width, window),
+                )
                 .into_any_element(),
             ),
         };

@@ -161,6 +161,61 @@ fn toggling_a_popover_in_a_dialog_keeps_focus_off_the_dialog_search(cx: &mut Tes
     }
 }
 
+struct ServerInPopover {
+    picked: Rc<Cell<Option<usize>>>,
+}
+
+impl Render for ServerInPopover {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let picked = self.picked.clone();
+        div().size_full().child(
+            mira_ui::primitives::Popover::new("relogin")
+                .default_open(true)
+                .trigger(Button::new("relogin", "Auto relogin"))
+                .content(move |_, _, _| {
+                    let picked = picked.clone();
+                    let servers =
+                        (0..12).map(|index| SharedString::from(format!("Server {index}")));
+                    div()
+                        .debug_selector(|| "server".into())
+                        .child(
+                            Select::new("server", "Server", servers, Some(0))
+                                .on_select(move |index, _, _| picked.set(Some(index))),
+                        )
+                        .into_any_element()
+                }),
+        )
+    }
+}
+
+#[gpui::test]
+fn a_select_in_a_popover_picks_options_that_hang_below_the_popover(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let picked = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        ServerInPopover {
+            picked: picked.clone(),
+        }
+    });
+    cx.run_until_parked();
+    let select = cx.debug_bounds("server").unwrap();
+    cx.simulate_click(select.center(), Modifiers::none());
+    cx.run_until_parked();
+    let tenth = point(
+        select.center().x,
+        select.bottom() + px(4.0 + 5.0 + 24.0 * 10.0 + 12.0),
+    );
+    cx.simulate_mouse_down(tenth, MouseButton::Left, Modifiers::none());
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(tenth, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(picked.get(), Some(10));
+}
+
 struct RoomThenGo {
     focus: FocusHandle,
     pressed: Rc<Cell<bool>>,
@@ -878,4 +933,49 @@ fn a_log_follows_new_lines_until_scrolled_up_then_keeps_its_place_as_old_lines_d
     );
     assert_eq!(shown(cx, top - 1), place);
     assert!(shown(cx, 40).is_none());
+}
+
+struct SafeStart {
+    focus: FocusHandle,
+    toggled: Rc<Cell<usize>>,
+}
+
+impl Render for SafeStart {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let toggled = self.toggled.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                mira_ui::primitives::Popover::new("options")
+                    .trigger(Button::new("options", "Options"))
+                    .content(move |_, _, _| {
+                        let toggled = toggled.clone();
+                        mira_ui::primitives::Switch::new("safe", "Safe start", false)
+                            .on_toggle(move |_, _, _| toggled.set(toggled.get() + 1))
+                            .into_any_element()
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn escape_closes_a_popover_back_onto_its_trigger(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let toggled = Rc::new(Cell::new(0));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        SafeStart {
+            focus,
+            toggled: toggled.clone(),
+        }
+    });
+    cx.run_until_parked();
+    for key in ["tab", "enter", "escape", "enter", "space"] {
+        press(cx, key);
+    }
+    assert_eq!(toggled.get(), 1);
 }

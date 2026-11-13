@@ -88,7 +88,7 @@ impl RenderOnce for Popover {
             .trigger
             .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Open"));
         let label = trigger.label().clone();
-        let trigger_focus = trigger.focus_handle(window, cx);
+        let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
         let (is_open, panel_focus) = {
             let state = state.read(cx);
             (state.is_open(), state.focus())
@@ -107,7 +107,7 @@ impl RenderOnce for Popover {
         }
         let closer = PopoverClose {
             state: state.clone(),
-            trigger: trigger_focus,
+            trigger: trigger_focus.clone(),
         };
         let press_state = state.clone();
         let press_close = closer.clone();
@@ -124,6 +124,7 @@ impl RenderOnce for Popover {
             }
         };
         let mut trigger = trigger
+            .focus(trigger_focus)
             .trigger(
                 is_open,
                 Rc::new(move |_, window, cx| {
@@ -144,45 +145,46 @@ impl RenderOnce for Popover {
         let theme = cx.theme().clone();
         let content = (self.content)(&closer, window, cx);
         let key_closer = closer.clone();
-        let out_state = state.clone();
         trigger = trigger.attach(
-            menu::attach(self.align, &state, window, cx, |from, _| {
-                menu::fading(
-                    motion::arrive(
-                        (self.id.clone(), "popover"),
-                        div()
-                            .id((self.id.clone(), "panel"))
-                            .role(Role::Dialog)
-                            .aria_label(label)
-                            .occlude()
-                            .track_focus(&panel_focus)
-                            .on_key_down(move |event, window, cx| {
-                                if event.keystroke.key == "escape" {
-                                    key_closer.close(window, cx);
-                                    cx.stop_propagation();
-                                }
-                            })
-                            .on_mouse_down_out(move |event, window, cx| {
-                                if menu::outside(&out_state, event.position, cx) {
-                                    menu::close(&out_state, false, window, cx)
-                                }
-                            })
-                            .map(|panel| match self.width {
-                                Some(width) => panel.w(width),
-                                None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
-                            })
-                            .p(px(12.0))
-                            .rounded(theme.radius.panel)
-                            .bg(theme.overlay)
-                            .border_1()
-                            .border_color(theme.border)
-                            .shadow(theme.floating())
-                            .child(content),
-                        from,
-                    ),
-                    shown,
-                )
-            })
+            menu::attach(
+                self.align,
+                &state,
+                menu::dismiss(&state),
+                window,
+                cx,
+                |from, _| {
+                    menu::fading(
+                        motion::arrive(
+                            (self.id.clone(), "popover"),
+                            div()
+                                .id((self.id.clone(), "panel"))
+                                .role(Role::Dialog)
+                                .aria_label(label)
+                                .occlude()
+                                .track_focus(&panel_focus)
+                                .on_key_down(move |event, window, cx| {
+                                    if event.keystroke.key == "escape" {
+                                        key_closer.close(window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                })
+                                .map(|panel| match self.width {
+                                    Some(width) => panel.w(width),
+                                    None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
+                                })
+                                .p(px(12.0))
+                                .rounded(theme.radius.panel)
+                                .bg(theme.overlay)
+                                .border_1()
+                                .border_color(theme.border)
+                                .shadow(theme.floating())
+                                .child(content),
+                            from,
+                        ),
+                        shown,
+                    )
+                },
+            )
             .into_any_element(),
         );
         trigger

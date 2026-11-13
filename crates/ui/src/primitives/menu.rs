@@ -1,10 +1,11 @@
 use std::{cell::Cell, rc::Rc, time::Instant};
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, RenderOnce,
-    Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
-    anchored, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
+    Anchor, AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
+    FontWeight, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseDownEvent,
+    ParentElement, Pixels, Point, RenderOnce, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Toggled, Window, anchored, canvas, deferred, div,
+    point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -212,6 +213,7 @@ pub enum Align {
 pub(crate) fn attach(
     align: Align,
     state: &Entity<MenuState>,
+    on_outside: PressHandler,
     window: &mut Window,
     cx: &App,
     panel: impl FnOnce(From, &mut Window) -> AnyElement,
@@ -244,6 +246,7 @@ pub(crate) fn attach(
                 .child(
                     div()
                         .relative()
+                        .child(dismiss_probe(state, on_outside))
                         .child(panel(if above { From::Below } else { From::Above }, window))
                         .child(
                             canvas(
@@ -395,10 +398,43 @@ pub(crate) fn trigger_probe(state: &Entity<MenuState>) -> impl IntoElement {
     .inset_0()
 }
 
-pub(crate) fn outside(state: &Entity<MenuState>, at: Point<Pixels>, cx: &App) -> bool {
-    let menu = state.read(cx);
-    !menu.trigger_bounds.get().contains(&at)
-        && !(menu.submenu.is_some() && menu.submenu_bounds.get().contains(&at))
+pub(crate) fn over_trigger(state: &Entity<MenuState>, at: Point<Pixels>, cx: &App) -> bool {
+    state.read(cx).trigger_bounds.get().contains(&at)
+}
+
+pub(crate) fn dismiss(state: &Entity<MenuState>) -> PressHandler {
+    let state = state.clone();
+    Rc::new(move |event, window, cx| {
+        if !over_trigger(&state, event.position, cx) {
+            close(&state, false, window, cx)
+        }
+    })
+}
+
+pub(crate) fn dismiss_probe(
+    state: &Entity<MenuState>,
+    on_outside: PressHandler,
+) -> impl IntoElement + use<> {
+    let state = state.clone();
+    canvas(
+        |_, window, _| {
+            window.insert_hitbox(
+                Bounds::new(Point::default(), window.viewport_size()),
+                HitboxBehavior::Normal,
+            )
+        },
+        move |_, probe, window, _| {
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture
+                    && state.read(cx).open
+                    && probe.is_hovered_at(event.position, window)
+                {
+                    on_outside(event, window, cx);
+                }
+            });
+        },
+    )
+    .absolute()
 }
 
 pub(crate) fn state(
@@ -935,7 +971,6 @@ pub(crate) fn popup(
     let focus = menu.focus.clone();
     let keys_state = state.clone();
     let keys_metas = metas.clone();
-    let out_state = state.clone();
     let next_state = state.clone();
     let prev_state = state.clone();
     let scrolls = metas.iter().all(|meta| meta.submenu.is_none());
@@ -958,11 +993,6 @@ pub(crate) fn popup(
             .on_action(move |_: &FocusPrevious, window, cx| {
                 close(&prev_state, true, window, cx);
                 cx.propagate();
-            })
-            .on_mouse_down_out(move |event, window, cx| {
-                if outside(&out_state, event.position, cx) {
-                    close(&out_state, false, window, cx)
-                }
             })
             .children(rows(
                 items,
@@ -1071,10 +1101,18 @@ impl RenderOnce for DropdownMenu {
         if shown {
             let items = (self.items)(window, cx);
             let id = self.id.clone();
+            let on_outside = dismiss(&state);
             trigger = trigger.attach(
-                attach(self.align, &state, window, cx, |from, window| {
-                    popup(&id, label, items, PopupKind::Menu, from, &state, window, cx)
-                })
+                attach(
+                    self.align,
+                    &state,
+                    on_outside,
+                    window,
+                    cx,
+                    |from, window| {
+                        popup(&id, label, items, PopupKind::Menu, from, &state, window, cx)
+                    },
+                )
                 .into_any_element(),
             );
         }

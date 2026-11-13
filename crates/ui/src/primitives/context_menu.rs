@@ -7,7 +7,8 @@ use gpui::{
 };
 
 use super::menu::{
-    ItemsBuilder, MenuItem, PopupKind, WINDOW_MARGIN, first_navigable, open, popup, presence, state,
+    ItemsBuilder, MenuItem, PopupKind, WINDOW_MARGIN, dismiss, dismiss_probe, first_navigable,
+    open, popup, presence, state,
 };
 use crate::motion::From;
 
@@ -86,16 +87,21 @@ impl RenderOnce for ContextMenu {
                         anchored()
                             .position(position)
                             .snap_to_window_with_margin(WINDOW_MARGIN)
-                            .child(popup(
-                                &self.id,
-                                self.label.clone(),
-                                items,
-                                PopupKind::Menu,
-                                From::Above,
-                                &state,
-                                window,
-                                cx,
-                            )),
+                            .child(
+                                div()
+                                    .relative()
+                                    .child(dismiss_probe(&state, dismiss(&state)))
+                                    .child(popup(
+                                        &self.id,
+                                        self.label.clone(),
+                                        items,
+                                        PopupKind::Menu,
+                                        From::Above,
+                                        &state,
+                                        window,
+                                        cx,
+                                    )),
+                            ),
                     )
                     .with_priority(super::layer::POPUP),
                 )
