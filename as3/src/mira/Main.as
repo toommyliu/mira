@@ -128,13 +128,7 @@ package mira {
 		}
 
 		private function onDebugMessage(packet:*):void {
-			if (packet.params.message.indexOf("%xt%zm%") > -1) {
-				this.emitPacketFromClient(packet.params.message.replace(/^\s+|\s+$/g, ''));
-			}
-			else {
-				var pkt:String = processPacket(packet.params.message);
-				this.emitPacketFromServer(pkt);
-			}
+			this.emitSmartFoxDebug(packet.params.message);
 		}
 
 		[BridgeEvent("onProgress")]
@@ -167,32 +161,9 @@ package mira {
 			this.external.call("onLoaded");
 		}
 
-		[BridgeEvent("packetFromClient")]
-		public function emitPacketFromClient(packet:String):void {
-			this.external.call("packetFromClient", packet);
-		}
-
-		[BridgeEvent("packetFromServer")]
-		public function emitPacketFromServer(packet:String):void {
-			this.external.call("packetFromServer", packet);
-		}
-
-		private function processPacket(packet:String):String {
-			var index:int = 0;
-			if (packet.indexOf("[Sending - STR]: ") > -1) {
-				packet = packet.replace("[Sending - STR]: ", "");
-			}
-			if (packet.indexOf("[ RECEIVED ]: ") > -1) {
-				packet = packet.replace("[ RECEIVED ]: ", "");
-			}
-			if (packet.indexOf("[Sending]: ") > -1) {
-				packet = packet.replace("[Sending]: ", "");
-			}
-			if (packet.indexOf(", (len: ") > -1) {
-				index = packet.indexOf(", (len: ");
-				packet = packet.slice(0, index);
-			}
-			return packet;
+		[BridgeEvent("onSmartFoxDebug")]
+		public function emitSmartFoxDebug(line:String):void {
+			this.external.call("onSmartFoxDebug", line);
 		}
 
 		[BridgeIgnore]

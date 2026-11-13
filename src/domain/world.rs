@@ -10,7 +10,7 @@ use super::{
 };
 use crate::bridge::{
     self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
-    packets::{disconnected, wire},
+    packets::{Sender, disconnected, raw, wire},
 };
 
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -135,7 +135,7 @@ pub(crate) fn location(loader: &impl Loader) -> Result<Option<Location>, CallErr
 
 pub(crate) fn moves(event: &Event) -> bool {
     match event {
-        Event::PacketFromClient { packet } => moved_to_cell(packet).is_some(),
+        Event::SmartFoxDebug { .. } => sent_move(event).is_some(),
         event => Kind::MapJoined.wants(event) || Kind::CellChanged.wants(event),
     }
 }
@@ -145,8 +145,9 @@ enum Move {
     Cell { cell: String, pad: String },
 }
 
-fn moved_to_cell(packet: &str) -> Option<Move> {
-    let mut fields = packet.split('%').skip(3);
+fn sent_move(event: &Event) -> Option<Move> {
+    let packet = raw(event).filter(|packet| packet.from == Sender::Client)?;
+    let mut fields = packet.text.split('%').skip(3);
     match (
         fields.next()?,
         fields.next()?,
@@ -162,8 +163,8 @@ fn moved_to_cell(packet: &str) -> Option<Move> {
 }
 
 fn own_move(loader: &impl Loader, event: &Event) -> Option<Move> {
-    if let Event::PacketFromClient { packet } = event {
-        return moved_to_cell(packet);
+    if let Event::SmartFoxDebug { .. } = event {
+        return sent_move(event);
     }
     let mut moved = Vec::new();
     Kind::MapJoined.read(event, &Myself(loader), &mut moved);
@@ -818,8 +819,8 @@ mod tests {
                 *place.borrow_mut() = ("battleon", "r2", "Left");
                 publish(moved("player1", "r2", "Left")).await;
                 *place.borrow_mut() = ("battleon", "Enter", "Right");
-                events.publish(&Event::PacketFromClient {
-                    packet: "%xt%zm%moveToCell%1%Enter%Right%".into(),
+                events.publish(&Event::SmartFoxDebug {
+                    line: "[Sending - STR]: %xt%zm%moveToCell%1%Enter%Right%, (len: 32)".into(),
                 });
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 *place.borrow_mut() = ("dage", "Enter", "Spawn");

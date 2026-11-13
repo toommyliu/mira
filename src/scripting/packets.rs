@@ -8,17 +8,10 @@ use super::{
 use crate::{
     bridge::{
         Event, Format, Loader, Subscription,
-        packets::{disconnected, names},
+        packets::{Sender, disconnected, names, raw},
     },
     domain::packets,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Sender {
-    Client,
-    Server,
-}
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(
@@ -63,13 +56,14 @@ pub(super) fn serve(
 
 fn wants(from: Option<Sender>, cmds: Option<Vec<String>>) -> impl Fn(&Event) -> bool {
     move |event| match event {
-        Event::PacketFromClient { packet } => {
-            from != Some(Sender::Server)
+        Event::SmartFoxDebug { .. } => raw(event).is_some_and(|packet| {
+            packet.from == Sender::Client
+                && from != Some(Sender::Server)
                 && cmds.as_ref().is_none_or(|cmds| {
-                    let cmd = packet.split('%').nth(3);
+                    let cmd = packet.text.split('%').nth(3);
                     cmds.iter().any(|wanted| Some(wanted.as_str()) == cmd)
                 })
-        }
+        }),
         Event::ExtensionResponse { packet } => {
             from != Some(Sender::Client)
                 && cmds.as_ref().is_none_or(|cmds| {
@@ -84,7 +78,9 @@ fn wants(from: Option<Sender>, cmds: Option<Vec<String>>) -> impl Fn(&Event) -> 
 
 fn read(event: Event) -> Option<Value> {
     match event {
-        Event::PacketFromClient { packet } => Some(json!({ "from": "client", "packet": packet })),
+        Event::SmartFoxDebug { .. } => raw(&event)
+            .filter(|packet| packet.from == Sender::Client)
+            .map(|packet| json!({ "from": "client", "packet": packet.text })),
         Event::ExtensionResponse { packet } => Some(json!({ "from": "server", "packet": packet })),
         event if disconnected(&event) => Some(json!({ "lost": true })),
         _ => None,
@@ -137,11 +133,14 @@ mod tests {
                 packet: r#"{"type":"json","dataObj":{"cmd":"cts"}}"#.into(),
             },
             Event::ExtensionResponse { packet: ct.into() },
-            Event::PacketFromClient {
-                packet: "[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)".into(),
+            Event::SmartFoxDebug {
+                line: "[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)".into(),
             },
-            Event::PacketFromClient {
-                packet: "%xt%zm%afkx%1%".into(),
+            Event::SmartFoxDebug {
+                line: "[Sending - STR]: %xt%zm%afkx%1%".into(),
+            },
+            Event::SmartFoxDebug {
+                line: "[ RECEIVED ]: %xt%afk%-1%, (len: 11)".into(),
             },
             Event::ExtensionResponse {
                 packet: respawn.into(),
@@ -163,7 +162,7 @@ mod tests {
         assert_eq!(
             next(&feeds, 2).await,
             json!({ "lagged": false, "items": [
-                { "from": "client", "packet": "[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)" },
+                { "from": "client", "packet": "%xt%zm%afk%1%true%" },
                 { "lost": true },
             ] })
         );

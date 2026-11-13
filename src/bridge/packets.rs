@@ -20,6 +20,51 @@ pub(crate) fn disconnected(event: &Event) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub(crate) enum Sender {
+    Client,
+    Server,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Raw<'a> {
+    pub(crate) from: Sender,
+    pub(crate) text: &'a str,
+}
+
+pub(crate) fn raw(event: &Event) -> Option<Raw<'_>> {
+    let Event::SmartFoxDebug { line } = event else {
+        return None;
+    };
+    read_line(line)
+}
+
+fn read_line(line: &str) -> Option<Raw<'_>> {
+    const SENT: [&str; 3] = ["[Sending - STR]: ", "[Sending - JSON]: ", "[Sending]: "];
+    const RECEIVED: &str = "[ RECEIVED ]: ";
+    let line = line.trim();
+    let (from, text) = match line.strip_prefix(RECEIVED) {
+        Some(text) => (Sender::Server, text),
+        None => (
+            Sender::Client,
+            SENT.iter().find_map(|prefix| line.strip_prefix(prefix))?,
+        ),
+    };
+    let text = without_length(text).trim();
+    (!text.is_empty()).then_some(Raw { from, text })
+}
+
+fn without_length(text: &str) -> &str {
+    text.rsplit_once(", (len: ")
+        .filter(|(_, length)| {
+            length.strip_suffix(')').is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .map_or(text, |(text, _)| text)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Format {
     Json,
     Str,
@@ -288,6 +333,44 @@ mod tests {
     impl Packet for RespawnMonPacket {
         const FORMAT: Format = Format::Str;
         const CMD: &'static str = "respawnMon";
+    }
+
+    #[test]
+    fn smartfox_debug_lines_read_as_the_packet_each_side_sent() {
+        let read = |line: &str| {
+            raw(&Event::SmartFoxDebug { line: line.into() })
+                .map(|raw| (raw.from, raw.text.to_owned()))
+        };
+        assert_eq!(
+            read("[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)\n"),
+            Some((Sender::Client, "%xt%zm%afk%1%true%".into()))
+        );
+        assert_eq!(
+            read(
+                "[Sending]: <msg t='sys'><body action='verChk' r='0'><ver v='157' /></body></msg>\n"
+            ),
+            Some((
+                Sender::Client,
+                "<msg t='sys'><body action='verChk' r='0'><ver v='157' /></body></msg>".into()
+            ))
+        );
+        assert_eq!(
+            read(r#"[Sending - JSON]: {"t":"sys","b":{"o":{"cmd":"joinOK"}}}"#),
+            Some((
+                Sender::Client,
+                r#"{"t":"sys","b":{"o":{"cmd":"joinOK"}}}"#.into()
+            ))
+        );
+        assert_eq!(
+            read("[ RECEIVED ]: %xt%server%-1%Welcome, (len: 1)%, (len: 32)"),
+            Some((Sender::Server, "%xt%server%-1%Welcome, (len: 1)%".into()))
+        );
+        assert_eq!(
+            read("[ RECEIVED ]: %xt%chatm%-1%zone~hi, (len: x)%"),
+            Some((Sender::Server, "%xt%chatm%-1%zone~hi, (len: x)%".into()))
+        );
+        assert_eq!(read("Connection lost"), None);
+        assert_eq!(read("[ RECEIVED ]: , (len: 0)"), None);
     }
 
     fn publish(events: &Events, packets: &[&str]) {

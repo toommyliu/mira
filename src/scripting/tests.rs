@@ -20,7 +20,7 @@ use super::{
     feeds::{FeedId, Request as F},
     house::Request as H,
     inventory::{Request as I, TempRequest as T},
-    packets::{Request as PK, Sender},
+    packets::Request as PK,
     player::Request as P,
     players::Request as PL,
     quests::Request as Q,
@@ -28,7 +28,10 @@ use super::{
     shops::Request as S,
     world::Request as W,
 };
-use crate::{bridge::CallError, domain::events::Kind};
+use crate::{
+    bridge::{CallError, packets::Sender},
+    domain::events::Kind,
+};
 
 struct Folder(PathBuf);
 

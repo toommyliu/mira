@@ -11,8 +11,7 @@ pub(crate) enum Event {
     ExtensionResponse { packet: String },
     Loaded,
     Progress { percent: i32 },
-    PacketFromClient { packet: String },
-    PacketFromServer { packet: String },
+    SmartFoxDebug { line: String },
 }
 
 impl Event {
@@ -35,11 +34,8 @@ impl Event {
             "onProgress" => Self::Progress {
                 percent: decode("onProgress", arg(args, 0))?,
             },
-            "packetFromClient" => Self::PacketFromClient {
-                packet: decode("packetFromClient", arg(args, 0))?,
-            },
-            "packetFromServer" => Self::PacketFromServer {
-                packet: decode("packetFromServer", arg(args, 0))?,
+            "onSmartFoxDebug" => Self::SmartFoxDebug {
+                line: decode("onSmartFoxDebug", arg(args, 0))?,
             },
             _ => return Ok(None),
         }))
