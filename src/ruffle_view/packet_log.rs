@@ -121,21 +121,10 @@ impl PacketLog {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Filter {
-    pub(crate) client: bool,
-    pub(crate) server: bool,
+    pub(crate) from: Option<Sender>,
     pub(crate) query: String,
-}
-
-impl Default for Filter {
-    fn default() -> Self {
-        Self {
-            client: true,
-            server: true,
-            query: String::new(),
-        }
-    }
 }
 
 impl Filter {
@@ -144,16 +133,13 @@ impl Filter {
         match line {
             Line::Lost { .. } => query.is_empty(),
             Line::Packet(packet) => {
-                let side = match packet.from {
-                    Sender::Client => self.client,
-                    Sender::Server => self.server,
-                };
-                side && (query.is_empty()
-                    || packet
-                        .text
-                        .as_bytes()
-                        .windows(query.len())
-                        .any(|window| window.eq_ignore_ascii_case(query)))
+                self.from.is_none_or(|from| from == packet.from)
+                    && (query.is_empty()
+                        || packet
+                            .text
+                            .as_bytes()
+                            .windows(query.len())
+                            .any(|window| window.eq_ignore_ascii_case(query)))
             }
         }
     }
@@ -330,9 +316,8 @@ mod tests {
         let mut log = PacketLog::default();
         let mut visible = Visible::default();
         let filter = Filter {
-            client: false,
+            from: Some(Sender::Server),
             query: "AFK".into(),
-            ..Filter::default()
         };
         log.extend(vec![
             packet(Sender::Server, "%xt%afk%-1%"),

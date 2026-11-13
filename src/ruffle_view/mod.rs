@@ -8,6 +8,7 @@ mod input;
 mod loader_grabber;
 mod manager;
 mod menu;
+mod packet_lines;
 mod packet_log;
 mod packets;
 mod profile_form;
