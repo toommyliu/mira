@@ -48,11 +48,6 @@ actions!(
 struct SelectSession(usize);
 
 pub(super) const SIDEBAR_WIDTH: Pixels = px(208.0);
-pub(super) const TAB_ROW: Pixels = px(56.0);
-pub(super) const TAB_GAP: Pixels = px(4.0);
-pub(super) const TAB_PADDING: Pixels = px(8.0);
-pub(super) const TAB_TOP: Pixels = px(8.0);
-pub(super) const TAB_BOTTOM: Pixels = px(10.0);
 const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
