@@ -300,6 +300,64 @@ fn focused_input(
     (input, cx)
 }
 
+fn text(input: &gpui::Entity<mira_ui::primitives::Input>, cx: &mut VisualTestContext) -> String {
+    input.read_with(cx, |input, _| input.text().to_string())
+}
+
+#[gpui::test]
+fn input_moves_and_deletes_by_word(cx: &mut TestAppContext) {
+    let (input, cx) = focused_input(|input| input, cx);
+    cx.simulate_input("kill the boss");
+    press(cx, "alt-left");
+    cx.simulate_input("big ");
+    assert_eq!(text(&input, cx), "kill the big boss");
+    press(cx, "alt-backspace");
+    assert_eq!(text(&input, cx), "kill the boss");
+    press(cx, "cmd-backspace");
+    assert_eq!(text(&input, cx), "boss");
+}
+
+#[gpui::test]
+fn input_undoes_typing_as_one_step_and_redoes_it(cx: &mut TestAppContext) {
+    let (input, cx) = focused_input(|input| input, cx);
+    cx.simulate_input("Yulgar");
+    press(cx, "alt-backspace");
+    cx.simulate_input("Battleon");
+    press(cx, "cmd-z");
+    assert_eq!(text(&input, cx), "");
+    press(cx, "cmd-z");
+    assert_eq!(text(&input, cx), "Yulgar");
+    press(cx, "cmd-shift-z");
+    assert_eq!(text(&input, cx), "");
+    press(cx, "cmd-shift-z");
+    assert_eq!(text(&input, cx), "Battleon");
+}
+
+#[gpui::test]
+fn numeric_input_takes_digits_and_steps_within_its_range(cx: &mut TestAppContext) {
+    use mira_ui::primitives::Numeric;
+    let (input, cx) = focused_input(
+        |input| {
+            input.numeric(Numeric {
+                min: 0,
+                max: 30,
+                step: 1,
+            })
+        },
+        cx,
+    );
+    cx.simulate_input("2a5");
+    assert_eq!(text(&input, cx), "25");
+    press(cx, "up");
+    assert_eq!(text(&input, cx), "26");
+    press(cx, "shift-up");
+    assert_eq!(text(&input, cx), "30");
+    press(cx, "shift-down");
+    press(cx, "shift-down");
+    press(cx, "shift-down");
+    assert_eq!(text(&input, cx), "0");
+}
+
 #[gpui::test]
 fn password_input_shows_a_bullet_per_character_and_keeps_it_off_the_clipboard(
     cx: &mut TestAppContext,

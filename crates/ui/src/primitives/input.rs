@@ -14,7 +14,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use super::{Button, Icon, button::Size};
 use crate::{
     ActiveTheme as _,
-    theme::{CONTROL_MD, LINE_BODY, TEXT_BODY},
+    theme::{CONTROL_MD, CONTROL_SM, LINE_BODY, TEXT_BODY, TEXT_SMALL, tabular},
 };
 
 actions!(
@@ -36,6 +36,18 @@ actions!(
         Copy,
         Submit,
         Cancel,
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        DeleteWordLeft,
+        DeleteToStart,
+        Undo,
+        Redo,
+        Increment,
+        Decrement,
+        IncrementMore,
+        DecrementMore,
     ]
 );
 
@@ -64,12 +76,38 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-right", SelectEnd, Some(CONTEXT)),
         KeyBinding::new("enter", Submit, Some(CONTEXT)),
         KeyBinding::new("escape", Cancel, Some(CONTEXT)),
+        KeyBinding::new("alt-left", WordLeft, Some(CONTEXT)),
+        KeyBinding::new("alt-right", WordRight, Some(CONTEXT)),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, Some(CONTEXT)),
+        KeyBinding::new("alt-shift-right", SelectWordRight, Some(CONTEXT)),
+        KeyBinding::new("alt-backspace", DeleteWordLeft, Some(CONTEXT)),
+        KeyBinding::new("cmd-backspace", DeleteToStart, Some(CONTEXT)),
+        KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-z", Redo, Some(CONTEXT)),
+        KeyBinding::new("up", Increment, Some(CONTEXT)),
+        KeyBinding::new("down", Decrement, Some(CONTEXT)),
+        KeyBinding::new("shift-up", IncrementMore, Some(CONTEXT)),
+        KeyBinding::new("shift-down", DecrementMore, Some(CONTEXT)),
     ]);
 }
 
 pub enum InputEvent {
     Changed,
     Submitted,
+}
+
+#[derive(Clone, Copy)]
+pub struct Numeric {
+    pub min: i64,
+    pub max: i64,
+    pub step: i64,
+}
+
+const HISTORY: usize = 100;
+
+struct Snapshot {
+    content: SharedString,
+    selected: Range<usize>,
 }
 
 pub struct Input {
@@ -80,6 +118,13 @@ pub struct Input {
     search: bool,
     password: bool,
     max_length: Option<usize>,
+    numeric: Option<Numeric>,
+    suffix: Option<SharedString>,
+    small: bool,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    typing: bool,
+    was_focused: bool,
     invalid: bool,
     selected: Range<usize>,
     reversed: bool,
@@ -101,6 +146,13 @@ impl Input {
             search: false,
             password: false,
             max_length: None,
+            numeric: None,
+            suffix: None,
+            small: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            typing: false,
+            was_focused: false,
             invalid: false,
             selected: 0..0,
             reversed: false,
@@ -131,11 +183,28 @@ impl Input {
         self
     }
 
+    pub fn numeric(mut self, numeric: Numeric) -> Self {
+        self.numeric = Some(numeric);
+        self
+    }
+
+    pub fn suffix(mut self, suffix: impl Into<SharedString>) -> Self {
+        self.suffix = Some(suffix.into());
+        self
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
+        self
+    }
+
     pub fn text(&self) -> &str {
         &self.content
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.typing = false;
+        self.redo.clear();
         self.content = text.into();
         self.selected = self.content.len()..self.content.len();
         self.marked = None;
@@ -178,6 +247,149 @@ impl Input {
         }
     }
 
+    fn accepts(&self, text: &str) -> bool {
+        let Some(numeric) = self.numeric else {
+            return true;
+        };
+        text.chars()
+            .all(|ch| ch.is_ascii_digit() || (ch == '-' && numeric.min < 0))
+    }
+
+    fn remember(&mut self, typing: bool) {
+        if typing && self.typing {
+            return;
+        }
+        self.typing = typing;
+        self.redo.clear();
+        self.undo.push(Snapshot {
+            content: self.content.clone(),
+            selected: self.selected.clone(),
+        });
+        if self.undo.len() > HISTORY {
+            self.undo.remove(0);
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) -> Snapshot {
+        let current = Snapshot {
+            content: std::mem::replace(&mut self.content, snapshot.content),
+            selected: std::mem::replace(&mut self.selected, snapshot.selected),
+        };
+        self.reversed = false;
+        self.marked = None;
+        self.typing = false;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+        current
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(snapshot) = self.undo.pop() {
+            let current = self.restore(snapshot, cx);
+            self.redo.push(current);
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(snapshot) = self.redo.pop() {
+            let current = self.restore(snapshot, cx);
+            self.undo.push(current);
+        }
+    }
+
+    fn step_by(&mut self, steps: i64, cx: &mut Context<Self>) {
+        let Some(numeric) = self.numeric else {
+            cx.propagate();
+            return;
+        };
+        let value = self.content.trim().parse::<i64>().unwrap_or(numeric.min);
+        let next = value
+            .saturating_add(steps.saturating_mul(numeric.step))
+            .clamp(numeric.min, numeric.max);
+        self.remember(false);
+        self.typing = false;
+        self.content = next.to_string().into();
+        self.selected = 0..self.content.len();
+        self.reversed = false;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    fn increment(&mut self, _: &Increment, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_by(1, cx);
+    }
+
+    fn decrement(&mut self, _: &Decrement, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_by(-1, cx);
+    }
+
+    fn increment_more(&mut self, _: &IncrementMore, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_by(10, cx);
+    }
+
+    fn decrement_more(&mut self, _: &DecrementMore, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_by(-10, cx);
+    }
+
+    fn previous_word(&self, offset: usize) -> usize {
+        if self.password {
+            return 0;
+        }
+        self.content[..offset]
+            .unicode_word_indices()
+            .next_back()
+            .map_or(0, |(index, _)| index)
+    }
+
+    fn next_word(&self, offset: usize) -> usize {
+        if self.password {
+            return self.content.len();
+        }
+        self.content[offset..]
+            .unicode_word_indices()
+            .next()
+            .map_or(self.content.len(), |(index, word)| {
+                offset + index + word.len()
+            })
+    }
+
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.typing = false;
+        self.move_to(self.previous_word(self.cursor()), cx);
+    }
+
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.typing = false;
+        self.move_to(self.next_word(self.cursor()), cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.previous_word(self.cursor()), cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_word(self.cursor()), cx);
+    }
+
+    fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected.is_empty() {
+            self.select_to(self.previous_word(self.cursor()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    fn delete_to_start(&mut self, _: &DeleteToStart, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.is_empty() {
+            self.select_to(0, cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
     fn fit<'a>(&self, range: &Range<usize>, text: &'a str) -> &'a str {
         let Some(max_length) = self.max_length else {
             return text;
@@ -197,6 +409,7 @@ impl Input {
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.typing = false;
         self.selected = offset..offset;
         self.reversed = false;
         cx.notify();
@@ -443,7 +656,14 @@ impl EntityInputHandler for Input {
             .map(|range| self.range_from_utf16(range))
             .or(self.marked.clone())
             .unwrap_or(self.selected.clone());
+        if !self.accepts(text) {
+            return;
+        }
         let text = self.fit(&range, text);
+        if range.is_empty() && text.is_empty() {
+            return;
+        }
+        self.remember(range.is_empty() && !text.is_empty());
         self.content =
             (self.content[..range.start].to_owned() + text + &self.content[range.end..]).into();
         self.selected = range.start + text.len()..range.start + text.len();
@@ -523,6 +743,12 @@ impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let focused = self.focus.is_focused(window);
+        if focused && !self.was_focused && crate::nav::keyboard_input(window, cx) {
+            self.selected = 0..self.content.len();
+            self.reversed = false;
+            self.typing = false;
+        }
+        self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
         div()
             .id("field")
@@ -560,6 +786,18 @@ impl Render for Input {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::delete_word_left))
+            .on_action(cx.listener(Self::delete_to_start))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::increment))
+            .on_action(cx.listener(Self::decrement))
+            .on_action(cx.listener(Self::increment_more))
+            .on_action(cx.listener(Self::decrement_more))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -568,7 +806,7 @@ impl Render for Input {
             .items_center()
             .gap(px(4.0))
             .w_full()
-            .h(CONTROL_MD)
+            .h(if self.small { CONTROL_SM } else { CONTROL_MD })
             .pl(px(8.0))
             .pr(px(if clearable { 2.0 } else { 8.0 }))
             .rounded(theme.radius.control)
@@ -590,15 +828,26 @@ impl Render for Input {
                     px(1.0),
                 ))
             })
-            .text_size(TEXT_BODY)
+            .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
             .line_height(LINE_BODY)
             .text_color(theme.text)
+            .when(self.numeric.is_some(), |field| {
+                field.font_features(tabular())
+            })
             .child(
                 div()
                     .flex_1()
                     .overflow_hidden()
                     .child(TextElement { field: cx.entity() }),
             )
+            .when_some(self.suffix.clone(), |field, suffix| {
+                field.child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.text_tertiary)
+                        .child(suffix),
+                )
+            })
             .when(clearable, |field| {
                 let entity = cx.entity();
                 field.child(

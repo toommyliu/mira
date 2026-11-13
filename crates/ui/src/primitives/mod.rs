@@ -47,7 +47,7 @@ pub use dot::{Activity, Dot, StatusDot};
 pub use field::Field;
 pub use hover_card::HoverCard;
 pub use icon::{Icon, icon, small_icon};
-pub use input::{Input, InputEvent};
+pub use input::{Input, InputEvent, Numeric};
 pub use kbd::Kbd;
 pub use list::{List, ListItem, VirtualList};
 pub use menu::{Align, DropdownMenu, MenuItem};

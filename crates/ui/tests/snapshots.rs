@@ -245,3 +245,85 @@ fn snapshot_tabs() {
             .into_any_element()
     });
 }
+
+struct Form {
+    walk: gpui::Entity<mira_ui::primitives::Input>,
+}
+
+impl Render for Form {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::{
+            components::{Empty, FieldRow, Group},
+            primitives::Field,
+        };
+        let theme = cx.theme().clone();
+        div()
+            .size_full()
+            .p(px(16.0))
+            .bg(theme.base)
+            .text_color(theme.text)
+            .font_family(SYSTEM_SANS)
+            .text_size(TEXT_BODY)
+            .flex()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .w(px(300.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        Group::new()
+                            .title("Gameplay")
+                            .child(
+                                FieldRow::new("Auto relogin")
+                                    .description("Log back in after a disconnect")
+                                    .child(
+                                        Switch::new("relogin", "Auto relogin", true).hide_label(),
+                                    ),
+                            )
+                            .child(FieldRow::new("Collisions").child(
+                                Switch::new("collisions", "Collisions", false).hide_label(),
+                            )),
+                    )
+                    .child(
+                        Field::new("Walk speed", self.walk.clone())
+                            .description("Default is 8")
+                            .end_slot(
+                                Button::icon("reset", Icon::RotateCcw, "Reset walk speed")
+                                    .size(Size::XSmall),
+                            ),
+                    ),
+            )
+            .child(
+                div().flex_1().child(
+                    Empty::new("No scripts yet", "Add a folder or install a package.")
+                        .compact()
+                        .action(Button::new("show", "Show in Finder"))
+                        .action(Button::new("add", "Add folder…").variant(Variant::Primary)),
+                ),
+            )
+    }
+}
+
+#[test]
+fn snapshot_form() {
+    use mira_ui::primitives::{Input, Numeric};
+    for path in snapshot("form", size(px(620.0), px(260.0)), |_, cx| {
+        let walk = cx.new(|cx| {
+            let mut input = Input::new("Walk speed", cx)
+                .numeric(Numeric {
+                    min: 0,
+                    max: 99,
+                    step: 1,
+                })
+                .suffix("px/s")
+                .small();
+            input.set_text("12", cx);
+            input
+        });
+        cx.new(|_| Form { walk })
+    }) {
+        assert!(path.exists());
+    }
+}
