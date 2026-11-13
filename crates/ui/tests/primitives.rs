@@ -7,7 +7,7 @@ use gpui::{
 };
 use mira_ui::{
     FOCUS_SCOPE,
-    primitives::{Button, Dialog, Select},
+    primitives::{Button, Dialog, Icon, Select},
 };
 
 struct Rooms {
@@ -1254,6 +1254,8 @@ fn shift_f10_on_an_empty_tab_list_does_nothing(cx: &mut TestAppContext) {
 struct Maps {
     focus: FocusHandle,
     items: Vec<SharedString>,
+    marked: Option<Vec<bool>>,
+    editable: bool,
 }
 
 impl Render for Maps {
@@ -1263,11 +1265,19 @@ impl Render for Maps {
             .track_focus(&self.focus)
             .size_full()
             .child({
-                let (removing, moving) = (cx.weak_entity(), cx.weak_entity());
+                let (removing, moving, marking, editing) = (
+                    cx.weak_entity(),
+                    cx.weak_entity(),
+                    cx.weak_entity(),
+                    cx.weak_entity(),
+                );
                 mira_ui::components::Chips::new("maps", "Maps", self.items.clone())
                     .on_remove(move |index, _, cx| {
                         let _ = removing.update(cx, |this, cx| {
                             this.items.remove(index);
+                            if let Some(marked) = &mut this.marked {
+                                marked.remove(index);
+                            }
                             cx.notify();
                         });
                     })
@@ -1277,6 +1287,26 @@ impl Render for Maps {
                             this.items.insert(to, item);
                             cx.notify();
                         });
+                    })
+                    .when(self.editable, |chips| {
+                        chips.on_edit(move |index, text, _, cx| {
+                            let _ = editing.update(cx, |this, cx| {
+                                this.items[index] = text.into();
+                                cx.notify();
+                            });
+                        })
+                    })
+                    .when_some(self.marked.clone(), |chips, marked| {
+                        chips.marked(Icon::Bell, "Beeps", marked).on_mark(
+                            move |index, on, _, cx| {
+                                let _ = marking.update(cx, |this, cx| {
+                                    if let Some(marked) = &mut this.marked {
+                                        marked[index] = on;
+                                    }
+                                    cx.notify();
+                                });
+                            },
+                        )
                     })
             })
     }
@@ -1296,11 +1326,13 @@ fn chips_move_with_arrows_reorder_with_option_and_remove_from_the_keyboard(
             items: ["battleon", "yulgar", "doomwood", "swordhaven"]
                 .map(SharedString::from)
                 .to_vec(),
+            marked: None,
+            editable: false,
         }
     });
     cx.run_until_parked();
     let items = |cx: &mut VisualTestContext| view.read_with(cx, |maps, _| maps.items.clone());
-    for key in ["tab", "right", "down", "alt-left", "right", "enter"] {
+    for key in ["tab", "right", "down", "alt-left", "right", "delete"] {
         press(cx, key);
     }
     assert_eq!(items(cx), ["battleon", "doomwood", "swordhaven"]);
@@ -1308,4 +1340,77 @@ fn chips_move_with_arrows_reorder_with_option_and_remove_from_the_keyboard(
         press(cx, key);
     }
     assert_eq!(items(cx), ["battleon", "swordhaven"]);
+}
+
+#[gpui::test]
+fn marked_chips_toggle_with_space_and_remove_with_backspace(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Maps {
+            focus,
+            items: ["battleon", "yulgar", "doomwood"]
+                .map(SharedString::from)
+                .to_vec(),
+            marked: Some(vec![false; 3]),
+            editable: false,
+        }
+    });
+    cx.run_until_parked();
+    let state = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |maps, _| {
+            (maps.items.clone(), maps.marked.clone().unwrap())
+        })
+    };
+    for key in ["tab", "right", "space"] {
+        press(cx, key);
+    }
+    assert_eq!(state(cx).1, [false, true, false]);
+    press(cx, "space");
+    assert_eq!(state(cx).1, [false, false, false]);
+    for key in ["right", "space", "left", "backspace"] {
+        press(cx, key);
+    }
+    assert_eq!(
+        state(cx),
+        (
+            vec!["battleon".into(), "doomwood".into()],
+            vec![false, true]
+        )
+    );
+}
+
+#[gpui::test]
+fn enter_edits_a_chip_return_saves_and_escape_cancels(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Maps {
+            focus,
+            items: ["battleon", "yulgar"].map(SharedString::from).to_vec(),
+            marked: None,
+            editable: true,
+        }
+    });
+    cx.run_until_parked();
+    let items = |cx: &mut VisualTestContext| view.read_with(cx, |maps, _| maps.items.clone());
+    for key in ["tab", "right", "enter", "right"] {
+        press(cx, key);
+    }
+    cx.simulate_input("-9999");
+    press(cx, "enter");
+    assert_eq!(items(cx), ["battleon", "yulgar-9999"]);
+
+    for key in ["left", "enter"] {
+        press(cx, key);
+    }
+    cx.simulate_input("x");
+    press(cx, "escape");
+    assert_eq!(items(cx), ["battleon", "yulgar-9999"]);
+    press(cx, "backspace");
+    assert_eq!(items(cx), ["yulgar-9999"], "the list has focus again");
 }
