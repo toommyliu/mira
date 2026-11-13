@@ -3976,7 +3976,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "gpui_apple",
  "gpui_platform",
+ "mira-ui",
  "unicode-segmentation",
 ]
 

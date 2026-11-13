@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+test-support = ["dep:gpui_apple", "gpui/test-support"]
+
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
+gpui_apple = { workspace = true, optional = true, features = ["font-kit", "test-support"] }
 unicode-segmentation.workspace = true
 
 [lints]
@@ -15,3 +19,4 @@ workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform.workspace = true
+mira-ui = { path = ".", features = ["test-support"] }
