@@ -15,6 +15,7 @@ pub struct Field {
     error: Option<SharedString>,
     end: Option<AnyElement>,
     control: AnyElement,
+    inline: bool,
 }
 
 impl Field {
@@ -25,6 +26,7 @@ impl Field {
             error: None,
             end: None,
             control: control.into_any_element(),
+            inline: false,
         }
     }
 
@@ -42,6 +44,11 @@ impl Field {
         self.error = error;
         self
     }
+
+    pub fn inline(mut self) -> Self {
+        self.inline = true;
+        self
+    }
 }
 
 impl RenderOnce for Field {
@@ -54,22 +61,31 @@ impl RenderOnce for Field {
                 .text_color(color)
                 .child(text)
         };
+        let label = h_flex()
+            .justify_between()
+            .gap(px(8.0))
+            .text_size(TEXT_SMALL)
+            .line_height(LINE_SMALL)
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.text)
+            .child(self.label)
+            .children(self.end);
         div()
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .gap(px(8.0))
-                    .text_size(TEXT_SMALL)
-                    .line_height(LINE_SMALL)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(self.label)
-                    .children(self.end),
-            )
-            .child(self.control)
+            .map(|field| {
+                if self.inline {
+                    field.child(
+                        h_flex()
+                            .gap(px(8.0))
+                            .child(label.flex_1().min_w_0())
+                            .child(div().flex_none().child(self.control)),
+                    )
+                } else {
+                    field.child(label).child(self.control)
+                }
+            })
             .map(|field| match (self.error, self.description) {
                 (Some(error), _) => field.child(note(error, theme.danger_text)),
                 (None, Some(description)) => field.child(note(description, theme.text_tertiary)),
