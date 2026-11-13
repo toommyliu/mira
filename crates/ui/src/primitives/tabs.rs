@@ -1,12 +1,16 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    AnyElement, App, Div, ElementId, Entity, FontWeight, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement, RenderOnce, Role, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use super::{Button, Flow, Icon, Pose, Sortable, button::Size, menu::Handler};
+use super::{
+    Button, ContextMenu, Flow, Icon, MenuItem, Pose, Sortable,
+    button::Size,
+    menu::{self, Handler, ItemsBuilder, MenuState},
+};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
     nav::{self, Axis, Step},
@@ -25,6 +29,7 @@ pub struct Tab {
     description: Option<SharedString>,
     children: Vec<AnyElement>,
     on_close: Option<Handler>,
+    menu: Option<ItemsBuilder>,
 }
 
 impl Tab {
@@ -36,6 +41,7 @@ impl Tab {
             description: None,
             children: Vec::new(),
             on_close: None,
+            menu: None,
         }
     }
 
@@ -56,6 +62,11 @@ impl Tab {
 
     pub fn on_close(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_close = Some(Rc::new(f));
+        self
+    }
+
+    pub fn menu(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
+        self.menu = Some(Rc::new(f));
         self
     }
 }
@@ -145,13 +156,14 @@ struct Render {
     vertical: bool,
     ring: bool,
     focus: gpui::FocusHandle,
+    menu: Entity<MenuState>,
     on_select: Option<IndexHandler>,
     theme: Theme,
 }
 
 impl Render {
-    fn tab(&self, index: usize, pose: Pose) -> Stateful<Div> {
-        let tab = (self.tab)(index);
+    fn tab(&self, index: usize, pose: Pose) -> AnyElement {
+        let mut tab = (self.tab)(index);
         let current = index == self.selected && pose != Pose::Lifted;
         let theme = &self.theme;
         let focus = self.focus.clone();
@@ -178,10 +190,20 @@ impl Render {
                     })
                 },
             );
-        if self.vertical {
+        let label = tab.label.clone();
+        let menu = tab.menu.take().filter(|_| pose != Pose::Lifted);
+        let row = if self.vertical {
             self.vertical_tab(base, tab, index, current, pose)
         } else {
             self.horizontal_tab(base, tab, current)
+        };
+        match menu {
+            Some(items) => ContextMenu::new(("menu", index), label)
+                .items(move |window, cx| items(window, cx))
+                .when(current, |menu| menu.state(self.menu.clone()))
+                .child(row)
+                .into_any_element(),
+            None => row.into_any_element(),
         }
     }
 
@@ -329,13 +351,20 @@ impl Render {
 impl RenderOnce for Tabs {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
+        let menu = menu::state(
+            &ElementId::from((self.id.clone(), "menu")),
+            false,
+            window,
+            cx,
+        );
         let render = Render {
-            tab: self.tab,
+            tab: self.tab.clone(),
             selected: self.selected,
             count: self.count,
             vertical: self.vertical,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus: focus.clone(),
+            menu: menu.clone(),
             on_select: self.on_select.clone(),
             theme: cx.theme().clone(),
         };
@@ -346,12 +375,24 @@ impl RenderOnce for Tabs {
             Axis::Horizontal
         };
         let on_key = self.on_select;
+        let tab = self.tab;
         let list = div()
             .id(self.id.clone())
             .role(Role::TabList)
             .aria_label(self.label)
             .track_focus(&focus.tab_stop(true))
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                let stroke = &event.keystroke;
+                if stroke.key == "f10" && stroke.modifiers.shift {
+                    if selected < count
+                        && let Some(items) = tab(selected).menu
+                    {
+                        let first = menu::first_navigable(&items(window, cx), false);
+                        menu::open(&menu, first, None, window, cx);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 let Some(step) = Step::from_key(event, axis) else {
                     return;
                 };
@@ -384,7 +425,7 @@ impl RenderOnce for Tabs {
                     list,
                     flow,
                     0..count,
-                    move |(index, pose), _, _| render.tab(index, pose).into_any_element(),
+                    move |(index, pose), _, _| render.tab(index, pose),
                     move |from, to, window, cx| reorder(from, to, window, cx),
                 );
                 match &self.scroll {

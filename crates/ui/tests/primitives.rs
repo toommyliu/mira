@@ -1153,3 +1153,100 @@ fn input_drops_its_selection_when_focus_leaves(cx: &mut TestAppContext) {
     });
     assert!(selection.unwrap().range.is_empty());
 }
+
+struct Profiles {
+    focus: FocusHandle,
+    selected: usize,
+    chosen: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl Render for Profiles {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{MenuItem, Tab, Tabs};
+        let chosen = self.chosen.clone();
+        let this = cx.weak_entity();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                Tabs::new("profiles", "Profiles", 3, move |index| {
+                    let chosen = chosen.clone();
+                    Tab::new(["Generic", "Farming", "Boss"][index]).menu(move |_, _| {
+                        let chosen = chosen.clone();
+                        vec![MenuItem::action("Rename", move |_, _| {
+                            chosen.borrow_mut().push(format!("rename {index}"))
+                        })]
+                    })
+                })
+                .vertical()
+                .selected(self.selected)
+                .on_select(move |index, _, cx| {
+                    this.update(cx, |view, cx| {
+                        view.selected = index;
+                        cx.notify();
+                    })
+                    .ok();
+                }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let chosen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Profiles {
+            focus,
+            selected: 0,
+            chosen: chosen.clone(),
+        }
+    });
+    cx.run_until_parked();
+
+    press(cx, "tab");
+    press(cx, "down");
+    press(cx, "shift-f10");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["rename 1"]);
+
+    let third = point(px(20.0), px(79.0));
+    cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    press(cx, "down");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["rename 1", "rename 2"]);
+}
+
+struct NoTabs(FocusHandle);
+
+impl Render for NoTabs {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::Tabs;
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.0)
+            .size_full()
+            .child(Tabs::new("none", "None", 0, |_| unreachable!("there are no tabs")).vertical())
+    }
+}
+
+#[gpui::test]
+fn shift_f10_on_an_empty_tab_list_does_nothing(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        NoTabs(focus)
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    press(cx, "shift-f10");
+}

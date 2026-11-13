@@ -1,14 +1,14 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, anchored,
-    deferred, div, point, prelude::FluentBuilder as _, px,
+    AnyElement, App, ElementId, Entity, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    anchored, deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::menu::{
-    ItemsBuilder, MenuItem, PopupKind, WINDOW_MARGIN, dismiss, dismiss_probe, first_navigable,
-    open, popup, presence, state,
+    ItemsBuilder, MenuItem, MenuState, PopupKind, WINDOW_MARGIN, dismiss, dismiss_probe,
+    first_navigable, open, popup, presence, state,
 };
 use crate::motion::From;
 
@@ -17,6 +17,7 @@ pub struct ContextMenu {
     id: ElementId,
     label: SharedString,
     items: ItemsBuilder,
+    state: Option<Entity<MenuState>>,
     children: Vec<AnyElement>,
 }
 
@@ -26,12 +27,18 @@ impl ContextMenu {
             id: id.into(),
             label: label.into(),
             items: Rc::new(|_, _| Vec::new()),
+            state: None,
             children: Vec::new(),
         }
     }
 
     pub fn items(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
         self.items = Rc::new(f);
+        self
+    }
+
+    pub(crate) fn state(mut self, state: Entity<MenuState>) -> Self {
+        self.state = Some(state);
         self
     }
 }
@@ -44,8 +51,10 @@ impl ParentElement for ContextMenu {
 
 impl RenderOnce for ContextMenu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = state(&self.id, false, window, cx);
-        let position = state.read(cx).position;
+        let state = match self.state {
+            Some(state) => state,
+            None => state(&self.id, false, window, cx),
+        };
         let shown = presence(&state, window, cx).is_some();
         let area = window
             .use_keyed_state((self.id.clone(), "area"), cx, |_, _| {
@@ -53,8 +62,11 @@ impl RenderOnce for ContextMenu {
             })
             .read(cx)
             .clone();
+        let position = state
+            .read(cx)
+            .position
+            .unwrap_or_else(|| area.get().origin + point(px(12.0), px(12.0)));
         let mouse_state = state.clone();
-        let key_area = area.clone();
         let key_state = state.clone();
         let key_items = self.items.clone();
         div()
@@ -67,9 +79,8 @@ impl RenderOnce for ContextMenu {
             .capture_key_down(move |event, window, cx| {
                 let stroke = &event.keystroke;
                 if stroke.key == "f10" && stroke.modifiers.shift && !key_state.read(cx).open {
-                    let at = key_area.get().origin + point(px(12.0), px(12.0));
                     let first = first_navigable(&key_items(window, cx), false);
-                    open(&key_state, first, Some(at), window, cx);
+                    open(&key_state, first, None, window, cx);
                     cx.stop_propagation();
                 }
             })
@@ -80,7 +91,7 @@ impl RenderOnce for ContextMenu {
                     .inset_0(),
             )
             .children(self.children)
-            .when_some(position.filter(|_| shown), |area, position| {
+            .when(shown, |area| {
                 let items = (self.items)(window, cx);
                 area.child(
                     deferred(
