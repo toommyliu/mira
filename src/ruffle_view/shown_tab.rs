@@ -86,7 +86,7 @@ pub(super) fn picker<W: 'static>(
     Select::new(
         id,
         "Tab",
-        titled.into_iter().map(|(_, title)| title).collect(),
+        titled.into_iter().map(|(_, title)| title),
         picked,
     )
     .placeholder("No tabs")

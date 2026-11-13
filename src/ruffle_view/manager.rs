@@ -18,9 +18,9 @@ use super::{
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
-    components::{Activity, Empty, StatusLabel},
+    components::{Empty, StatusLabel},
     primitives::{
-        Alert, Button, Checkbox, CheckedState, Dialog, Field, Input, InputEvent, Select,
+        Activity, Alert, Button, Checkbox, CheckedState, Dialog, Field, Input, InputEvent, Select,
         button::{Size, Variant},
     },
     theme::{CONTROL_MD, TEXT_BODY, TEXT_SMALL},
@@ -823,12 +823,10 @@ impl Manager {
         )
         .body(body)
         .when(form.editing.is_some(), |dialog| {
-            dialog.action(
-                div().flex_1().child(
-                    Button::new("remove", "Remove")
-                        .variant(Variant::Danger)
-                        .on_click(cx.listener(|this, _, _, cx| this.set_removing(true, cx))),
-                ),
+            dialog.footer_start_slot(
+                Button::new("remove", "Remove")
+                    .variant(Variant::Danger)
+                    .on_click(cx.listener(|this, _, _, cx| this.set_removing(true, cx))),
             )
         })
         .action(
@@ -922,7 +920,7 @@ impl Manager {
                 .and_then(|server| names.iter().position(|name| name == server))
                 .map_or(0, |index| index + 1)
         });
-        let options = std::iter::once(SharedString::from(CHOOSE_IN_GAME))
+        let options: Vec<SharedString> = std::iter::once(SharedString::from(CHOOSE_IN_GAME))
             .chain(names.iter().cloned().map(SharedString::from))
             .collect();
         let choose = cx.listener(move |this, index: &usize, _, cx| {

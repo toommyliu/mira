@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::{
-    ActiveTheme as _,
+    ActiveTheme as _, h_flex,
     theme::{LINE_SMALL, TEXT_SMALL},
 };
 
@@ -13,6 +13,7 @@ pub struct Field {
     label: SharedString,
     description: Option<SharedString>,
     error: Option<SharedString>,
+    end: Option<AnyElement>,
     control: AnyElement,
 }
 
@@ -22,12 +23,18 @@ impl Field {
             label: label.into(),
             description: None,
             error: None,
+            end: None,
             control: control.into_any_element(),
         }
     }
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn end_slot(mut self, element: impl IntoElement) -> Self {
+        self.end = Some(element.into_any_element());
         self
     }
 
@@ -50,14 +57,17 @@ impl RenderOnce for Field {
         div()
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(px(4.0))
             .child(
-                div()
+                h_flex()
+                    .justify_between()
+                    .gap(px(8.0))
                     .text_size(TEXT_SMALL)
                     .line_height(LINE_SMALL)
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
-                    .child(self.label),
+                    .child(self.label)
+                    .children(self.end),
             )
             .child(self.control)
             .map(|field| match (self.error, self.description) {

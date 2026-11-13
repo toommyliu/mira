@@ -11,7 +11,7 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
-    components::SettingsGroup,
+    components::Group,
     primitives::{Select, Switch},
     theme::TEXT_BODY,
 };
@@ -260,7 +260,7 @@ impl Render for SettingsWindow {
             )
             .child(
                 div().px(px(16.0)).child(
-                    SettingsGroup::new()
+                    Group::new()
                         .title("Appearance")
                         .row(
                             "Theme",

@@ -1,42 +1,72 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, RenderOnce, Role, StatefulInteractiveElement as _, Styled as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
-use super::{Icon, icon, menu};
+use super::{
+    Button,
+    menu::{self, MenuState},
+};
 use crate::{ActiveTheme as _, motion, nav};
 
-type Content = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
+
+const MIN_WIDTH: Pixels = px(200.0);
+const MAX_WIDTH: Pixels = px(420.0);
+
+#[derive(Clone)]
+pub struct PopoverClose {
+    state: Entity<MenuState>,
+    trigger: FocusHandle,
+}
+
+impl PopoverClose {
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
+        menu::close(&self.state, false, window, cx);
+        window.focus(&self.trigger, cx);
+    }
+}
 
 #[derive(IntoElement)]
 pub struct Popover {
     id: ElementId,
-    label: SharedString,
+    trigger: Option<Button>,
     content: Content,
     align: menu::Align,
-    width: Pixels,
+    width: Option<Pixels>,
+    default_open: bool,
 }
 
 impl Popover {
-    pub fn new(
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
-            label: label.into(),
-            content: Rc::new(content),
+            trigger: None,
+            content: Rc::new(|_, _, _| div().into_any_element()),
             align: menu::Align::Start,
-            width: px(280.0),
+            width: None,
+            default_open: false,
         }
     }
 
+    pub fn trigger(mut self, trigger: Button) -> Self {
+        self.trigger = Some(trigger);
+        self
+    }
+
+    pub fn content(
+        mut self,
+        f: impl Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        self.content = Rc::new(f);
+        self
+    }
+
     pub fn width(mut self, width: Pixels) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -44,13 +74,21 @@ impl Popover {
         self.align = align;
         self
     }
+
+    pub fn default_open(mut self, open: bool) -> Self {
+        self.default_open = open;
+        self
+    }
 }
 
 impl RenderOnce for Popover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = menu::state(&self.id, window, cx);
-        let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
-        let ring = nav::keyboard_focused(&trigger_focus, window, cx);
+        let state = menu::state(&self.id, self.default_open, window, cx);
+        let trigger = self
+            .trigger
+            .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Open"));
+        let label = trigger.label().clone();
+        let trigger_focus = trigger.focus_handle(window, cx);
         let (is_open, panel_focus) = {
             let state = state.read(cx);
             (state.is_open(), state.focus())
@@ -67,99 +105,86 @@ impl RenderOnce for Popover {
                 nav::focus_first(&panel_focus, window, cx)
             });
         }
-        let theme = cx.theme().clone();
-        let close_to_trigger = {
-            let trigger_focus = trigger_focus.clone();
-            move |state: &gpui::Entity<menu::MenuState>, window: &mut Window, cx: &mut App| {
-                menu::close(state, false, window, cx);
-                window.focus(&trigger_focus, cx);
+        let closer = PopoverClose {
+            state: state.clone(),
+            trigger: trigger_focus,
+        };
+        let press_state = state.clone();
+        let press_close = closer.clone();
+        let key_state = state.clone();
+        let key_close = closer.clone();
+        let toggle = move |state: &Entity<MenuState>,
+                           close: &PopoverClose,
+                           window: &mut Window,
+                           cx: &mut App| {
+            if state.read(cx).is_open() {
+                close.close(window, cx);
+            } else {
+                menu::open(state, None, None, window, cx);
             }
         };
-        let toggle = {
-            let state = state.clone();
-            let close_to_trigger = close_to_trigger.clone();
-            move |window: &mut Window, cx: &mut App| {
-                if state.read(cx).is_open() {
-                    close_to_trigger(&state, window, cx);
-                } else {
-                    menu::open(&state, None, None, window, cx);
-                }
-            }
-        };
-        div()
-            .relative()
-            .flex_none()
-            .child(
-                menu::trigger_style(
-                    div()
-                        .id(self.id.clone())
-                        .role(Role::Button)
-                        .aria_label(self.label.clone())
-                        .aria_expanded(is_open)
-                        .track_focus(&trigger_focus.tab_stop(true)),
-                    menu::trigger_face(is_open, &theme).render(
-                        (self.id.clone(), "face"),
-                        window,
-                        cx,
-                    ),
-                    &theme,
-                    ring,
-                )
-                .on_mouse_down(MouseButton::Left, {
-                    let toggle = toggle.clone();
-                    move |_, window, cx| {
-                        toggle(window, cx);
-                        cx.stop_propagation();
-                    }
-                })
-                .on_key_down(move |event, window, cx| {
+        let mut trigger = trigger
+            .trigger(
+                is_open,
+                Rc::new(move |_, window, cx| {
+                    toggle(&press_state, &press_close, window, cx);
+                    cx.stop_propagation();
+                }),
+                Rc::new(move |event, window, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
-                        toggle(window, cx);
+                        toggle(&key_state, &key_close, window, cx);
                         cx.stop_propagation();
                     }
-                })
-                .child(self.label.clone())
-                .child(icon(Icon::ChevronDown, theme.text_tertiary))
-                .child(menu::trigger_probe(&state)),
+                }),
             )
-            .when_some(menu::presence(&state, window, cx), |container, shown| {
-                let content = (self.content)(window, cx);
-                let key_state = state.clone();
-                let out_state = state.clone();
-                container.child(menu::attach(self.align, &state, window, cx, |from, _| {
-                    menu::fading(
-                        motion::arrive(
-                            (self.id.clone(), "popover"),
-                            div()
-                                .id((self.id.clone(), "panel"))
-                                .role(Role::Dialog)
-                                .aria_label(self.label.clone())
-                                .occlude()
-                                .track_focus(&panel_focus)
-                                .on_key_down(move |event, window, cx| {
-                                    if event.keystroke.key == "escape" {
-                                        close_to_trigger(&key_state, window, cx);
-                                        cx.stop_propagation();
-                                    }
-                                })
-                                .on_mouse_down_out(move |event, window, cx| {
-                                    if menu::outside(&out_state, event.position, cx) {
-                                        menu::close(&out_state, false, window, cx)
-                                    }
-                                })
-                                .w(self.width)
-                                .p(px(16.0))
-                                .rounded(theme.radius.panel)
-                                .bg(theme.overlay)
-                                .border_1()
-                                .border_color(theme.border)
-                                .shadow(theme.floating())
-                                .child(content),
-                            from,
-                        ),
-                        shown,
-                    )
-                }))
+            .attach(menu::trigger_probe(&state).into_any_element());
+        let Some(shown) = menu::presence(&state, window, cx) else {
+            return trigger;
+        };
+        let theme = cx.theme().clone();
+        let content = (self.content)(&closer, window, cx);
+        let key_closer = closer.clone();
+        let out_state = state.clone();
+        trigger = trigger.attach(
+            menu::attach(self.align, &state, window, cx, |from, _| {
+                menu::fading(
+                    motion::arrive(
+                        (self.id.clone(), "popover"),
+                        div()
+                            .id((self.id.clone(), "panel"))
+                            .role(Role::Dialog)
+                            .aria_label(label)
+                            .occlude()
+                            .track_focus(&panel_focus)
+                            .on_key_down(move |event, window, cx| {
+                                if event.keystroke.key == "escape" {
+                                    key_closer.close(window, cx);
+                                    cx.stop_propagation();
+                                }
+                            })
+                            .on_mouse_down_out(move |event, window, cx| {
+                                if menu::outside(&out_state, event.position, cx) {
+                                    menu::close(&out_state, false, window, cx)
+                                }
+                            })
+                            .map(|panel| match self.width {
+                                Some(width) => panel.w(width),
+                                None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
+                            })
+                            .p(px(12.0))
+                            .rounded(theme.radius.panel)
+                            .bg(theme.overlay)
+                            .border_1()
+                            .border_color(theme.border)
+                            .shadow(theme.floating())
+                            .child(content),
+                        from,
+                    ),
+                    shown,
+                )
             })
+            .into_any_element(),
+        );
+        trigger
     }
 }

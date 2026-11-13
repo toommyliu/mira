@@ -96,7 +96,6 @@ pub(super) fn switch(theme: &Theme, on: bool) -> impl IntoElement {
 #[derive(Clone, Copy)]
 pub(super) enum Glyph {
     Right,
-    Close,
 }
 
 pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
@@ -106,7 +105,6 @@ pub(super) fn glyph(glyph: Glyph, color: Hsla) -> Canvas<()> {
             let c = bounds.center();
             let strokes: &[&[(f32, f32)]] = match glyph {
                 Glyph::Right => &[&[(-1.5, -3.5), (2.0, 0.0), (-1.5, 3.5)]],
-                Glyph::Close => &[&[(-3.0, -3.0), (3.0, 3.0)], &[(-3.0, 3.0), (3.0, -3.0)]],
             };
             let mut path = PathBuilder::stroke(px(1.5));
             for stroke in strokes {

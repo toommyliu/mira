@@ -8,6 +8,7 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
     components::Empty,
+    h_flex,
     primitives::{
         Badge, Button, Icon, Input, InputEvent, List, ListItem, Select, Spinner, VirtualList,
         button::{Size, Variant},
@@ -441,8 +442,7 @@ impl LoaderGrabber {
             "Load",
             LoadKind::ALL
                 .iter()
-                .map(|kind| SharedString::from(kind.name()))
-                .collect(),
+                .map(|kind| SharedString::from(kind.name())),
             LoadKind::ALL.iter().position(|kind| *kind == self.kind),
         )
         .width(px(168.0))
@@ -484,16 +484,7 @@ impl LoaderGrabber {
             .snapshot
             .as_ref()
             .map(|snapshot| snapshot.entries.len());
-        let items = Source::ALL
-            .iter()
-            .map(|source| {
-                let item = ListItem::new(source.name());
-                match count {
-                    Some(count) if *source == self.source => item.meta(count.to_string()),
-                    _ => item,
-                }
-            })
-            .collect();
+        let current = self.source;
         let this = cx.weak_entity();
         div()
             .flex_none()
@@ -502,12 +493,15 @@ impl LoaderGrabber {
             .border_r_1()
             .border_color(theme.hairline)
             .child(
-                List::new(
-                    "grab-sources",
-                    "Sources",
-                    items,
-                    Source::ALL.iter().position(|source| *source == self.source),
-                )
+                List::new("grab-sources", "Sources", Source::ALL.len(), move |index| {
+                    let source = Source::ALL[index];
+                    let item = ListItem::new(source.name());
+                    match count {
+                        Some(count) if source == current => item.end_slot(count.to_string()),
+                        _ => item,
+                    }
+                })
+                .selected(Source::ALL.iter().position(|source| *source == self.source))
                 .on_select(move |index, _, cx| {
                     let _ = this.update(cx, |this, cx| {
                         if this.source != Source::ALL[index] {
@@ -549,13 +543,10 @@ impl LoaderGrabber {
             )
             .into_any_element(),
             (Some(_), _) => {
-                let rows: std::rc::Rc<[(i64, ListItem)]> = entries
-                    .iter()
-                    .map(|entry| (entry.key, row(entry)))
-                    .collect();
+                let rows: std::rc::Rc<[Entry]> = entries.into();
                 let selected = self
                     .selected
-                    .and_then(|key| rows.iter().position(|(shown, _)| *shown == key));
+                    .and_then(|key| rows.iter().position(|entry| entry.key == key));
                 let lookup = rows.clone();
                 let keys = rows.clone();
                 let this = cx.weak_entity();
@@ -563,12 +554,12 @@ impl LoaderGrabber {
                     "grab-entries",
                     self.source.name(),
                     rows.len(),
-                    move |index| lookup[index].1.clone(),
+                    move |index| row(&lookup[index]),
                 )
                 .selected(selected)
                 .height(height)
                 .on_select(move |index, _, cx| {
-                    let key = keys[index].0;
+                    let key = keys[index].key;
                     let _ = this.update(cx, |this, cx| this.select(key, cx));
                 })
                 .into_any_element()
@@ -820,17 +811,14 @@ fn tooltip(act: &Act) -> &'static str {
 }
 
 fn row(entry: &Entry) -> ListItem {
-    let mut detail = format!("{} {}", entry.id_label, entry.id);
-    for badge in &entry.badges {
-        detail.push_str(" · ");
-        detail.push_str(badge);
-    }
-    let item = ListItem::new(entry.name.clone()).detail(detail);
-    if entry.meta.is_empty() {
-        item
-    } else {
-        item.meta(entry.meta.clone())
-    }
+    ListItem::new(entry.name.clone())
+        .description(format!("{} {}", entry.id_label, entry.id))
+        .end_slot(
+            h_flex()
+                .gap(px(4.0))
+                .children(entry.badges.iter().map(|badge| Badge::new(*badge)))
+                .when(!entry.meta.is_empty(), |end| end.child(entry.meta.clone())),
+        )
 }
 
 fn amount(theme: &Theme, line: &Line) -> Div {

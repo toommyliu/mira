@@ -65,8 +65,13 @@ fn select_picks_the_next_option_from_the_keyboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn select_ignores_a_selection_past_its_options(cx: &mut TestAppContext) {
-    assert_eq!(rooms(Some(3), "tab enter enter", cx), None);
+fn select_opens_on_the_first_option_without_a_valid_selection(cx: &mut TestAppContext) {
+    assert_eq!(rooms(None, "tab enter enter", cx), Some(0));
+}
+
+#[gpui::test]
+fn select_treats_a_selection_past_its_options_as_none(cx: &mut TestAppContext) {
+    assert_eq!(rooms(Some(3), "tab enter enter", cx), Some(0));
 }
 
 struct Confirm {
@@ -117,13 +122,21 @@ impl Render for SearchAndOptions {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().size_full().child(
             Dialog::new("scripts", true, "Run script")
-                .accessory(div().w(gpui::px(200.0)).child(self.search.clone()))
-                .body(div().debug_selector(|| "options".into()).child(
-                    mira_ui::primitives::Popover::new("options", "Options", |_, _| {
-                        mira_ui::primitives::Switch::new("safe", "Safe start and stop", false)
-                            .into_any_element()
-                    }),
-                )),
+                .header_end_slot(div().w(gpui::px(200.0)).child(self.search.clone()))
+                .body(
+                    div().debug_selector(|| "options".into()).child(
+                        mira_ui::primitives::Popover::new("options")
+                            .trigger(mira_ui::primitives::Button::new("options", "Options"))
+                            .content(|_, _, _| {
+                                mira_ui::primitives::Switch::new(
+                                    "safe",
+                                    "Safe start and stop",
+                                    false,
+                                )
+                                .into_any_element()
+                            }),
+                    ),
+                ),
         )
     }
 }
@@ -360,7 +373,7 @@ struct NarrowStatus;
 
 impl Render for NarrowStatus {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        use mira_ui::components::{Activity, StatusLabel};
+        use mira_ui::{components::StatusLabel, primitives::Activity};
         div().w(gpui::px(120.0)).flex().flex_col().child(
             div()
                 .debug_selector(|| "status".into())
@@ -704,7 +717,7 @@ impl Render for Panes {
                 .height(height)
                 .into_any_element()
         } else {
-            List::new("queue", "Queue", (0..3).map(item).collect(), None)
+            List::new("queue", "Queue", 3, item)
                 .height(height)
                 .on_reorder(|_, _, _, _| {})
                 .into_any_element()

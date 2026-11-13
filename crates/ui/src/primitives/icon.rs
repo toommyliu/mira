@@ -1,8 +1,8 @@
-use gpui::{Hsla, Styled as _, Svg, px, svg};
+use gpui::{App, Hsla, IntoElement, RenderOnce, Styled as _, Svg, Window, px, svg};
 
 use crate::assets::{HEAVY, SIDEBAR, SIDEBAR_OPEN};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, IntoElement)]
 pub enum Icon {
     ArrowDown,
     ArrowLeft,
@@ -17,6 +17,8 @@ pub enum Icon {
     Minus,
     Plus,
     RotateCcw,
+    Sidebar,
+    SidebarOpen,
     Square,
     X,
 }
@@ -37,6 +39,8 @@ impl Icon {
             Icon::Minus => "icons/minus.svg",
             Icon::Plus => "icons/plus.svg",
             Icon::RotateCcw => "icons/rotate-ccw.svg",
+            Icon::Sidebar => SIDEBAR,
+            Icon::SidebarOpen => SIDEBAR_OPEN,
             Icon::Square => "icons/square.svg",
             Icon::X => "icons/x.svg",
         }
@@ -54,26 +58,23 @@ impl Icon {
 }
 
 pub fn icon(icon: Icon, color: Hsla) -> Svg {
-    svg()
-        .path(icon.path())
-        .flex_none()
-        .size(px(14.0))
-        .text_color(color)
+    let svg = svg().path(icon.path()).flex_none().text_color(color);
+    match icon {
+        Icon::Sidebar | Icon::SidebarOpen => svg.w(px(18.0)).h(px(14.0)),
+        _ => svg.size(px(14.0)),
+    }
 }
 
-pub fn sidebar_icon(open: bool, color: Hsla) -> Svg {
-    svg()
-        .path(if open { SIDEBAR_OPEN } else { SIDEBAR })
-        .flex_none()
-        .w(px(18.0))
-        .h(px(14.0))
-        .text_color(color)
-}
-
-pub(crate) fn small_icon(icon: Icon, color: Hsla) -> Svg {
+pub fn small_icon(icon: Icon, color: Hsla) -> Svg {
     svg()
         .path(format!("{HEAVY}{}", icon.path()))
         .flex_none()
         .size(px(10.0))
         .text_color(color)
+}
+
+impl RenderOnce for Icon {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        icon(self, window.text_style().color)
+    }
 }

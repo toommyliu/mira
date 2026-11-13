@@ -27,6 +27,7 @@ pub(crate) enum State {
     Failed,
 }
 
+#[derive(Clone)]
 pub(crate) struct Glance {
     pub(crate) label: SharedString,
     pub(crate) tone: Tone,
@@ -41,6 +42,7 @@ impl Glance {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Details {
     pub(crate) server: Option<SharedString>,
     pub(crate) script: Option<SharedString>,

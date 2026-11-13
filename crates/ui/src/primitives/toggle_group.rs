@@ -4,9 +4,10 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, ElementId, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Toggled, Window, canvas, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Bounds, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, Pixels, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -46,11 +47,55 @@ fn probe(layout: Rc<Layout>, index: Option<usize>) -> impl IntoElement {
     .inset_0()
 }
 
+pub struct ToggleItem {
+    label: SharedString,
+    start: Option<AnyElement>,
+    end: Option<AnyElement>,
+}
+
+impl ToggleItem {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            start: None,
+            end: None,
+        }
+    }
+
+    pub fn start_slot(mut self, element: impl IntoElement) -> Self {
+        self.start = Some(element.into_any_element());
+        self
+    }
+
+    pub fn end_slot(mut self, element: impl IntoElement) -> Self {
+        self.end = Some(element.into_any_element());
+        self
+    }
+}
+
+impl From<SharedString> for ToggleItem {
+    fn from(label: SharedString) -> Self {
+        Self::new(label)
+    }
+}
+
+impl From<&'static str> for ToggleItem {
+    fn from(label: &'static str) -> Self {
+        Self::new(label)
+    }
+}
+
+impl From<String> for ToggleItem {
+    fn from(label: String) -> Self {
+        Self::new(label)
+    }
+}
+
 #[derive(IntoElement)]
 pub struct ToggleGroup {
     id: ElementId,
     label: SharedString,
-    options: Vec<SharedString>,
+    options: Vec<ToggleItem>,
     selected: usize,
     full_width: bool,
     on_select: Option<IndexHandler>,
@@ -60,13 +105,13 @@ impl ToggleGroup {
     pub fn new(
         id: impl Into<ElementId>,
         label: impl Into<SharedString>,
-        options: Vec<SharedString>,
+        options: impl IntoIterator<Item = impl Into<ToggleItem>>,
         selected: usize,
     ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            options,
+            options: options.into_iter().map(Into::into).collect(),
             selected,
             full_width: false,
             on_select: None,
@@ -160,7 +205,7 @@ impl RenderOnce for ToggleGroup {
                 div()
                     .id(index)
                     .role(Role::RadioButton)
-                    .aria_label(option.clone())
+                    .aria_label(option.label.clone())
                     .aria_toggled(if checked {
                         Toggled::True
                     } else {
@@ -198,8 +243,11 @@ impl RenderOnce for ToggleGroup {
                             on_select(index, window, cx);
                         })
                     })
+                    .gap(px(4.0))
                     .child(probe(layout.clone(), Some(index)))
-                    .child(div().truncate().child(option))
+                    .children(option.start)
+                    .child(div().truncate().child(option.label))
+                    .children(option.end)
             }));
         div()
             .flex()

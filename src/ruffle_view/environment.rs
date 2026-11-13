@@ -8,8 +8,8 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
     primitives::{
-        Button, Checkbox, CheckedState, Dialog, Flow, Icon, Input, InputEvent, Pose, Sortable,
-        Switch, Tabs,
+        Badge, Button, Checkbox, CheckedState, Dialog, Flow, Icon, Input, InputEvent, Pose,
+        Sortable, Switch, Tab, Tabs,
         button::{Size, Variant},
     },
     theme::{LINE_SMALL, TEXT_BODY, TEXT_SMALL},
@@ -709,12 +709,9 @@ impl Render for Environment {
                     Section::Quests => self.quests_section(&theme, automation, cx),
                     Section::Boosts => self.boosts_section(&theme, automation, cx),
                 };
-                let labels: Vec<SharedString> = Section::ALL
+                let labels: Vec<(SharedString, usize)> = Section::ALL
                     .into_iter()
-                    .map(|section| match section.count(automation) {
-                        0 => section.name().into(),
-                        count => format!("{} · {count}", section.name()).into(),
-                    })
+                    .map(|section| (section.name().into(), section.count(automation)))
                     .collect();
                 (
                     body.into_any_element(),
@@ -724,7 +721,9 @@ impl Render for Environment {
             }
             None => (
                 empty_note(&theme, "Open a tab to set up its environment.").into_any_element(),
-                Section::ALL.map(|section| section.name().into()).to_vec(),
+                Section::ALL
+                    .map(|section| (section.name().into(), 0))
+                    .to_vec(),
                 false,
             ),
         };
@@ -774,9 +773,24 @@ impl Render for Environment {
                     )
                     .child(picker),
             )
-            .child(div().flex_none().px(px(20.0)).child(
-                Tabs::new("environment-sections", "Sections", labels, section as usize).on_select(
-                    {
+            .child(
+                div().flex_none().px(px(20.0)).child(
+                    Tabs::new(
+                        "environment-sections",
+                        "Sections",
+                        labels.len(),
+                        move |index| {
+                            let (name, count) = labels[index].clone();
+                            let tab = Tab::new(name);
+                            if count == 0 {
+                                tab
+                            } else {
+                                tab.end_slot(Badge::new(count.to_string()))
+                            }
+                        },
+                    )
+                    .selected(section as usize)
+                    .on_select({
                         let this = cx.weak_entity();
                         move |index, _, cx| {
                             let _ = this.update(cx, |this, cx| {
@@ -784,9 +798,9 @@ impl Render for Environment {
                                 cx.notify();
                             });
                         }
-                    },
+                    }),
                 ),
-            ))
+            )
             .child(
                 div()
                     .id("environment-body")

@@ -11,7 +11,8 @@ use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
     components::{Empty, LogEntry, LogView},
     primitives::{
-        Button, Field, Input, InputEvent, List, ListItem, MenuItem, Switch, Tabs, ToggleGroup,
+        Badge, Button, Field, Input, InputEvent, List, ListItem, MenuItem, Switch, Tab, Tabs,
+        ToggleGroup,
         button::{Size, Variant},
     },
     theme::{LINE_SMALL, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL},
@@ -746,12 +747,7 @@ impl Packets {
         .on_select(move |index, _, _| {
             targeting.update_spammer(|settings| settings.target = TARGETS[index]);
         });
-        let items = settings
-            .packets
-            .iter()
-            .enumerate()
-            .map(|(index, text)| ListItem::new(text.clone()).meta(format!("{:02}", index + 1)))
-            .collect();
+        let packets: std::rc::Rc<[String]> = settings.packets.clone().into();
         let reordering = automation.clone();
         let this = cx.weak_entity();
         let picks = this.clone();
@@ -768,29 +764,37 @@ impl Packets {
                 ))
                 .into_any_element()
         } else {
-            List::new("spammer-packets", "Packets to send", items, self.queued)
-                .height(px(220.0))
-                .on_reorder(move |from, to, _, cx| {
-                    reordering.update_spammer(|settings| {
-                        let moved = settings.packets.remove(from);
-                        settings.packets.insert(to, moved);
-                    });
-                    let _ = moves.update(cx, |this, cx| {
-                        this.queued = Some(to);
-                        this.editing = None;
-                        cx.notify();
-                    });
-                })
-                .on_select(move |index, _, cx| {
-                    let _ = picks.update(cx, |this, cx| {
-                        this.queued = Some(index);
-                        cx.notify();
-                    });
-                })
-                .on_activate(move |index, window, cx| {
-                    let _ = this.update(cx, |this, cx| this.edit_queued(index, window, cx));
-                })
-                .into_any_element()
+            List::new(
+                "spammer-packets",
+                "Packets to send",
+                packets.len(),
+                move |index| {
+                    ListItem::new(packets[index].clone()).end_slot(format!("{:02}", index + 1))
+                },
+            )
+            .selected(self.queued)
+            .height(px(220.0))
+            .on_reorder(move |from, to, _, cx| {
+                reordering.update_spammer(|settings| {
+                    let moved = settings.packets.remove(from);
+                    settings.packets.insert(to, moved);
+                });
+                let _ = moves.update(cx, |this, cx| {
+                    this.queued = Some(to);
+                    this.editing = None;
+                    cx.notify();
+                });
+            })
+            .on_select(move |index, _, cx| {
+                let _ = picks.update(cx, |this, cx| {
+                    this.queued = Some(index);
+                    cx.notify();
+                });
+            })
+            .on_activate(move |index, window, cx| {
+                let _ = this.update(cx, |this, cx| this.edit_queued(index, window, cx));
+            })
+            .into_any_element()
         };
         let editing = self.editing.is_some();
         div()
@@ -1015,13 +1019,7 @@ impl Render for Packets {
         let queued = automation
             .as_ref()
             .map_or(0, |automation| automation.spammer().packets.len());
-        let labels: Vec<SharedString> = vec![
-            "Log".into(),
-            match queued {
-                0 => "Spammer".into(),
-                count => format!("Spammer · {count}").into(),
-            },
-        ];
+        let labels = [("Log", 0), ("Spammer", queued)];
         let body = match (&automation, self.page) {
             (None, _) => div()
                 .py(px(24.0))
@@ -1062,17 +1060,29 @@ impl Render for Packets {
                     )
                     .child(picker),
             )
-            .child(div().flex_none().px(px(20.0)).child(
-                Tabs::new("packets-pages", "Pages", labels, self.page as usize).on_select({
-                    let this = cx.weak_entity();
-                    move |index, _, cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.page = [Page::Log, Page::Spammer][index];
-                            cx.notify();
-                        });
-                    }
-                }),
-            ))
+            .child(
+                div().flex_none().px(px(20.0)).child(
+                    Tabs::new("packets-pages", "Pages", labels.len(), move |index| {
+                        let (name, count) = labels[index];
+                        let tab = Tab::new(name);
+                        if count == 0 {
+                            tab
+                        } else {
+                            tab.end_slot(Badge::new(count.to_string()))
+                        }
+                    })
+                    .selected(self.page as usize)
+                    .on_select({
+                        let this = cx.weak_entity();
+                        move |index, _, cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.page = [Page::Log, Page::Spammer][index];
+                                cx.notify();
+                            });
+                        }
+                    }),
+                ),
+            )
             .child(
                 div()
                     .id("packets-body")

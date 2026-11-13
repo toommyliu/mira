@@ -251,12 +251,9 @@ impl Follower {
         let profile = Select::new(
             "follower-profile",
             "Profile",
-            names
-                .iter()
-                .map(|name| {
-                    SharedString::from(name.as_deref().unwrap_or(profiles::GENERIC).to_owned())
-                })
-                .collect(),
+            names.iter().map(|name| {
+                SharedString::from(name.as_deref().unwrap_or(profiles::GENERIC).to_owned())
+            }),
             picked,
         )
         .on_select(move |index, _, _| {

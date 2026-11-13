@@ -12,19 +12,18 @@ use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, PointerCursor as _, Theme, Tone,
     primitives::{
         Alert, Badge, Button, ContextMenu, Dialog, Flow, Icon, Input, InputEvent, MenuItem, Pose,
-        Sortable, ToggleGroup, Tooltip,
+        Sortable, ToggleGroup,
         button::{Size, Variant},
-        icon,
     },
-    theme::{CONTROL_SM, LINE_SMALL, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL, TEXT_TITLE, tabular},
+    theme::{LINE_SMALL, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL, TEXT_TITLE, tabular},
 };
 
 use super::{
     BAR_HEIGHT,
     account::Glance,
     client::{
-        CloseSession, SIDEBAR_WIDTH, TAB_BOTTOM, TAB_GAP, TAB_PADDING, TAB_ROW, TAB_TOP, control,
-        drag_area, tab_face,
+        CloseSession, SIDEBAR_WIDTH, TAB_BOTTOM, TAB_GAP, TAB_PADDING, TAB_ROW, TAB_TOP, drag_area,
+        tab_face,
     },
     profile_form::{Form, FormStep, FormTrigger, Item, Kind, Rule},
     ui,
@@ -714,15 +713,9 @@ impl Editor {
                     .h(BAR_HEIGHT)
                     .pr(px(8.0))
                     .child(drag_area().flex_1())
-                    .child(Tooltip::new(
-                        "new-profile-tip",
-                        "New profile",
-                        control(theme, "new-profile")
-                            .size(CONTROL_SM)
-                            .justify_center()
-                            .role(Role::Button)
-                            .aria_label("New profile")
-                            .child(icon(Icon::Plus, theme.text_secondary))
+                    .child(
+                        Button::icon("new-profile", Icon::Plus, "New profile")
+                            .size(Size::Small)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.add_profile(
                                     Form::of(&Profile::generic()),
@@ -731,7 +724,7 @@ impl Editor {
                                     cx,
                                 )
                             })),
-                    )),
+                    ),
             )
             .child(
                 div()
@@ -824,29 +817,35 @@ impl Editor {
             })
             .on_click(cx.listener(move |this, _, window, cx| this.select(entry, window, cx)));
         let this = cx.weak_entity();
-        let act = |label: &'static str, run: fn(&mut Editor, &mut Window, &mut Context<Editor>)| {
-            let this = this.clone();
-            MenuItem::action(label, move |window, cx| {
-                let _ = this.update(cx, |editor, cx| {
-                    editor.select(entry, window, cx);
-                    run(editor, window, cx);
-                });
+        ContextMenu::new(("profile-menu", key), title)
+            .items(move |_, _| {
+                let act =
+                    |label: &'static str,
+                     run: fn(&mut Editor, &mut Window, &mut Context<Editor>)| {
+                        let this = this.clone();
+                        MenuItem::action(label, move |window, cx| {
+                            let _ = this.update(cx, |editor, cx| {
+                                editor.select(entry, window, cx);
+                                run(editor, window, cx);
+                            });
+                        })
+                    };
+                match entry {
+                    None => vec![act("Duplicate", Editor::duplicate)],
+                    Some(_) => vec![
+                        act("Rename", Editor::rename),
+                        act("Duplicate", Editor::duplicate),
+                        MenuItem::separator(),
+                        act("Delete…", |editor, _, cx| {
+                            editor.deleting = true;
+                            cx.notify();
+                        })
+                        .danger(),
+                    ],
+                }
             })
-        };
-        let items = match entry {
-            None => vec![act("Duplicate", Editor::duplicate)],
-            Some(_) => vec![
-                act("Rename", Editor::rename),
-                act("Duplicate", Editor::duplicate),
-                MenuItem::separator(),
-                act("Delete…", |editor, _, cx| {
-                    editor.deleting = true;
-                    cx.notify();
-                })
-                .danger(),
-            ],
-        };
-        ContextMenu::new(("profile-menu", key), title, items, row).into_any_element()
+            .child(row)
+            .into_any_element()
     }
 
     fn header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -990,7 +989,7 @@ impl Editor {
                         ToggleGroup::new(
                             "profile-on-cooldown",
                             "When a skill is cooling down",
-                            vec!["Skip it".into(), "Wait for it".into()],
+                            ["Skip it", "Wait for it"],
                             on_cooldown,
                         )
                         .on_select(move |choice, _, cx| {
@@ -1218,8 +1217,7 @@ impl Editor {
                         "Skill",
                         SLOTS
                             .iter()
-                            .map(|slot| SharedString::from(slot.to_string()))
-                            .collect(),
+                            .map(|slot| SharedString::from(slot.to_string())),
                         usize::from(slot),
                     )
                     .full_width()
@@ -1291,7 +1289,7 @@ impl Editor {
                                 ToggleGroup::new(
                                     "step-on-cooldown",
                                     "When it's cooling down",
-                                    vec!["Default".into(), "Skip".into(), "Wait".into()],
+                                    ["Default", "Skip", "Wait"],
                                     chosen,
                                 )
                                 .full_width()
@@ -1490,10 +1488,7 @@ fn rule_card(
         ToggleGroup::new(
             (id, rule),
             label,
-            options
-                .iter()
-                .map(|option| SharedString::from(*option))
-                .collect(),
+            options.iter().map(|option| SharedString::from(*option)),
             chosen,
         )
         .full_width()
@@ -1518,7 +1513,7 @@ fn rule_card(
         ToggleGroup::new(
             ("rule-bound", rule),
             "Comparison",
-            vec!["≤".into(), "≥".into()],
+            ["≤", "≥"],
             usize::from(!condition.at_most),
         )
         .on_select(move |index, _, cx| {

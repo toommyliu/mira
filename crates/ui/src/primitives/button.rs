@@ -5,16 +5,17 @@ use std::{
 };
 
 use gpui::{
-    App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled as _, Window, div,
+    AnyElement, App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement,
+    Pixels, Refineable as _, RenderOnce, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
 
 use super::{Icon, Spinner, icon, tooltip};
 use crate::{
-    ActiveTheme as _, PointerCursor as _, nav,
-    theme::{CONTROL_MD, CONTROL_SM, LINE_BODY, TEXT_BODY, TEXT_SMALL},
+    ActiveTheme as _, PointerCursor as _, h_flex, nav,
+    theme::{CONTROL_MD, CONTROL_SM, CONTROL_XS, LINE_BODY, TEXT_BODY, TEXT_SMALL},
 };
 
 pub type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -86,60 +87,106 @@ pub enum Variant {
     Primary,
     #[default]
     Secondary,
+    Outline,
     Ghost,
     Danger,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Size {
+    XSmall,
     Small,
     #[default]
     Medium,
 }
 
-enum Content {
-    Label(SharedString),
-    Icon(Icon, SharedString),
+impl Size {
+    fn height(self) -> Pixels {
+        match self {
+            Size::XSmall => CONTROL_XS,
+            Size::Small => CONTROL_SM,
+            Size::Medium => CONTROL_MD,
+        }
+    }
+
+    fn padding(self) -> Pixels {
+        match self {
+            Size::XSmall => px(6.0),
+            Size::Small => px(8.0),
+            Size::Medium => px(10.0),
+        }
+    }
 }
+
+pub(crate) type PressHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
+pub(crate) type KeyHandler = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Button {
     id: ElementId,
-    content: Content,
+    label: SharedString,
+    icon: Option<Icon>,
+    start: Option<AnyElement>,
+    end: Option<AnyElement>,
+    children: Vec<AnyElement>,
     variant: Variant,
     size: Size,
     disabled: bool,
     busy: bool,
     selected: Option<bool>,
+    expanded: Option<bool>,
     tooltip: Option<SharedString>,
     on_click: Option<ClickHandler>,
+    on_press: Option<PressHandler>,
+    on_key_down: Option<KeyHandler>,
+    attachments: Vec<AnyElement>,
+    role: Role,
+    value: Option<SharedString>,
+    style: StyleRefinement,
 }
 
 impl Button {
     pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
-        Self::with(id, Content::Label(label.into()))
-    }
-
-    pub fn icon(id: impl Into<ElementId>, icon: Icon, label: impl Into<SharedString>) -> Self {
-        let label = label.into();
-        let mut button = Self::with(id, Content::Icon(icon, label.clone()));
-        button.variant = Variant::Ghost;
-        button.tooltip = (icon != Icon::X).then_some(label);
-        button
-    }
-
-    fn with(id: impl Into<ElementId>, content: Content) -> Self {
         Self {
             id: id.into(),
-            content,
+            label: label.into(),
+            icon: None,
+            start: None,
+            end: None,
+            children: Vec::new(),
             variant: Variant::default(),
             size: Size::default(),
             disabled: false,
             busy: false,
             selected: None,
+            expanded: None,
             tooltip: None,
             on_click: None,
+            on_press: None,
+            on_key_down: None,
+            attachments: Vec::new(),
+            role: Role::Button,
+            value: None,
+            style: StyleRefinement::default(),
         }
+    }
+
+    pub fn icon(id: impl Into<ElementId>, icon: Icon, label: impl Into<SharedString>) -> Self {
+        let mut button = Self::new(id, label);
+        button.icon = Some(icon);
+        button.variant = Variant::Ghost;
+        button.tooltip = (icon != Icon::X).then(|| button.label.clone());
+        button
+    }
+
+    pub fn start_slot(mut self, element: impl IntoElement) -> Self {
+        self.start = Some(element.into_any_element());
+        self
+    }
+
+    pub fn end_slot(mut self, element: impl IntoElement) -> Self {
+        self.end = Some(element.into_any_element());
+        self
     }
 
     pub fn variant(mut self, variant: Variant) -> Self {
@@ -176,6 +223,49 @@ impl Button {
         self.on_click = Some(Rc::new(f));
         self
     }
+
+    pub(crate) fn trigger(
+        mut self,
+        expanded: bool,
+        on_press: PressHandler,
+        on_key_down: KeyHandler,
+    ) -> Self {
+        self.expanded = Some(expanded);
+        self.on_press = Some(on_press);
+        self.on_key_down = Some(on_key_down);
+        self
+    }
+
+    pub(crate) fn attach(mut self, element: AnyElement) -> Self {
+        self.attachments.push(element);
+        self
+    }
+
+    pub(crate) fn combobox(mut self, value: Option<SharedString>) -> Self {
+        self.role = Role::ComboBox;
+        self.value = value;
+        self
+    }
+
+    pub(crate) fn focus_handle(&self, window: &mut Window, cx: &mut App) -> gpui::FocusHandle {
+        nav::focus_handle((self.id.clone(), "focus"), window, cx)
+    }
+
+    pub(crate) fn label(&self) -> &SharedString {
+        &self.label
+    }
+}
+
+impl ParentElement for Button {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl Styled for Button {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
 }
 
 impl RenderOnce for Button {
@@ -184,7 +274,7 @@ impl RenderOnce for Button {
         let ring = !self.disabled && nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
         let inert = self.disabled || self.busy;
-        let pressed = self.selected == Some(true);
+        let lit = self.selected == Some(true) || self.expanded == Some(true);
         let (bg, hover, active, fg, border) = match self.variant {
             Variant::Primary => (
                 theme.inverse,
@@ -194,21 +284,32 @@ impl RenderOnce for Button {
                 None,
             ),
             Variant::Secondary => (
-                theme.fill,
+                if lit { theme.fill_pressed } else { theme.fill },
+                theme.fill_hover,
+                theme.fill_pressed,
+                theme.text,
+                Some(theme.border),
+            ),
+            Variant::Outline => (
+                if lit {
+                    theme.fill_pressed
+                } else {
+                    gpui::transparent_black()
+                },
                 theme.fill_hover,
                 theme.fill_pressed,
                 theme.text,
                 Some(theme.border),
             ),
             Variant::Ghost => (
-                if pressed {
+                if lit {
                     theme.selected
                 } else {
                     gpui::transparent_black()
                 },
                 theme.fill_hover,
                 theme.fill_pressed,
-                if pressed {
+                if lit {
                     theme.text
                 } else {
                     theme.text_secondary
@@ -223,14 +324,6 @@ impl RenderOnce for Button {
                 None,
             ),
         };
-        let height = match self.size {
-            Size::Small => CONTROL_SM,
-            Size::Medium => CONTROL_MD,
-        };
-        let (label, is_icon) = match &self.content {
-            Content::Label(label) => (label.clone(), false),
-            Content::Icon(_, label) => (label.clone(), true),
-        };
         let fg = if self.disabled {
             theme.text_disabled
         } else {
@@ -241,14 +334,33 @@ impl RenderOnce for Button {
         } else {
             bg
         };
+        let height = self.size.height();
+        let icon_only = self.icon.is_some() && self.children.is_empty();
         let tip = self.tooltip.clone();
-        let describe = tip.clone().filter(|tip| *tip != label);
-
-        let button = div()
+        let describe = tip.clone().filter(|tip| *tip != self.label);
+        let content = h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(6.0))
+            .justify_center()
+            .when(self.busy, |content| content.opacity(0.0))
+            .when_some(self.start, |content, start| {
+                content.child(h_flex().flex_none().child(start))
+            })
+            .map(|content| match (self.icon, self.children.is_empty()) {
+                (Some(glyph), true) => content.child(icon(glyph, fg)),
+                (_, true) => content.child(div().truncate().child(self.label.clone())),
+                (_, false) => content.children(self.children),
+            })
+            .when_some(self.end, |content, end| {
+                content.child(h_flex().flex_none().child(end))
+            });
+        let mut button = h_flex()
             .id(self.id.clone())
-            .role(Role::Button)
+            .role(self.role)
+            .aria_label(self.label.clone())
+            .when_some(self.value.clone(), |button, value| button.aria_value(value))
             .when_some(describe, |button, tip| button.aria_description(tip))
-            .aria_label(label.clone())
             .when_some(self.selected, |button, pressed| {
                 button.aria_toggled(if pressed {
                     gpui::Toggled::True
@@ -256,28 +368,26 @@ impl RenderOnce for Button {
                     gpui::Toggled::False
                 })
             })
+            .when_some(self.expanded, |button, expanded| {
+                button.aria_expanded(expanded)
+            })
             .when(self.busy, |button| button.aria_description("Working"))
             .when(!self.disabled, |button| {
                 button.track_focus(&focus.tab_stop(true))
             })
             .relative()
-            .flex()
             .flex_none()
-            .items_center()
             .justify_center()
             .h(height)
             .map(|button| {
-                if is_icon {
+                if icon_only {
                     button.w(height)
                 } else {
-                    button.px(match self.size {
-                        Size::Small => px(8.0),
-                        Size::Medium => px(12.0),
-                    })
+                    button.px(self.size.padding())
                 }
             })
             .text_size(match self.size {
-                Size::Small => TEXT_SMALL,
+                Size::XSmall | Size::Small => TEXT_SMALL,
                 Size::Medium => TEXT_BODY,
             })
             .line_height(LINE_BODY)
@@ -290,7 +400,9 @@ impl RenderOnce for Button {
                     bg,
                     border: border.filter(|_| !self.disabled),
                     states: (!inert).then_some((hover, active)),
-                    edge: if self.variant == Variant::Ghost || self.disabled {
+                    edge: if matches!(self.variant, Variant::Ghost | Variant::Outline)
+                        || self.disabled
+                    {
                         Vec::new()
                     } else {
                         theme.edge()
@@ -300,17 +412,24 @@ impl RenderOnce for Button {
             )
             .when(!inert, |button| button.pointer_cursor(&theme))
             .when_some(self.on_click.filter(|_| !inert), |button, on_click| {
-                button.on_click(move |event, window, cx| on_click(event, window, cx))
+                button.on_click(move |event, window, cx| {
+                    cx.stop_propagation();
+                    on_click(event, window, cx)
+                })
             })
-            .child(
-                div()
-                    .flex()
-                    .when(self.busy, |content| content.opacity(0.0))
-                    .map(|content| match self.content {
-                        Content::Label(label) => content.child(label),
-                        Content::Icon(g, _) => content.child(icon(g, fg)),
-                    }),
+            .when_some(self.on_press.filter(|_| !inert), |button, on_press| {
+                button.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    on_press(event, window, cx)
+                })
+            })
+            .when_some(
+                self.on_key_down.filter(|_| !inert),
+                |button, on_key_down| {
+                    button.on_key_down(move |event, window, cx| on_key_down(event, window, cx))
+                },
             )
+            .child(content)
+            .children(self.attachments)
             .when(self.busy, |button| {
                 button.child(
                     div()
@@ -325,6 +444,7 @@ impl RenderOnce for Button {
             .when(ring, |button| {
                 button.child(theme.focus_ring(theme.radius.control))
             });
+        button.style().refine(&self.style);
         match tip {
             Some(tip) => tooltip::attach(button, (self.id, "tooltip"), tip, ring, window, cx),
             None => button,

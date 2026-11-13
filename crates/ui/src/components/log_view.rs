@@ -248,16 +248,19 @@ impl RenderOnce for LogView {
                                     .child(entry.message),
                             );
                         match &menu {
-                            Some(menu) => ContextMenu::new(
-                                (
-                                    id.clone(),
-                                    SharedString::from((dropped + index as u64).to_string()),
-                                ),
-                                "Line actions",
-                                menu(index, cx),
-                                line,
-                            )
-                            .into_any_element(),
+                            Some(menu) => {
+                                let menu = menu.clone();
+                                ContextMenu::new(
+                                    (
+                                        id.clone(),
+                                        SharedString::from((dropped + index as u64).to_string()),
+                                    ),
+                                    "Line actions",
+                                )
+                                .items(move |_, cx| menu(index, cx))
+                                .child(line)
+                                .into_any_element()
+                            }
                             None => line.into_any_element(),
                         }
                     })

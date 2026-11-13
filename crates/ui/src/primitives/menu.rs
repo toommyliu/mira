@@ -2,127 +2,203 @@ use std::{cell::Cell, rc::Rc, time::Instant};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Pixels,
-    Point, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Toggled, Window, anchored, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
-    relative,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, RenderOnce,
+    Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
+    anchored, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
-    Icon,
-    button::{FACE_GROUP, Face},
-    icon,
+    Button, Icon,
+    button::{KeyHandler, PressHandler},
 };
 use crate::{
-    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, Theme,
+    ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
     motion::{self, From},
     nav::{self, Axis, Step},
-    theme::{CONTROL_MD, LINE_BODY, PANEL_INSET, TEXT_BODY, TEXT_CAPTION, TEXT_SMALL},
+    theme::{LINE_BODY, PANEL_INSET, TEXT_BODY},
+    v_flex,
 };
 
-type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
 const MENU_MIN_WIDTH: Pixels = px(200.0);
-const MENU_MAX_HEIGHT: Pixels = px(320.0);
-const ITEM_HEIGHT: Pixels = px(26.0);
+const MENU_MAX_HEIGHT: Pixels = px(360.0);
+const ITEM_HEIGHT: Pixels = px(24.0);
 const GAP: Pixels = px(4.0);
 const BORDER: Pixels = px(1.0);
 const SUBMENU_OVERLAP: Pixels = px(2.0);
 pub(crate) const WINDOW_MARGIN: Pixels = px(8.0);
 const ROW_PADDING: Pixels = px(8.0);
-const CHECK_GUTTER: Pixels = px(12.0);
+const MARK_GUTTER: Pixels = px(12.0);
+const ROW_GAP: Pixels = px(6.0);
 const TRIGGER_PADDING: Pixels = px(10.0);
 
-#[derive(Clone)]
-pub enum MenuItem {
-    Action {
-        label: SharedString,
-        shortcut: Option<SharedString>,
-        checked: Option<bool>,
-        disabled: bool,
-        danger: bool,
-        on_select: Handler,
-    },
-    Submenu {
-        label: SharedString,
-        items: Rc<[MenuItem]>,
-    },
-    Section(SharedString),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Check,
+    Radio,
+    Switch,
+}
+
+enum Kind {
+    Action(Handler),
+    Submenu(Vec<MenuItem>),
+    Header,
     Separator,
 }
 
+pub struct MenuItem {
+    kind: Kind,
+    label: SharedString,
+    start: Option<AnyElement>,
+    end: Option<AnyElement>,
+    description: Option<SharedString>,
+    children: Vec<AnyElement>,
+    shortcut: Option<SharedString>,
+    checked: Option<bool>,
+    mark: Mark,
+    disabled: bool,
+    danger: bool,
+    keep_open: bool,
+}
+
 impl MenuItem {
+    fn with(kind: Kind, label: SharedString) -> Self {
+        Self {
+            kind,
+            label,
+            start: None,
+            end: None,
+            description: None,
+            children: Vec::new(),
+            shortcut: None,
+            checked: None,
+            mark: Mark::Check,
+            disabled: false,
+            danger: false,
+            keep_open: false,
+        }
+    }
+
     pub fn action(
         label: impl Into<SharedString>,
         f: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
-        MenuItem::Action {
-            label: label.into(),
-            shortcut: None,
-            checked: None,
-            disabled: false,
-            danger: false,
-            on_select: Rc::new(f),
-        }
+        Self::with(Kind::Action(Rc::new(f)), label.into())
+    }
+
+    pub fn switch(
+        label: impl Into<SharedString>,
+        on: bool,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        let mut item = Self::action(label, f).checked(on).keep_open();
+        item.mark = Mark::Switch;
+        item
+    }
+
+    pub fn radio(
+        label: impl Into<SharedString>,
+        checked: bool,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        let mut item = Self::action(label, f).checked(checked);
+        item.mark = Mark::Radio;
+        item
     }
 
     pub fn submenu(label: impl Into<SharedString>, items: Vec<MenuItem>) -> Self {
-        MenuItem::Submenu {
-            label: label.into(),
-            items: items.into(),
-        }
+        Self::with(Kind::Submenu(items), label.into())
     }
 
-    pub fn section(label: impl Into<SharedString>) -> Self {
-        MenuItem::Section(label.into())
+    pub fn header(label: impl Into<SharedString>) -> Self {
+        Self::with(Kind::Header, label.into())
     }
 
     pub fn separator() -> Self {
-        MenuItem::Separator
+        Self::with(Kind::Separator, SharedString::default())
+    }
+
+    pub fn start_slot(mut self, element: impl IntoElement) -> Self {
+        self.start = Some(element.into_any_element());
+        self
+    }
+
+    pub fn end_slot(mut self, element: impl IntoElement) -> Self {
+        self.end = Some(element.into_any_element());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 
     pub fn shortcut(mut self, keys: impl Into<SharedString>) -> Self {
-        if let MenuItem::Action { shortcut, .. } = &mut self {
-            *shortcut = Some(keys.into());
-        }
+        self.shortcut = Some(keys.into());
         self
     }
 
     pub fn checked(mut self, on: bool) -> Self {
-        if let MenuItem::Action { checked, .. } = &mut self {
-            *checked = Some(on);
-        }
+        self.checked = Some(on);
         self
     }
 
     pub fn disabled(mut self, off: bool) -> Self {
-        if let MenuItem::Action { disabled, .. } = &mut self {
-            *disabled = off;
-        }
+        self.disabled = off;
         self
     }
 
     pub fn danger(mut self) -> Self {
-        if let MenuItem::Action { danger, .. } = &mut self {
-            *danger = true;
-        }
+        self.danger = true;
+        self
+    }
+
+    pub fn keep_open(mut self) -> Self {
+        self.keep_open = true;
         self
     }
 
     fn navigable(&self) -> bool {
-        match self {
-            MenuItem::Action { disabled, .. } => !disabled,
-            MenuItem::Submenu { .. } => true,
-            MenuItem::Section(_) | MenuItem::Separator => false,
+        match self.kind {
+            Kind::Action(_) | Kind::Submenu(_) => !self.disabled,
+            Kind::Header | Kind::Separator => false,
         }
     }
+}
 
-    fn label(&self) -> Option<&SharedString> {
-        match self {
-            MenuItem::Action { label, .. } | MenuItem::Submenu { label, .. } => Some(label),
-            MenuItem::Section(_) | MenuItem::Separator => None,
-        }
+impl ParentElement for MenuItem {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
     }
+}
+
+pub(crate) struct Meta {
+    label: SharedString,
+    navigable: bool,
+    on_select: Option<Handler>,
+    keep_open: bool,
+    submenu: Option<Rc<[Meta]>>,
+}
+
+fn metas(items: &[MenuItem]) -> Rc<[Meta]> {
+    items
+        .iter()
+        .map(|item| Meta {
+            label: item.label.clone(),
+            navigable: item.navigable(),
+            on_select: match &item.kind {
+                Kind::Action(handler) if !item.disabled => Some(handler.clone()),
+                _ => None,
+            },
+            keep_open: item.keep_open,
+            submenu: match &item.kind {
+                Kind::Submenu(items) => Some(metas(items)),
+                _ => None,
+            },
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -147,15 +223,17 @@ pub(crate) fn attach(
         trigger.bottom() + GAP + height.get() <= window.viewport_size().height - WINDOW_MARGIN;
     let fits_above = trigger.top() - GAP - height.get() >= WINDOW_MARGIN;
     let above = !fits_below && fits_above;
-    let spot = div()
-        .absolute()
-        .top(if above { -GAP } else { CONTROL_MD + GAP });
+    let spot = div().absolute().top(if above {
+        -GAP
+    } else {
+        trigger.size.height + GAP
+    });
     let (spot, anchor) = match (align, above) {
         (Align::Start, false) => (spot.left_0(), Anchor::TopLeft),
-        (Align::Center, false) => (spot.left(relative(0.5)), Anchor::TopCenter),
+        (Align::Center, false) => (spot.left(gpui::relative(0.5)), Anchor::TopCenter),
         (Align::End, false) => (spot.right_0(), Anchor::TopRight),
         (Align::Start, true) => (spot.left_0(), Anchor::BottomLeft),
-        (Align::Center, true) => (spot.left(relative(0.5)), Anchor::BottomCenter),
+        (Align::Center, true) => (spot.left(gpui::relative(0.5)), Anchor::BottomCenter),
         (Align::End, true) => (spot.right_0(), Anchor::BottomRight),
     };
     spot.child(
@@ -196,18 +274,20 @@ pub(crate) fn item_over_trigger(
     if height > MENU_MAX_HEIGHT {
         return None;
     }
+    let trigger = state.read(cx).trigger_bounds.get();
     let offset = point(
-        BORDER + PANEL_INSET + ROW_PADDING + CHECK_GUTTER + ROW_PADDING - BORDER - TRIGGER_PADDING,
-        BORDER + PANEL_INSET + ITEM_HEIGHT * index as f32 - (CONTROL_MD - ITEM_HEIGHT) / 2.0,
+        BORDER + PANEL_INSET + ROW_PADDING + MARK_GUTTER + ROW_GAP - TRIGGER_PADDING,
+        BORDER + PANEL_INSET + ITEM_HEIGHT * index as f32
+            - (trigger.size.height - ITEM_HEIGHT) / 2.0,
     );
-    let top = state.read(cx).trigger_bounds.get().top() - offset.y;
+    let top = trigger.top() - offset.y;
     let fits =
         top >= WINDOW_MARGIN && top + height <= window.viewport_size().height - WINDOW_MARGIN;
     fits.then_some(offset)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub(crate) enum PopupKind {
     Menu,
     ListBox,
 }
@@ -225,6 +305,7 @@ pub(crate) struct MenuState {
     pub(crate) item_offset: Cell<Option<Point<Pixels>>>,
     closed_at: Option<Instant>,
     pointer: Option<Point<Pixels>>,
+    started: bool,
 }
 
 impl MenuState {
@@ -242,6 +323,7 @@ impl MenuState {
             item_offset: Cell::new(None),
             closed_at: None,
             pointer: None,
+            started: false,
         }
     }
 
@@ -258,6 +340,10 @@ impl MenuState {
 
     pub fn focus(&self) -> FocusHandle {
         self.focus.clone()
+    }
+
+    pub(crate) fn trigger_width(&self) -> Pixels {
+        self.trigger_bounds.get().size.width
     }
 }
 
@@ -315,8 +401,20 @@ pub(crate) fn outside(state: &Entity<MenuState>, at: Point<Pixels>, cx: &App) ->
         && !(menu.submenu.is_some() && menu.submenu_bounds.get().contains(&at))
 }
 
-pub(crate) fn state(id: &ElementId, window: &mut Window, cx: &mut App) -> Entity<MenuState> {
-    window.use_keyed_state((id.clone(), "menu"), cx, |_, cx| MenuState::new(cx))
+pub(crate) fn state(
+    id: &ElementId,
+    default_open: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<MenuState> {
+    let state = window.use_keyed_state((id.clone(), "menu"), cx, |_, cx| MenuState::new(cx));
+    if default_open && !state.read(cx).started {
+        state.update(cx, |menu, _| {
+            menu.started = true;
+            menu.open = true;
+        });
+    }
+    state
 }
 
 pub(crate) fn open(
@@ -329,6 +427,7 @@ pub(crate) fn open(
     let return_focus = window.focused(cx);
     let focus = state.update(cx, |menu, cx| {
         menu.open = true;
+        menu.started = true;
         menu.closed_at = None;
         menu.pointer = None;
         menu.highlighted = highlighted;
@@ -357,51 +456,61 @@ pub(crate) fn close(state: &Entity<MenuState>, restore: bool, window: &mut Windo
 }
 
 fn activate(
-    items: &[MenuItem],
+    metas: &Rc<[Meta]>,
     index: usize,
     state: &Entity<MenuState>,
     keyboard: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
-    match &items[index] {
-        MenuItem::Action {
-            on_select,
-            disabled: false,
-            ..
-        } => {
-            close(state, true, window, cx);
-            on_select(window, cx);
-        }
-        MenuItem::Submenu { items: sub, .. } => {
-            let first = keyboard
-                .then(|| nav::step(None, sub.len(), Step::First, false, |i| sub[i].navigable()))
-                .flatten();
-            state.update(cx, |menu, cx| {
-                menu.highlighted = Some(index);
-                menu.submenu = Some((index, first));
-                cx.notify();
-            });
-        }
-        _ => {}
+    let meta = &metas[index];
+    if let Some(sub) = &meta.submenu {
+        let first = keyboard
+            .then(|| nav::step(None, sub.len(), Step::First, false, |i| sub[i].navigable))
+            .flatten();
+        state.update(cx, |menu, cx| {
+            menu.highlighted = Some(index);
+            menu.submenu = Some((index, first));
+            cx.notify();
+        });
+        return;
     }
+    let Some(on_select) = meta.on_select.clone() else {
+        return;
+    };
+    if !meta.keep_open {
+        close(state, true, window, cx);
+    }
+    on_select(window, cx);
+}
+
+fn typeahead(key: &str, metas: &[Meta], current: Option<usize>) -> Option<usize> {
+    nav::typeahead(
+        key,
+        metas
+            .iter()
+            .enumerate()
+            .filter(|(_, meta)| meta.navigable)
+            .map(|(i, meta)| (i, meta.label.to_string())),
+        current,
+    )
 }
 
 fn key_down(
-    items: &Rc<[MenuItem]>,
+    metas: &Rc<[Meta]>,
     state: &Entity<MenuState>,
     event: &KeyDownEvent,
     window: &mut Window,
     cx: &mut App,
 ) {
     let key = event.keystroke.key.as_str();
-    let (highlighted, submenu) = current(items, state.read(cx));
+    let (highlighted, submenu) = current(metas, state.read(cx));
     if key == "tab" {
         close(state, true, window, cx);
         return;
     }
     if let Some((parent, sub_highlight)) = submenu
-        && let MenuItem::Submenu { items: sub, .. } = &items[parent]
+        && let Some(sub) = &metas[parent].submenu
         && sub_highlight.is_some()
     {
         if key == "escape" || key == "left" {
@@ -420,19 +529,8 @@ fn key_down(
             return;
         }
         let next = Step::from_key(event, Axis::Vertical)
-            .and_then(|step| {
-                nav::step(sub_highlight, sub.len(), step, true, |i| sub[i].navigable())
-            })
-            .or_else(|| {
-                nav::typeahead(
-                    key,
-                    sub.iter()
-                        .enumerate()
-                        .filter(|(_, item)| item.navigable())
-                        .filter_map(|(i, item)| item.label().map(|l| (i, l.to_string()))),
-                    sub_highlight,
-                )
-            });
+            .and_then(|step| nav::step(sub_highlight, sub.len(), step, true, |i| sub[i].navigable))
+            .or_else(|| typeahead(key, sub, sub_highlight));
         if let Some(next) = next {
             state.update(cx, |menu, cx| {
                 menu.submenu = Some((parent, Some(next)));
@@ -446,34 +544,22 @@ fn key_down(
         "escape" => close(state, true, window, cx),
         "enter" | "space" => {
             if let Some(index) = highlighted {
-                activate(items, index, state, true, window, cx);
+                activate(metas, index, state, true, window, cx);
             }
         }
         "right" => {
             if let Some(index) = highlighted
-                && matches!(items[index], MenuItem::Submenu { .. })
+                && metas[index].submenu.is_some()
             {
-                activate(items, index, state, true, window, cx);
+                activate(metas, index, state, true, window, cx);
             }
         }
         _ => {
             let next = Step::from_key(event, Axis::Vertical)
                 .and_then(|step| {
-                    nav::step(highlighted, items.len(), step, true, |i| {
-                        items[i].navigable()
-                    })
+                    nav::step(highlighted, metas.len(), step, true, |i| metas[i].navigable)
                 })
-                .or_else(|| {
-                    nav::typeahead(
-                        key,
-                        items
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, item)| item.navigable())
-                            .filter_map(|(i, item)| item.label().map(|l| (i, l.to_string()))),
-                        highlighted,
-                    )
-                });
+                .or_else(|| typeahead(key, metas, highlighted));
             let Some(next) = next else {
                 return;
             };
@@ -487,17 +573,14 @@ fn key_down(
     cx.stop_propagation();
 }
 
-fn current(
-    items: &[MenuItem],
-    menu: &MenuState,
-) -> (Option<usize>, Option<(usize, Option<usize>)>) {
-    let highlighted = menu.highlighted.filter(|&index| index < items.len());
+fn current(metas: &[Meta], menu: &MenuState) -> (Option<usize>, Option<(usize, Option<usize>)>) {
+    let highlighted = menu.highlighted.filter(|&index| index < metas.len());
     let submenu = menu
         .submenu
-        .and_then(|(parent, sub_highlight)| match items.get(parent) {
-            Some(MenuItem::Submenu { items: sub, .. }) => {
-                Some((parent, sub_highlight.filter(|&index| index < sub.len())))
-            }
+        .and_then(|(parent, sub_highlight)| match metas.get(parent) {
+            Some(Meta {
+                submenu: Some(sub), ..
+            }) => Some((parent, sub_highlight.filter(|&index| index < sub.len()))),
             _ => None,
         });
     (highlighted, submenu)
@@ -513,7 +596,7 @@ pub(crate) fn first_navigable(items: &[MenuItem], from_end: bool) -> Option<usiz
     )
 }
 
-fn panel_shell(id: impl Into<ElementId>, scrolls: bool, theme: &Theme) -> Stateful<Div> {
+pub(crate) fn panel_shell(id: impl Into<ElementId>, scrolls: bool, theme: &Theme) -> Stateful<Div> {
     div()
         .id(id)
         .occlude()
@@ -534,187 +617,260 @@ fn panel_shell(id: impl Into<ElementId>, scrolls: bool, theme: &Theme) -> Statef
         .text_color(theme.text)
 }
 
+fn switch_mark(on: bool, theme: &Theme) -> Div {
+    div()
+        .flex_none()
+        .w(px(24.0))
+        .h(px(14.0))
+        .p(px(2.0))
+        .rounded_full()
+        .bg(if on {
+            theme.accent
+        } else {
+            theme.border_strong
+        })
+        .child(
+            div()
+                .when(on, |thumb| thumb.ml(px(10.0)))
+                .size(px(10.0))
+                .rounded_full()
+                .bg(theme.knob),
+        )
+}
+
+type Cursor = (Option<usize>, Option<(usize, Option<usize>)>);
+
 fn rows(
-    items: &Rc<[MenuItem]>,
-    highlighted: Option<usize>,
-    submenu: Option<(usize, Option<usize>)>,
+    items: Vec<MenuItem>,
+    metas: &Rc<[Meta]>,
+    (highlighted, submenu): Cursor,
     nested: bool,
-    kind: Kind,
+    kind: PopupKind,
     state: &Entity<MenuState>,
     theme: &Theme,
 ) -> Vec<AnyElement> {
-    let gutter = items.iter().any(|item| {
-        matches!(
-            item,
-            MenuItem::Action {
-                checked: Some(_),
-                ..
-            }
-        )
-    });
-    let count = items.iter().filter(|item| item.navigable()).count();
+    let gutter = items
+        .iter()
+        .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
+    let count = metas.iter().filter(|meta| meta.navigable).count();
     let mut position = 0;
     items
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(index, item)| match item {
-            MenuItem::Separator => div()
-                .flex_none()
-                .h(px(1.0))
-                .mx(px(8.0))
-                .my(PANEL_INSET)
-                .bg(theme.hairline)
-                .into_any_element(),
-            MenuItem::Section(label) => div()
-                .flex_none()
-                .px(px(8.0))
-                .pt(px(6.0))
-                .pb(px(2.0))
-                .text_size(TEXT_CAPTION)
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_tertiary)
-                .child(label.clone())
-                .into_any_element(),
-            MenuItem::Action {
+        .map(|(index, item)| {
+            let MenuItem {
+                kind: item_kind,
                 label,
+                start,
+                end,
+                description,
+                children,
                 shortcut,
                 checked,
+                mark,
                 disabled,
                 danger,
                 ..
-            } => {
-                position += 1;
-                let lit = highlighted == Some(index);
-                let fg = match (*disabled, *danger, lit) {
-                    (true, _, _) => theme.text_disabled,
-                    (false, true, _) => theme.danger_text,
-                    (false, false, _) => theme.text,
-                };
-                row(index, nested, items, state)
-                    .rounded(theme.radius.item)
-                    .role(match (kind, checked) {
-                        (Kind::ListBox, _) => Role::ListBoxOption,
-                        (Kind::Menu, Some(_)) => Role::MenuItemCheckBox,
-                        (Kind::Menu, None) => Role::MenuItem,
-                    })
-                    .aria_label(label.clone())
-                    .aria_position_in_set(position)
-                    .aria_size_of_set(count)
-                    .when_some(shortcut.clone(), |row, keys| row.aria_keyshortcuts(keys))
-                    .when_some(*checked, |row, on| match kind {
-                        Kind::ListBox => row.aria_selected(on),
-                        Kind::Menu => {
-                            row.aria_toggled(if on { Toggled::True } else { Toggled::False })
-                        }
-                    })
-                    .when(lit, |row| {
-                        row.aria_active_descendant().bg(if *danger {
-                            theme.danger_soft
-                        } else {
-                            theme.selected
+            } = item;
+            match item_kind {
+                Kind::Separator => div()
+                    .flex_none()
+                    .h(px(1.0))
+                    .mx(px(-4.0))
+                    .my(PANEL_INSET)
+                    .bg(theme.hairline)
+                    .into_any_element(),
+                Kind::Header => div()
+                    .flex_none()
+                    .px(ROW_PADDING)
+                    .pt(px(6.0))
+                    .pb(px(2.0))
+                    .text_caption()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child(label)
+                    .into_any_element(),
+                Kind::Action(_) | Kind::Submenu(_) => {
+                    position += 1;
+                    let lit = highlighted == Some(index);
+                    let open = submenu.is_some_and(|(parent, _)| parent == index);
+                    let fg = match (disabled, danger) {
+                        (true, _) => theme.text_disabled,
+                        (false, true) => theme.danger_text,
+                        (false, false) => theme.text,
+                    };
+                    let two_line = description.is_some();
+                    let sub = match item_kind {
+                        Kind::Submenu(sub) => Some(sub),
+                        _ => None,
+                    };
+                    let role = match (kind, &sub, checked, mark) {
+                        (PopupKind::ListBox, _, _, _) => Role::ListBoxOption,
+                        (_, Some(_), _, _) => Role::MenuItem,
+                        (_, None, Some(_), Mark::Radio) => Role::MenuItemRadio,
+                        (_, None, Some(_), _) => Role::MenuItemCheckBox,
+                        (_, None, None, _) => Role::MenuItem,
+                    };
+                    let body = v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .map(|body| {
+                            if children.is_empty() {
+                                body.child(div().truncate().child(label.clone()))
+                            } else {
+                                body.children(children)
+                            }
                         })
-                    })
-                    .text_color(fg)
-                    .when(gutter, |row| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .w(CHECK_GUTTER)
-                                .when(*checked == Some(true), |c| c.child(icon(Icon::Check, fg))),
+                        .when_some(description.clone(), |body, description| {
+                            body.child(
+                                div()
+                                    .truncate()
+                                    .text_small()
+                                    .text_color(if lit {
+                                        theme.text_secondary
+                                    } else {
+                                        theme.text_tertiary
+                                    })
+                                    .child(description),
+                            )
+                        });
+                    let trailing = |content: AnyElement| {
+                        h_flex()
+                            .flex_none()
+                            .gap(px(4.0))
+                            .text_small()
+                            .text_color(if lit {
+                                theme.text_secondary
+                            } else {
+                                theme.text_tertiary
+                            })
+                            .child(content)
+                    };
+                    row(index, nested, metas, state)
+                        .rounded(theme.radius.item)
+                        .role(role)
+                        .aria_label(label.clone())
+                        .when_some(description, |row, description| {
+                            row.aria_description(description)
+                        })
+                        .aria_position_in_set(position)
+                        .aria_size_of_set(count)
+                        .when_some(shortcut.clone(), |row, keys| row.aria_keyshortcuts(keys))
+                        .when_some(checked, |row, on| match kind {
+                            PopupKind::ListBox => row.aria_selected(on),
+                            PopupKind::Menu => {
+                                row.aria_toggled(if on { Toggled::True } else { Toggled::False })
+                            }
+                        })
+                        .when(sub.is_some(), |row| row.aria_expanded(open))
+                        .when(
+                            lit && !(open && submenu.and_then(|(_, h)| h).is_some()),
+                            |row| row.aria_active_descendant(),
                         )
-                    })
-                    .child(div().flex_1().truncate().child(label.clone()))
-                    .when_some(shortcut.clone(), |row, keys| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .text_size(TEXT_SMALL)
-                                .text_color(theme.text_tertiary)
-                                .child(keys),
-                        )
-                    })
-                    .into_any_element()
-            }
-            MenuItem::Submenu { label, items: sub } => {
-                position += 1;
-                let lit = highlighted == Some(index);
-                let open = submenu.is_some_and(|(parent, _)| parent == index);
-                row(index, nested, items, state)
-                    .rounded(theme.radius.item)
-                    .role(Role::MenuItem)
-                    .aria_label(label.clone())
-                    .aria_expanded(open)
-                    .aria_position_in_set(position)
-                    .aria_size_of_set(count)
-                    .when(lit && submenu.and_then(|(_, h)| h).is_none(), |row| {
-                        row.aria_active_descendant()
-                    })
-                    .when(lit || open, |row| row.bg(theme.selected))
-                    .relative()
-                    .when(gutter, |row| row.child(div().flex_none().w(CHECK_GUTTER)))
-                    .child(div().flex_1().child(label.clone()))
-                    .child(icon(Icon::ChevronRight, theme.text_tertiary))
-                    .when(open, |row| {
-                        let sub_highlight = submenu.and_then(|(_, h)| h);
-                        row.child(
-                            div()
-                                .absolute()
-                                .top(-PANEL_INSET - BORDER)
-                                .right(-(PANEL_INSET + BORDER - SUBMENU_OVERLAP))
-                                .child(
-                                    anchored().snap_to_window_with_margin(px(8.0)).child(
-                                        motion::fade(
-                                            ("submenu", index),
-                                            panel_shell(("submenu-panel", index), true, theme)
-                                                .role(Role::Menu)
-                                                .aria_label(label.clone())
-                                                .child({
-                                                    let state = state.clone();
-                                                    canvas(
-                                                        move |area, _, cx| {
-                                                            state.read(cx).submenu_bounds.set(area)
-                                                        },
-                                                        |_, _, _, _| {},
-                                                    )
-                                                    .absolute()
-                                                    .inset_0()
-                                                })
-                                                .children(rows(
-                                                    sub,
-                                                    sub_highlight,
-                                                    None,
-                                                    true,
-                                                    Kind::Menu,
-                                                    state,
-                                                    theme,
-                                                )),
-                                        ),
-                                    ),
+                        .when(lit || open, |row| {
+                            row.bg(if danger {
+                                theme.danger_soft
+                            } else {
+                                theme.selected
+                            })
+                        })
+                        .when(!two_line, |row| row.h(ITEM_HEIGHT))
+                        .when(two_line, |row| row.py(px(4.0)))
+                        .text_color(fg)
+                        .when(gutter, |row| {
+                            row.child(
+                                div().flex_none().w(MARK_GUTTER).when(
+                                    checked == Some(true) && mark != Mark::Switch,
+                                    |gutter| gutter.child(Icon::Check),
                                 ),
-                        )
-                    })
-                    .into_any_element()
+                            )
+                        })
+                        .when_some(start, |row, start| {
+                            row.child(h_flex().flex_none().child(start))
+                        })
+                        .child(body)
+                        .when_some(end, |row, end| row.child(trailing(end)))
+                        .when_some(shortcut, |row, keys| {
+                            row.child(trailing(keys.into_any_element()))
+                        })
+                        .when(mark == Mark::Switch, |row| {
+                            row.child(switch_mark(checked == Some(true), theme))
+                        })
+                        .when_some(sub, |row, sub| {
+                            let sub_metas = metas[index].submenu.clone().unwrap_or_default();
+                            row.relative()
+                                .child(trailing(Icon::ChevronRight.into_any_element()))
+                                .when(open, |row| {
+                                    let sub_highlight = submenu.and_then(|(_, h)| h);
+                                    row.child(submenu_panel(
+                                        index,
+                                        &label,
+                                        sub,
+                                        &sub_metas,
+                                        sub_highlight,
+                                        state,
+                                        theme,
+                                    ))
+                                })
+                        })
+                        .into_any_element()
+                }
             }
         })
         .collect()
 }
 
-fn row(
+fn submenu_panel(
     index: usize,
-    nested: bool,
-    items: &Rc<[MenuItem]>,
+    label: &SharedString,
+    items: Vec<MenuItem>,
+    metas: &Rc<[Meta]>,
+    highlighted: Option<usize>,
     state: &Entity<MenuState>,
-) -> Stateful<Div> {
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(-PANEL_INSET - BORDER)
+        .right(-(PANEL_INSET + BORDER - SUBMENU_OVERLAP))
+        .child(
+            anchored()
+                .snap_to_window_with_margin(WINDOW_MARGIN)
+                .child(motion::fade(
+                    ("submenu", index),
+                    panel_shell(("submenu-panel", index), true, theme)
+                        .role(Role::Menu)
+                        .aria_label(label.clone())
+                        .child({
+                            let state = state.clone();
+                            canvas(
+                                move |area, _, cx| state.read(cx).submenu_bounds.set(area),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0()
+                        })
+                        .children(rows(
+                            items,
+                            metas,
+                            (highlighted, None),
+                            true,
+                            PopupKind::Menu,
+                            state,
+                            theme,
+                        )),
+                )),
+        )
+}
+
+fn row(index: usize, nested: bool, metas: &Rc<[Meta]>, state: &Entity<MenuState>) -> Stateful<Div> {
     let hover_state = state.clone();
     let click_state = state.clone();
-    let click_items = items.clone();
-    div()
+    let click_metas = metas.clone();
+    h_flex()
         .id(("item", index))
-        .flex()
         .flex_none()
-        .items_center()
-        .gap(ROW_PADDING)
-        .h(ITEM_HEIGHT)
+        .gap(ROW_GAP)
         .px(ROW_PADDING)
         .when(nested, |row| {
             row.on_hover(move |hovered, _, cx| {
@@ -730,13 +886,13 @@ fn row(
             })
         })
         .on_click(move |_, window, cx| {
-            activate(&click_items, index, &click_state, false, window, cx);
+            activate(&click_metas, index, &click_state, false, window, cx);
         })
         .when(!nested, |row| {
             let open_state = state.clone();
-            let open_items = items.clone();
+            let opens = metas[index].submenu.is_some();
+            let navigable = metas[index].navigable;
             row.on_mouse_move(move |event, _, cx| {
-                let opens = matches!(open_items[index], MenuItem::Submenu { .. });
                 open_state.update(cx, |menu, cx| {
                     let at = event.position;
                     let from = menu.pointer.replace(at);
@@ -749,11 +905,12 @@ fn row(
                     {
                         return;
                     }
-                    if menu.highlighted == Some(index) && current.is_none() && !opens {
+                    let highlight = navigable.then_some(index);
+                    if menu.highlighted == highlight && current.is_none() && !opens {
                         return;
                     }
-                    menu.highlighted = Some(index);
-                    menu.submenu = opens.then_some((index, None));
+                    menu.highlighted = highlight;
+                    menu.submenu = (opens && navigable).then_some((index, None));
                     cx.notify();
                 });
             })
@@ -763,8 +920,8 @@ fn row(
 pub(crate) fn popup(
     id: &ElementId,
     label: SharedString,
-    items: Rc<[MenuItem]>,
-    kind: Kind,
+    items: Vec<MenuItem>,
+    kind: PopupKind,
     from: From,
     state: &Entity<MenuState>,
     window: &mut Window,
@@ -772,188 +929,155 @@ pub(crate) fn popup(
 ) -> AnyElement {
     let shown = presence(state, window, cx).unwrap_or(0.0);
     let theme = &cx.theme().clone();
+    let metas = metas(&items);
     let menu = state.read(cx);
-    let (highlighted, submenu) = current(&items, menu);
+    let (highlighted, submenu) = current(&metas, menu);
     let focus = menu.focus.clone();
     let keys_state = state.clone();
-    let keys_items = items.clone();
+    let keys_metas = metas.clone();
     let out_state = state.clone();
     let next_state = state.clone();
     let prev_state = state.clone();
+    let scrolls = metas.iter().all(|meta| meta.submenu.is_none());
     let panel = motion::arrive(
         (id.clone(), "popup"),
-        panel_shell(
-            (id.clone(), "panel"),
-            !items
-                .iter()
-                .any(|item| matches!(item, MenuItem::Submenu { .. })),
-            theme,
-        )
-        .role(match kind {
-            Kind::Menu => Role::Menu,
-            Kind::ListBox => Role::ListBox,
-        })
-        .aria_label(label)
-        .track_focus(&focus)
-        .on_key_down(move |event, window, cx| key_down(&keys_items, &keys_state, event, window, cx))
-        .on_action(move |_: &FocusNext, window, cx| {
-            close(&next_state, true, window, cx);
-            cx.propagate();
-        })
-        .on_action(move |_: &FocusPrevious, window, cx| {
-            close(&prev_state, true, window, cx);
-            cx.propagate();
-        })
-        .on_mouse_down_out(move |event, window, cx| {
-            if outside(&out_state, event.position, cx) {
-                close(&out_state, false, window, cx)
-            }
-        })
-        .children(rows(
-            &items,
-            highlighted,
-            submenu,
-            false,
-            kind,
-            state,
-            theme,
-        )),
+        panel_shell((id.clone(), "panel"), scrolls, theme)
+            .role(match kind {
+                PopupKind::Menu => Role::Menu,
+                PopupKind::ListBox => Role::ListBox,
+            })
+            .aria_label(label)
+            .track_focus(&focus)
+            .on_key_down(move |event, window, cx| {
+                key_down(&keys_metas, &keys_state, event, window, cx)
+            })
+            .on_action(move |_: &FocusNext, window, cx| {
+                close(&next_state, true, window, cx);
+                cx.propagate();
+            })
+            .on_action(move |_: &FocusPrevious, window, cx| {
+                close(&prev_state, true, window, cx);
+                cx.propagate();
+            })
+            .on_mouse_down_out(move |event, window, cx| {
+                if outside(&out_state, event.position, cx) {
+                    close(&out_state, false, window, cx)
+                }
+            })
+            .children(rows(
+                items,
+                &metas,
+                (highlighted, submenu),
+                false,
+                kind,
+                state,
+                theme,
+            )),
         from,
     );
     fading(panel, shown)
 }
 
-pub(crate) fn trigger_keys(
-    items: Rc<[MenuItem]>,
-    state: Entity<MenuState>,
+pub(crate) fn trigger_handlers(
+    state: &Entity<MenuState>,
+    items: Option<ItemsBuilder>,
     initial: Option<usize>,
-) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) {
-    move |event, window, cx| {
-        let highlight = match event.keystroke.key.as_str() {
-            "down" | "enter" | "space" => initial.or_else(|| first_navigable(&items, false)),
-            "up" => initial.or_else(|| first_navigable(&items, true)),
-            _ => return,
-        };
-        open(&state, highlight, None, window, cx);
-        cx.stop_propagation();
-    }
-}
-
-pub(crate) fn trigger_face(open: bool, theme: &Theme) -> Face {
-    Face {
-        radius: theme.radius.control,
-        bg: if open { theme.fill_pressed } else { theme.fill },
-        border: Some(theme.border),
-        states: Some((theme.fill_hover, theme.fill_pressed)),
-        edge: theme.edge(),
-    }
-}
-
-pub(crate) fn trigger_style(
-    base: Stateful<Div>,
-    face: Stateful<Div>,
-    theme: &Theme,
-    ring: bool,
-) -> Stateful<Div> {
-    base.flex()
-        .flex_none()
-        .items_center()
-        .gap(px(6.0))
-        .h(CONTROL_MD)
-        .pl(TRIGGER_PADDING)
-        .pr(px(8.0))
-        .relative()
-        .group(FACE_GROUP)
-        .child(face)
-        .text_size(TEXT_BODY)
-        .line_height(LINE_BODY)
-        .text_color(theme.text)
-        .pointer_cursor(&theme)
-        .when(ring, |trigger| {
-            trigger.child(theme.focus_ring(theme.radius.control))
-        })
+) -> (PressHandler, KeyHandler) {
+    let press_state = state.clone();
+    let key_state = state.clone();
+    let press = Rc::new(
+        move |_: &gpui::MouseDownEvent, window: &mut Window, cx: &mut App| {
+            if press_state.read(cx).open {
+                close(&press_state, true, window, cx);
+            } else {
+                open(&press_state, initial, None, window, cx);
+            }
+            cx.stop_propagation();
+        },
+    );
+    let keys = Rc::new(
+        move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+            let from_end = match event.keystroke.key.as_str() {
+                "down" | "enter" | "space" => false,
+                "up" => true,
+                _ => return,
+            };
+            let highlight = initial.or_else(|| {
+                items
+                    .as_ref()
+                    .and_then(|items| first_navigable(&items(window, cx), from_end))
+            });
+            open(&key_state, highlight, None, window, cx);
+            cx.stop_propagation();
+        },
+    );
+    (press, keys)
 }
 
 #[derive(IntoElement)]
-pub struct Menu {
+pub struct DropdownMenu {
     id: ElementId,
-    label: SharedString,
-    items: Vec<MenuItem>,
+    trigger: Option<Button>,
+    items: ItemsBuilder,
     align: Align,
+    default_open: bool,
 }
 
-impl Menu {
-    pub fn new(
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        items: Vec<MenuItem>,
-    ) -> Self {
+impl DropdownMenu {
+    pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
-            label: label.into(),
-            items,
+            trigger: None,
+            items: Rc::new(|_, _| Vec::new()),
             align: Align::Start,
+            default_open: false,
         }
+    }
+
+    pub fn trigger(mut self, trigger: Button) -> Self {
+        self.trigger = Some(trigger);
+        self
+    }
+
+    pub fn items(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
+        self.items = Rc::new(f);
+        self
     }
 
     pub fn align(mut self, align: Align) -> Self {
         self.align = align;
         self
     }
+
+    pub fn default_open(mut self, open: bool) -> Self {
+        self.default_open = open;
+        self
+    }
 }
 
-impl RenderOnce for Menu {
+impl RenderOnce for DropdownMenu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = state(&self.id, window, cx);
-        let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
-        let ring = nav::keyboard_focused(&trigger_focus, window, cx);
+        let state = state(&self.id, self.default_open, window, cx);
         let is_open = state.read(cx).open;
         let shown = presence(&state, window, cx).is_some();
-        let theme = cx.theme().clone();
-        let items: Rc<[MenuItem]> = self.items.into();
-        let click_state = state.clone();
-        div()
-            .relative()
-            .flex_none()
-            .child(
-                trigger_style(
-                    div()
-                        .id(self.id.clone())
-                        .role(Role::Button)
-                        .aria_label(self.label.clone())
-                        .aria_expanded(is_open)
-                        .track_focus(&trigger_focus.tab_stop(true)),
-                    trigger_face(is_open, &theme).render((self.id.clone(), "face"), window, cx),
-                    &theme,
-                    ring,
-                )
-                .on_key_down(trigger_keys(items.clone(), state.clone(), None))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    if click_state.read(cx).open {
-                        close(&click_state, true, window, cx);
-                    } else {
-                        open(&click_state, None, None, window, cx);
-                    }
-                    cx.stop_propagation();
+        let trigger = self
+            .trigger
+            .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Menu"));
+        let label = trigger.label().clone();
+        let (press, keys) = trigger_handlers(&state, Some(self.items.clone()), None);
+        let mut trigger = trigger
+            .trigger(is_open, press, keys)
+            .attach(trigger_probe(&state).into_any_element());
+        if shown {
+            let items = (self.items)(window, cx);
+            let id = self.id.clone();
+            trigger = trigger.attach(
+                attach(self.align, &state, window, cx, |from, window| {
+                    popup(&id, label, items, PopupKind::Menu, from, &state, window, cx)
                 })
-                .child(self.label.clone())
-                .child(icon(Icon::ChevronDown, theme.text_tertiary))
-                .child(trigger_probe(&state)),
-            )
-            .when(shown, |container| {
-                let panel = |from, window: &mut Window| {
-                    popup(
-                        &self.id,
-                        self.label.clone(),
-                        items,
-                        Kind::Menu,
-                        from,
-                        &state,
-                        window,
-                        cx,
-                    )
-                };
-                container.child(attach(self.align, &state, window, cx, panel))
-            })
+                .into_any_element(),
+            );
+        }
+        trigger
     }
 }

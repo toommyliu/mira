@@ -5,8 +5,8 @@ use anyhow::Context as _;
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement as _,
-    Pixels, Render, Role, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -14,12 +14,15 @@ use super::{
     manager::OpenAccounts,
     script::CloseTab,
     scripts::{OpenScripts, Picker},
-    ui::{self, Glyph},
 };
 use mira_ui::{
-    ActiveTheme as _, PointerCursor as _, Theme, Tone,
+    ActiveTheme as _, Theme, Tone,
     components::format_keystroke,
-    primitives::{Flow, HoverCard, Icon, Pose, Sortable, Tooltip, attach_card, icon, sidebar_icon},
+    h_flex,
+    primitives::{
+        Button, HoverCard, Icon, Kbd, Tab as TabItem, Tabs,
+        button::{Size, Variant},
+    },
     theme::{CONTROL_SM, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
 
@@ -141,11 +144,23 @@ impl Session {
     }
 }
 
-fn tab_card(title: SharedString, details: Details) -> Option<HoverCard> {
+struct SessionTab {
+    number: usize,
+    title: SharedString,
+    glance: Option<Glance>,
+    details: Details,
+    hint: Option<usize>,
+}
+
+fn tab_card(
+    id: impl Into<gpui::ElementId>,
+    title: SharedString,
+    details: Details,
+) -> Option<HoverCard> {
     if details.server.is_none() && details.script.is_none() && details.error.is_none() {
         return None;
     }
-    let mut card = HoverCard::new(title);
+    let mut card = HoverCard::new(id, title);
     if let Some(server) = details.server {
         card = card.row("Server", server, Tone::Neutral);
     }
@@ -572,34 +587,74 @@ impl Client {
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let shortcuts = self.shortcut_tabs();
-        let hints: Rc<[Option<usize>]> = (0..self.sessions.len())
-            .map(|index| {
-                self.shortcut_hints
-                    .then(|| shortcut_for(&shortcuts, index))
-                    .flatten()
+        let rows: Rc<[SessionTab]> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| {
+                let view = session.view.read(cx);
+                SessionTab {
+                    number: session.number,
+                    title: session.title(cx),
+                    glance: view.glance(),
+                    details: view.details(),
+                    hint: self
+                        .shortcut_hints
+                        .then(|| shortcut_for(&shortcuts, index))
+                        .flatten(),
+                }
             })
             .collect();
+        let active = self.active;
         let client = cx.weak_entity();
-        let tabs = Sortable::new(
-            div()
-                .id("tabs")
-                .flex()
-                .flex_col()
-                .gap(TAB_GAP)
-                .px(px(8.0))
-                .py(px(4.0)),
-            Flow::Column,
-            self.sessions.iter().map(|session| session.number),
-            cx.processor(move |this, (index, pose), window, cx| {
-                this.tab(index, pose, hints[index], window, cx)
-            }),
-            move |from, to, _, cx| {
+        let selector = client.clone();
+        let mover = client.clone();
+        let face_theme = theme.clone();
+        let tabs = Tabs::new("sessions", "Tabs", rows.len(), move |index| {
+            let row = &rows[index];
+            let face = tab_face(
+                &face_theme,
+                &row.title,
+                row.glance.clone(),
+                index == active,
+                row.hint,
+            );
+            let tab = TabItem::new(row.title.clone());
+            let tab = match &row.glance {
+                Some(glance) => tab.description(glance.label.clone()),
+                None => tab,
+            };
+            let tab = match tab_card(
+                ("tab-card", row.number),
+                row.title.clone(),
+                row.details.clone(),
+            ) {
+                Some(card) => tab.child(card.child(face)),
+                None => tab.child(face),
+            };
+            if row.hint.is_some() {
+                return tab;
+            }
+            let client = client.clone();
+            tab.on_close(move |window, cx| {
                 client
-                    .update(cx, |client, cx| client.move_session(from, to, cx))
+                    .update(cx, |client, cx| client.close_session(index, window, cx))
                     .ok();
-            },
-        )
-        .scrolls(&self.tab_scroll);
+            })
+        })
+        .vertical()
+        .selected(active)
+        .track_scroll(&self.tab_scroll)
+        .on_select(move |index, window, cx| {
+            selector
+                .update(cx, |client, cx| client.select(index, window, cx))
+                .ok();
+        })
+        .on_reorder(move |from, to, _, cx| {
+            mover
+                .update(cx, |client, cx| client.move_session(from, to, cx))
+                .ok();
+        });
         div()
             .flex()
             .flex_col()
@@ -620,40 +675,41 @@ impl Client {
                     .h(super::BAR_HEIGHT)
                     .pr(px(8.0))
                     .child(drag_area().flex_1())
-                    .child(Tooltip::new(
-                        "new-session-tip",
-                        "New tab",
-                        control(&theme, "new-session")
-                            .size(CONTROL_SM)
-                            .justify_center()
-                            .role(Role::Button)
-                            .aria_label("New tab")
-                            .child(icon(Icon::Plus, theme.text_secondary))
+                    .child(
+                        Button::icon("new-session", Icon::Plus, "New tab")
+                            .size(Size::Small)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Err(error) = this.open_session(None, window, cx) {
                                     tracing::error!(%error, "couldn't open a session");
                                 }
                             })),
-                    ))
-                    .child(self.grid_toggle(&theme, cx)),
+                    )
+                    .child(self.grid_toggle(cx)),
             )
-            .child(tabs)
+            .child(div().flex_none().px(px(6.0)).py(px(4.0)).child(tabs))
             .child(drag_area().flex_1())
             .child(
                 div().flex_none().p(px(8.0)).child(
-                    control(&theme, "accounts")
+                    Button::new("accounts", "Accounts")
+                        .variant(Variant::Ghost)
                         .w_full()
-                        .justify_between()
-                        .role(Role::Button)
-                        .text_color(theme.text_secondary)
-                        .child("Accounts")
-                        .children(
-                            window
-                                .highest_precedence_binding_for_action(&OpenAccounts)
-                                .and_then(|binding| {
-                                    Some(format_keystroke(binding.keystrokes().first()?.inner()))
-                                })
-                                .map(|keys| div().text_color(theme.text_tertiary).child(keys)),
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .justify_between()
+                                .child("Accounts")
+                                .children(
+                                    window
+                                        .highest_precedence_binding_for_action(&OpenAccounts)
+                                        .and_then(|binding| {
+                                            Some(format_keystroke(
+                                                binding.keystrokes().first()?.inner(),
+                                            ))
+                                        })
+                                        .map(|keys| {
+                                            div().text_color(theme.text_tertiary).child(keys)
+                                        }),
+                                ),
                         )
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(OpenAccounts), cx)
@@ -662,144 +718,35 @@ impl Client {
             )
     }
 
-    fn tab(
-        &self,
-        index: usize,
-        pose: Pose,
-        hint: Option<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let theme = &cx.theme().clone();
-        let session = &self.sessions[index];
-        let hint = hint.filter(|_| pose == Pose::Rest);
-        let active = index == self.active;
-        let title = session.title(cx);
-        let glance = session.view.read(cx).glance();
-        let description = glance.as_ref().map(|glance| glance.label.clone());
-        let row = div()
-            .id(("tab", session.number))
-            .relative()
-            .flex()
-            .flex_none()
-            .h(TAB_ROW)
-            .px(TAB_PADDING)
-            .pt(TAB_TOP)
-            .pb(TAB_BOTTOM)
-            .rounded(theme.radius.item)
-            .role(Role::Tab)
-            .aria_label(title.clone())
-            .when_some(description, |tab, description: SharedString| {
-                tab.aria_description(description)
-            })
-            .aria_selected(active)
-            .child(tab_face(theme, &title, glance, active, hint));
-        match pose {
-            Pose::Rest => {
-                let row = match tab_card(title, session.view.read(cx).details()) {
-                    Some(card) => attach_card(row, ("tab-card", session.number), card, window, cx),
-                    None => row,
-                };
-                self.resting_tab(row, theme, index, session, hint, cx)
-            }
-            Pose::Sorting if active => row
-                .bg(theme.selected)
-                .text_color(theme.text)
-                .into_any_element(),
-            Pose::Sorting => row.text_color(theme.text_secondary).into_any_element(),
-            Pose::Lifted => row.text_color(theme.text).into_any_element(),
-        }
-    }
-
-    fn resting_tab(
-        &self,
-        row: Stateful<gpui::Div>,
-        theme: &Theme,
-        index: usize,
-        session: &Session,
-        hint: Option<usize>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let active = index == self.active;
-        row.group("tab")
-            .map(|tab| {
-                if active {
-                    tab.bg(theme.selected).text_color(theme.text)
-                } else {
-                    ui::pressable(theme, tab).text_color(theme.text_secondary)
-                }
-            })
-            .when(hint.is_none(), |tab| {
-                tab.child(
-                    div()
-                        .id(("close-session", session.number))
-                        .absolute()
-                        .right(px(4.0))
-                        .top(TAB_TOP)
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .justify_center()
-                        .size(px(18.0))
-                        .rounded(px(4.0))
-                        .pointer_cursor(theme)
-                        .when(!active, |close| {
-                            close
-                                .invisible()
-                                .group_hover("tab", |close| close.visible())
-                        })
-                        .hover(|close| close.bg(theme.fill_hover))
-                        .active(|close| close.bg(theme.fill_pressed))
-                        .role(Role::Button)
-                        .aria_label("Close tab")
-                        .child(ui::glyph(Glyph::Close, theme.text_secondary))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.close_session(index, window, cx)
-                        })),
-                )
-            })
-            .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
-            .into_any_element()
-    }
-
     fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
         let label = match self.sidebar {
             Sidebar::Hidden => "Show sidebar",
             Sidebar::Full => "Hide sidebar",
         };
-        let toggle = control(theme, "sidebar-toggle")
-            .size(CONTROL_SM)
-            .justify_center()
-            .role(Role::Button)
-            .aria_label(label)
-            .child(sidebar_icon(
-                self.sidebar == Sidebar::Full,
-                theme.text_secondary,
-            ))
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
+        let glyph = match self.sidebar {
+            Sidebar::Hidden => Icon::Sidebar,
+            Sidebar::Full => Icon::SidebarOpen,
+        };
         div()
             .absolute()
             .left(sidebar_toggle_left(window))
             .top((super::BAR_HEIGHT - CONTROL_SM) / 2.0)
             .occlude()
-            .child(Tooltip::new("sidebar-toggle-tip", label, toggle))
+            .child(
+                Button::icon("sidebar-toggle", glyph, label)
+                    .size(Size::Small)
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
+            )
     }
 
-    fn grid_toggle(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn grid_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (label, glyph, next) = match self.layout {
             Layout::Single => ("Grid view", Icon::LayoutGrid, Layout::Grid),
             Layout::Grid => ("Single view", Icon::Square, Layout::Single),
         };
-        let toggle = control(theme, "grid")
-            .size(CONTROL_SM)
-            .justify_center()
-            .role(Role::Button)
-            .aria_label(label)
-            .child(icon(glyph, theme.text_secondary))
-            .on_click(cx.listener(move |this, _, window, cx| this.set_layout(next, window, cx)));
-        Tooltip::new("grid-tip", label, toggle)
+        Button::icon("grid", glyph, label)
+            .size(Size::Small)
+            .on_click(cx.listener(move |this, _, window, cx| this.set_layout(next, window, cx)))
     }
 
     fn tile(
@@ -878,15 +825,9 @@ impl Client {
             .text_color(theme.text_secondary)
             .child("No tabs are open.")
             .child(
-                control(theme, "open-session")
+                Button::new("open-session", "New tab")
+                    .variant(Variant::Outline)
                     .mt(px(8.0))
-                    .px(px(12.0))
-                    .border_1()
-                    .border_color(theme.hairline)
-                    .text_color(theme.text)
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .role(Role::Button)
-                    .child("New tab")
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Err(error) = this.open_session(None, window, cx) {
                             tracing::error!(%error, "couldn't open a session");
@@ -915,7 +856,6 @@ pub(super) fn tab_face(
                 .items_center()
                 .gap(px(8.0))
                 .h(LINE_BODY)
-                .when(hint.is_none(), |line| line.pr(px(14.0)))
                 .child(
                     div()
                         .flex_1()
@@ -925,7 +865,7 @@ pub(super) fn tab_face(
                         .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
                         .child(label.clone()),
                 )
-                .children(hint.map(|number| shortcut_badge(theme, number))),
+                .children(hint.map(|number| Kbd::new(format!("⌘{number}")))),
         )
         .child(
             div()
@@ -942,34 +882,6 @@ pub(super) fn tab_face(
                         .child(glance.label)
                 })),
         )
-}
-
-fn shortcut_badge(theme: &Theme, number: usize) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .h(px(18.0))
-        .px(px(5.0))
-        .rounded(px(4.0))
-        .bg(theme.fill_hover)
-        .text_size(TEXT_SMALL)
-        .text_color(theme.text_secondary)
-        .child(format!("⌘{number}"))
-}
-
-pub(super) fn control(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
-    ui::pressable(
-        theme,
-        div()
-            .id(id)
-            .flex()
-            .flex_none()
-            .items_center()
-            .h(px(26.0))
-            .px(px(10.0))
-            .rounded(theme.radius.control),
-    )
 }
 
 fn sidebar_toggle_left(window: &Window) -> Pixels {

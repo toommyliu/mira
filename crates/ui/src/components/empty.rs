@@ -4,15 +4,16 @@ use gpui::{
 };
 
 use crate::{
-    ActiveTheme as _,
-    theme::{LINE_BODY, LINE_TITLE, TEXT_BODY, TEXT_TITLE},
+    ActiveTheme as _, StyledExt as _, h_flex,
+    theme::{LINE_BODY, TEXT_BODY},
 };
 
 #[derive(IntoElement)]
 pub struct Empty {
     title: SharedString,
     body: SharedString,
-    action: Option<AnyElement>,
+    actions: Vec<AnyElement>,
+    compact: bool,
 }
 
 impl Empty {
@@ -20,12 +21,18 @@ impl Empty {
         Self {
             title: title.into(),
             body: body.into(),
-            action: None,
+            actions: Vec::new(),
+            compact: false,
         }
     }
 
     pub fn action(mut self, action: impl IntoElement) -> Self {
-        self.action = Some(action.into_any_element());
+        self.actions.push(action.into_any_element());
+        self
+    }
+
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
         self
     }
 }
@@ -38,13 +45,17 @@ impl RenderOnce for Empty {
             .flex_col()
             .items_center()
             .gap(px(4.0))
-            .py(px(32.0))
+            .py(px(if self.compact { 16.0 } else { 32.0 }))
             .px(px(24.0))
             .child(
                 div()
-                    .text_size(TEXT_TITLE)
-                    .line_height(LINE_TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .map(|title| {
+                        if self.compact {
+                            title.text_body().font_weight(FontWeight::MEDIUM)
+                        } else {
+                            title.text_title()
+                        }
+                    })
                     .text_color(theme.text)
                     .child(self.title),
             )
@@ -57,8 +68,13 @@ impl RenderOnce for Empty {
                     .text_color(theme.text_secondary)
                     .child(self.body),
             )
-            .when_some(self.action, |empty, action| {
-                empty.child(div().pt(px(12.0)).child(action))
+            .when(!self.actions.is_empty(), |empty| {
+                empty.child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .pt(px(if self.compact { 8.0 } else { 12.0 }))
+                        .children(self.actions),
+                )
             })
     }
 }

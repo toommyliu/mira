@@ -9,7 +9,7 @@ use gpui::{
 
 use super::{Button, Icon, button::Size};
 use crate::{
-    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious,
+    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, h_flex,
     motion::{self, From},
     nav,
     theme::{LINE_BODY, LINE_TITLE, TEXT_BODY, TEXT_TITLE},
@@ -43,8 +43,9 @@ pub struct Dialog {
     title: SharedString,
     width: Pixels,
     description: Option<SharedString>,
-    accessory: Option<AnyElement>,
-    body: Option<AnyElement>,
+    header_end: Option<AnyElement>,
+    body: Vec<AnyElement>,
+    footer_start: Option<AnyElement>,
     actions: Vec<AnyElement>,
     on_close: Option<CloseHandler>,
 }
@@ -58,8 +59,9 @@ impl Dialog {
             title: title.into(),
             width: px(420.0),
             description: None,
-            accessory: None,
-            body: None,
+            header_end: None,
+            body: Vec::new(),
+            footer_start: None,
             actions: Vec::new(),
             on_close: None,
         }
@@ -80,13 +82,18 @@ impl Dialog {
         self
     }
 
-    pub fn accessory(mut self, accessory: impl IntoElement) -> Self {
-        self.accessory = Some(accessory.into_any_element());
+    pub fn header_end_slot(mut self, element: impl IntoElement) -> Self {
+        self.header_end = Some(element.into_any_element());
         self
     }
 
     pub fn body(mut self, body: impl IntoElement) -> Self {
-        self.body = Some(body.into_any_element());
+        self.body.push(body.into_any_element());
+        self
+    }
+
+    pub fn footer_start_slot(mut self, element: impl IntoElement) -> Self {
+        self.footer_start = Some(element.into_any_element());
         self
     }
 
@@ -146,7 +153,7 @@ impl RenderOnce for Dialog {
         let theme = cx.theme().clone();
         let close = self.on_close.clone();
         let dismiss = self.on_close.clone().filter(|_| !self.alert);
-        let close_size = if self.accessory.is_some() {
+        let close_size = if self.header_end.is_some() {
             Size::Medium
         } else {
             Size::Small
@@ -207,9 +214,9 @@ impl RenderOnce for Dialog {
                                 .relative()
                                 .flex()
                                 .flex_col()
-                                .gap(px(16.0))
+                                .gap(px(12.0))
                                 .w(self.width)
-                                .p(px(20.0))
+                                .p(px(16.0))
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.overlay)
                                 .text_color(theme.text)
@@ -220,7 +227,7 @@ impl RenderOnce for Dialog {
                                     div()
                                         .flex()
                                         .flex_col()
-                                        .gap(px(6.0))
+                                        .gap(px(2.0))
                                         .child(
                                             div()
                                                 .flex()
@@ -238,10 +245,8 @@ impl RenderOnce for Dialog {
                                                         .font_weight(FontWeight::SEMIBOLD)
                                                         .child(self.title),
                                                 )
-                                                .when_some(self.accessory, |row, accessory| {
-                                                    row.child(
-                                                        div().flex_1().min_w_0().child(accessory),
-                                                    )
+                                                .when_some(self.header_end, |row, end| {
+                                                    row.child(div().flex_1().min_w_0().child(end))
                                                 })
                                                 .when_some(dismiss, |row, dismiss| {
                                                     row.child(
@@ -267,17 +272,25 @@ impl RenderOnce for Dialog {
                                             )
                                         }),
                                 )
-                                .when_some(self.body, |panel, body| panel.child(body))
-                                .when(!self.actions.is_empty(), |panel| {
-                                    panel.child(
-                                        div()
-                                            .flex()
-                                            .justify_end()
-                                            .gap(px(8.0))
-                                            .pt(px(4.0))
-                                            .children(self.actions),
-                                    )
-                                }),
+                                .children(self.body)
+                                .when(
+                                    !self.actions.is_empty() || self.footer_start.is_some(),
+                                    |panel| {
+                                        panel.child(
+                                            h_flex()
+                                                .gap(px(6.0))
+                                                .pt(px(4.0))
+                                                .child(
+                                                    h_flex()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .gap(px(6.0))
+                                                        .children(self.footer_start),
+                                                )
+                                                .children(self.actions),
+                                        )
+                                    },
+                                ),
                             From::Below,
                         )),
                 )),

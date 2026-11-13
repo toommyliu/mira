@@ -1,6 +1,7 @@
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Div, ElementId, FontWeight, IntoElement, ParentElement as _,
-    Pixels, SharedString, Stateful, Styled as _, Window, anchored, deferred, div, point, px,
+    Anchor, AnyElement, App, Bounds, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    ParentElement, Pixels, RenderOnce, SharedString, Styled as _, Window, anchored, deferred, div,
+    point, px,
 };
 
 use super::tooltip;
@@ -13,16 +14,27 @@ const GAP: Pixels = px(6.0);
 const MARGIN: Pixels = px(8.0);
 const MAX_LINES: usize = 3;
 
-pub struct HoverCard {
+struct Card {
     title: SharedString,
     rows: Vec<(SharedString, SharedString, Tone)>,
 }
 
+#[derive(IntoElement)]
+pub struct HoverCard {
+    id: ElementId,
+    card: Card,
+    children: Vec<AnyElement>,
+}
+
 impl HoverCard {
-    pub fn new(title: impl Into<SharedString>) -> Self {
+    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Self {
         Self {
-            title: title.into(),
-            rows: Vec::new(),
+            id: id.into(),
+            card: Card {
+                title: title.into(),
+                rows: Vec::new(),
+            },
+            children: Vec::new(),
         }
     }
 
@@ -32,24 +44,38 @@ impl HoverCard {
         text: impl Into<SharedString>,
         tone: Tone,
     ) -> Self {
-        self.rows.push((label.into(), text.into(), tone));
+        self.card.rows.push((label.into(), text.into(), tone));
         self
     }
 }
 
-pub fn attach_card(
-    trigger: Stateful<Div>,
-    id: impl Into<ElementId>,
-    card: HoverCard,
-    window: &mut Window,
-    cx: &mut App,
-) -> Stateful<Div> {
-    tooltip::hover(trigger, id.into(), false, window, cx, move |at, _, cx| {
-        popup(card, at, cx)
-    })
+impl ParentElement for HoverCard {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
 }
 
-fn popup(card: HoverCard, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
+impl RenderOnce for HoverCard {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let trigger = div()
+            .id(self.id.clone())
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .children(self.children);
+        let card = self.card;
+        tooltip::hover(
+            trigger,
+            (self.id, "card").into(),
+            false,
+            window,
+            cx,
+            move |at, _, cx| popup(card, at, cx),
+        )
+    }
+}
+
+fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
     let theme = cx.theme();
     deferred(
         anchored()
