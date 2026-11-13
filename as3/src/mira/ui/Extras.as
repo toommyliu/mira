@@ -7,8 +7,8 @@ package mira.ui {
     }
 
     [BridgeExport]
-    public static function setChatHistoryEnabled(enabled:Boolean):void {
-      ChatHistory.setEnabled(enabled);
+    public static function setChatRecallEnabled(enabled:Boolean):void {
+      ChatRecall.setEnabled(enabled);
     }
 
     [BridgeExport]

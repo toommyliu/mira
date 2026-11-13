@@ -301,13 +301,13 @@ pub(crate) mod extras {
         Ok(decode("extras.setBankSearchEnabled", reply)?)
     }
 
-    pub(crate) fn set_chat_history_enabled(
+    pub(crate) fn set_chat_recall_enabled(
         loader: &impl Loader,
         enabled: bool,
     ) -> Result<(), CallError> {
         let call_args = vec![Value::Bool(enabled)];
-        let reply = loader.call("extras.setChatHistoryEnabled", call_args)?;
-        Ok(decode("extras.setChatHistoryEnabled", reply)?)
+        let reply = loader.call("extras.setChatRecallEnabled", call_args)?;
+        Ok(decode("extras.setChatRecallEnabled", reply)?)
     }
 
     pub(crate) fn set_copy_menus_enabled(

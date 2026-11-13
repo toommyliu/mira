@@ -8,17 +8,17 @@ use crate::bridge::{self, Event, Loader, Subscription};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Extra {
     CopyMenus,
-    ChatHistory,
+    ChatRecall,
     BankSearch,
 }
 
 impl Extra {
-    pub(crate) const ALL: [Extra; 3] = [Extra::CopyMenus, Extra::ChatHistory, Extra::BankSearch];
+    pub(crate) const ALL: [Extra; 3] = [Extra::CopyMenus, Extra::ChatRecall, Extra::BankSearch];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Extra::CopyMenus => "Right-click menus",
-            Extra::ChatHistory => "Chat history",
+            Extra::ChatRecall => "Chat recall",
             Extra::BankSearch => "Bank search",
         }
     }
@@ -28,8 +28,8 @@ impl Extra {
             Extra::CopyMenus => {
                 "Adds contextual menus to monsters, items, shops, quests, and drops for more actions."
             }
-            Extra::ChatHistory => {
-                "Press Up and Down in the chat box to bring back messages you've sent."
+            Extra::ChatRecall => {
+                "Press Up and Down in the chat box to reuse what you've entered. Clears on disconnect."
             }
             Extra::BankSearch => {
                 "Search the bank by enhancement or boost, like forge or dmg undead."
@@ -42,7 +42,7 @@ impl Extra {
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct Extras {
     copy_menus: bool,
-    chat_history: bool,
+    chat_recall: bool,
     bank_search: bool,
 }
 
@@ -50,7 +50,7 @@ impl Extras {
     pub(crate) fn enabled(self, extra: Extra) -> bool {
         match extra {
             Extra::CopyMenus => self.copy_menus,
-            Extra::ChatHistory => self.chat_history,
+            Extra::ChatRecall => self.chat_recall,
             Extra::BankSearch => self.bank_search,
         }
     }
@@ -58,7 +58,7 @@ impl Extras {
     fn toggle(&mut self, extra: Extra) {
         let enabled = match extra {
             Extra::CopyMenus => &mut self.copy_menus,
-            Extra::ChatHistory => &mut self.chat_history,
+            Extra::ChatRecall => &mut self.chat_recall,
             Extra::BankSearch => &mut self.bank_search,
         };
         *enabled = !*enabled;
@@ -125,7 +125,7 @@ pub(super) async fn run<L: Loader>(
         }
         let extras = *extras.borrow_and_update();
         let applied = bridge::extras::set_copy_menus_enabled(&loader, extras.copy_menus)
-            .and_then(|()| bridge::extras::set_chat_history_enabled(&loader, extras.chat_history))
+            .and_then(|()| bridge::extras::set_chat_recall_enabled(&loader, extras.chat_recall))
             .and_then(|()| bridge::extras::set_bank_search_enabled(&loader, extras.bank_search));
         if let Err(error) = applied {
             tracing::debug!(%error, "AS3 extras will apply once the loader is ready");
@@ -158,17 +158,17 @@ mod tests {
             assert!(!store.get().enabled(extra));
         }
 
-        store.toggle(Extra::ChatHistory).unwrap();
-        assert!(running.borrow_and_update().enabled(Extra::ChatHistory));
+        store.toggle(Extra::ChatRecall).unwrap();
+        assert!(running.borrow_and_update().enabled(Extra::ChatRecall));
         let reopened = Store::open(path.clone()).get();
-        assert!(reopened.enabled(Extra::ChatHistory));
+        assert!(reopened.enabled(Extra::ChatRecall));
         assert!(!reopened.enabled(Extra::CopyMenus));
 
         store.toggle(Extra::CopyMenus).unwrap();
-        store.toggle(Extra::ChatHistory).unwrap();
+        store.toggle(Extra::ChatRecall).unwrap();
         let reopened = Store::open(path.clone()).get();
         assert!(reopened.enabled(Extra::CopyMenus));
-        assert!(!reopened.enabled(Extra::ChatHistory));
+        assert!(!reopened.enabled(Extra::ChatRecall));
 
         fs::write(&path, "{ not json").unwrap();
         assert_eq!(Store::open(path.clone()).get(), Extras::default());
@@ -202,7 +202,7 @@ mod tests {
                 tokio::task::spawn_local(run(loader, events.subscribe(wants), store.watch()));
                 yield_now().await;
 
-                store.toggle(Extra::ChatHistory).unwrap();
+                store.toggle(Extra::ChatRecall).unwrap();
                 yield_now().await;
                 assert!(applied.borrow().is_empty());
 
@@ -213,7 +213,7 @@ mod tests {
                     applied.borrow_mut().drain(..).collect::<Vec<_>>(),
                     [
                         ("extras.setCopyMenusEnabled", false),
-                        ("extras.setChatHistoryEnabled", true),
+                        ("extras.setChatRecallEnabled", true),
                         ("extras.setBankSearchEnabled", false)
                     ]
                 );
@@ -224,7 +224,7 @@ mod tests {
                     *applied.borrow(),
                     [
                         ("extras.setCopyMenusEnabled", true),
-                        ("extras.setChatHistoryEnabled", true),
+                        ("extras.setChatRecallEnabled", true),
                         ("extras.setBankSearchEnabled", false)
                     ]
                 );

@@ -6,7 +6,7 @@ package mira.ui {
 
   import mira.Main;
 
-  public class ChatHistory {
+  public class ChatRecall {
     private static const LIMIT:int = 50;
 
     private static var entries:Array = [];

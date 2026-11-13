@@ -14,7 +14,7 @@ package mira {
 
 	import mira.Externalizer;
 	import mira.module.Modules;
-	import mira.ui.ChatHistory;
+	import mira.ui.ChatRecall;
 	import mira.ui.CopyMenu;
 	import mira.util.SFSEvent;
 
@@ -118,7 +118,7 @@ package mira {
 		}
 
 		private function onConnectionLost(evt:*):void {
-			ChatHistory.clear();
+			ChatRecall.clear();
 			this.emitConnection('OnConnectionLost');
 			this.emitDebug('Connection to SmartFoxServer lost.');
 		}
