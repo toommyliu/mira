@@ -121,11 +121,13 @@ pub struct Input {
     numeric: Option<Numeric>,
     suffix: Option<SharedString>,
     small: bool,
+    pill: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     typing: bool,
     was_focused: bool,
     invalid: bool,
+    disabled: bool,
     selected: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
@@ -149,11 +151,13 @@ impl Input {
             numeric: None,
             suffix: None,
             small: false,
+            pill: false,
             undo: Vec::new(),
             redo: Vec::new(),
             typing: false,
             was_focused: false,
             invalid: false,
+            disabled: false,
             selected: 0..0,
             reversed: false,
             marked: None,
@@ -198,6 +202,11 @@ impl Input {
         self
     }
 
+    pub fn pill(mut self) -> Self {
+        self.pill = true;
+        self
+    }
+
     pub fn text(&self) -> &str {
         &self.content
     }
@@ -215,6 +224,25 @@ impl Input {
     pub fn set_invalid(&mut self, invalid: bool, cx: &mut Context<Self>) {
         self.invalid = invalid;
         cx.notify();
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        if self.disabled != disabled {
+            self.disabled = disabled;
+            cx.notify();
+        }
+    }
+
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            cx.notify();
+        }
     }
 
     fn display_text(&self) -> SharedString {
@@ -742,7 +770,7 @@ impl Focusable for Input {
 impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let focused = self.focus.is_focused(window);
+        let focused = !self.disabled && self.focus.is_focused(window);
         if focused && !self.was_focused && crate::nav::keyboard_input(window, cx) {
             self.selected = 0..self.content.len();
             self.reversed = false;
@@ -750,6 +778,12 @@ impl Render for Input {
         }
         self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
+        let height = if self.small { CONTROL_SM } else { CONTROL_MD };
+        let radius = if self.pill {
+            height / 2.0
+        } else {
+            theme.radius.control
+        };
         div()
             .id("field")
             .role(if self.search {
@@ -768,8 +802,9 @@ impl Render for Input {
                 field.aria_description("Invalid value")
             })
             .key_context(CONTEXT)
-            .track_focus(&self.focus)
-            .cursor(CursorStyle::IBeam)
+            .when(!self.disabled, |field| {
+                field.track_focus(&self.focus).cursor(CursorStyle::IBeam)
+            })
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -798,24 +833,27 @@ impl Render for Input {
             .on_action(cx.listener(Self::decrement))
             .on_action(cx.listener(Self::increment_more))
             .on_action(cx.listener(Self::decrement_more))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
-            .on_mouse_move(cx.listener(Self::mouse_move))
+            .when(!self.disabled, |field| {
+                field
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+                    .on_mouse_move(cx.listener(Self::mouse_move))
+            })
             .flex()
             .items_center()
             .gap(px(4.0))
             .w_full()
-            .h(if self.small { CONTROL_SM } else { CONTROL_MD })
+            .h(height)
             .pl(px(8.0))
             .pr(px(if clearable { 2.0 } else { 8.0 }))
-            .rounded(theme.radius.control)
+            .rounded(radius)
             .bg(theme.fill)
             .border_1()
-            .border_color(if self.invalid {
-                theme.danger
-            } else {
-                theme.border
+            .border_color(match (self.invalid, self.pill) {
+                (true, _) => theme.danger,
+                (false, true) => theme.fill,
+                (false, false) => theme.border,
             })
             .when(focused, |field| {
                 field.child(theme.ring_around(
@@ -824,13 +862,17 @@ impl Render for Input {
                     } else {
                         theme.focus
                     },
-                    theme.radius.control,
+                    radius,
                     px(1.0),
                 ))
             })
             .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
             .line_height(LINE_BODY)
-            .text_color(theme.text)
+            .text_color(if self.disabled {
+                theme.text_disabled
+            } else {
+                theme.text
+            })
             .when(self.numeric.is_some(), |field| {
                 field.font_features(tabular())
             })
@@ -869,6 +911,7 @@ struct TextElement {
 }
 
 struct Prepainted {
+    bounds: Bounds<Pixels>,
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
@@ -958,6 +1001,15 @@ impl gpui::Element for TextElement {
         let line = window
             .text_system()
             .shape_line(text, font_size, &runs, None);
+        let bounds = if field.pill {
+            let inset = ((bounds.size.width - line.width) / 2.0).max(Pixels::ZERO);
+            Bounds::new(
+                point(bounds.left() + inset, bounds.top()),
+                size(bounds.size.width - inset, bounds.size.height),
+            )
+        } else {
+            bounds
+        };
         let caret_x = if field.content.is_empty() {
             px(0.0)
         } else {
@@ -994,6 +1046,7 @@ impl gpui::Element for TextElement {
             )
         };
         Prepainted {
+            bounds,
             line: Some(line),
             cursor,
             selection,
@@ -1004,12 +1057,13 @@ impl gpui::Element for TextElement {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut (),
         prepainted: &mut Prepainted,
         window: &mut Window,
         cx: &mut App,
     ) {
+        let bounds = prepainted.bounds;
         let focus = self.field.read(cx).focus.clone();
         window.handle_input(
             &focus,

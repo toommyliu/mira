@@ -935,6 +935,166 @@ fn a_log_follows_new_lines_until_scrolled_up_then_keeps_its_place_as_old_lines_d
     assert!(shown(cx, 40).is_none());
 }
 
+struct GameBar {
+    focus: FocusHandle,
+    chosen: Rc<std::cell::RefCell<Vec<&'static str>>>,
+    dismissed: Rc<Cell<usize>>,
+    reached: Rc<Cell<usize>>,
+}
+
+impl Render for GameBar {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::{MouseButton, px};
+        use mira_ui::primitives::{MenuItem, Menubar};
+        let pick = |name: &'static str| {
+            let chosen = self.chosen.clone();
+            move |_: &mut Window, _: &mut gpui::App| chosen.borrow_mut().push(name)
+        };
+        let (new, undo) = (pick("new"), pick("undo"));
+        let (dismissed, reached) = (self.dismissed.clone(), self.reached.clone());
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                Menubar::new("bar", "Game")
+                    .menu(Button::new("file", "File").w(px(80.0)), move |_, _| {
+                        let new = new.clone();
+                        vec![MenuItem::action("New", move |window, cx| new(window, cx))]
+                    })
+                    .menu(Button::new("edit", "Edit").w(px(80.0)), move |_, _| {
+                        let undo = undo.clone();
+                        vec![MenuItem::action("Undo", move |window, cx| undo(window, cx))]
+                    })
+                    .on_dismiss(move |_, _, cx| {
+                        dismissed.set(dismissed.get() + 1);
+                        cx.stop_propagation();
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                        reached.set(reached.get() + 1)
+                    }),
+            )
+    }
+}
+
+struct Bar<'a> {
+    cx: &'a mut VisualTestContext,
+    view: gpui::Entity<GameBar>,
+}
+
+impl Bar<'_> {
+    const FILE: (f32, f32) = (40.0, 13.0);
+    const EDIT: (f32, f32) = (120.0, 13.0);
+    const GAME: (f32, f32) = (200.0, 300.0);
+
+    fn click(&mut self, (x, y): (f32, f32)) {
+        use gpui::{Modifiers, point, px};
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    fn hover(&mut self, (x, y): (f32, f32)) {
+        use gpui::{Modifiers, point, px};
+        self.cx
+            .simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    fn keys(&mut self, keys: &'static str) {
+        for key in keys.split(' ') {
+            press(self.cx, key);
+        }
+    }
+
+    fn chosen(&self) -> Vec<&'static str> {
+        self.view
+            .read_with(self.cx, |view, _| view.chosen.borrow().clone())
+    }
+
+    fn root_focused(&mut self) -> bool {
+        let focus = self.view.read_with(self.cx, |view, _| view.focus.clone());
+        self.cx.update(|window, _| focus.is_focused(window))
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        self.view.read_with(self.cx, |view, _| {
+            (view.dismissed.get(), view.reached.get())
+        })
+    }
+}
+
+fn game_bar(cx: &mut TestAppContext) -> Bar<'_> {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        GameBar {
+            focus,
+            chosen: Rc::default(),
+            dismissed: Rc::default(),
+            reached: Rc::default(),
+        }
+    });
+    cx.run_until_parked();
+    Bar { cx, view }
+}
+
+#[gpui::test]
+fn menubar_switches_to_a_hovered_trigger_once_an_entry_is_open(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.hover(Bar::EDIT);
+    bar.click(Bar::FILE);
+    bar.hover(Bar::EDIT);
+    bar.keys("down enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+}
+
+#[gpui::test]
+fn menubar_moves_between_entries_with_left_and_right(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.keys("tab right enter enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+    bar.keys("enter left enter");
+    assert_eq!(bar.chosen(), ["undo", "new"]);
+    bar.click(Bar::FILE);
+    bar.keys("right right enter");
+    assert_eq!(bar.chosen(), ["undo", "new", "new"]);
+}
+
+#[gpui::test]
+fn menubar_escape_closes_the_entry_and_returns_focus(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.click(Bar::FILE);
+    assert!(!bar.root_focused());
+    bar.keys("escape");
+    assert!(bar.root_focused());
+
+    bar.keys("tab enter escape right enter enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+}
+
+#[gpui::test]
+fn menubar_hands_the_dismissing_press_to_on_dismiss(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.click(Bar::FILE);
+    bar.click(Bar::EDIT);
+    assert_eq!(bar.counts(), (0, 0));
+    bar.click(Bar::GAME);
+    assert_eq!(bar.counts(), (1, 0));
+    bar.click(Bar::GAME);
+    assert_eq!(bar.counts(), (1, 1));
+    bar.keys("down enter");
+    assert!(bar.chosen().is_empty());
+}
+
 struct SafeStart {
     focus: FocusHandle,
     toggled: Rc<Cell<usize>>,

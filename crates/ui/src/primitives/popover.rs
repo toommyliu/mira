@@ -1,9 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, RenderOnce, Role, StatefulInteractiveElement as _, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, RenderOnce, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{ActiveTheme as _, motion, nav};
 
-type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
+pub(crate) type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
 
 const MIN_WIDTH: Pixels = px(200.0);
 const MAX_WIDTH: Pixels = px(420.0);
@@ -20,14 +20,74 @@ const MAX_WIDTH: Pixels = px(420.0);
 #[derive(Clone)]
 pub struct PopoverClose {
     state: Entity<MenuState>,
-    trigger: FocusHandle,
+    focus: Option<FocusHandle>,
 }
 
 impl PopoverClose {
-    pub fn close(&self, window: &mut Window, cx: &mut App) {
-        menu::close(&self.state, false, window, cx);
-        window.focus(&self.trigger, cx);
+    pub(crate) fn returning_focus(state: Entity<MenuState>) -> Self {
+        Self { state, focus: None }
     }
+
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
+        menu::close(&self.state, self.focus.is_none(), window, cx);
+        if let Some(focus) = &self.focus {
+            window.focus(focus, cx);
+        }
+    }
+}
+
+pub(crate) fn focus_first_on_open(
+    id: &ElementId,
+    state: &Entity<MenuState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (is_open, panel) = {
+        let state = state.read(cx);
+        (state.is_open(), state.focus())
+    };
+    let was_open = window
+        .use_keyed_state((id.clone(), "was-open"), cx, |_, _| {
+            Rc::new(Cell::new(false))
+        })
+        .read(cx)
+        .clone();
+    if was_open.replace(is_open) != is_open && is_open {
+        window.defer(cx, move |window, cx| nav::focus_first(&panel, window, cx));
+    }
+}
+
+pub(crate) fn panel(
+    id: &ElementId,
+    label: SharedString,
+    close: PopoverClose,
+    width: Option<Pixels>,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let focus = close.state.read(cx).focus();
+    div()
+        .id((id.clone(), "panel"))
+        .role(Role::Dialog)
+        .aria_label(label)
+        .occlude()
+        .track_focus(&focus)
+        .on_key_down(move |event, window, cx| {
+            if event.keystroke.key == "escape" {
+                close.close(window, cx);
+                cx.stop_propagation();
+            }
+        })
+        .map(|panel| match width {
+            Some(width) => panel.w(width),
+            None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
+        })
+        .p(px(12.0))
+        .rounded(theme.radius.panel)
+        .bg(theme.overlay)
+        .border_1()
+        .border_color(theme.border)
+        .shadow(theme.floating())
 }
 
 #[derive(IntoElement)]
@@ -89,26 +149,12 @@ impl RenderOnce for Popover {
             .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Open"));
         let label = trigger.label().clone();
         let trigger_focus = nav::focus_handle((self.id.clone(), "trigger"), window, cx);
-        let (is_open, panel_focus) = {
-            let state = state.read(cx);
-            (state.is_open(), state.focus())
-        };
-        let was_open = window
-            .use_keyed_state((self.id.clone(), "was-open"), cx, |_, _| {
-                Rc::new(Cell::new(false))
-            })
-            .read(cx)
-            .clone();
-        if was_open.replace(is_open) != is_open && is_open {
-            let panel_focus = panel_focus.clone();
-            window.defer(cx, move |window, cx| {
-                nav::focus_first(&panel_focus, window, cx)
-            });
-        }
         let closer = PopoverClose {
             state: state.clone(),
-            trigger: trigger_focus.clone(),
+            focus: Some(trigger_focus.clone()),
         };
+        focus_first_on_open(&self.id, &state, window, cx);
+        let is_open = state.read(cx).is_open();
         let press_state = state.clone();
         let press_close = closer.clone();
         let key_state = state.clone();
@@ -142,9 +188,8 @@ impl RenderOnce for Popover {
         let Some(shown) = menu::presence(&state, window, cx) else {
             return trigger;
         };
-        let theme = cx.theme().clone();
         let content = (self.content)(&closer, window, cx);
-        let key_closer = closer.clone();
+        let panel = panel(&self.id, label, closer, self.width, cx).child(content);
         trigger = trigger.attach(
             menu::attach(
                 self.align,
@@ -154,33 +199,7 @@ impl RenderOnce for Popover {
                 cx,
                 |from, _| {
                     menu::fading(
-                        motion::arrive(
-                            (self.id.clone(), "popover"),
-                            div()
-                                .id((self.id.clone(), "panel"))
-                                .role(Role::Dialog)
-                                .aria_label(label)
-                                .occlude()
-                                .track_focus(&panel_focus)
-                                .on_key_down(move |event, window, cx| {
-                                    if event.keystroke.key == "escape" {
-                                        key_closer.close(window, cx);
-                                        cx.stop_propagation();
-                                    }
-                                })
-                                .map(|panel| match self.width {
-                                    Some(width) => panel.w(width),
-                                    None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
-                                })
-                                .p(px(12.0))
-                                .rounded(theme.radius.panel)
-                                .bg(theme.overlay)
-                                .border_1()
-                                .border_color(theme.border)
-                                .shadow(theme.floating())
-                                .child(content),
-                            from,
-                        ),
+                        motion::arrive((self.id.clone(), "popover"), panel, from),
                         shown,
                     )
                 },

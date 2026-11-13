@@ -76,6 +76,7 @@ pub struct Select {
     align: Align,
     align_item: bool,
     default_open: bool,
+    disabled: bool,
     on_select: Option<IndexHandler>,
 }
 
@@ -96,6 +97,7 @@ impl Select {
             align: Align::Start,
             align_item: false,
             default_open: false,
+            disabled: false,
             on_select: None,
         }
     }
@@ -130,6 +132,11 @@ impl Select {
         self
     }
 
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
@@ -149,6 +156,7 @@ impl RenderOnce for Select {
         let (press, keys) = trigger_handlers(&state, None, initial);
         let mut trigger = Button::new((self.id.clone(), "trigger"), self.label.clone())
             .combobox(value.clone())
+            .disabled(self.disabled)
             .end_slot(
                 div()
                     .text_color(theme.text_tertiary)

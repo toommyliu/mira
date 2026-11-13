@@ -476,6 +476,24 @@ pub(crate) fn open(
     window.focus(&focus, cx);
 }
 
+pub(crate) fn hand_off(
+    from: &Entity<MenuState>,
+    to: &Entity<MenuState>,
+    highlighted: Option<usize>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let return_focus = from.update(cx, |menu, cx| {
+        menu.open = false;
+        menu.submenu = None;
+        menu.closed_at = None;
+        cx.notify();
+        menu.return_focus.take()
+    });
+    open(to, highlighted, None, window, cx);
+    to.update(cx, |menu, _| menu.return_focus = return_focus);
+}
+
 pub(crate) fn close(state: &Entity<MenuState>, restore: bool, window: &mut Window, cx: &mut App) {
     let return_focus = state.update(cx, |menu, cx| {
         if menu.open {
@@ -534,6 +552,7 @@ fn typeahead(key: &str, metas: &[Meta], current: Option<usize>) -> Option<usize>
 
 fn key_down(
     metas: &Rc<[Meta]>,
+    kind: PopupKind,
     state: &Entity<MenuState>,
     event: &KeyDownEvent,
     window: &mut Window,
@@ -583,11 +602,13 @@ fn key_down(
                 activate(metas, index, state, true, window, cx);
             }
         }
-        "right" => {
-            if let Some(index) = highlighted
-                && metas[index].submenu.is_some()
-            {
-                activate(metas, index, state, true, window, cx);
+        "left" | "right" => {
+            let submenu =
+                highlighted.filter(|&index| key == "right" && metas[index].submenu.is_some());
+            match (submenu, kind) {
+                (Some(index), _) => activate(metas, index, state, true, window, cx),
+                (None, PopupKind::ListBox) => {}
+                (None, PopupKind::Menu) => return,
             }
         }
         _ => {
@@ -984,7 +1005,7 @@ pub(crate) fn popup(
             .aria_label(label)
             .track_focus(&focus)
             .on_key_down(move |event, window, cx| {
-                key_down(&keys_metas, &keys_state, event, window, cx)
+                key_down(&keys_metas, kind, &keys_state, event, window, cx)
             })
             .on_action(move |_: &FocusNext, window, cx| {
                 close(&next_state, true, window, cx);

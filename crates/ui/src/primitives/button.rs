@@ -221,6 +221,11 @@ impl Button {
         self
     }
 
+    pub fn hide_tooltip(mut self) -> Self {
+        self.tooltip = None;
+        self
+    }
+
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Rc::new(f));
         self
@@ -256,6 +261,10 @@ impl Button {
 
     pub(crate) fn label(&self) -> &SharedString {
         &self.label
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
     }
 }
 

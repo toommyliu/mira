@@ -7,7 +7,7 @@ use mira_ui::{
     components::StatusLabel,
     primitives::{
         Activity, Alert, Badge, Button, Dialog, Dot, DropdownMenu, Icon, List, ListItem, MenuItem,
-        Popover, Select, SelectOption, Switch, Tab, Tabs, ToggleGroup, ToggleItem,
+        Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs, ToggleGroup, ToggleItem,
         button::{Size, Variant},
     },
     snapshot,
@@ -177,6 +177,54 @@ fn snapshot_menu() {
                 )
                 .width(px(180.0)),
             )
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_menubar() {
+    scene("menubar", 560.0, 300.0, |_, cx| {
+        let theme = cx.theme().clone();
+        let trigger = |id: &'static str, title: &'static str| {
+            Button::new(id, title)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+        };
+        Menubar::new("bar", "Game")
+            .h(px(38.0))
+            .gap(px(2.0))
+            .px(px(6.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .menu(trigger("windows", "Windows"), |_, _| {
+                vec![MenuItem::action("Packets", |_, _| {})]
+            })
+            .menu(trigger("scripts", "Scripts"), |_, _| {
+                vec![
+                    MenuItem::header("Running daily.ts"),
+                    MenuItem::action("Stop", |_, _| {}),
+                    MenuItem::action("Run script…", |_, _| {}),
+                ]
+            })
+            .child(div().flex_1())
+            .menu(
+                trigger("attack", "Auto attack")
+                    .child("Auto attack")
+                    .child(div().text_color(theme.text_tertiary).child("Generic")),
+                |_, _| {
+                    vec![
+                        MenuItem::switch("Auto attack", true, |_, _| {}),
+                        MenuItem::separator(),
+                        MenuItem::header("Profile"),
+                        MenuItem::radio("Generic", true, |_, _| {}),
+                        MenuItem::radio("Ultra speaker", false, |_, _| {}),
+                        MenuItem::separator(),
+                        MenuItem::action("Edit profiles…", |_, _| {}),
+                    ]
+                },
+            )
+            .child(trigger("bank", "Bank"))
+            .default_open(2)
             .into_any_element()
     });
 }
