@@ -738,6 +738,7 @@ fn dragging_the_last_row_up_keeps_a_bottom_scrolled_list_in_place(cx: &mut TestA
 struct Feed {
     dropped: u64,
     lines: Vec<String>,
+    selected: Option<usize>,
 }
 
 struct Lines(Rc<std::cell::RefCell<Feed>>);
@@ -752,6 +753,7 @@ impl Render for Lines {
                 LogEntry::new("info", lines[index].clone())
             })
             .dropped(feed.dropped)
+            .selected(feed.selected)
             .height(gpui::px(120.0)),
         )
     }
@@ -766,6 +768,7 @@ fn a_log_follows_new_lines_until_scrolled_up_then_keeps_its_place_as_old_lines_d
     let feed = Rc::new(std::cell::RefCell::new(Feed {
         dropped: 0,
         lines: (0..40).map(|line| format!("line {line}")).collect(),
+        selected: Some(39),
     }));
     let (view, cx) = cx.add_window_view(|_, _| Lines(Rc::clone(&feed)));
     let log = |change: &dyn Fn(&mut Feed), cx: &mut VisualTestContext| {
@@ -796,6 +799,7 @@ fn a_log_follows_new_lines_until_scrolled_up_then_keeps_its_place_as_old_lines_d
         &|feed| {
             feed.lines.drain(..3);
             feed.dropped += 3;
+            feed.selected = Some(36);
             feed.lines
                 .extend((41..44).map(|line| format!("line {line}")));
         },

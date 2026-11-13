@@ -117,7 +117,7 @@ impl LogView {
 #[derive(Clone, Copy, Default)]
 struct Shown {
     dropped: u64,
-    selected: Option<usize>,
+    selected: Option<u64>,
 }
 
 impl RenderOnce for LogView {
@@ -133,10 +133,11 @@ impl RenderOnce for LogView {
             selected: None,
         });
         let before = *shown.read(cx);
+        let selected_line = self.selected.map(|index| self.dropped + index as u64);
         shown.update(cx, |shown, _| {
             *shown = Shown {
                 dropped: self.dropped,
-                selected: self.selected,
+                selected: selected_line,
             }
         });
         let base = scroll.0.borrow().base_handle.clone();
@@ -151,7 +152,7 @@ impl RenderOnce for LogView {
                 (offset.y + ROW_HEIGHT * dropped).min(px(0.0)),
             ));
         }
-        if self.selected != before.selected
+        if selected_line != before.selected
             && let Some(selected) = self.selected
         {
             scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
