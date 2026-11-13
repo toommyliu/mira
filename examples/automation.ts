@@ -1,6 +1,5 @@
-import { Auth, Player } from "mira";
+import { Auth, Player, Settings } from "mira";
 import * as AutoRelogin from "mira/autorelogin";
-import * as AutoZone from "mira/autozone";
 
 export default function* () {
   const server = yield* Auth.getServer();
@@ -8,6 +7,6 @@ export default function* () {
   console.log(`auto relogin: ${relogin.server ?? "last server"} after ${relogin.delaySeconds}s`);
 
   yield* Player.joinMap("queeniona");
-  const zone = yield* AutoZone.update({ enabled: true, map: "queeniona" });
-  console.log(`auto zone: ${zone.map}`);
+  const settings = yield* Settings.update({ autoZone: true });
+  console.log(`auto zone: ${settings.autoZone ? "on" : "off"}`);
 }

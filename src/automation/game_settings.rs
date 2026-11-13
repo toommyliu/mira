@@ -101,6 +101,7 @@ pub(crate) struct Settings {
     pub(crate) custom_name: Option<String>,
     pub(crate) custom_guild: Option<String>,
     pub(crate) anti_counter: bool,
+    pub(crate) auto_zone: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +137,7 @@ impl Default for Settings {
             custom_name: None,
             custom_guild: None,
             anti_counter: true,
+            auto_zone: false,
         }
     }
 }
@@ -273,6 +275,7 @@ pub(crate) async fn log_hidden_ads(events: Subscription) {
 
 fn step(loader: &impl Loader, desired: &Settings, applied: &mut Settings, tick: bool) {
     applied.anti_counter = desired.anti_counter;
+    applied.auto_zone = desired.auto_zone;
     sync(
         &desired.custom_name,
         &mut applied.custom_name,

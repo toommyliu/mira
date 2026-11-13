@@ -27,7 +27,7 @@ use std::{ops::Range, rc::Rc};
 use crate::{
     account_settings::{self, Options},
     accounts::AccountId,
-    automation::{auto_attack, auto_relogin, auto_zone, game_settings, settings::Automation},
+    automation::{auto_attack, auto_relogin, game_settings, settings::Automation},
     ruffle::{
         Msg, Output, Runtime,
         context_menu::MenuSelection,
@@ -130,7 +130,6 @@ impl RuffleView {
         native
             .connect_visibility(move |visible| inbox.post(Msg::View(ViewEvent::Visible(visible))));
         let relogin_changes = automation.watch_auto_relogin();
-        let zone_changes = automation.watch_auto_zone();
         let game_changes = automation.watch_game_settings();
         let frame_rate_changes = automation.watch_frame_rate();
         let quest_changes = automation.watch_quests();
@@ -141,7 +140,6 @@ impl RuffleView {
             notify_on_change(drop_changes, cx);
             notify_on_change(boost_changes, cx);
             notify_on_change(relogin_changes, cx);
-            notify_on_change(zone_changes, cx);
             notify_on_change(game_changes, cx);
             notify_on_change(frame_rate_changes, cx);
             cx.spawn(async move |this, cx| {
@@ -476,15 +474,6 @@ impl RuffleView {
             self.session.send(event);
         }
         window.refresh();
-    }
-
-    fn change_auto_zone(
-        &mut self,
-        change: impl FnOnce(&mut auto_zone::Settings),
-        cx: &mut Context<Self>,
-    ) {
-        self.automation.update_auto_zone(change);
-        cx.notify();
     }
 
     fn change_auto_attack(

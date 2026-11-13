@@ -22,7 +22,6 @@ use super::{
 use crate::{
     automation::{
         auto_relogin::Phase,
-        auto_zone::Room,
         game_settings::{FrameRate, RenderingMode, Settings as GameSettings},
         settings::Automation,
     },
@@ -49,7 +48,6 @@ const BORDER: Pixels = px(1.0);
 pub(super) enum BarMenu {
     Windows,
     Options,
-    AutoZone,
     AutoRelogin,
     Script,
     Jump,
@@ -58,7 +56,6 @@ pub(super) enum BarMenu {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Submenu {
-    Rooms,
     Servers,
     Rendering,
 }
@@ -66,7 +63,6 @@ enum Submenu {
 impl BarMenu {
     fn submenu(self) -> Option<Submenu> {
         match self {
-            BarMenu::AutoZone => Some(Submenu::Rooms),
             BarMenu::AutoRelogin => Some(Submenu::Servers),
             BarMenu::Options => Some(Submenu::Rendering),
             BarMenu::Windows | BarMenu::Script | BarMenu::Jump | BarMenu::AutoAttack => None,
@@ -249,7 +245,7 @@ type Toggle = (
     fn(&mut GameSettings) -> &mut bool,
 );
 
-const TOGGLES: [Toggle; 9] = [
+const TOGGLES: [Toggle; 10] = [
     ("infinite-range", "Infinite range", |s| {
         &mut s.infinite_range
     }),
@@ -263,6 +259,7 @@ const TOGGLES: [Toggle; 9] = [
     ("collisions", "Collisions", |s| &mut s.collisions),
     ("ads", "Ads", |s| &mut s.ads),
     ("anti-counter", "Anti counter", |s| &mut s.anti_counter),
+    ("auto-zone", "Auto zone", |s| &mut s.auto_zone),
 ];
 
 struct Edit {
@@ -281,8 +278,8 @@ pub(super) struct BarState {
     location: Option<Location>,
     identity: Option<Identity>,
     focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 8]>>,
-    submenu_rows: Rc<Cell<[Bounds<Pixels>; 3]>>,
+    triggers: Rc<Cell<[Bounds<Pixels>; 6]>>,
+    submenu_rows: Rc<Cell<[Bounds<Pixels>; 2]>>,
     submenu_panel: Rc<Cell<Bounds<Pixels>>>,
 }
 
@@ -834,16 +831,6 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
         .child(trigger(
             &theme,
             view,
-            BarMenu::AutoZone,
-            "Auto zone",
-            None,
-            Some(view.automation.auto_zone().enabled),
-            cx,
-            true,
-        ))
-        .child(trigger(
-            &theme,
-            view,
             BarMenu::AutoRelogin,
             "Auto relogin",
             relogin_value(view),
@@ -935,7 +922,6 @@ fn trigger(
     let id = match menu {
         BarMenu::Windows => "windows",
         BarMenu::Options => "options",
-        BarMenu::AutoZone => "auto-zone",
         BarMenu::AutoRelogin => "auto-relogin",
         BarMenu::Script => "script",
         BarMenu::Jump => "jump",
@@ -1010,7 +996,6 @@ pub(super) fn overlay(
     let panel = match menu {
         BarMenu::Windows => windows_panel(&theme, cx),
         BarMenu::Options => options_panel(&theme, view, cx),
-        BarMenu::AutoZone => zone_panel(&theme, view, cx),
         BarMenu::AutoRelogin => relogin_panel(&theme, view, cx),
         BarMenu::Script => script_panel(&theme, view, cx),
         BarMenu::Jump => travel_panel(&theme, view, cx),
@@ -1134,32 +1119,6 @@ fn submenu_row(
                     row.on_click(cx.listener(move |this, _, _, cx| this.open_submenu(submenu, cx)))
                 }),
         )
-}
-
-fn zone_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let settings = view.automation.auto_zone();
-    ui::panel(theme, "auto-zone-panel", px(220.0))
-        .child(
-            toggle_row(
-                theme,
-                "auto-zone-enabled",
-                "Auto zone",
-                settings.enabled,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.change_auto_zone(|settings| settings.enabled = !settings.enabled, cx)
-            })),
-        )
-        .child(submenu_row(
-            theme,
-            view,
-            Submenu::Rooms,
-            "Map",
-            settings.room.map_or("None", Room::label).into(),
-            cx,
-            true,
-        ))
 }
 
 fn options_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
@@ -1680,17 +1639,6 @@ fn submenu_panel(
         .max_h(SUBMENU_MAX_HEIGHT)
         .overflow_y_scroll();
     let panel = match submenu {
-        Submenu::Rooms => {
-            let selected = view.automation.auto_zone().room;
-            panel.children(Room::ALL.map(|room| {
-                choice_row(theme, room.label(), room.label(), selected == Some(room)).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.change_auto_zone(|settings| settings.room = Some(room), cx);
-                        this.close_submenu();
-                    }),
-                )
-            }))
-        }
         Submenu::Servers => servers(theme, view, panel, cx),
         Submenu::Rendering => {
             let selected = view.automation.game_settings().rendering.mode();

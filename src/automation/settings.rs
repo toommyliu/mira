@@ -1,13 +1,10 @@
 use tokio::sync::watch;
 
-use super::{
-    auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings, quests, spammer,
-};
+use super::{auto_attack, auto_relogin, boosts, drops, follower, game_settings, quests, spammer};
 
 #[derive(Clone, Default)]
 pub(crate) struct Automation {
     relogin: watch::Sender<auto_relogin::Settings>,
-    zone: watch::Sender<auto_zone::Settings>,
     attack: watch::Sender<auto_attack::Settings>,
     follower: watch::Sender<follower::Settings>,
     follower_status: watch::Sender<follower::Status>,
@@ -38,21 +35,6 @@ impl Automation {
             change(settings);
             *settings = std::mem::take(settings).normalized();
         })
-    }
-
-    pub(crate) fn auto_zone(&self) -> auto_zone::Settings {
-        *self.zone.borrow()
-    }
-
-    pub(crate) fn watch_auto_zone(&self) -> watch::Receiver<auto_zone::Settings> {
-        self.zone.subscribe()
-    }
-
-    pub(crate) fn update_auto_zone(
-        &self,
-        change: impl FnOnce(&mut auto_zone::Settings),
-    ) -> auto_zone::Settings {
-        update(&self.zone, change)
     }
 
     pub(crate) fn auto_attack(&self) -> auto_attack::Settings {

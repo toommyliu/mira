@@ -15,7 +15,6 @@ const effect = join(runtime, "node_modules", "effect");
 const miraModules = [
   { specifier: "mira", source: "mira", out: "mira/index" },
   { specifier: "mira/autorelogin", source: "autorelogin", out: "mira/autorelogin" },
-  { specifier: "mira/autozone", source: "autozone", out: "mira/autozone" },
 ] as const;
 
 async function effectModules(): Promise<string[]> {

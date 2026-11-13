@@ -2,12 +2,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 
 use super::calls::Reply;
-use crate::automation::{
-    auto_relogin,
-    auto_zone::{self, Room},
-    game_settings::RenderingMode,
-    settings::Automation,
-};
+use crate::automation::{auto_relogin, game_settings::RenderingMode, settings::Automation};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(
@@ -35,6 +30,7 @@ pub(crate) enum SettingsRequest {
         #[serde(default, deserialize_with = "present")]
         custom_guild: Option<Option<String>>,
         anti_counter: Option<bool>,
+        auto_zone: Option<bool>,
     },
 }
 
@@ -55,22 +51,6 @@ pub(crate) enum ReloginRequest {
         retries: Option<u32>,
         backoff_seconds: Option<u32>,
         backoff_cap_seconds: Option<u32>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(
-    tag = "op",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub(crate) enum ZoneRequest {
-    Get,
-    Update {
-        enabled: Option<bool>,
-        #[serde(default, deserialize_with = "present")]
-        map: Option<Option<Room>>,
     },
 }
 
@@ -102,17 +82,6 @@ pub(super) fn serve_relogin(automation: &Automation, request: ReloginRequest) ->
     Ok(relogin(&settings))
 }
 
-pub(super) fn serve_zone(automation: &Automation, request: ZoneRequest) -> Reply {
-    let settings = match request {
-        ZoneRequest::Get => automation.auto_zone(),
-        ZoneRequest::Update { enabled, map } => automation.update_auto_zone(|settings| {
-            apply(&mut settings.enabled, enabled);
-            apply(&mut settings.room, map);
-        }),
-    };
-    Ok(zone(settings))
-}
-
 pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) -> Reply {
     let (settings, frame_rate) = match request {
         SettingsRequest::Get => (automation.game_settings(), automation.frame_rate()),
@@ -131,6 +100,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
             custom_name,
             custom_guild,
             anti_counter,
+            auto_zone,
         } => {
             let settings = automation.update_game_settings(|settings| {
                 apply(&mut settings.infinite_range, infinite_range);
@@ -148,6 +118,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.custom_name, custom_name);
                 apply(&mut settings.custom_guild, custom_guild);
                 apply(&mut settings.anti_counter, anti_counter);
+                apply(&mut settings.auto_zone, auto_zone);
             });
             let frame_rate = match frame_rate {
                 Some(fps) => automation.set_frame_rate(fps),
@@ -176,10 +147,6 @@ fn relogin(settings: &auto_relogin::Settings) -> serde_json::Value {
         "backoffSeconds": settings.backoff_seconds,
         "backoffCapSeconds": settings.backoff_cap_seconds,
     })
-}
-
-fn zone(settings: auto_zone::Settings) -> serde_json::Value {
-    json!({ "enabled": settings.enabled, "map": settings.room })
 }
 
 #[cfg(test)]
@@ -230,29 +197,12 @@ mod tests {
     }
 
     #[test]
-    fn auto_zone_reads_and_writes_the_map() {
-        let automation = Automation::default();
-        let update =
-            serde_json::from_value(json!({ "op": "update", "enabled": true, "map": "queeniona" }))
-                .unwrap();
-        assert_eq!(
-            serve_zone(&automation, update),
-            Ok(json!({ "enabled": true, "map": "queeniona" }))
-        );
-        assert_eq!(automation.auto_zone().room, Some(Room::Queeniona));
-        let clear = serde_json::from_value(json!({ "op": "update", "map": null })).unwrap();
-        assert_eq!(
-            serve_zone(&automation, clear),
-            Ok(json!({ "enabled": true, "map": null }))
-        );
-    }
-
-    #[test]
     fn a_settings_update_returns_every_setting_as_stored() {
         let automation = Automation::default();
         let update = serde_json::from_value(json!({
             "op": "update",
             "hidePlayers": true,
+            "autoZone": true,
             "rendering": "interface-only",
             "walkSpeed": 500,
             "frameRate": 500,
@@ -276,6 +226,7 @@ mod tests {
                 "customName": "player1",
                 "customGuild": null,
                 "antiCounter": true,
+                "autoZone": true,
             }))
         );
         let clear = serde_json::from_value(json!({ "op": "update", "customName": null })).unwrap();
@@ -287,13 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_and_maps_are_rejected() {
-        for value in [
-            json!({ "op": "update", "map": "battleon" }),
-            json!({ "op": "update", "room": "queeniona" }),
-        ] {
-            assert!(serde_json::from_value::<ZoneRequest>(value).is_err());
-        }
+    fn unknown_fields_are_rejected() {
         assert!(
             serde_json::from_value::<ReloginRequest>(json!({ "op": "update", "delay": 3 }))
                 .is_err()

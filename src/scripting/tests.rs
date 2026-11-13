@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{
     Level, Limit, Limits, Outcome, Run, ToPlayer,
     auth::Request as A,
-    automation::{ReloginRequest as AR, SettingsRequest as GS, ZoneRequest as AZ},
+    automation::{ReloginRequest as AR, SettingsRequest as GS},
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
@@ -1291,21 +1291,16 @@ export default function* () {
 
 #[test]
 fn automation_requests_reach_the_player_typed() {
-    use crate::automation::auto_zone::Room;
-
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Settings } from "mira";
 import * as AutoRelogin from "mira/autorelogin";
-import * as AutoZone from "mira/autozone";
 
 export default function* () {
   yield* AutoRelogin.get();
   yield* AutoRelogin.update({ enabled: true, server: null, delaySeconds: 10 });
-  yield* AutoZone.get();
-  yield* AutoZone.update({ map: "queeniona" });
   yield* Settings.get();
-  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null, antiCounter: false });
+  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null, antiCounter: false, autoZone: true });
 }
 "#,
     )]);
@@ -1338,11 +1333,6 @@ export default function* () {
                 backoff_seconds: None,
                 backoff_cap_seconds: None,
             }),
-            Request::AutoZone(AZ::Get),
-            Request::AutoZone(AZ::Update {
-                enabled: None,
-                map: Some(Some(Room::Queeniona)),
-            }),
             Request::Settings(GS::Get),
             Request::Settings(GS::Update {
                 infinite_range: None,
@@ -1359,6 +1349,7 @@ export default function* () {
                 custom_name: None,
                 custom_guild: Some(None),
                 anti_counter: Some(false),
+                auto_zone: Some(true),
             }),
         ]
     );

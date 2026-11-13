@@ -707,6 +707,11 @@ export type GameSettings = {
    * `Combat.attack`, `useSkill` and `kill` skip a countering monster, and auto attack waits it out.
    */
   readonly antiCounter: boolean;
+  /**
+   * Walks to the safe side when a boss calls a zone in ledgermayne, moreskulls, ultradage,
+   * darkcarnax, astralshrine, queeniona and magnumopus. Does nothing in other maps.
+   */
+  readonly autoZone: boolean;
 };
 
 export type SettingsPatch = Partial<Omit<GameSettings, "frameRate">> & {

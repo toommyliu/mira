@@ -1,20 +1,19 @@
 use std::{ops::RangeInclusive, time::Duration};
 
-use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch,
     time::{Instant, sleep_until},
 };
 
+use super::game_settings;
 use crate::bridge::{self, CallError, Loader, Packets};
 use crate::domain::{
     auras, player,
     world::{EventArgs, EventPacket},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Room {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Room {
     Ledgermayne,
     Moreskulls,
     Ultradage,
@@ -25,7 +24,7 @@ pub(crate) enum Room {
 }
 
 impl Room {
-    pub(crate) const ALL: [Room; 7] = [
+    const ALL: [Room; 7] = [
         Room::Ledgermayne,
         Room::Moreskulls,
         Room::Ultradage,
@@ -35,16 +34,10 @@ impl Room {
         Room::Magnumopus,
     ];
 
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Room::Ledgermayne => "Ledgermayne",
-            Room::Moreskulls => "Moreskulls",
-            Room::Ultradage => "Ultra Dage",
-            Room::Darkcarnax => "Darkcarnax",
-            Room::Astralshrine => "Astral Shrine",
-            Room::Queeniona => "Queen Iona",
-            Room::Magnumopus => "Magnum Opus",
-        }
+    fn of(map: &str) -> Option<Room> {
+        Room::ALL
+            .into_iter()
+            .find(|room| map.eq_ignore_ascii_case(room.map()))
     }
 
     fn map(self) -> &'static str {
@@ -65,12 +58,6 @@ impl Room {
             _ => Duration::ZERO,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct Settings {
-    pub(crate) enabled: bool,
-    pub(crate) room: Option<Room>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,26 +129,29 @@ struct Pending {
 pub(crate) async fn run(
     loader: impl Loader,
     zones: Packets<EventPacket>,
-    mut settings: watch::Receiver<Settings>,
+    mut settings: watch::Receiver<game_settings::Settings>,
     pick: impl Fn(&Area) -> (i32, i32),
 ) {
     let mut pending: Option<Pending> = None;
     loop {
-        let current = *settings.borrow_and_update();
-        let room = current.room.filter(|_| current.enabled);
-        if room != pending.as_ref().map(|pending| pending.room) {
+        let enabled = settings.borrow_and_update().auto_zone;
+        if !enabled {
             pending = None;
         }
         let due = pending.as_ref().map(|pending| pending.at);
         tokio::select! {
             event = zones.next() => match event {
-                Ok(EventPacket { args: EventArgs { zone_set: zone } }) => {
-                    tracing::debug!(?room, zone, "auto zone received an event packet");
-                    if let Some(room) = room {
-                        pending = Some(Pending { room, zone, at: Instant::now() + room.settle() });
+                Ok(EventPacket { args: EventArgs { zone_set: zone } }) if enabled => {
+                    match current_room(&loader) {
+                        Ok(Some(room)) => {
+                            tracing::debug!(?room, zone, "auto zone received an event packet");
+                            pending = Some(Pending { room, zone, at: Instant::now() + room.settle() });
+                        }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(%error, "auto zone couldn't read the map"),
                     }
                 }
-                Err(_) => {}
+                Ok(_) | Err(_) => {}
             },
             changed = settings.changed() => if changed.is_err() {
                 return;
@@ -177,17 +167,19 @@ pub(crate) async fn run(
     }
 }
 
+fn current_room(loader: &impl Loader) -> Result<Option<Room>, CallError> {
+    Ok(bridge::player::get_map(loader)?
+        .as_deref()
+        .and_then(Room::of))
+}
+
 fn move_to_zone(
     loader: &impl Loader,
     pending: &Pending,
     pick: &impl Fn(&Area) -> (i32, i32),
 ) -> Result<(), CallError> {
-    let map = bridge::player::get_map(loader)?;
-    if !map
-        .as_deref()
-        .is_some_and(|map| map.eq_ignore_ascii_case(pending.room.map()))
-    {
-        tracing::debug!(?map, room = ?pending.room, "auto zone is outside its room");
+    if current_room(loader)? != Some(pending.room) {
+        tracing::debug!(room = ?pending.room, "auto zone left the room before it moved");
         return Ok(());
     }
     let charge = if pending.room == Room::Queeniona {
@@ -253,10 +245,10 @@ mod tests {
     struct Fight {
         boss: Rc<RefCell<Boss>>,
         events: Rc<Events>,
-        settings: watch::Sender<Settings>,
+        settings: watch::Sender<game_settings::Settings>,
     }
 
-    fn fight(room: Room, map: &'static str) -> Fight {
+    fn fight(map: &'static str) -> Fight {
         let boss = Rc::new(RefCell::new(Boss {
             map,
             hp: 100,
@@ -264,9 +256,9 @@ mod tests {
             walks: Vec::new(),
         }));
         let events = Rc::new(Events::default());
-        let (settings, receiver) = watch::channel(Settings {
-            enabled: true,
-            room: Some(room),
+        let (settings, receiver) = watch::channel(game_settings::Settings {
+            auto_zone: true,
+            ..game_settings::Settings::default()
         });
         let state = boss.clone();
         let start = Instant::now();
@@ -341,7 +333,7 @@ mod tests {
     async fn each_zone_walks_into_its_area() {
         LocalSet::new()
             .run_until(async {
-                let fight = fight(Room::Ultradage, "UltraDage");
+                let fight = fight("UltraDage");
                 for zone in [Some("A"), Some("B"), None] {
                     fight.zone(zone);
                     settle().await;
@@ -355,7 +347,7 @@ mod tests {
     async fn queen_iona_picks_the_side_from_the_charge_after_it_settles() {
         LocalSet::new()
             .run_until(async {
-                let fight = fight(Room::Queeniona, "queeniona");
+                let fight = fight("queeniona");
                 fight.boss.borrow_mut().auras = vec!["Negative Charge"];
                 fight.zone(Some("A"));
                 settle().await;
@@ -385,7 +377,7 @@ mod tests {
     async fn it_stays_put_outside_the_room_when_dead_or_off() {
         LocalSet::new()
             .run_until(async {
-                let fight = fight(Room::Darkcarnax, "battleon");
+                let fight = fight("battleon");
                 fight.zone(Some("A"));
                 settle().await;
                 fight.boss.borrow_mut().map = "darkcarnax";
@@ -395,14 +387,14 @@ mod tests {
                 fight.boss.borrow_mut().hp = 100;
                 fight
                     .settings
-                    .send_modify(|settings| settings.enabled = false);
+                    .send_modify(|settings| settings.auto_zone = false);
                 settle().await;
                 fight.zone(Some("A"));
                 settle().await;
                 assert!(fight.walks().is_empty());
                 fight
                     .settings
-                    .send_modify(|settings| settings.enabled = true);
+                    .send_modify(|settings| settings.auto_zone = true);
                 settle().await;
                 fight.zone(Some("A"));
                 settle().await;
@@ -415,10 +407,15 @@ mod tests {
     async fn a_newer_zone_replaces_one_still_settling() {
         LocalSet::new()
             .run_until(async {
-                let fight = fight(Room::Queeniona, "queeniona");
+                let fight = fight("queeniona");
                 fight.zone(Some("A"));
                 sleep(Duration::from_millis(100)).await;
                 fight.zone(None);
+                settle().await;
+                assert_eq!(fight.walks(), [(490, 320)]);
+                fight.zone(None);
+                sleep(Duration::from_millis(100)).await;
+                fight.boss.borrow_mut().map = "battleon";
                 settle().await;
                 assert_eq!(fight.walks(), [(490, 320)]);
             })
@@ -438,7 +435,7 @@ mod tests {
     async fn an_event_without_a_zone_returns_to_the_center_and_a_null_zone_is_ignored() {
         LocalSet::new()
             .run_until(async {
-                let fight = fight(Room::Queeniona, "queeniona");
+                let fight = fight("queeniona");
                 fight.event(r#""zoneSet":null"#);
                 settle().await;
                 assert!(fight.walks().is_empty());

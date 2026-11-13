@@ -317,7 +317,7 @@ fn run(
         auto_zone::run(
             bridge.clone(),
             Packets::subscribe(|wants| bridge.subscribe(wants)),
-            automation.watch_auto_zone(),
+            automation.watch_game_settings(),
             auto_zone::random_point,
         ),
     );
