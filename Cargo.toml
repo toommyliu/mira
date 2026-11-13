@@ -58,6 +58,8 @@ url = "2.5"
 workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+mira-ui = { workspace = true, features = ["test-support"] }
 swf = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
 tokio = { version = "1", features = ["test-util"] }
 

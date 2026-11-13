@@ -26,7 +26,6 @@ use super::{
         tab_face,
     },
     profile_form::{Form, FormStep, FormTrigger, Item, Kind, Rule},
-    ui,
 };
 use crate::{
     combat_profiles,
@@ -812,7 +811,11 @@ impl Editor {
                 if active {
                     row.bg(theme.selected).text_color(theme.text)
                 } else {
-                    ui::pressable(theme, row).text_color(theme.text_secondary)
+                    let (hover, pressed) = (theme.fill_hover, theme.fill_pressed);
+                    row.pointer_cursor(theme)
+                        .hover(move |style| style.bg(hover))
+                        .active(move |style| style.bg(pressed))
+                        .text_color(theme.text_secondary)
                 }
             })
             .on_click(cx.listener(move |this, _, window, cx| this.select(entry, window, cx)));

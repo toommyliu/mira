@@ -1,24 +1,27 @@
-use std::{cell::Cell, rc::Rc};
+use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement as _, Pixels, Point, RenderOnce, Role, ScrollHandle,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
-    anchored, deferred, div, point, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseDownEvent,
+    ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use mira_ui::{
-    ActiveTheme as _, PointerCursor as _, Theme, motion,
+    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _, h_flex, motion,
     nav::{self, Axis, Step},
-    primitives::{Icon, Scrollbar, Spinner, icon},
-    theme::{CONTROL_SM, DISABLED_OPACITY, PANEL_INSET, ROW, TEXT_BODY, TEXT_SMALL},
+    primitives::{
+        Button, Field, Icon, Input, InputEvent, MenuItem, Menubar, Numeric, PopoverClose,
+        Scrollbar, Select, Spinner, Switch,
+        button::{Size, Variant},
+        icon,
+    },
+    theme::{DISABLED_OPACITY, ROW, TEXT_BODY},
+    v_flex,
 };
 
-use super::{
-    RuffleView,
-    ui::{self, Glyph},
-};
+use super::RuffleView;
 use crate::{
     automation::{
         auto_relogin::Phase,
@@ -34,44 +37,16 @@ use crate::{
     ruffle::Command,
 };
 
+pub(crate) const BAR_HEIGHT: Pixels = px(38.0);
+
 const LAST_SERVER: &str = "Last server";
-const MAX_DIGITS: usize = 3;
+const MAX_NUMBER: u32 = 999;
 const MAX_TEXT: usize = 32;
-const SUBMENU_WIDTH: Pixels = px(200.0);
-const SUBMENU_MAX_HEIGHT: Pixels = px(360.0);
-const SUBMENU_OVERLAP: Pixels = px(2.0);
 const VISIBLE_CELLS: f32 = 10.5;
 const SCROLLBAR_CLEARANCE: Pixels = px(2.0);
-const BORDER: Pixels = px(1.0);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum BarMenu {
-    Windows,
-    Options,
-    AutoRelogin,
-    Script,
-    Jump,
-    AutoAttack,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Submenu {
-    Servers,
-    Rendering,
-}
-
-impl BarMenu {
-    fn submenu(self) -> Option<Submenu> {
-        match self {
-            BarMenu::AutoRelogin => Some(Submenu::Servers),
-            BarMenu::Options => Some(Submenu::Rendering),
-            BarMenu::Windows | BarMenu::Script | BarMenu::Jump | BarMenu::AutoAttack => None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Field {
+enum Setting {
     Delay,
     Retries,
     Backoff,
@@ -82,72 +57,99 @@ enum Field {
     CustomGuild,
 }
 
-impl Field {
-    const RELOGIN: [Field; 4] = [
-        Field::Delay,
-        Field::Retries,
-        Field::Backoff,
-        Field::BackoffCap,
+impl Setting {
+    const ALL: [Setting; 8] = [
+        Setting::Delay,
+        Setting::Retries,
+        Setting::Backoff,
+        Setting::BackoffCap,
+        Setting::WalkSpeed,
+        Setting::FrameRate,
+        Setting::CustomName,
+        Setting::CustomGuild,
     ];
-    const MOVEMENT: [Field; 2] = [Field::WalkSpeed, Field::FrameRate];
-    const IDENTITY: [Field; 2] = [Field::CustomName, Field::CustomGuild];
+    const RELOGIN: [Setting; 4] = [
+        Setting::Delay,
+        Setting::Retries,
+        Setting::Backoff,
+        Setting::BackoffCap,
+    ];
 
     fn label(self) -> &'static str {
         match self {
-            Field::Delay => "Delay",
-            Field::Retries => "Retries",
-            Field::Backoff => "Backoff",
-            Field::BackoffCap => "Backoff cap",
-            Field::WalkSpeed => "Walk speed",
-            Field::FrameRate => "Frame rate",
-            Field::CustomName => "Name",
-            Field::CustomGuild => "Guild",
+            Setting::Delay => "Delay",
+            Setting::Retries => "Retries",
+            Setting::Backoff => "Backoff",
+            Setting::BackoffCap => "Backoff cap",
+            Setting::WalkSpeed => "Walk speed",
+            Setting::FrameRate => "Frame rate",
+            Setting::CustomName => "Name",
+            Setting::CustomGuild => "Guild",
         }
     }
 
-    fn unit(self) -> &'static str {
+    fn range(self) -> Option<(u32, u32)> {
         match self {
-            Field::Delay | Field::Backoff | Field::BackoffCap => "s",
-            _ => "",
+            Setting::FrameRate => Some(FrameRate::RANGE),
+            Setting::CustomName | Setting::CustomGuild => None,
+            _ => Some((0, MAX_NUMBER)),
         }
     }
 
-    fn is_text(self) -> bool {
-        matches!(self, Field::CustomName | Field::CustomGuild)
+    fn unit(self) -> Option<&'static str> {
+        match self {
+            Setting::Delay | Setting::Backoff | Setting::BackoffCap => Some("s"),
+            _ => None,
+        }
     }
 
-    fn steps(self) -> bool {
-        !self.is_text()
+    fn pill(self) -> bool {
+        matches!(self, Setting::WalkSpeed | Setting::FrameRate)
     }
 
-    fn max_len(self) -> usize {
-        if self.is_text() { MAX_TEXT } else { MAX_DIGITS }
+    fn input(self, cx: &mut App) -> Entity<Input> {
+        cx.new(|cx| {
+            let input = Input::new(self.label(), cx).small();
+            let input = match self.range() {
+                Some((min, max)) => input.numeric(Numeric {
+                    min: min.into(),
+                    max: max.into(),
+                    step: 1,
+                }),
+                None => input.max_length(MAX_TEXT),
+            };
+            let input = if self.pill() { input.pill() } else { input };
+            match self.unit() {
+                Some(unit) => input.suffix(unit),
+                None => input,
+            }
+        })
     }
 
     fn value(self, automation: &Automation) -> String {
         let relogin = || automation.auto_relogin();
         let game = || automation.game_settings();
         match self {
-            Field::Delay => relogin().delay_seconds.to_string(),
-            Field::Retries => relogin().retries.to_string(),
-            Field::Backoff => relogin().backoff_seconds.to_string(),
-            Field::BackoffCap => relogin().backoff_cap_seconds.to_string(),
-            Field::WalkSpeed => game().walk_speed.to_string(),
-            Field::FrameRate => automation
+            Setting::Delay => relogin().delay_seconds.to_string(),
+            Setting::Retries => relogin().retries.to_string(),
+            Setting::Backoff => relogin().backoff_seconds.to_string(),
+            Setting::BackoffCap => relogin().backoff_cap_seconds.to_string(),
+            Setting::WalkSpeed => game().walk_speed.to_string(),
+            Setting::FrameRate => automation
                 .frame_rate()
                 .map(|fps| fps.to_string())
                 .unwrap_or_default(),
-            Field::CustomName => game().custom_name.unwrap_or_default(),
-            Field::CustomGuild => game().custom_guild.unwrap_or_default(),
+            Setting::CustomName => game().custom_name.unwrap_or_default(),
+            Setting::CustomGuild => game().custom_guild.unwrap_or_default(),
         }
     }
 
     fn commit(self, text: String, view: &mut RuffleView, cx: &mut Context<RuffleView>) {
         match self {
-            Field::CustomName => {
+            Setting::CustomName => {
                 return view.change_game_settings(|settings| settings.custom_name = Some(text), cx);
             }
-            Field::CustomGuild => {
+            Setting::CustomGuild => {
                 return view
                     .change_game_settings(|settings| settings.custom_guild = Some(text), cx);
             }
@@ -157,46 +159,48 @@ impl Field {
             return;
         };
         match self {
-            Field::Delay => view.change_auto_relogin(|settings| settings.delay_seconds = value, cx),
-            Field::Retries => view.change_auto_relogin(|settings| settings.retries = value, cx),
-            Field::Backoff => {
+            Setting::Delay => {
+                view.change_auto_relogin(|settings| settings.delay_seconds = value, cx)
+            }
+            Setting::Retries => view.change_auto_relogin(|settings| settings.retries = value, cx),
+            Setting::Backoff => {
                 view.change_auto_relogin(|settings| settings.backoff_seconds = value, cx)
             }
-            Field::BackoffCap => {
+            Setting::BackoffCap => {
                 view.change_auto_relogin(|settings| settings.backoff_cap_seconds = value, cx)
             }
-            Field::WalkSpeed => {
+            Setting::WalkSpeed => {
                 view.change_game_settings(|settings| settings.walk_speed = value, cx)
             }
-            Field::FrameRate => view.change_frame_rate(value, cx),
-            Field::CustomName | Field::CustomGuild => {}
+            Setting::FrameRate => view.change_frame_rate(value, cx),
+            Setting::CustomName | Setting::CustomGuild => {}
         }
     }
 
     fn is_default(self, automation: &Automation) -> bool {
         let game = automation.game_settings();
         match self {
-            Field::WalkSpeed => game.walk_speed == GameSettings::default().walk_speed,
-            Field::FrameRate => automation
+            Setting::WalkSpeed => game.walk_speed == GameSettings::default().walk_speed,
+            Setting::FrameRate => automation
                 .frame_rate()
                 .is_none_or(|fps| fps == FrameRate::DEFAULT),
-            Field::CustomName => game.custom_name.is_none(),
-            Field::CustomGuild => game.custom_guild.is_none(),
+            Setting::CustomName => game.custom_name.is_none(),
+            Setting::CustomGuild => game.custom_guild.is_none(),
             _ => true,
         }
     }
 
     fn reset(self, view: &mut RuffleView, cx: &mut Context<RuffleView>) {
         match self {
-            Field::WalkSpeed => view.change_game_settings(
+            Setting::WalkSpeed => view.change_game_settings(
                 |settings| settings.walk_speed = GameSettings::default().walk_speed,
                 cx,
             ),
-            Field::FrameRate => view.change_frame_rate(FrameRate::DEFAULT, cx),
-            Field::CustomName => {
+            Setting::FrameRate => view.change_frame_rate(FrameRate::DEFAULT, cx),
+            Setting::CustomName => {
                 view.change_game_settings(|settings| settings.custom_name = None, cx)
             }
-            Field::CustomGuild => {
+            Setting::CustomGuild => {
                 view.change_game_settings(|settings| settings.custom_guild = None, cx)
             }
             _ => {}
@@ -206,36 +210,29 @@ impl Field {
     fn needs_game(self) -> bool {
         matches!(
             self,
-            Field::WalkSpeed | Field::FrameRate | Field::CustomName | Field::CustomGuild
+            Setting::WalkSpeed | Setting::FrameRate | Setting::CustomName | Setting::CustomGuild
         )
     }
 
     fn editable(self, automation: &Automation) -> bool {
-        self != Field::FrameRate || !automation.game_settings().rendering.minimal()
+        self != Setting::FrameRate || !automation.game_settings().rendering.minimal()
     }
 
-    fn after(self, backwards: bool, automation: &Automation) -> Field {
-        let group: &[Field] = match self {
-            Field::Delay | Field::Retries | Field::Backoff | Field::BackoffCap => &Field::RELOGIN,
-            _ => &[
-                Field::WalkSpeed,
-                Field::FrameRate,
-                Field::CustomName,
-                Field::CustomGuild,
-            ],
-        };
-        let index = group.iter().position(|field| *field == self).unwrap();
-        let count = group.len();
-        (1..count)
-            .map(|step| {
-                group[if backwards {
-                    (index + count - step) % count
-                } else {
-                    (index + step) % count
-                }]
-            })
-            .find(|field| field.editable(automation))
-            .unwrap_or(self)
+    fn enabled(self, automation: &Automation, live: bool) -> bool {
+        self.editable(automation) && (live || !self.needs_game())
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct Inputs([Entity<Input>; Setting::ALL.len()]);
+
+impl Inputs {
+    fn new(cx: &mut App) -> Self {
+        Self(Setting::ALL.map(|setting| setting.input(cx)))
+    }
+
+    fn get(&self, setting: Setting) -> &Entity<Input> {
+        &self.0[setting as usize]
     }
 }
 
@@ -262,58 +259,39 @@ const TOGGLES: [Toggle; 10] = [
     ("auto-zone", "Auto zone", |s| &mut s.auto_zone),
 ];
 
-struct Edit {
-    field: Field,
-    text: String,
-    fresh: bool,
-}
-
 pub(super) struct BarState {
-    open: Option<BarMenu>,
-    submenu: Option<(Submenu, Point<Pixels>)>,
-    aim_from: Option<Point<Pixels>>,
-    edit: Option<Edit>,
-    jump: Option<Spot>,
-    cells_scroll: ScrollHandle,
+    inputs: Inputs,
     location: Option<Location>,
     identity: Option<Identity>,
-    focus: FocusHandle,
-    triggers: Rc<Cell<[Bounds<Pixels>; 6]>>,
-    submenu_rows: Rc<Cell<[Bounds<Pixels>; 2]>>,
-    submenu_panel: Rc<Cell<Bounds<Pixels>>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl BarState {
-    pub(super) fn new(cx: &mut App) -> Self {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<RuffleView>) -> Self {
+        let inputs = Inputs::new(cx);
+        let mut subscriptions = Vec::new();
+        for setting in Setting::ALL {
+            let input = inputs.get(setting);
+            subscriptions.push(cx.subscribe(input, move |view, _, event, cx| {
+                if let InputEvent::Submitted = event {
+                    view.commit(setting, cx);
+                }
+            }));
+            subscriptions.push(
+                cx.on_blur(&input.focus_handle(cx), window, move |view, _, cx| {
+                    view.commit(setting, cx)
+                }),
+            );
+        }
         Self {
-            open: None,
-            submenu: None,
-            aim_from: None,
-            edit: None,
-            jump: None,
-            cells_scroll: ScrollHandle::new(),
+            inputs,
             location: None,
             identity: None,
-            focus: cx.focus_handle(),
-            triggers: Default::default(),
-            submenu_rows: Default::default(),
-            submenu_panel: Default::default(),
+            _subscriptions: subscriptions,
         }
-    }
-
-    pub(super) fn open(&self) -> Option<BarMenu> {
-        self.open
     }
 
     pub(super) fn located(&mut self, location: Option<Location>) {
-        if location.is_none()
-            && self
-                .edit
-                .as_ref()
-                .is_some_and(|edit| edit.field.needs_game())
-        {
-            self.edit = None;
-        }
         self.location = location;
     }
 
@@ -328,281 +306,103 @@ impl BarState {
     }
 }
 
+struct Options {
+    automation: Automation,
+    live: bool,
+    name: SharedString,
+    guild: SharedString,
+    inputs: Inputs,
+}
+
+struct Relogin {
+    automation: Automation,
+    status: Option<String>,
+    servers: Vec<String>,
+    inputs: Inputs,
+}
+
 impl RuffleView {
-    fn toggle_menu(&mut self, menu: BarMenu, window: &mut Window, cx: &mut Context<Self>) {
-        if self.bar.open == Some(menu) {
-            self.close_menu(window, cx);
-            return;
-        }
-        self.commit_edit(cx);
-        self.session.release_keys();
-        self.bar.open = Some(menu);
-        self.bar.submenu = None;
-        self.bar.jump = None;
-        if menu == BarMenu::Jump
-            && let Some(location) = &self.bar.location
+    fn in_game(&self) -> bool {
+        self.bar.location.is_some()
+    }
+
+    fn commit(&mut self, setting: Setting, cx: &mut Context<Self>) {
+        let input = self.bar.inputs.get(setting).clone();
+        let text = input.read(cx).text().to_owned();
+        if setting.enabled(&self.automation, self.in_game())
+            && text != setting.value(&self.automation)
         {
-            let spot = current_spot(location);
-            self.bar.jump = Some(spot);
-            self.bar.cells_scroll.scroll_to_item(spot.row);
+            setting.commit(text, self, cx);
         }
-        window.focus(&self.bar.focus, cx);
-        cx.notify();
+        self.show_value(setting, cx);
     }
 
-    pub(super) fn dismiss_menu(&mut self, cx: &mut Context<Self>) {
-        self.commit_edit(cx);
-        self.bar.open = None;
-        self.bar.submenu = None;
-        self.bar.jump = None;
+    fn reset(&mut self, setting: Setting, cx: &mut Context<Self>) {
+        setting.reset(self, cx);
+        self.show_value(setting, cx);
     }
 
-    pub(super) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss_menu(cx);
-        window.focus(&self.focus, cx);
-        self.restore_modifiers(window);
-        cx.notify();
+    fn show_value(&self, setting: Setting, cx: &mut Context<Self>) {
+        let value = setting.value(&self.automation);
+        self.bar.inputs.get(setting).update(cx, |input, cx| {
+            if input.text() != value {
+                input.set_text(value, cx);
+            }
+        });
     }
 
-    fn panel_mouse_down_out(
+    fn bar_dismissed(
         &mut self,
         event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let at = event.position;
-        if self
-            .bar
-            .triggers
-            .get()
-            .iter()
-            .any(|bounds| bounds.contains(&at))
-            || (self.bar.submenu.is_some() && self.bar.submenu_panel.get().contains(&at))
-        {
-            return;
-        }
-        self.close_menu(window, cx);
-        if self.player_bounds.contains(&at) {
+        window.focus(&self.focus, cx);
+        if self.player_bounds.contains(&event.position) {
             self.mouse.swallow(event.button);
             cx.stop_propagation();
         }
     }
 
-    fn panel_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let key = event.keystroke.key.as_str();
-        let shift = event.keystroke.modifiers.shift;
-        if key == "escape" {
-            if self.bar.edit.take().is_none() && self.bar.submenu.take().is_none() {
-                self.close_menu(window, cx);
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        if self.bar.open == Some(BarMenu::Jump) {
-            let Some(location) = &self.bar.location else {
-                return;
-            };
-            match jump_key(location, self.bar.jump, event) {
-                Some(JumpKey::Move(spot)) => {
-                    self.bar.jump = Some(spot);
-                    if spot.column == Column::Cell {
-                        self.bar.cells_scroll.scroll_to_item(spot.row);
-                    }
-                }
-                Some(JumpKey::Travel {
-                    cell,
-                    pad,
-                    keep_open,
-                }) => self.travel(cell, pad, keep_open, window, cx),
-                None => return,
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        let Some(field) = self.bar.edit.as_ref().map(|edit| edit.field) else {
-            return;
-        };
-        match key {
-            "enter" => self.commit_edit(cx),
-            "tab" => {
-                self.commit_edit(cx);
-                self.start_edit(field.after(shift, &self.automation));
-            }
-            "up" | "down" if field.steps() => {
-                let stored = field.value(&self.automation).parse().unwrap_or(0);
-                let edit = self.bar.edit.as_mut().unwrap();
-                let step = if shift { 10 } else { 1 };
-                let draft = edit.text.parse().unwrap_or(stored);
-                let stepped = if key == "up" {
-                    draft + step
-                } else {
-                    draft - step
-                };
-                edit.text = stepped.max(0).to_string();
-                self.commit_edit(cx);
-                self.start_edit(field);
-            }
-            "backspace" => {
-                let edit = self.bar.edit.as_mut().unwrap();
-                if edit.fresh {
-                    edit.text.clear();
-                } else {
-                    edit.text.pop();
-                }
-                edit.fresh = false;
-            }
-            _ if field.is_text() => {
-                let modifiers = event.keystroke.modifiers;
-                let Some(typed) = event.keystroke.key_char.as_deref() else {
-                    return;
-                };
-                if modifiers.platform || modifiers.control {
-                    return;
-                }
-                let edit = self.bar.edit.as_mut().unwrap();
-                if edit.fresh {
-                    edit.text.clear();
-                    edit.fresh = false;
-                }
-                if edit.text.chars().count() + typed.chars().count() <= field.max_len() {
-                    edit.text.push_str(typed);
-                }
-            }
-            digit if digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit()) => {
-                let edit = self.bar.edit.as_mut().unwrap();
-                if edit.fresh {
-                    edit.text.clear();
-                    edit.fresh = false;
-                }
-                if edit.text.len() < field.max_len() {
-                    edit.text.push_str(digit);
-                }
-            }
-            _ => return,
-        }
-        cx.stop_propagation();
-        cx.notify();
-    }
-
-    fn in_game(&self) -> bool {
-        self.bar.location.is_some()
-    }
-
-    fn field_enabled(&self, field: Field) -> bool {
-        field.editable(&self.automation) && (!field.needs_game() || self.in_game())
-    }
-
-    fn start_edit(&mut self, field: Field) {
-        if !self.field_enabled(field) {
-            self.bar.edit = None;
-            return;
-        }
-        self.bar.edit = Some(Edit {
-            field,
-            text: field.value(&self.automation),
-            fresh: true,
-        });
-    }
-
-    fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(edit) = self.bar.edit.take() else {
-            return;
-        };
-        edit.field.commit(edit.text, self, cx);
-        cx.notify();
-    }
-
-    fn open_submenu(&mut self, submenu: Submenu, cx: &mut Context<Self>) {
-        if self.bar.submenu.is_some_and(|(open, _)| open == submenu) {
-            return;
-        }
-        self.commit_edit(cx);
-        let row = self.bar.submenu_rows.get()[submenu as usize];
-        self.bar.submenu = Some((
-            submenu,
-            point(
-                row.right() + PANEL_INSET + BORDER - SUBMENU_OVERLAP,
-                row.top() - PANEL_INSET - BORDER,
-            ),
-        ));
-        cx.notify();
-    }
-
-    fn travel(
-        &mut self,
-        cell: String,
-        pad: String,
-        keep_open: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.session.command(Command::Jump { cell, pad });
-        if !keep_open {
-            self.close_menu(window, cx);
+    fn options(&self) -> Options {
+        let identity = self.bar.identity.as_ref();
+        let name = identity
+            .map(|identity| identity.name.clone())
+            .or_else(|| self.username().map(str::to_owned));
+        let guild = identity.and_then(|identity| identity.guild.clone());
+        Options {
+            automation: self.automation.clone(),
+            live: self.in_game(),
+            name: name.unwrap_or_default().into(),
+            guild: guild.unwrap_or_default().into(),
+            inputs: self.bar.inputs.clone(),
         }
     }
 
-    fn close_submenu(&mut self) {
-        self.bar.submenu = None;
-        self.bar.aim_from = None;
-    }
-
-    fn panel_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(menu) = self.bar.open else {
-            return;
-        };
-        let at = event.position;
-        let Some(submenu) = menu.submenu() else {
-            return;
-        };
-        if self.bar.submenu_rows.get()[submenu as usize].contains(&at) {
-            self.bar.aim_from = Some(at);
-            self.open_submenu(submenu, cx);
-            return;
+    fn relogin(&self) -> Relogin {
+        Relogin {
+            automation: self.automation.clone(),
+            status: status(&self.auto_relogin),
+            servers: self.servers.clone(),
+            inputs: self.bar.inputs.clone(),
         }
-        let Some((_, origin)) = self.bar.submenu else {
-            return;
-        };
-        let panel = self.bar.submenu_panel.get();
-        let near_edge = if panel.size.height > Pixels::ZERO {
-            (panel.origin, panel.bottom_left())
-        } else {
-            (origin, point(origin.x, origin.y + SUBMENU_MAX_HEIGHT))
-        };
-        if let Some(from) = self.bar.aim_from
-            && heading_toward(from, at, near_edge)
-        {
-            self.bar.aim_from = Some(at);
-            return;
-        }
-        self.close_submenu();
-        cx.notify();
     }
 }
 
-fn heading_toward(
-    from: Point<Pixels>,
-    at: Point<Pixels>,
-    (top, bottom): (Point<Pixels>, Point<Pixels>),
-) -> bool {
-    let side = |a: Point<Pixels>, b: Point<Pixels>, p: Point<Pixels>| {
-        f32::from(b.x - a.x) * f32::from(p.y - a.y) - f32::from(b.y - a.y) * f32::from(p.x - a.x)
-    };
-    let (d1, d2, d3) = (
-        side(from, top, at),
-        side(top, bottom, at),
-        side(bottom, from, at),
-    );
-    let negative = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-    let positive = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    !(negative && positive)
+fn update(
+    this: &WeakEntity<RuffleView>,
+    cx: &mut App,
+    f: impl FnOnce(&mut RuffleView, &mut Context<RuffleView>),
+) {
+    let _ = this.update(cx, f);
+}
+
+fn act(
+    this: &WeakEntity<RuffleView>,
+    f: impl Fn(&mut RuffleView, &mut Context<RuffleView>) + 'static,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let this = this.clone();
+    move |_, cx| update(&this, cx, &f)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -780,85 +580,140 @@ fn status(phase: &Phase) -> Option<String> {
     }
 }
 
+fn profile_label(view: &RuffleView) -> String {
+    view.automation
+        .auto_attack()
+        .profile
+        .unwrap_or_else(|| profiles::GENERIC.to_owned())
+}
+
+fn trigger(
+    id: &'static str,
+    title: &'static str,
+    value: Option<Detail>,
+    on: Option<bool>,
+    cx: &App,
+) -> Button {
+    let theme = cx.theme();
+    let state = match on {
+        Some(true) => ", on",
+        Some(false) => ", off",
+        None => "",
+    };
+    let label = match &value {
+        Some(Detail::Text(value) | Detail::Working(value) | Detail::Waiting(value)) => {
+            format!("{title}{state}: {value}")
+        }
+        None => format!("{title}{state}"),
+    };
+    let shrinks = matches!(value, Some(Detail::Text(_)));
+    Button::new(id, label)
+        .variant(Variant::Ghost)
+        .size(Size::Small)
+        .text_size(TEXT_BODY)
+        .when(shrinks, |trigger| trigger.flex_shrink(1.0).min_w_0())
+        .child(
+            div()
+                .flex_none()
+                .when(on == Some(true), |title| title.text_color(theme.text))
+                .child(title),
+        )
+        .children(value.map(|value| {
+            let waiting = matches!(value, Detail::Waiting(_));
+            match value {
+                Detail::Text(value) => div()
+                    .min_w_0()
+                    .max_w(px(120.0))
+                    .truncate()
+                    .text_color(theme.text_tertiary)
+                    .child(value)
+                    .into_any_element(),
+                Detail::Working(label) | Detail::Waiting(label) => Busy {
+                    id: SharedString::from(format!("{id}-working")).into(),
+                    label,
+                    waiting,
+                }
+                .into_any_element(),
+            }
+        }))
+}
+
 pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
+    let this = cx.weak_entity();
     let theme = cx.theme().clone();
-    let attack = view.automation.auto_attack().enabled;
     let live = view.in_game();
-    div()
-        .flex()
+    let relogin = view.automation.auto_relogin().enabled;
+    let attack = view.automation.auto_attack().enabled;
+    Menubar::new(("game-bar", cx.entity_id()), "Game")
         .flex_none()
-        .items_center()
-        .gap(px(2.0))
         .w_full()
-        .h(ui::BAR_HEIGHT)
+        .h(BAR_HEIGHT)
+        .gap(px(2.0))
         .pr(px(6.0))
-        .child(super::client::drag_area().flex_none().w(view.bar_inset))
         .bg(theme.base)
         .border_b_1()
         .border_color(theme.border)
-        .text_size(TEXT_BODY)
-        .text_color(theme.text)
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::Windows,
-            "Windows",
-            None,
-            None,
-            cx,
-            true,
-        ))
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::Script,
-            "Scripts",
-            None,
-            None,
-            cx,
-            true,
-        ))
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::Options,
-            "Options",
-            None,
-            None,
-            cx,
-            true,
-        ))
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::AutoRelogin,
-            "Auto relogin",
-            relogin_value(view),
-            Some(view.automation.auto_relogin().enabled),
-            cx,
-            true,
-        ))
+        .child(super::client::drag_area().flex_none().w(view.bar_inset))
+        .menu(trigger("windows", "Windows", None, None, cx), |_, _| {
+            windows_menu()
+        })
+        .menu(trigger("scripts", "Scripts", None, None, cx), {
+            let this = this.clone();
+            move |_, cx| {
+                this.read_with(cx, |view, _| scripts_menu(&this, view))
+                    .unwrap_or_default()
+            }
+        })
+        .popover(trigger("options", "Options", None, None, cx), {
+            let this = this.clone();
+            move |close, window, cx| match this.read_with(cx, |view, _| view.options()) {
+                Ok(options) => options_panel(options, &this, close, window, cx),
+                Err(_) => div().into_any_element(),
+            }
+        })
+        .popover(
+            trigger(
+                "auto-relogin",
+                "Auto relogin",
+                relogin_value(view),
+                Some(relogin),
+                cx,
+            ),
+            {
+                let this = this.clone();
+                move |_, window, cx| match this.read_with(cx, |view, _| view.relogin()) {
+                    Ok(relogin) => relogin_panel(relogin, &this, window, cx),
+                    Err(_) => div().into_any_element(),
+                }
+            },
+        )
         .child(super::client::drag_area().flex_1())
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::AutoAttack,
-            "Auto attack",
-            Some(Detail::Text(profile_label(view).into())),
-            Some(attack),
-            cx,
-            true,
-        ))
-        .child(trigger(
-            &theme,
-            view,
-            BarMenu::Jump,
-            "Jump",
-            None,
-            None,
-            cx,
-            live,
-        ))
+        .menu(
+            trigger(
+                "auto-attack",
+                "Auto attack",
+                Some(Detail::Text(profile_label(view).into())),
+                Some(attack),
+                cx,
+            ),
+            {
+                let this = this.clone();
+                move |_, cx| {
+                    this.read_with(cx, |view, cx| attack_menu(&this, view, cx))
+                        .unwrap_or_default()
+                }
+            },
+        )
+        .popover(trigger("jump", "Jump", None, None, cx).disabled(!live), {
+            let this = this.clone();
+            move |close, window, cx| {
+                let location = this
+                    .read_with(cx, |view, _| view.bar.location.clone())
+                    .ok()
+                    .flatten();
+                jump_panel(location, &this, close, window, cx)
+            }
+        })
         .child(
             div()
                 .flex_none()
@@ -868,854 +723,631 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                 .bg(theme.hairline),
         )
         .child(
-            bar_control(&theme, "bank", live)
-                .flex_none()
-                .role(Role::Button)
-                .aria_label("Bank")
-                .child("Bank")
-                .when(live, |control| {
-                    control.on_click(
-                        cx.listener(|this, _, _, _| this.session.command(Command::OpenBank)),
-                    )
-                }),
+            Button::new("bank", "Bank")
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .text_size(TEXT_BODY)
+                .disabled(!live)
+                .on_click(cx.listener(|this, _, _, _| this.session.command(Command::OpenBank))),
         )
+        .on_dismiss(cx.listener(RuffleView::bar_dismissed))
 }
 
-fn bar_control(theme: &Theme, id: &'static str, enabled: bool) -> Stateful<Div> {
-    press(
-        theme,
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .h(CONTROL_SM)
-            .px(px(8.0))
-            .rounded(theme.radius.control),
-        enabled,
-    )
+fn windows_menu() -> Vec<MenuItem> {
+    vec![
+        MenuItem::action("Combat profiles", |window, cx| {
+            window.dispatch_action(Box::new(super::OpenCombatProfiles), cx)
+        }),
+        MenuItem::action("Environment", |window, cx| {
+            window.dispatch_action(Box::new(super::OpenEnvironment), cx)
+        }),
+        MenuItem::action("Follower", |window, cx| {
+            window.dispatch_action(Box::new(super::OpenFollower), cx)
+        }),
+        MenuItem::action("Loader/grabber", |window, cx| {
+            window.dispatch_action(Box::new(super::OpenLoaderGrabber), cx)
+        }),
+        MenuItem::action("Packets", |window, cx| {
+            window.dispatch_action(Box::new(super::OpenPackets), cx)
+        }),
+    ]
 }
 
-fn trigger(
-    theme: &Theme,
-    view: &RuffleView,
-    menu: BarMenu,
-    title: &'static str,
-    value: Option<Detail>,
-    on: Option<bool>,
-    cx: &mut Context<RuffleView>,
-    enabled: bool,
-) -> impl IntoElement {
-    let triggers = view.bar.triggers.clone();
-    let open = view.bar.open == Some(menu);
-    let shrinks = matches!(value, Some(Detail::Text(_)));
-    let state = match on {
-        Some(true) => ", on",
-        Some(false) => ", off",
-        None => "",
-    };
-    let label = match &value {
-        Some(Detail::Text(value) | Detail::Working(value) | Detail::Waiting(value)) => {
-            SharedString::from(format!("{title}{state}: {value}"))
-        }
-        None => SharedString::from(format!("{title}{state}")),
-    };
-    let id = match menu {
-        BarMenu::Windows => "windows",
-        BarMenu::Options => "options",
-        BarMenu::AutoRelogin => "auto-relogin",
-        BarMenu::Script => "script",
-        BarMenu::Jump => "jump",
-        BarMenu::AutoAttack => "auto-attack",
-    };
-    div()
-        .map(|slot| {
-            if shrinks {
-                slot.min_w_0()
-            } else {
-                slot.flex_none()
-            }
-        })
-        .on_children_prepainted(move |bounds, _, _| {
-            let mut all = triggers.get();
-            all[menu as usize] = bounds[0];
-            triggers.set(all);
-        })
-        .child(
-            bar_control(theme, id, enabled)
-                .role(Role::Button)
-                .aria_label(label)
-                .aria_expanded(open)
-                .when(shrinks, |trigger| trigger.min_w_0())
-                .gap(px(7.0))
-                .when(open, |trigger| trigger.bg(theme.fill_pressed))
-                .child(
-                    div()
-                        .flex_none()
-                        .when(on == Some(false), |title| {
-                            title.text_color(theme.text_secondary)
-                        })
-                        .child(title),
-                )
-                .children(value.map(|value| {
-                    let waiting = matches!(value, Detail::Waiting(_));
-                    match value {
-                        Detail::Text(value) => div()
-                            .min_w_0()
-                            .max_w(px(120.0))
-                            .truncate()
-                            .text_color(theme.text_secondary)
-                            .child(value)
-                            .into_any_element(),
-                        Detail::Working(label) | Detail::Waiting(label) => Busy {
-                            id: SharedString::from(format!("{id}-working")).into(),
-                            label,
-                            waiting,
-                        }
-                        .into_any_element(),
-                    }
-                }))
-                .when(enabled, |trigger| {
-                    trigger.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.toggle_menu(menu, window, cx)
-                        }),
-                    )
-                }),
-        )
-}
-
-pub(super) fn overlay(
-    view: &RuffleView,
-    menu: BarMenu,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement {
-    let theme = cx.theme().clone();
-    let anchor = view.bar.triggers.get()[menu as usize];
-    let panel = match menu {
-        BarMenu::Windows => windows_panel(&theme, cx),
-        BarMenu::Options => options_panel(&theme, view, cx),
-        BarMenu::AutoRelogin => relogin_panel(&theme, view, cx),
-        BarMenu::Script => script_panel(&theme, view, cx),
-        BarMenu::Jump => travel_panel(&theme, view, cx),
-        BarMenu::AutoAttack => attack_panel(&theme, view, cx),
-    }
-    .track_focus(&view.bar.focus)
-    .on_key_down(cx.listener(RuffleView::panel_key_down))
-    .on_mouse_down_out(cx.listener(RuffleView::panel_mouse_down_out))
-    .on_mouse_move(cx.listener(RuffleView::panel_mouse_move))
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(|this, _, _, cx| this.commit_edit(cx)),
-    );
-    div()
-        .absolute()
-        .child(
-            deferred(
-                anchored()
-                    .position(point(anchor.left(), anchor.bottom() + px(6.0)))
-                    .snap_to_window_with_margin(px(8.0))
-                    .child(panel),
+fn scripts_menu(this: &WeakEntity<RuffleView>, view: &RuffleView) -> Vec<MenuItem> {
+    let mut items: Vec<MenuItem> = view
+        .script
+        .status()
+        .map(MenuItem::header)
+        .into_iter()
+        .collect();
+    if view.script.running() {
+        items
+            .push(MenuItem::action("Stop", act(this, |view, cx| view.stop_script(cx))).keep_open());
+    } else if let Some(name) = view.script.loaded() {
+        items.push(
+            MenuItem::action(
+                format!("Start {name}"),
+                act(this, |view, cx| view.start_loaded_script(cx)),
             )
-            .with_priority(1),
-        )
-        .when_some(view.bar.submenu, |overlay, (submenu, at)| {
-            overlay.child(submenu_panel(&theme, view, submenu, at, cx))
-        })
-}
-
-fn toggle_row(
-    theme: &Theme,
-    id: &'static str,
-    label: &'static str,
-    on: bool,
-    enabled: bool,
-) -> Stateful<Div> {
-    press(theme, ui::row(theme, id), enabled)
-        .role(Role::Switch)
-        .aria_label(label)
-        .aria_toggled(if on { Toggled::True } else { Toggled::False })
-        .child(div().font_weight(FontWeight::MEDIUM).child(label))
-        .child(ui::switch(theme, on))
-}
-
-fn press(theme: &Theme, row: Stateful<Div>, enabled: bool) -> Stateful<Div> {
-    if enabled {
-        ui::pressable(theme, row)
-    } else {
-        row.opacity(DISABLED_OPACITY)
+            .keep_open(),
+        );
     }
+    items.push(MenuItem::action("Run script…", |window, cx| {
+        window.dispatch_action(Box::new(super::OpenScripts), cx)
+    }));
+    items
 }
 
-fn choice_row(
-    theme: &Theme,
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-    selected: bool,
-) -> Stateful<Div> {
-    ui::pressable(theme, choice(theme, id, label, selected))
-}
-
-fn choice(
-    theme: &Theme,
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-    selected: bool,
-) -> Stateful<Div> {
-    ui::row(theme, id)
-        .role(Role::MenuItemRadio)
-        .justify_start()
-        .gap(px(6.0))
-        .pl(px(6.0))
-        .child(div().flex_none().w(px(12.0)).when(selected, |column| {
-            column.child(icon(Icon::Check, theme.text).size(px(12.0)))
-        }))
-        .child(div().min_w_0().truncate().child(label.into()))
-}
-
-fn submenu_row(
-    theme: &Theme,
-    view: &RuffleView,
-    submenu: Submenu,
-    label: &'static str,
-    value: SharedString,
-    cx: &mut Context<RuffleView>,
-    enabled: bool,
-) -> impl IntoElement + use<> {
-    let rows = view.bar.submenu_rows.clone();
-    let open = view.bar.submenu.is_some_and(|(open, _)| open == submenu);
-    div()
-        .on_children_prepainted(move |bounds, _, _| {
-            let mut all = rows.get();
-            all[submenu as usize] = if enabled {
-                bounds[0]
-            } else {
-                Bounds::default()
-            };
-            rows.set(all);
-        })
-        .child(
-            press(theme, ui::row(theme, label), enabled)
-                .role(Role::MenuItem)
-                .aria_expanded(open)
-                .when(open, |row| row.bg(theme.fill_pressed))
-                .child(div().flex_none().child(label))
-                .child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .items_center()
-                        .gap(px(4.0))
-                        .text_color(theme.text_secondary)
-                        .child(div().min_w_0().truncate().child(value))
-                        .child(
-                            div()
-                                .flex_none()
-                                .child(ui::glyph(Glyph::Right, theme.text_secondary)),
-                        ),
-                )
-                .when(enabled, |row| {
-                    row.on_click(cx.listener(move |this, _, _, cx| this.open_submenu(submenu, cx)))
-                }),
-        )
-}
-
-fn options_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let mut settings = view.automation.game_settings();
-    let live = view.in_game();
-    let mut cells: Vec<_> = TOGGLES
-        .map(|(id, label, setting)| {
-            toggle_row(theme, id, label, *setting(&mut settings), live)
-                .when(live, |row| {
-                    row.on_click(cx.listener(move |this, _, _, cx| {
-                        this.change_game_settings(
-                            |settings| {
-                                let on = setting(settings);
-                                *on = !*on;
-                            },
-                            cx,
-                        )
-                    }))
-                })
-                .into_any_element()
-        })
-        .into();
-    cells.insert(
-        3,
-        submenu_row(
-            theme,
-            view,
-            Submenu::Rendering,
-            "Rendering",
-            settings.rendering.mode().label().into(),
-            cx,
-            live,
-        )
-        .into_any_element(),
-    );
-    cells.extend(
-        Field::MOVEMENT.map(|field| number_chip(theme, view, field, cx).into_any_element()),
-    );
-    ui::panel(theme, "options-panel", px(392.0))
-        .child(ui::section(theme, "Gameplay"))
-        .child(grid(cells))
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Identity"))
-        .child(grid(Field::IDENTITY.map(|field| {
-            stacked_field(theme, view, field, cx).into_any_element()
-        })))
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Actions"))
-        .child(grid(
-            [
-                ("reload-map", "Reload map", Command::ReloadMap),
-                ("set-spawnpoint", "Set spawnpoint", Command::SetSpawnPoint),
-            ]
-            .map(|(id, label, command)| {
-                press(theme, ui::row(theme, id), live)
-                    .role(Role::MenuItem)
-                    .child(label)
-                    .when(live, |row| {
-                        row.on_click(cx.listener(move |this, _, window, cx| {
-                            this.session.command(command.clone());
-                            this.close_menu(window, cx);
-                        }))
-                    })
-                    .into_any_element()
+fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Vec<MenuItem> {
+    let attack = view.automation.auto_attack();
+    let library = combat_profiles::library(cx);
+    let mut items = vec![
+        MenuItem::switch(
+            "Auto attack",
+            attack.enabled,
+            act(this, |view, cx| {
+                view.change_auto_attack(|settings| settings.enabled = !settings.enabled, cx)
             }),
-        ))
+        )
+        .disabled(!view.in_game()),
+        MenuItem::separator(),
+        MenuItem::header("Profile"),
+    ];
+    let names = std::iter::once(None).chain(library.names().map(|name| Some(name.to_owned())));
+    items.extend(names.map(|name| {
+        let selected = match (&name, &attack.profile) {
+            (None, None) => true,
+            (Some(name), Some(chosen)) => profiles::same_name(name, chosen),
+            _ => false,
+        };
+        let label = name.clone().unwrap_or_else(|| profiles::GENERIC.to_owned());
+        MenuItem::radio(
+            label,
+            selected,
+            act(this, move |view, cx| {
+                let name = name.clone();
+                view.change_auto_attack(|settings| settings.profile = name, cx)
+            }),
+        )
+    }));
+    let editing = attack.profile;
+    items.push(MenuItem::separator());
+    items.push(MenuItem::action("Edit profiles…", move |_, cx| {
+        super::open_combat_profiles(editing.clone(), cx)
+    }));
+    items
 }
 
-fn grid(cells: impl IntoIterator<Item = gpui::AnyElement>) -> Div {
+fn heading(title: &'static str, cx: &App) -> impl IntoElement {
+    div()
+        .text_caption()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(cx.theme().text_tertiary)
+        .child(title)
+}
+
+fn note(text: &'static str, cx: &App) -> AnyElement {
+    div()
+        .px(px(8.0))
+        .py(px(6.0))
+        .text_small()
+        .text_color(cx.theme().text_tertiary)
+        .child(text)
+        .into_any_element()
+}
+
+fn pair(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
     div()
         .grid()
         .grid_cols(2)
-        .children(cells.into_iter().map(|cell| div().min_w_0().child(cell)))
+        .gap(px(12.0))
+        .child(div().min_w_0().child(left))
+        .child(div().min_w_0().child(right))
 }
 
-fn script_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let panel = ui::panel(theme, "script-panel", px(264.0))
-        .when_some(view.script.status(), |panel, text| {
-            panel.child(div().pt(px(6.0)).child(ui::status(theme, text)))
-        });
-    let panel = if view.script.running() {
-        panel.child(
-            ui::pressable(theme, ui::row(theme, "script-stop"))
-                .role(Role::MenuItem)
-                .child("Stop")
-                .on_click(cx.listener(|this, _, _, cx| this.stop_script(cx))),
+fn setting_input(
+    setting: Setting,
+    automation: &Automation,
+    enabled: bool,
+    inputs: &Inputs,
+    window: &mut Window,
+    cx: &mut App,
+) -> impl IntoElement + use<> {
+    let input = inputs.get(setting).clone();
+    let value = setting.value(automation);
+    let focused = input.focus_handle(cx).is_focused(window);
+    input.update(cx, |input, cx| {
+        input.set_disabled(!enabled, cx);
+        if !focused && input.text() != value {
+            input.set_text(value.clone(), cx);
+        }
+    });
+    div().child(input.clone()).on_key_down(move |event, _, cx| {
+        if event.keystroke.key == "escape" {
+            input.update(cx, |input, cx| input.set_text(value.clone(), cx));
+        }
+    })
+}
+
+fn setting_field(
+    setting: Setting,
+    automation: &Automation,
+    enabled: bool,
+    inputs: &Inputs,
+    window: &mut Window,
+    cx: &mut App,
+) -> Field {
+    let input = setting_input(setting, automation, enabled, inputs, window, cx);
+    Field::new(setting.label(), input)
+}
+
+fn row_label(label: &'static str, enabled: bool) -> impl IntoElement {
+    div()
+        .min_w_0()
+        .truncate()
+        .when(!enabled, |label| label.opacity(DISABLED_OPACITY))
+        .child(label)
+}
+
+fn reset_button(
+    setting: Setting,
+    automation: &Automation,
+    enabled: bool,
+    this: &WeakEntity<RuffleView>,
+) -> Button {
+    let this = this.clone();
+    let id = SharedString::from(format!("{}-reset", setting.label()));
+    let disabled = !enabled || setting.is_default(automation);
+    Button::icon(
+        id,
+        Icon::RotateCcw,
+        format!("Reset {}", setting.label().to_lowercase()),
+    )
+    .size(Size::XSmall)
+    .disabled(disabled)
+    .when(disabled || setting.pill(), Button::hide_tooltip)
+    .on_click(move |_, _, cx| update(&this, cx, |view, cx| view.reset(setting, cx)))
+}
+
+fn options_panel(
+    options: Options,
+    this: &WeakEntity<RuffleView>,
+    close: &PopoverClose,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let Options {
+        automation,
+        live,
+        name,
+        guild,
+        inputs,
+    } = options;
+    let mut settings = automation.game_settings();
+    let switches = TOGGLES.map(|(id, label, setting)| {
+        let this = this.clone();
+        Switch::new(id, label, *setting(&mut settings))
+            .disabled(!live)
+            .on_toggle(move |on, _, cx| {
+                update(&this, cx, |view, cx| {
+                    view.change_game_settings(|settings| *setting(settings) = on, cx)
+                })
+            })
+    });
+    let mode = settings.rendering.mode();
+    let rendering = {
+        let this = this.clone();
+        Select::new(
+            "rendering",
+            "Rendering",
+            RenderingMode::ALL.map(RenderingMode::label),
+            RenderingMode::ALL.iter().position(|each| *each == mode),
         )
-    } else {
-        panel.when_some(view.script.loaded(), |panel, name| {
-            panel.child(
-                ui::pressable(theme, ui::row(theme, "script-start"))
-                    .role(Role::MenuItem)
-                    .child(format!("Start {name}"))
-                    .on_click(cx.listener(|this, _, _, cx| this.start_loaded_script(cx))),
-            )
+        .width(px(150.0))
+        .disabled(!live)
+        .on_select(move |index, _, cx| {
+            update(&this, cx, |view, cx| {
+                view.change_game_settings(
+                    |settings| settings.rendering.set(RenderingMode::ALL[index]),
+                    cx,
+                )
+            })
         })
     };
-    panel.child(
-        ui::pressable(theme, ui::row(theme, "script-run"))
-            .role(Role::MenuItem)
-            .child("Run script…")
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.close_menu(window, cx);
-                window.dispatch_action(Box::new(super::OpenScripts), cx);
-            })),
-    )
-}
-
-const WINDOWS: [&str; 5] = [
-    "Combat profiles",
-    "Environment",
-    "Follower",
-    "Loader/grabber",
-    "Packets",
-];
-
-fn profile_label(view: &RuffleView) -> String {
-    view.automation
-        .auto_attack()
-        .profile
-        .unwrap_or_else(|| profiles::GENERIC.to_owned())
-}
-
-fn attack_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let attack = view.automation.auto_attack();
-    let live = view.in_game();
-    let chosen = attack.profile;
-    let library = combat_profiles::library(cx);
-    let names: Vec<Option<String>> = std::iter::once(None)
-        .chain(library.names().map(|name| Some(name.to_owned())))
-        .collect();
-    let editing = chosen.clone();
-    ui::panel(theme, "auto-attack-panel", px(220.0))
-        .child(
-            toggle_row(
-                theme,
-                "auto-attack-enabled",
-                "Auto attack",
-                attack.enabled,
-                live,
+    for (setting, placeholder) in [(Setting::CustomName, name), (Setting::CustomGuild, guild)] {
+        inputs
+            .get(setting)
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+    }
+    let field =
+        |setting: Setting, window: &mut Window, cx: &mut App| {
+            let enabled = setting.enabled(&automation, live);
+            setting_field(setting, &automation, enabled, &inputs, window, cx)
+                .end_slot(reset_button(setting, &automation, enabled, this))
+        };
+    let chip = |setting: Setting, window: &mut Window, cx: &mut App| {
+        let enabled = setting.enabled(&automation, live);
+        h_flex()
+            .justify_between()
+            .gap(px(8.0))
+            .child(row_label(setting.label(), enabled))
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap(px(4.0))
+                    .child(reset_button(setting, &automation, enabled, this))
+                    .child(div().w(px(44.0)).child(setting_input(
+                        setting,
+                        &automation,
+                        enabled,
+                        &inputs,
+                        window,
+                        cx,
+                    ))),
             )
-            .when(live, |row| {
-                row.on_click(cx.listener(|this, _, _, cx| {
-                    this.change_auto_attack(|settings| settings.enabled = !settings.enabled, cx)
-                }))
+    };
+    let walk_speed = chip(Setting::WalkSpeed, window, cx);
+    let frame_rate = chip(Setting::FrameRate, window, cx);
+    let held = !Setting::FrameRate.editable(&automation);
+    let custom_name = field(Setting::CustomName, window, cx);
+    let custom_guild = field(Setting::CustomGuild, window, cx);
+    let command = |id: &'static str, label: &'static str, command: Command| {
+        let this = this.clone();
+        let close = close.clone();
+        Button::new(id, label)
+            .size(Size::Small)
+            .disabled(!live)
+            .on_click(move |_, window, cx| {
+                let command = command.clone();
+                update(&this, cx, |view, _| view.session.command(command));
+                close.close(window, cx);
+            })
+    };
+    v_flex()
+        .w(px(380.0))
+        .gap(px(12.0))
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(heading("Gameplay", cx))
+                .child(div().grid().grid_cols(2).gap_x(px(12.0)).children(switches))
+                .child(
+                    v_flex()
+                        .gap(px(6.0))
+                        .pt(px(6.0))
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .gap(px(12.0))
+                                .child(row_label("Rendering", live))
+                                .child(rendering),
+                        )
+                        .child(pair(walk_speed, frame_rate))
+                        .when(held, |rows| {
+                            rows.child(
+                                div()
+                                    .text_small()
+                                    .text_color(cx.theme().text_tertiary)
+                                    .child("Minimal rendering holds the frame rate at 2."),
+                            )
+                        }),
+                ),
+        )
+        .child(
+            v_flex()
+                .gap(px(8.0))
+                .child(heading("Identity", cx))
+                .child(pair(custom_name, custom_guild)),
+        )
+        .child(
+            h_flex()
+                .gap(px(6.0))
+                .child(command("reload-map", "Reload map", Command::ReloadMap))
+                .child(command(
+                    "set-spawnpoint",
+                    "Set spawnpoint",
+                    Command::SetSpawnPoint,
+                )),
+        )
+        .into_any_element()
+}
+
+fn relogin_panel(
+    relogin: Relogin,
+    this: &WeakEntity<RuffleView>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let settings = relogin.automation.auto_relogin();
+    let mut servers = relogin.servers.clone();
+    if let Some(saved) = &settings.server
+        && !servers.contains(saved)
+    {
+        servers.push(saved.clone());
+    }
+    let selected = match &settings.server {
+        None => Some(0),
+        Some(saved) => servers
+            .iter()
+            .position(|server| server == saved)
+            .map(|index| index + 1),
+    };
+    let toggle = {
+        let this = this.clone();
+        Switch::new("auto-relogin-enabled", "Auto relogin", settings.enabled).on_toggle(
+            move |on, _, cx| {
+                update(&this, cx, |view, cx| {
+                    view.change_auto_relogin(|settings| settings.enabled = on, cx)
+                })
+            },
+        )
+    };
+    let server = {
+        let this = this.clone();
+        let choices = servers.clone();
+        let options = std::iter::once(SharedString::from(LAST_SERVER))
+            .chain(servers.into_iter().map(Into::into));
+        Select::new("server", "Server", options, selected)
+            .full_width()
+            .on_select(move |index, _, cx| {
+                let server = index.checked_sub(1).map(|index| choices[index].clone());
+                update(&this, cx, |view, cx| {
+                    view.change_auto_relogin(|settings| settings.server = server, cx)
+                })
+            })
+    };
+    let [delay, retries, backoff, backoff_cap] = Setting::RELOGIN.map(|setting| {
+        let enabled = setting.editable(&relogin.automation);
+        setting_field(
+            setting,
+            &relogin.automation,
+            enabled,
+            &relogin.inputs,
+            window,
+            cx,
+        )
+    });
+    v_flex()
+        .w(px(264.0))
+        .gap(px(12.0))
+        .child(match relogin.status {
+            Some(status) => toggle.description(status),
+            None => toggle,
+        })
+        .child(
+            Field::new("Server", server).when(relogin.servers.is_empty(), |field| {
+                field.description("Log in to list the other servers")
             }),
         )
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Profile"))
-        .children(names.into_iter().enumerate().map(|(index, name)| {
-            let selected = match (&name, &chosen) {
-                (None, None) => true,
-                (Some(name), Some(chosen)) => profiles::same_name(name, chosen),
-                _ => false,
-            };
-            let label = name.clone().unwrap_or_else(|| profiles::GENERIC.to_owned());
-            choice_row(theme, ("profile", index), label, selected).on_click(cx.listener(
-                move |this, _, window, cx| {
-                    let name = name.clone();
-                    this.change_auto_attack(|settings| settings.profile = name, cx);
-                    this.close_menu(window, cx);
-                },
-            ))
-        }))
-        .child(ui::separator(theme))
         .child(
-            ui::pressable(theme, ui::row(theme, "edit-profiles"))
-                .role(Role::MenuItem)
-                .child("Edit profiles…")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_menu(window, cx);
-                    super::open_combat_profiles(editing.clone(), cx);
-                })),
+            v_flex()
+                .gap(px(8.0))
+                .child(heading("Retry schedule", cx))
+                .child(pair(delay, retries))
+                .child(pair(backoff, backoff_cap)),
         )
+        .into_any_element()
 }
 
-fn windows_panel(theme: &Theme, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    ui::panel(theme, "windows-panel", px(200.0)).children(WINDOWS.iter().enumerate().map(
-        |(index, label)| {
-            ui::pressable(theme, ui::row(theme, ("window", index)))
-                .role(Role::MenuItem)
-                .child(*label)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_menu(window, cx);
-                    match *label {
-                        "Combat profiles" => {
-                            window.dispatch_action(Box::new(super::OpenCombatProfiles), cx)
-                        }
-                        "Environment" => {
-                            window.dispatch_action(Box::new(super::OpenEnvironment), cx)
-                        }
-                        "Follower" => window.dispatch_action(Box::new(super::OpenFollower), cx),
-                        "Loader/grabber" => {
-                            window.dispatch_action(Box::new(super::OpenLoaderGrabber), cx)
-                        }
-                        "Packets" => window.dispatch_action(Box::new(super::OpenPackets), cx),
-                        _ => {}
-                    }
-                }))
+fn tab() -> KeyDownEvent {
+    KeyDownEvent {
+        keystroke: Keystroke {
+            modifiers: Default::default(),
+            key: "tab".into(),
+            key_char: None,
         },
-    ))
+        is_held: false,
+        prefer_character_input: false,
+    }
 }
 
-fn travel_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let Some(location) = &view.bar.location else {
-        return ui::panel(theme, "travel-panel", px(200.0)).child(note(theme, "Log in to travel"));
+fn jump_panel(
+    location: Option<Location>,
+    this: &WeakEntity<RuffleView>,
+    close: &PopoverClose,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let Some(location) = location else {
+        return note("Log in to travel", cx);
     };
-    let pressed = theme.fill_pressed;
-    let jump_row = |spot: Spot, label: SharedString, selected: bool| {
-        let id = match spot.column {
-            Column::Cell => "cell",
-            Column::Pad => "pad",
-        };
-        choice(theme, (id, spot.row), label, selected)
-            .pointer_cursor(theme)
-            .when(view.bar.jump == Some(spot), |row| row.bg(theme.fill_hover))
-            .active(move |style| style.bg(pressed))
-            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                if this.bar.jump != Some(spot) {
-                    this.bar.jump = Some(spot);
-                    cx.notify();
+    let theme = cx.theme().clone();
+    let spot = window.use_keyed_state("jump-spot", cx, |_, _| current_spot(&location));
+    let start = *spot.read(cx);
+    let cells_scroll = window
+        .use_keyed_state("jump-cells", cx, |_, _| {
+            let scroll = ScrollHandle::new();
+            scroll.scroll_to_item(start.row);
+            scroll
+        })
+        .read(cx)
+        .clone();
+    let focus = nav::focus_handle("jump", window, cx);
+    let location = Rc::new(location);
+    let travel = {
+        let this = this.clone();
+        let close = close.clone();
+        Rc::new(
+            move |cell: String, pad: String, keep_open: bool, window: &mut Window, cx: &mut App| {
+                update(&this, cx, |view, _| {
+                    view.session.command(Command::Jump { cell, pad })
+                });
+                if !keep_open {
+                    close.close(window, cx);
                 }
+            },
+        )
+    };
+    let respond = {
+        let (location, spot, scroll, travel) = (
+            location.clone(),
+            spot.clone(),
+            cells_scroll.clone(),
+            travel.clone(),
+        );
+        move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| -> bool {
+            match jump_key(&location, Some(*spot.read(cx)), event) {
+                Some(JumpKey::Move(next)) => {
+                    spot.update(cx, |spot, cx| {
+                        *spot = next;
+                        cx.notify();
+                    });
+                    if next.column == Column::Cell {
+                        scroll.scroll_to_item(next.row);
+                    }
+                    true
+                }
+                Some(JumpKey::Travel {
+                    cell,
+                    pad,
+                    keep_open,
+                }) => {
+                    travel(cell, pad, keep_open, window, cx);
+                    true
+                }
+                None => false,
+            }
+        }
+    };
+    let respond = Rc::new(respond);
+    let row = |spot_here: Spot, label: SharedString, here: bool, (cell, pad): (String, String)| {
+        let id: ElementId = match spot_here.column {
+            Column::Cell => ("cell", spot_here.row).into(),
+            Column::Pad => ("pad", spot_here.row).into(),
+        };
+        let hover = spot.clone();
+        let travel = travel.clone();
+        let pressed = theme.fill_pressed;
+        h_flex()
+            .id(id)
+            .flex_none()
+            .h(ROW)
+            .px(px(6.0))
+            .gap(px(6.0))
+            .rounded(theme.radius.item)
+            .role(Role::MenuItemRadio)
+            .aria_label(label.clone())
+            .pointer_cursor(&theme)
+            .when(*spot.read(cx) == spot_here, |row| row.bg(theme.fill_hover))
+            .active(move |style| style.bg(pressed))
+            .child(div().flex_none().w(px(12.0)).when(here, |mark| {
+                mark.child(icon(Icon::Check, theme.text).size(px(12.0)))
             }))
+            .child(div().min_w_0().truncate().child(label))
+            .on_mouse_move(move |_, _, cx| {
+                hover.update(cx, |spot, cx| {
+                    if *spot != spot_here {
+                        *spot = spot_here;
+                        cx.notify();
+                    }
+                })
+            })
+            .on_click(move |event, window, cx| {
+                travel(
+                    cell.clone(),
+                    pad.clone(),
+                    event.modifiers().shift,
+                    window,
+                    cx,
+                )
+            })
     };
     let cells: Vec<_> = location
         .cells
         .iter()
         .enumerate()
-        .map(|(row, cell)| {
-            let (cell, pad) = (cell.clone(), location.pad.clone());
+        .map(|(index, cell)| {
             let spot = Spot {
                 column: Column::Cell,
-                row,
+                row: index,
             };
-            jump_row(spot, cell.clone().into(), cell == location.cell).on_click(cx.listener(
-                move |this, event: &ClickEvent, window, cx| {
-                    let keep_open = event.modifiers().shift;
-                    this.travel(cell.clone(), pad.clone(), keep_open, window, cx)
-                },
-            ))
+            row(
+                spot,
+                cell.clone().into(),
+                *cell == location.cell,
+                (cell.clone(), location.pad.clone()),
+            )
         })
         .collect();
     let pads: Vec<_> = PADS
         .iter()
         .enumerate()
-        .map(|(row, pad)| {
+        .map(|(index, pad)| {
+            let spot = Spot {
+                column: Column::Pad,
+                row: index,
+            };
             let in_cell = location
                 .cell_pads
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(pad));
-            let cell = location.cell.clone();
-            let spot = Spot {
-                column: Column::Pad,
-                row,
-            };
-            jump_row(spot, (*pad).into(), location.pad.eq_ignore_ascii_case(pad))
-                .when(!in_cell, |row| row.text_color(theme.text_tertiary))
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    let keep_open = event.modifiers().shift;
-                    this.travel(cell.clone(), pad.to_string(), keep_open, window, cx)
-                }))
+            row(
+                spot,
+                (*pad).into(),
+                location.pad.eq_ignore_ascii_case(pad),
+                (location.cell.clone(), pad.to_string()),
+            )
+            .when(!in_cell, |row| row.text_color(theme.text_tertiary))
         })
         .collect();
     let column = |label| {
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .flex_1()
             .min_w_0()
-            .child(ui::section(theme, label))
+            .child(div().px(px(6.0)).pb(px(2.0)).child(heading(label, cx)))
     };
-    ui::panel(theme, "travel-panel", px(300.0))
-        .flex_row()
+    let (keys, next, previous) = (respond.clone(), respond.clone(), respond);
+    h_flex()
+        .id("jump")
+        .items_start()
+        .w(px(300.0))
+        .track_focus(&focus.tab_stop(true))
+        .on_key_down(move |event, window, cx| {
+            if keys(event, window, cx) {
+                cx.stop_propagation();
+            }
+        })
+        .on_action(move |_: &FocusNext, window, cx| {
+            next(&tab(), window, cx);
+        })
+        .on_action(move |_: &FocusPrevious, window, cx| {
+            previous(&tab(), window, cx);
+        })
         .child(
             column("Cell").child(
                 div()
                     .relative()
                     .child(
-                        div()
-                            .id("travel-cells")
-                            .flex()
-                            .flex_col()
+                        v_flex()
+                            .id("jump-cells")
                             .max_h(ROW * VISIBLE_CELLS)
                             .when(location.cells.len() as f32 > VISIBLE_CELLS, |list| {
                                 list.pr(Scrollbar::GUTTER + SCROLLBAR_CLEARANCE)
                             })
                             .overflow_y_scroll()
-                            .track_scroll(&view.bar.cells_scroll)
-                            .when(cells.is_empty(), |list| list.child(note(theme, "No cells")))
+                            .track_scroll(&cells_scroll)
+                            .when(cells.is_empty(), |list| list.child(note("No cells", cx)))
                             .children(cells),
                     )
-                    .child(Scrollbar::new(
-                        "travel-cells-scrollbar",
-                        view.bar.cells_scroll.clone(),
-                    )),
+                    .child(Scrollbar::new("jump-cells-scrollbar", cells_scroll.clone())),
             ),
         )
         .child(
             div()
                 .flex_none()
+                .self_stretch()
                 .w(px(1.0))
-                .mx(PANEL_INSET)
+                .mx(px(6.0))
                 .bg(theme.hairline),
         )
         .child(column("Pad").children(pads))
-}
-
-fn note(theme: &Theme, text: &'static str) -> impl IntoElement {
-    div()
-        .px(px(8.0))
-        .py(px(6.0))
-        .text_size(TEXT_SMALL)
-        .text_color(theme.text_tertiary)
-        .child(text)
-}
-
-fn relogin_panel(theme: &Theme, view: &RuffleView, cx: &mut Context<RuffleView>) -> Stateful<Div> {
-    let settings = view.automation.auto_relogin();
-    ui::panel(theme, "auto-relogin-panel", px(264.0))
-        .child(
-            toggle_row(
-                theme,
-                "auto-relogin-enabled",
-                "Auto relogin",
-                settings.enabled,
-                true,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.change_auto_relogin(|settings| settings.enabled = !settings.enabled, cx)
-            })),
-        )
-        .when_some(status(&view.auto_relogin), |panel, text| {
-            panel.child(ui::status(theme, text))
-        })
-        .child(ui::separator(theme))
-        .child(submenu_row(
-            theme,
-            view,
-            Submenu::Servers,
-            "Server",
-            settings
-                .server
-                .clone()
-                .unwrap_or_else(|| LAST_SERVER.into())
-                .into(),
-            cx,
-            true,
-        ))
-        .child(ui::separator(theme))
-        .child(ui::section(theme, "Login attempts"))
-        .children(Field::RELOGIN.map(|field| field_row(theme, view, field, cx)))
-}
-
-fn field_row(
-    theme: &Theme,
-    view: &RuffleView,
-    field: Field,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement + use<> {
-    let name = field.label();
-    ui::row(theme, SharedString::from(format!("{name}-row")))
-        .child(name)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(field_input(theme, view, field, ui::Shape::Box, cx))
-                .child(
-                    div()
-                        .w(px(8.0))
-                        .text_color(theme.text_tertiary)
-                        .child(field.unit()),
-                ),
-        )
-}
-
-fn number_chip(
-    theme: &Theme,
-    view: &RuffleView,
-    field: Field,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement + use<> {
-    ui::row(theme, SharedString::from(format!("{}-chip", field.label())))
-        .pr(px(2.0))
-        .when(!view.in_game(), |row| row.opacity(DISABLED_OPACITY))
-        .child(div().font_weight(FontWeight::MEDIUM).child(field.label()))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(2.0))
-                .child(reset_button(theme, view, field, cx))
-                .child(field_input(theme, view, field, ui::Shape::Pill, cx)),
-        )
-}
-
-fn stacked_field(
-    theme: &Theme,
-    view: &RuffleView,
-    field: Field,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement + use<> {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(4.0))
-        .px(px(8.0))
-        .when(!view.in_game(), |field| field.opacity(DISABLED_OPACITY))
-        .py(px(4.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(field.label())
-                .child(reset_button(theme, view, field, cx)),
-        )
-        .child(field_input(theme, view, field, ui::Shape::Box, cx).w_full())
-}
-
-fn reset_button(
-    theme: &Theme,
-    view: &RuffleView,
-    field: Field,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement + use<> {
-    let enabled = !field.is_default(&view.automation) && view.field_enabled(field);
-    let button = div()
-        .id(SharedString::from(format!("{}-reset", field.label())))
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(20.0))
-        .rounded(theme.radius.control)
-        .role(Role::Button)
-        .aria_label(format!("Reset {}", field.label().to_lowercase()))
-        .child(
-            icon(
-                Icon::RotateCcw,
-                if enabled {
-                    theme.text_secondary
-                } else {
-                    theme.text_disabled
-                },
-            )
-            .size(px(12.0)),
-        );
-    if !enabled {
-        return button;
-    }
-    ui::pressable(theme, button).on_click(cx.listener(move |this, _, _, cx| {
-        this.bar.edit = None;
-        field.reset(this, cx);
-    }))
-}
-
-fn field_input(
-    theme: &Theme,
-    view: &RuffleView,
-    field: Field,
-    shape: ui::Shape,
-    cx: &mut Context<RuffleView>,
-) -> Stateful<Div> {
-    let edit = view.bar.edit.as_ref().filter(|edit| edit.field == field);
-    let editing = edit.is_some();
-    let fresh = edit.is_some_and(|edit| edit.fresh);
-    let text = edit.map_or_else(|| field.value(&view.automation), |edit| edit.text.clone());
-    let name = field.label();
-    let id = SharedString::from(format!("{name}-field"));
-    let input = if field.is_text() {
-        let identity = view.bar.identity.as_ref();
-        let placeholder = match field {
-            Field::CustomName => identity
-                .map(|identity| identity.name.clone())
-                .or_else(|| view.username().map(str::to_owned)),
-            _ => identity.and_then(|identity| identity.guild.clone()),
-        };
-        ui::text_field(
-            theme,
-            id,
-            text,
-            placeholder.unwrap_or_default(),
-            editing,
-            fresh,
-        )
-        .role(Role::TextInput)
-    } else {
-        ui::number_field(theme, id, text, editing, fresh, shape).role(Role::SpinButton)
-    }
-    .when(!view.field_enabled(field), |input| input.cursor_default())
-    .when(!field.editable(&view.automation), |input| {
-        input
-            .text_color(theme.text_tertiary)
-            .cursor_default()
-            .aria_description("Minimal rendering holds the frame rate at 2")
-    });
-    input.aria_label(name).on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, _, _, cx| {
-            cx.stop_propagation();
-            this.commit_edit(cx);
-            this.start_edit(field);
-            cx.notify();
-        }),
-    )
-}
-
-fn submenu_panel(
-    theme: &Theme,
-    view: &RuffleView,
-    submenu: Submenu,
-    at: Point<Pixels>,
-    cx: &mut Context<RuffleView>,
-) -> impl IntoElement {
-    let panel = ui::panel(theme, "bar-submenu", SUBMENU_WIDTH)
-        .max_h(SUBMENU_MAX_HEIGHT)
-        .overflow_y_scroll();
-    let panel = match submenu {
-        Submenu::Servers => servers(theme, view, panel, cx),
-        Submenu::Rendering => {
-            let selected = view.automation.game_settings().rendering.mode();
-            panel.children(RenderingMode::ALL.map(|mode| {
-                choice_row(theme, mode.label(), mode.label(), selected == mode).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.change_game_settings(|settings| settings.rendering.set(mode), cx);
-                    }),
-                )
-            }))
-        }
-    };
-    let bounds = view.bar.submenu_panel.clone();
-    deferred(
-        anchored()
-            .position(at)
-            .snap_to_window_with_margin(px(8.0))
-            .child(
-                div()
-                    .on_children_prepainted(move |all, _, _| bounds.set(all[0]))
-                    .child(panel),
-            ),
-    )
-    .with_priority(2)
-}
-
-fn servers(
-    theme: &Theme,
-    view: &RuffleView,
-    panel: Stateful<Div>,
-    cx: &mut Context<RuffleView>,
-) -> Stateful<Div> {
-    let saved = view.automation.auto_relogin().server.clone();
-    let mut names = view.servers.clone();
-    if let Some(saved) = &saved
-        && !names.contains(saved)
-    {
-        names.push(saved.clone());
-    }
-    let choose = |server: Option<String>| {
-        cx.listener(move |this: &mut RuffleView, _, _, cx| {
-            let server = server.clone();
-            this.change_auto_relogin(|settings| settings.server = server, cx);
-        })
-    };
-    panel
-        .child(
-            choice_row(theme, "server-last", LAST_SERVER, saved.is_none()).on_click(choose(None)),
-        )
-        .child(if view.servers.is_empty() {
-            note(theme, "Log in to list the other servers").into_any_element()
-        } else {
-            ui::separator(theme).into_any_element()
-        })
-        .children(names.into_iter().enumerate().map(|(index, name)| {
-            let selected = saved.as_deref() == Some(name.as_str());
-            choice_row(theme, ("server", index), name.clone(), selected)
-                .on_click(choose(Some(name)))
-        }))
+        .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::automation::game_settings::RenderingMode;
-
-    #[test]
-    fn tab_skips_the_frame_rate_while_minimal_rendering_holds_it() {
-        let automation = Automation::default();
-        assert_eq!(Field::WalkSpeed.after(false, &automation), Field::FrameRate);
-        automation.update_game_settings(|settings| settings.rendering.set(RenderingMode::Minimal));
-        assert_eq!(
-            Field::WalkSpeed.after(false, &automation),
-            Field::CustomName
-        );
-        assert_eq!(Field::CustomName.after(true, &automation), Field::WalkSpeed);
-    }
 
     fn press(location: &Location, at: Option<Spot>, key: &'static str) -> Option<JumpKey> {
         let event = KeyDownEvent {
@@ -1792,21 +1424,199 @@ mod tests {
         assert_eq!(press(&location, spot(Column::Cell, 0), "x"), None);
     }
 
+    type Panel = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
+
+    struct Scene {
+        title: &'static str,
+        panel: Panel,
+    }
+
+    impl gpui::Render for Scene {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let panel = self.panel.clone();
+            div()
+                .key_context(mira_ui::FOCUS_SCOPE)
+                .size_full()
+                .bg(theme.base)
+                .text_color(theme.text)
+                .font_family(mira_ui::theme::SYSTEM_SANS)
+                .text_body()
+                .child(
+                    Menubar::new("bar", "Game")
+                        .h(BAR_HEIGHT)
+                        .px(px(6.0))
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .popover(
+                            Button::new("entry", self.title)
+                                .variant(Variant::Ghost)
+                                .size(Size::Small)
+                                .text_size(TEXT_BODY),
+                            move |close, window, cx| panel(close, window, cx),
+                        )
+                        .default_open(0),
+                )
+        }
+    }
+
+    fn in_game_options(automation: &Automation, inputs: &Inputs) -> Options {
+        Options {
+            automation: automation.clone(),
+            live: true,
+            name: "Artix".into(),
+            guild: "Battleon Bunch".into(),
+            inputs: inputs.clone(),
+        }
+    }
+
+    fn options_scene(automation: Automation, inputs: Inputs) -> Scene {
+        Scene {
+            title: "Options",
+            panel: Rc::new(move |close, window, cx| {
+                let options = in_game_options(&automation, &inputs);
+                options_panel(options, &WeakEntity::new_invalid(), close, window, cx)
+            }),
+        }
+    }
+
+    #[gpui::test]
+    fn tab_skips_the_frame_rate_while_minimal_rendering_holds_it(cx: &mut gpui::TestAppContext) {
+        cx.update(mira_ui::init);
+        let automation = Automation::default();
+        let inputs = cx.update(Inputs::new);
+        let (_, cx) = cx.add_window_view(|window, _| {
+            window.activate_window();
+            options_scene(automation.clone(), inputs.clone())
+        });
+        cx.run_until_parked();
+        let focused = |setting: Setting, cx: &mut gpui::VisualTestContext| {
+            let handle = cx.update(|_, cx| inputs.get(setting).focus_handle(cx));
+            cx.update(|window, _| handle.is_focused(window))
+        };
+        let tab_from = |setting: Setting, keys: &str, cx: &mut gpui::VisualTestContext| {
+            let handle = cx.update(|_, cx| inputs.get(setting).focus_handle(cx));
+            cx.update(|window, cx| window.focus(&handle, cx));
+            cx.run_until_parked();
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+        };
+
+        tab_from(Setting::WalkSpeed, "tab", cx);
+        assert!(focused(Setting::FrameRate, cx));
+
+        automation.update_game_settings(|settings| settings.rendering.set(RenderingMode::Minimal));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        tab_from(Setting::WalkSpeed, "tab", cx);
+        assert!(focused(Setting::CustomName, cx));
+        tab_from(Setting::CustomName, "shift-tab", cx);
+        assert!(focused(Setting::WalkSpeed, cx));
+    }
+
+    #[gpui::test]
+    fn escape_discards_an_edit_instead_of_committing_it(cx: &mut gpui::TestAppContext) {
+        cx.update(mira_ui::init);
+        let automation = Automation::default();
+        automation.update_game_settings(|settings| settings.walk_speed = 12);
+        let inputs = cx.update(Inputs::new);
+        let (_, cx) = cx.add_window_view(|window, _| {
+            window.activate_window();
+            options_scene(automation.clone(), inputs.clone())
+        });
+        cx.run_until_parked();
+        let walk_speed = inputs.get(Setting::WalkSpeed).clone();
+        cx.update(|window, cx| window.focus(&walk_speed.focus_handle(cx), cx));
+        cx.run_until_parked();
+        cx.simulate_input("5");
+        assert_ne!(
+            walk_speed.read_with(cx, |input, _| input.text().to_owned()),
+            "12"
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(
+            walk_speed.read_with(cx, |input, _| input.text().to_owned()),
+            "12"
+        );
+    }
+
+    fn snapshot(name: &str, height: f32, scene: impl Fn(&mut App) -> Scene + 'static) {
+        for path in mira_ui::snapshot(name, gpui::size(px(460.0), px(height)), move |_, cx| {
+            let scene = scene(cx);
+            cx.new(|_| scene)
+        }) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    fn options_fixture(rendering: RenderingMode, cx: &mut App) -> Scene {
+        let automation = Automation::default();
+        automation.set_frame_rate(30);
+        automation.update_game_settings(|settings| {
+            settings.hide_players = true;
+            settings.skip_cutscenes = true;
+            settings.walk_speed = 12;
+            settings.rendering.set(rendering);
+        });
+        options_scene(automation, Inputs::new(cx))
+    }
+
     #[test]
-    fn moving_toward_the_submenu_keeps_it_open() {
-        let near_edge = (point(px(300.0), px(100.0)), point(px(300.0), px(400.0)));
-        let from = point(px(250.0), px(150.0));
-        assert!(heading_toward(from, point(px(270.0), px(170.0)), near_edge));
-        assert!(heading_toward(from, point(px(280.0), px(140.0)), near_edge));
-        assert!(!heading_toward(
-            from,
-            point(px(250.0), px(180.0)),
-            near_edge
-        ));
-        assert!(!heading_toward(
-            from,
-            point(px(230.0), px(150.0)),
-            near_edge
-        ));
+    fn snapshot_options() {
+        snapshot("game-options", 520.0, |cx| {
+            options_fixture(RenderingMode::Full, cx)
+        });
+        snapshot("game-options-minimal", 520.0, |cx| {
+            options_fixture(RenderingMode::Minimal, cx)
+        });
+    }
+
+    #[test]
+    fn snapshot_relogin() {
+        snapshot("game-relogin", 400.0, |cx| {
+            let automation = Automation::default();
+            automation.update_auto_relogin(|settings| {
+                settings.enabled = true;
+                settings.server = Some("Twilly".into());
+            });
+            let inputs = Inputs::new(cx);
+            Scene {
+                title: "Auto relogin",
+                panel: Rc::new(move |_, window, cx| {
+                    let relogin = Relogin {
+                        automation: automation.clone(),
+                        status: status(&Phase::Attempt { attempt: 2, of: 3 }),
+                        servers: vec!["Artix".into(), "Twilly".into(), "Yorumi".into()],
+                        inputs: inputs.clone(),
+                    };
+                    relogin_panel(relogin, &WeakEntity::new_invalid(), window, cx)
+                }),
+            }
+        });
+    }
+
+    #[test]
+    fn snapshot_jump() {
+        snapshot("game-jump", 420.0, |_| {
+            let location = Location {
+                cell: "r3".into(),
+                pad: "Left".into(),
+                cells: (1..=14).map(|cell| format!("r{cell}")).collect(),
+                cell_pads: vec!["Left".into(), "Right".into()],
+            };
+            Scene {
+                title: "Jump",
+                panel: Rc::new(move |close, window, cx| {
+                    jump_panel(
+                        Some(location.clone()),
+                        &WeakEntity::new_invalid(),
+                        close,
+                        window,
+                        cx,
+                    )
+                }),
+            }
+        });
     }
 }

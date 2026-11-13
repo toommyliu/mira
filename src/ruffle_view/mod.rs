@@ -17,7 +17,6 @@ mod scripts;
 mod shown_tab;
 mod stats;
 mod text_input;
-mod ui;
 
 #[path = "macos.rs"]
 mod native;
@@ -44,8 +43,8 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, Theme,
-    primitives::Spinner,
-    theme::{ROW, TEXT_BODY, TEXT_SMALL, TEXT_TITLE},
+    primitives::{Button, Spinner, button::Variant},
+    theme::{TEXT_BODY, TEXT_SMALL, TEXT_TITLE},
 };
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
@@ -54,6 +53,7 @@ pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
 pub(crate) use client::{Client, CloseSession, bind_keys, drag_area};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
+pub(crate) use game_bar::BAR_HEIGHT;
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use packets::{OpenPackets, open as open_packets};
@@ -61,7 +61,6 @@ pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
 pub(crate) use scripts::OpenScripts;
-pub(crate) use ui::BAR_HEIGHT;
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
 const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_millis(500);
@@ -385,7 +384,7 @@ impl RuffleView {
                 extras,
                 auto_relogin: auto_relogin::Phase::Off,
                 servers: Vec::new(),
-                bar: game_bar::BarState::new(cx),
+                bar: game_bar::BarState::new(window, cx),
                 bar_inset: Pixels::ZERO,
                 script: script::Script::default(),
                 account: None,
@@ -396,21 +395,11 @@ impl RuffleView {
     }
 
     pub(super) fn bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        div()
-            .flex_none()
-            .w_full()
-            .child(game_bar::bar(self, cx))
-            .when_some(self.bar.open(), |bar, menu| {
-                bar.child(game_bar::overlay(self, menu, cx))
-            })
-            .into_any_element()
+        game_bar::bar(self, cx).into_any_element()
     }
 
     fn present(&mut self, tiled: bool, active: bool, window: &Window, cx: &mut Context<Self>) {
         self.native.set_shown(tiled || active);
-        if tiled && (!self.tiled || !active) {
-            self.dismiss_menu(cx);
-        }
         self.tiled = tiled;
         self.selected = active;
         self.throttle(window);
@@ -689,25 +678,12 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
                 .child("The game and scripts keep running while using fewer resources."),
         )
         .child(
-            ui::pressable(
-                theme,
-                div()
-                    .id("resume-rendering")
-                    .flex()
-                    .items_center()
-                    .mt(px(8.0))
-                    .h(ROW)
-                    .px(px(12.0))
-                    .rounded(theme.radius.control)
-                    .border_1()
-                    .border_color(theme.hairline)
-                    .font_weight(gpui::FontWeight::MEDIUM),
-            )
-            .role(Role::Button)
-            .child("Resume rendering")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.change_game_settings(|settings| settings.rendering.resume(), cx)
-            })),
+            Button::new("resume-rendering", "Resume rendering")
+                .variant(Variant::Outline)
+                .mt(px(8.0))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.change_game_settings(|settings| settings.rendering.resume(), cx)
+                })),
         )
 }
 
