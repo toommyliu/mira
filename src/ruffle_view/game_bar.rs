@@ -1004,7 +1004,7 @@ fn options_panel(
             })
     };
     v_flex()
-        .w(px(380.0))
+        .w(px(320.0))
         .gap(px(12.0))
         .child(
             v_flex()
