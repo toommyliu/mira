@@ -988,7 +988,6 @@ fn options_panel(
     };
     let walk_speed = chip(Setting::WalkSpeed, window, cx);
     let frame_rate = chip(Setting::FrameRate, window, cx);
-    let held = !Setting::FrameRate.editable(&automation);
     let custom_name = field(Setting::CustomName, window, cx);
     let custom_guild = field(Setting::CustomGuild, window, cx);
     let command = |id: &'static str, label: &'static str, command: Command| {
@@ -1022,15 +1021,7 @@ fn options_panel(
                                 .child(row_label("Rendering", live))
                                 .child(rendering),
                         )
-                        .child(pair(walk_speed, frame_rate))
-                        .when(held, |rows| {
-                            rows.child(
-                                div()
-                                    .text_small()
-                                    .text_color(cx.theme().text_tertiary)
-                                    .child("Minimal rendering holds the frame rate at 2."),
-                            )
-                        }),
+                        .child(pair(walk_speed, frame_rate)),
                 ),
         )
         .child(
