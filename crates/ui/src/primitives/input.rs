@@ -776,6 +776,10 @@ impl Render for Input {
             self.reversed = false;
             self.typing = false;
         }
+        if !focused && self.was_focused {
+            self.selected = self.selected.end..self.selected.end;
+            self.reversed = false;
+        }
         self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
         let height = if self.small { CONTROL_SM } else { CONTROL_MD };

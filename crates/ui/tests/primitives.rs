@@ -1139,3 +1139,17 @@ fn escape_closes_a_popover_back_onto_its_trigger(cx: &mut TestAppContext) {
     }
     assert_eq!(toggled.get(), 1);
 }
+
+#[gpui::test]
+fn input_drops_its_selection_when_focus_leaves(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (input, cx) = focused_input(|input| input, cx);
+    cx.simulate_input("walk");
+    press(cx, "cmd-a");
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    let selection = cx.update(|window, cx| {
+        input.update(cx, |input, cx| input.selected_text_range(false, window, cx))
+    });
+    assert!(selection.unwrap().range.is_empty());
+}
