@@ -10,16 +10,26 @@ pub(crate) enum Extra {
     CopyMenus,
     ChatRecall,
     BankSearch,
+    Percentages,
+    HideMusicButton,
 }
 
 impl Extra {
-    pub(crate) const ALL: [Extra; 3] = [Extra::CopyMenus, Extra::ChatRecall, Extra::BankSearch];
+    pub(crate) const ALL: [Extra; 5] = [
+        Extra::CopyMenus,
+        Extra::ChatRecall,
+        Extra::BankSearch,
+        Extra::Percentages,
+        Extra::HideMusicButton,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Extra::CopyMenus => "Right-click menus",
             Extra::ChatRecall => "Chat recall",
             Extra::BankSearch => "Bank search",
+            Extra::Percentages => "HP and MP percentages",
+            Extra::HideMusicButton => "Hide music button",
         }
     }
 
@@ -34,6 +44,8 @@ impl Extra {
             Extra::BankSearch => {
                 "Search the bank by enhancement or boost, like forge or dmg undead."
             }
+            Extra::Percentages => "Shows percentages on your and your target's HP and MP bars.",
+            Extra::HideMusicButton => "Hides the Music On/Off button at the top of some maps.",
         }
     }
 }
@@ -44,6 +56,8 @@ pub(crate) struct Extras {
     copy_menus: bool,
     chat_recall: bool,
     bank_search: bool,
+    percentages: bool,
+    hide_music_button: bool,
 }
 
 impl Extras {
@@ -52,6 +66,8 @@ impl Extras {
             Extra::CopyMenus => self.copy_menus,
             Extra::ChatRecall => self.chat_recall,
             Extra::BankSearch => self.bank_search,
+            Extra::Percentages => self.percentages,
+            Extra::HideMusicButton => self.hide_music_button,
         }
     }
 
@@ -60,6 +76,8 @@ impl Extras {
             Extra::CopyMenus => &mut self.copy_menus,
             Extra::ChatRecall => &mut self.chat_recall,
             Extra::BankSearch => &mut self.bank_search,
+            Extra::Percentages => &mut self.percentages,
+            Extra::HideMusicButton => &mut self.hide_music_button,
         };
         *enabled = !*enabled;
     }
@@ -126,7 +144,11 @@ pub(super) async fn run<L: Loader>(
         let extras = *extras.borrow_and_update();
         let applied = bridge::extras::set_copy_menus_enabled(&loader, extras.copy_menus)
             .and_then(|()| bridge::extras::set_chat_recall_enabled(&loader, extras.chat_recall))
-            .and_then(|()| bridge::extras::set_bank_search_enabled(&loader, extras.bank_search));
+            .and_then(|()| bridge::extras::set_bank_search_enabled(&loader, extras.bank_search))
+            .and_then(|()| bridge::extras::set_percentages_enabled(&loader, extras.percentages))
+            .and_then(|()| {
+                bridge::extras::set_hide_music_button_enabled(&loader, extras.hide_music_button)
+            });
         if let Err(error) = applied {
             tracing::debug!(%error, "AS3 extras will apply once the loader is ready");
         }
@@ -214,7 +236,9 @@ mod tests {
                     [
                         ("extras.setCopyMenusEnabled", false),
                         ("extras.setChatRecallEnabled", true),
-                        ("extras.setBankSearchEnabled", false)
+                        ("extras.setBankSearchEnabled", false),
+                        ("extras.setPercentagesEnabled", false),
+                        ("extras.setHideMusicButtonEnabled", false)
                     ]
                 );
 
@@ -225,7 +249,9 @@ mod tests {
                     [
                         ("extras.setCopyMenusEnabled", true),
                         ("extras.setChatRecallEnabled", true),
-                        ("extras.setBankSearchEnabled", false)
+                        ("extras.setBankSearchEnabled", false),
+                        ("extras.setPercentagesEnabled", false),
+                        ("extras.setHideMusicButtonEnabled", false)
                     ]
                 );
                 fs::remove_file(path).unwrap();

@@ -30,7 +30,8 @@ use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 use crate::{
     army::Armies,
     automation::{
-        anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, follower, game_settings,
+        anti_afk, anti_counter, auto_attack, auto_relogin, auto_zone, boosts, drops, follower,
+        game_settings,
         packets::{self as packet_capture, Captured},
         quests, register_items,
         settings::Automation,
@@ -84,6 +85,7 @@ pub(crate) enum Output {
     Stage(Option<view::StageFit>),
     Beep,
     Packets(Vec<Captured>),
+    Link(url::Url),
 }
 
 #[derive(Clone)]
@@ -267,7 +269,12 @@ fn run(
     let bridge = Bridge::default();
     let player = PlayerBuilder::new()
         .with_boxed_renderer(surface.renderer(viewport)?)
-        .with_navigator(Navigator::new(net, inbox.clone(), tasks.clone()))
+        .with_navigator(Navigator::new(
+            net,
+            inbox.clone(),
+            tasks.clone(),
+            outputs.clone(),
+        ))
         .with_boxed_audio(backends::audio::audio())
         .with_external_interface(Box::new(bridge.clone()))
         .with_ui(Ui::new(arboard::Clipboard::new()?, outputs.clone()))
@@ -304,6 +311,15 @@ fn run(
             bridge.subscribe(counter_attack::wants),
             automation.watch_game_settings(),
             counter_attacks.clone(),
+        ),
+    );
+    spawn_local(
+        &inbox,
+        &tasks,
+        anti_afk::run(
+            bridge.clone(),
+            bridge.subscribe(anti_afk::wants),
+            automation.watch_game_settings(),
         ),
     );
     spawn_local(

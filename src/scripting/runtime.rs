@@ -18,6 +18,7 @@ use rquickjs::{
 
 use super::{
     calls::{self, Call, CallId, Replier, Reply, Request, RunId, ToPlayer},
+    dialog::{self, Dialog, ToDialogs},
     inputs::{self, Supplied},
     limits::{CappedAllocator, Clock, Limits, Tripped},
     modules::{BOOTSTRAP, ModuleLoader, ModuleResolver, Modules, PRELUDE},
@@ -57,6 +58,8 @@ const THREW_NULL: &str = "the script threw null";
 
 pub(crate) type Player = Box<dyn Fn(ToPlayer) + Send>;
 
+pub(crate) type Dialogs = Box<dyn Fn(ToDialogs) + Send>;
+
 pub(crate) enum Command {
     Stop,
     Reply { id: CallId, reply: Reply },
@@ -66,6 +69,7 @@ pub(crate) enum Command {
 struct Link {
     run: RunId,
     player: Rc<dyn Fn(ToPlayer)>,
+    dialogs: Rc<dyn Fn(ToDialogs)>,
     commands: mpsc::Sender<Command>,
 }
 
@@ -87,6 +91,7 @@ impl Run {
         limits: Limits,
         log: Log,
         player: Player,
+        dialogs: Dialogs,
         finish: impl FnOnce(Outcome) + Send + 'static,
     ) -> std::io::Result<Self> {
         static RUNS: AtomicU64 = AtomicU64::new(0);
@@ -101,6 +106,7 @@ impl Run {
                 let link = Link {
                     run,
                     player: Rc::new(player),
+                    dialogs: Rc::new(dialogs),
                     commands: replies,
                 };
                 let outcome = execute(&launch, limits, &shared, &inbox, log, link.clone());
@@ -416,6 +422,8 @@ fn setup<'js>(
     )
     .catch(ctx)?;
     let calling = link.clone();
+    let asking = link.clone();
+    let dismissing = link.clone();
     host.set(
         "call",
         Function::new(
@@ -443,6 +451,32 @@ fn setup<'js>(
                 run: link.run,
                 id: CallId(id),
             })
+        }),
+    )
+    .catch(ctx)?;
+    host.set(
+        "ask",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, id: u64, request: String| -> rquickjs::Result<()> {
+                let request: dialog::Request = serde_json::from_str(&request).map_err(|error| {
+                    Exception::throw_type(&ctx, &format!("Mira can't show {request}: {error}"))
+                })?;
+                let id = CallId(id);
+                (asking.dialogs)(ToDialogs::Open(Dialog::new(
+                    id,
+                    request,
+                    Replier::new(id, asking.commands.clone()),
+                )));
+                Ok(())
+            },
+        ),
+    )
+    .catch(ctx)?;
+    host.set(
+        "dismiss",
+        Function::new(ctx.clone(), move |id: u64| {
+            (dismissing.dialogs)(ToDialogs::Close(CallId(id)))
         }),
     )
     .catch(ctx)?;

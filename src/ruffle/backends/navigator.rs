@@ -13,7 +13,7 @@ use ruffle_core::socket::{ConnectionState, SocketAction, SocketHandle};
 use url::{ParseError, Url};
 
 use crate::ruffle::net::{HttpBody, HttpRequest, HttpResponse, Method, Net, SocketEvent};
-use crate::ruffle::{Inbox, Msg};
+use crate::ruffle::{Inbox, Msg, Output};
 
 pub(crate) type Tasks = Rc<RefCell<Vec<async_task::Task<()>>>>;
 
@@ -43,12 +43,34 @@ pub(crate) struct Navigator {
     net: Net,
     inbox: Inbox,
     tasks: Tasks,
+    outputs: async_channel::Sender<Output>,
 }
 
 impl Navigator {
-    pub(crate) fn new(net: Net, inbox: Inbox, tasks: Tasks) -> Navigator {
-        Navigator { net, inbox, tasks }
+    pub(crate) fn new(
+        net: Net,
+        inbox: Inbox,
+        tasks: Tasks,
+        outputs: async_channel::Sender<Output>,
+    ) -> Navigator {
+        Navigator {
+            net,
+            inbox,
+            tasks,
+            outputs,
+        }
     }
+}
+
+fn link(url: &str, vars: Option<IndexMap<String, String>>) -> Option<Url> {
+    let mut url = Url::parse(url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    if let Some(vars) = vars.filter(|vars| !vars.is_empty()) {
+        url.query_pairs_mut().extend_pairs(vars);
+    }
+    Some(url)
 }
 
 impl NavigatorBackend for Navigator {
@@ -56,9 +78,14 @@ impl NavigatorBackend for Navigator {
         &self,
         url: &str,
         _target: &str,
-        _vars_method: Option<(NavigationMethod, IndexMap<String, String>)>,
+        vars_method: Option<(NavigationMethod, IndexMap<String, String>)>,
     ) {
-        tracing::info!(url, "link not opened");
+        match link(url, vars_method.map(|(_, vars)| vars)) {
+            Some(url) => {
+                let _ = self.outputs.try_send(Output::Link(url));
+            }
+            None => tracing::info!(url, "link not opened"),
+        }
     }
 
     fn fetch(&self, request: Request) -> OwnedFuture<Box<dyn SuccessResponse>, ErrorResponse> {
@@ -214,5 +241,37 @@ impl SuccessResponse for Response {
     }
     fn expected_length(&self) -> Result<Option<u64>, Error> {
         Ok(self.length)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_links_open_and_carry_their_variables() {
+        let opened = |url, vars: &[(&str, &str)]| {
+            let vars = vars
+                .iter()
+                .map(|&(key, value)| (key.to_owned(), value.to_owned()))
+                .collect();
+            link(url, Some(vars)).map(String::from)
+        };
+        assert_eq!(
+            opened("https://www.aq.com/order-now/", &[]).as_deref(),
+            Some("https://www.aq.com/order-now/")
+        );
+        assert_eq!(
+            opened(
+                "http://www.aq.com/game?a=1",
+                &[("server", "Twig"), ("n", "a b")]
+            )
+            .as_deref(),
+            Some("http://www.aq.com/game?a=1&server=Twig&n=a+b")
+        );
+        assert_eq!(opened("javascript:alert(1)", &[]), None);
+        assert_eq!(opened("file:///etc/passwd", &[]), None);
+        assert_eq!(opened("mailto:support@aq.com", &[]), None);
+        assert_eq!(opened("order-now.html", &[]), None);
     }
 }

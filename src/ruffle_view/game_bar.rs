@@ -242,7 +242,7 @@ type Toggle = (
     fn(&mut GameSettings) -> &mut bool,
 );
 
-const TOGGLES: [Toggle; 10] = [
+const TOGGLES: [Toggle; 11] = [
     ("infinite-range", "Infinite range", |s| {
         &mut s.infinite_range
     }),
@@ -256,6 +256,7 @@ const TOGGLES: [Toggle; 10] = [
     ("collisions", "Collisions", |s| &mut s.collisions),
     ("ads", "Ads", |s| &mut s.ads),
     ("anti-counter", "Anti counter", |s| &mut s.anti_counter),
+    ("anti-afk", "Anti AFK", |s| &mut s.anti_afk),
     ("auto-zone", "Auto zone", |s| &mut s.auto_zone),
 ];
 

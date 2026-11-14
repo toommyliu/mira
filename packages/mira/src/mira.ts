@@ -9,7 +9,7 @@ import type * as Scope from "effect/Scope";
 
 import { inputs } from "./inputs.ts";
 import { exited, exiting, failed, stopping } from "./run.ts";
-import { call } from "./call.ts";
+import { ask, call } from "./call.ts";
 
 declare const console: { readonly warn: (message: string) => void };
 
@@ -705,6 +705,8 @@ export type GameSettings = {
    * `Combat.attack`, `useSkill` and `kill` skip a countering monster, and auto attack waits it out.
    */
   readonly antiCounter: boolean;
+  /** Clears AFK 1 to 1.5 seconds after the server marks you AFK, so you stay active while idle. */
+  readonly antiAfk: boolean;
   /**
    * Walks to the safe side when a boss calls a zone in ledgermayne, moreskulls, ultradage,
    * darkcarnax, astralshrine, queeniona and magnumopus. Does nothing in other maps.
@@ -772,7 +774,28 @@ type InputValue<F> = F extends { readonly type: "number" }
 
 export type InputValues<D extends Inputs> = { readonly [K in keyof D]: InputValue<D[K]> };
 
+/** The title defaults to the script's name. */
+export type DialogOptions = { readonly title?: string };
+export type ConfirmOptions = DialogOptions & {
+  readonly confirm?: string;
+  readonly cancel?: string;
+};
+/** `default` fills the box; `placeholder` only hints at what to type. */
+export type PromptOptions = DialogOptions & {
+  readonly default?: string;
+  readonly placeholder?: string;
+};
+
 export const Script = {
+  /** Waits until the user dismisses it. Interrupting the effect closes the dialog. */
+  alert: (message: string, { title }: DialogOptions = {}) =>
+    ask<null>({ op: "alert", message, title }).pipe(Effect.asVoid),
+  /** True when confirmed, false when cancelled. Interrupting the effect closes the dialog. */
+  confirm: (message: string, { title, confirm, cancel }: ConfirmOptions = {}) =>
+    ask<boolean>({ op: "confirm", message, title, confirm, cancel }),
+  /** The text as entered, or null when cancelled. Interrupting the effect closes the dialog. */
+  prompt: (message: string, { title, default: initial, placeholder }: PromptOptions = {}) =>
+    ask<string | null>({ op: "prompt", message, title, default: initial, placeholder }),
   /** The values this run started with. Pass `typeof inputs` to type them; Mira checks the values, not the type. */
   inputs: <D extends Inputs = Inputs>(): InputValues<D> => inputs.values as InputValues<D>,
   sleep: (duration: Duration.Input) => Effect.sleep(duration),

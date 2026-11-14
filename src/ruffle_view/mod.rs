@@ -14,6 +14,7 @@ mod packets;
 mod profile_form;
 mod profiles;
 mod script;
+mod script_dialog;
 mod script_form;
 mod scripts;
 mod shown_tab;
@@ -176,6 +177,15 @@ impl RuffleView {
                                 log.extend(batch);
                                 cx.notify();
                             });
+                            continue;
+                        }
+                        Output::Link(url) => {
+                            if this
+                                .update(cx, |_: &mut Self, cx| cx.open_url(url.as_str()))
+                                .is_err()
+                            {
+                                break;
+                            }
                             continue;
                         }
                         Output::FrameClock(enabled) => {
@@ -745,6 +755,10 @@ impl Render for RuffleView {
             .size_full()
             .when(!self.tiled, |root| root.child(self.bar(cx)))
             .child(player)
+            .when_some(
+                self.script.dialogs().filter(|_| self.selected),
+                |root, dialogs| root.child(dialogs),
+            )
     }
 }
 

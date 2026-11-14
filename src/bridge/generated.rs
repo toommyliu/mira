@@ -318,6 +318,24 @@ pub(crate) mod extras {
         let reply = loader.call("extras.setCopyMenusEnabled", call_args)?;
         Ok(decode("extras.setCopyMenusEnabled", reply)?)
     }
+
+    pub(crate) fn set_hide_music_button_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setHideMusicButtonEnabled", call_args)?;
+        Ok(decode("extras.setHideMusicButtonEnabled", reply)?)
+    }
+
+    pub(crate) fn set_percentages_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setPercentagesEnabled", call_args)?;
+        Ok(decode("extras.setPercentagesEnabled", reply)?)
+    }
 }
 
 pub(crate) mod flash {

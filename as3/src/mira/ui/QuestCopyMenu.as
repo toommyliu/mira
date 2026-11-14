@@ -78,7 +78,8 @@ package mira.ui {
       return [
         CopyMenu.option("Copy Name", String(item.name)),
         CopyMenu.option("Copy Item ID", String(item.itemId)),
-        CopyMenu.option("Copy Quest ID", String(quest.QuestID))
+        CopyMenu.option("Copy Quest ID", String(quest.QuestID)),
+        CopyMenu.wiki(item.name)
       ];
     }
 
