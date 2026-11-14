@@ -60,6 +60,7 @@ pub const RING_ROOM: Pixels = px(6.0);
 pub enum Tone {
     Neutral,
     Accent,
+    Success,
     Warning,
     Danger,
 }
@@ -90,6 +91,9 @@ pub struct Theme {
     pub accent: Hsla,
     pub accent_soft: Hsla,
     pub accent_text: Hsla,
+    pub success: Hsla,
+    pub success_soft: Hsla,
+    pub success_text: Hsla,
     pub warning: Hsla,
     pub warning_soft: Hsla,
     pub warning_text: Hsla,
@@ -138,6 +142,9 @@ impl Theme {
             accent: oklch(0.623, 0.2, 279.0, 1.0),
             accent_soft: oklch(0.623, 0.2, 279.0, 0.16),
             accent_text: oklch(0.75, 0.12, 278.0, 1.0),
+            success: oklch(0.72, 0.16, 150.0, 1.0),
+            success_soft: oklch(0.72, 0.16, 150.0, 0.14),
+            success_text: oklch(0.8, 0.13, 150.0, 1.0),
             warning: oklch(0.8, 0.15, 78.0, 1.0),
             warning_soft: oklch(0.8, 0.15, 78.0, 0.12),
             warning_text: oklch(0.85, 0.12, 84.0, 1.0),
@@ -183,6 +190,9 @@ impl Theme {
             accent: oklch(0.6, 0.2, 280.0, 1.0),
             accent_soft: oklch(0.6, 0.2, 280.0, 0.1),
             accent_text: oklch(0.5, 0.2, 278.0, 1.0),
+            success: oklch(0.62, 0.15, 150.0, 1.0),
+            success_soft: oklch(0.62, 0.15, 150.0, 0.12),
+            success_text: oklch(0.48, 0.12, 150.0, 1.0),
             warning: oklch(0.75, 0.16, 70.0, 1.0),
             warning_soft: oklch(0.75, 0.15, 75.0, 0.16),
             warning_text: oklch(0.5, 0.11, 65.0, 1.0),
@@ -210,6 +220,7 @@ impl Theme {
         match tone {
             Tone::Neutral => (self.text_tertiary, self.fill, self.text_secondary),
             Tone::Accent => (self.accent, self.accent_soft, self.accent_text),
+            Tone::Success => (self.success, self.success_soft, self.success_text),
             Tone::Warning => (self.warning, self.warning_soft, self.warning_text),
             Tone::Danger => (self.danger, self.danger_soft, self.danger_text),
         }

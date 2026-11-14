@@ -416,6 +416,40 @@ fn snapshot_sources_short_window() {
 }
 
 #[test]
+fn snapshot_alert_tones() {
+    scene("alert-tones", 460.0, 380.0, |_, _| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                Alert::new("saved", Tone::Success, "Setup saved")
+                    .body("Every account in Dailies logs in with its own server."),
+            )
+            .child(Alert::new(
+                "tip",
+                Tone::Neutral,
+                "Scripts reload when you save them",
+            ))
+            .child(
+                Alert::new("slow", Tone::Warning, "Scripts folder can't be read")
+                    .body("Locate it or remove it from the library.")
+                    .action(Button::new("locate", "Locate…").size(Size::Small)),
+            )
+            .child(
+                Alert::new("failed", Tone::Danger, "Couldn't save the setups")
+                    .body("The disk is full."),
+            )
+            .child(
+                Alert::new("bell", Tone::Accent, "Drop alert on")
+                    .icon(Icon::Bell)
+                    .body("Beeps when a listed drop appears."),
+            )
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_menubar() {
     scene("menubar", 560.0, 300.0, |_, cx| {
         let theme = cx.theme().clone();

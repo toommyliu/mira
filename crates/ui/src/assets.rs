@@ -30,10 +30,13 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => include_str!("../assets/icons/lucide/chevron-down.svg"),
             "icons/chevron-right.svg" => include_str!("../assets/icons/lucide/chevron-right.svg"),
             "icons/chevron-up.svg" => include_str!("../assets/icons/lucide/chevron-up.svg"),
+            "icons/circle-alert.svg" => include_str!("../assets/icons/lucide/circle-alert.svg"),
+            "icons/circle-check.svg" => include_str!("../assets/icons/lucide/circle-check.svg"),
             "icons/clock.svg" => include_str!("../assets/icons/lucide/clock.svg"),
             "icons/ellipsis.svg" => include_str!("../assets/icons/lucide/ellipsis.svg"),
             "icons/eye.svg" => include_str!("../assets/icons/lucide/eye.svg"),
             "icons/eye-off.svg" => include_str!("../assets/icons/lucide/eye-off.svg"),
+            "icons/info.svg" => include_str!("../assets/icons/lucide/info.svg"),
             "icons/layout-grid.svg" => include_str!("../assets/icons/lucide/layout-grid.svg"),
             "icons/minus.svg" => include_str!("../assets/icons/lucide/minus.svg"),
             "icons/pin.svg" => include_str!("../assets/icons/lucide/pin.svg"),
@@ -41,6 +44,9 @@ impl AssetSource for Assets {
             "icons/rotate-ccw.svg" => include_str!("../assets/icons/lucide/rotate-ccw.svg"),
             "icons/search.svg" => include_str!("../assets/icons/lucide/search.svg"),
             "icons/square.svg" => include_str!("../assets/icons/lucide/square.svg"),
+            "icons/triangle-alert.svg" => {
+                include_str!("../assets/icons/lucide/triangle-alert.svg")
+            }
             "icons/x.svg" => include_str!("../assets/icons/lucide/x.svg"),
             SIDEBAR => include_str!("../assets/icons/sidebar.svg"),
             SIDEBAR_OPEN => include_str!("../assets/icons/sidebar-open.svg"),
