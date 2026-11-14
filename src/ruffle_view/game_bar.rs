@@ -685,7 +685,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .menu(trigger("windows", "Windows", None, None, cx), |_, _| {
             windows_menu()
         })
-        .child(
+        .button(
             bar_button("scripts", "Scripts")
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(super::OpenScripts), cx)),
         )
@@ -713,7 +713,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             },
         )
         .child(super::client::bar_separator(cx))
-        .child(script_button(bar.script, this.clone()))
+        .button(script_button(bar.script, this.clone()))
         .child(super::client::drag_area().flex_1())
         .menu(
             trigger("auto-attack", "Auto attack", None, Some(bar.attack), cx),
@@ -739,7 +739,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             },
         )
         .child(super::client::bar_separator(cx))
-        .child(bar_button("bank", "Bank").disabled(!bar.live).on_click({
+        .button(bar_button("bank", "Bank").disabled(!bar.live).on_click({
             let this = this.clone();
             move |_, _, cx| update(&this, cx, |view, _| view.session.command(Command::OpenBank))
         }))
