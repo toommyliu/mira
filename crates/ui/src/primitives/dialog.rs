@@ -288,16 +288,24 @@ impl RenderOnce for Dialog {
                                     |panel| {
                                         panel.child(
                                             h_flex()
+                                                .flex_wrap()
+                                                .justify_end()
                                                 .gap(px(6.0))
                                                 .pt(px(4.0))
                                                 .child(
                                                     h_flex()
-                                                        .flex_1()
+                                                        .flex_grow(1.0)
                                                         .min_w_0()
                                                         .gap(px(6.0))
                                                         .children(self.footer_start),
                                                 )
-                                                .children(self.actions),
+                                                .child(
+                                                    h_flex()
+                                                        .flex_wrap()
+                                                        .justify_end()
+                                                        .gap(px(6.0))
+                                                        .children(self.actions),
+                                                ),
                                         )
                                     },
                                 ),
