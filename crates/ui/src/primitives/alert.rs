@@ -4,6 +4,7 @@ use gpui::{
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
+use super::{Icon, icon};
 use crate::{
     ActiveTheme as _, Tone,
     theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
@@ -13,6 +14,7 @@ use crate::{
 pub struct Alert {
     id: ElementId,
     tone: Tone,
+    icon: Icon,
     title: SharedString,
     body: Option<SharedString>,
     action: Option<AnyElement>,
@@ -23,10 +25,21 @@ impl Alert {
         Self {
             id: id.into(),
             tone,
+            icon: match tone {
+                Tone::Neutral | Tone::Accent => Icon::Info,
+                Tone::Success => Icon::CircleCheck,
+                Tone::Warning => Icon::TriangleAlert,
+                Tone::Danger => Icon::CircleAlert,
+            },
             title: title.into(),
             body: None,
             action: None,
         }
+    }
+
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = icon;
+        self
     }
 
     pub fn body(mut self, body: impl Into<SharedString>) -> Self {
@@ -75,31 +88,40 @@ impl RenderOnce for Alert {
             .child(
                 div()
                     .flex()
-                    .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(2.0))
+                    .items_start()
+                    .gap(px(10.0))
+                    .child(div().flex_none().mt(px(2.0)).child(icon(self.icon, solid)))
                     .child(
                         div()
-                            .text_size(TEXT_BODY)
-                            .line_height(LINE_BODY)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if self.tone == Tone::Neutral {
-                                theme.text
-                            } else {
-                                text
-                            })
-                            .child(self.title),
-                    )
-                    .when_some(self.body, |column, body| {
-                        column.child(
-                            div()
-                                .text_size(TEXT_SMALL)
-                                .line_height(LINE_SMALL)
-                                .text_color(theme.text_secondary)
-                                .child(body),
-                        )
-                    }),
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(TEXT_BODY)
+                                    .line_height(LINE_BODY)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(if self.tone == Tone::Neutral {
+                                        theme.text
+                                    } else {
+                                        text
+                                    })
+                                    .child(self.title),
+                            )
+                            .when_some(self.body, |column, body| {
+                                column.child(
+                                    div()
+                                        .text_size(TEXT_SMALL)
+                                        .line_height(LINE_SMALL)
+                                        .text_color(theme.text_secondary)
+                                        .child(body),
+                                )
+                            }),
+                    ),
             )
             .when_some(self.action, |alert, action| alert.child(action))
     }

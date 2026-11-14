@@ -14,10 +14,13 @@ pub enum Icon {
     ChevronDown,
     ChevronRight,
     ChevronUp,
+    CircleAlert,
+    CircleCheck,
     Clock,
     Ellipsis,
     Eye,
     EyeOff,
+    Info,
     LayoutGrid,
     Minus,
     Pin,
@@ -27,6 +30,7 @@ pub enum Icon {
     Sidebar,
     SidebarOpen,
     Square,
+    TriangleAlert,
     X,
 }
 
@@ -43,10 +47,13 @@ impl Icon {
             Icon::ChevronDown => "icons/chevron-down.svg",
             Icon::ChevronRight => "icons/chevron-right.svg",
             Icon::ChevronUp => "icons/chevron-up.svg",
+            Icon::CircleAlert => "icons/circle-alert.svg",
+            Icon::CircleCheck => "icons/circle-check.svg",
             Icon::Clock => "icons/clock.svg",
             Icon::Ellipsis => "icons/ellipsis.svg",
             Icon::Eye => "icons/eye.svg",
             Icon::EyeOff => "icons/eye-off.svg",
+            Icon::Info => "icons/info.svg",
             Icon::LayoutGrid => "icons/layout-grid.svg",
             Icon::Minus => "icons/minus.svg",
             Icon::Pin => "icons/pin.svg",
@@ -56,6 +63,7 @@ impl Icon {
             Icon::Sidebar => SIDEBAR,
             Icon::SidebarOpen => SIDEBAR_OPEN,
             Icon::Square => "icons/square.svg",
+            Icon::TriangleAlert => "icons/triangle-alert.svg",
             Icon::X => "icons/x.svg",
         }
     }
