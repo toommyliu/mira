@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription};
 
-use super::{RuffleView, script_dialog::ScriptDialogs};
+use super::{RuffleView, ScriptPhase, ScriptState, script_dialog::ScriptDialogs};
 use crate::{
     ruffle::Msg,
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
@@ -79,6 +79,32 @@ impl Script {
 
     pub(super) fn dialogs(&self) -> Option<Entity<ScriptDialogs>> {
         Some(self.dialogs.as_ref()?.view.clone())
+    }
+
+    pub(super) fn state(&self) -> Option<ScriptState> {
+        let Loaded {
+            launch,
+            name,
+            phase,
+        } = self.loaded.as_ref()?;
+        let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
+        let phase = match phase {
+            Phase::Running {
+                stopping: false, ..
+            } if waiting => ScriptPhase::NeedsInput,
+            Phase::Running {
+                stopping: false, ..
+            } => ScriptPhase::Running,
+            Phase::Running { stopping: true, .. } => ScriptPhase::Stopping,
+            Phase::Finished(Outcome::Completed | Outcome::Exited { .. }) => ScriptPhase::Finished,
+            Phase::Finished(Outcome::Stopped) => ScriptPhase::Stopped,
+            Phase::Finished(_) => ScriptPhase::Failed(self.failure().unwrap_or_default().into()),
+        };
+        Some(ScriptState {
+            entry: launch.entry.clone(),
+            name: name.clone(),
+            phase,
+        })
     }
 
     pub(super) fn status(&self) -> Option<String> {

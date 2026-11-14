@@ -1,10 +1,12 @@
 mod account;
+mod account_card;
 mod client;
 mod environment;
 mod follower;
 mod form;
 mod game_bar;
 mod input;
+mod launches;
 mod loader_grabber;
 mod manager;
 mod menu;
@@ -52,7 +54,9 @@ use mira_ui::{
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
 
-pub(crate) use account::{Changed, Details, Glance, Identified, State, Summary};
+pub(crate) use account::{
+    Changed, Details, Glance, Identified, Login, ScriptPhase, ScriptState, Summary, Updated,
+};
 pub(crate) use client::{Client, CloseSession, bar_title, bind_keys, drag_area, window_bar};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
@@ -204,7 +208,8 @@ impl RuffleView {
                                 .update(cx, |this: &mut Self, cx| {
                                     match report {
                                         auto_relogin::Report::Phase(phase) => {
-                                            this.auto_relogin = phase
+                                            this.auto_relogin = phase;
+                                            cx.emit(Updated);
                                         }
                                         auto_relogin::Report::Servers(servers) => {
                                             this.servers = servers
@@ -238,6 +243,7 @@ impl RuffleView {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
                                     this.bar.located(location);
+                                    cx.emit(Updated);
                                     cx.notify();
                                 })
                                 .is_err()
@@ -263,6 +269,7 @@ impl RuffleView {
                                     if unlinked {
                                         this.changed(cx);
                                     } else {
+                                        cx.emit(Updated);
                                         cx.notify();
                                     }
                                 })

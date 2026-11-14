@@ -8,6 +8,7 @@ mod automation;
 mod bridge;
 mod combat_profiles;
 mod domain;
+mod jitter;
 mod logging;
 mod net;
 mod ruffle;
@@ -15,6 +16,7 @@ mod ruffle_view;
 mod script_inputs;
 mod scripting;
 mod settings;
+mod setups;
 
 use std::{iter, path::PathBuf};
 

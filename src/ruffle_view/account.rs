@@ -1,12 +1,22 @@
+use std::path::PathBuf;
+
 use gpui::{Context, EventEmitter, SharedString};
 use mira_ui::Tone;
 
 use super::{Loading, RuffleView};
-use crate::{accounts::Account, automation::sign_in::Status, scripting::Launch};
+use crate::{
+    accounts::Account,
+    automation::{auto_relogin::Phase, sign_in::Status},
+    scripting::Launch,
+};
 
 pub(crate) struct Changed;
 
 impl EventEmitter<Changed> for RuffleView {}
+
+pub(crate) struct Updated;
+
+impl EventEmitter<Updated> for RuffleView {}
 
 pub(crate) struct Identified(pub(crate) String);
 
@@ -17,12 +27,48 @@ pub(super) struct Link {
     queued: Option<Launch>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum State {
-    Busy,
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Login {
+    Loading(Option<u8>),
+    LoggingIn { attempt: u32, of: u32 },
+    Retrying { attempt: u32, of: u32 },
+    ChooseServer,
     Online,
-    Offline,
-    Failed,
+    Reconnecting,
+    Disconnected,
+    Failed(SharedString),
+    Broken(SharedString),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Place {
+    pub(crate) server: Option<SharedString>,
+    pub(crate) area: Option<SharedString>,
+    pub(crate) cell: Option<SharedString>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Character {
+    pub(crate) level: Option<u32>,
+    pub(crate) class: Option<SharedString>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScriptState {
+    pub(crate) entry: PathBuf,
+    pub(crate) name: SharedString,
+    pub(crate) phase: ScriptPhase,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ScriptPhase {
+    Queued,
+    Running,
+    NeedsInput,
+    Stopping,
+    Finished,
+    Stopped,
+    Failed(SharedString),
 }
 
 #[derive(Clone)]
@@ -47,12 +93,12 @@ pub(crate) struct Details {
     pub(crate) error: Option<SharedString>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Summary {
-    pub(crate) state: State,
-    pub(crate) login: SharedString,
-    pub(crate) script: Option<SharedString>,
-    pub(crate) script_failed: bool,
-    pub(crate) running: bool,
+    pub(crate) login: Login,
+    pub(crate) place: Option<Place>,
+    pub(crate) character: Option<Character>,
+    pub(crate) script: Option<ScriptState>,
 }
 
 impl RuffleView {
@@ -125,31 +171,64 @@ impl RuffleView {
     }
 
     pub(crate) fn summary(&self) -> Summary {
-        let status = self.status.as_ref();
-        let login: SharedString = match (&self.error, status, self.loading) {
-            (Some(error), _, _) => format!("Couldn't start: {error}").into(),
-            (None, None, Loading::Percent(percent)) => format!("Loading {percent}%").into(),
-            (None, None, _) => "Loading".into(),
-            (None, Some(status), _) => login_label(status),
+        let login = match (&self.error, self.status.as_ref()) {
+            (Some(error), _) => Login::Broken(error.clone().into()),
+            (None, None) => Login::Loading(match self.loading {
+                Loading::Percent(percent) => Some(percent),
+                Loading::Started | Loading::Done => None,
+            }),
+            (None, Some(Status::LoggingIn { attempt, of })) => Login::LoggingIn {
+                attempt: *attempt,
+                of: *of,
+            },
+            (None, Some(Status::Retrying { attempt, of })) => Login::Retrying {
+                attempt: *attempt,
+                of: *of,
+            },
+            (None, Some(Status::ChooseServer)) => Login::ChooseServer,
+            (None, Some(Status::Online(_))) => Login::Online,
+            (None, Some(Status::Offline)) if relogging(&self.auto_relogin) => Login::Reconnecting,
+            (None, Some(Status::Offline)) => Login::Disconnected,
+            (None, Some(Status::Failed(error))) => Login::Failed(error.clone().into()),
         };
+        let online = login == Login::Online;
+        let place = online.then(|| {
+            let location = self.bar.location();
+            Place {
+                server: match self.status.as_ref() {
+                    Some(Status::Online(server)) => server.clone().map(Into::into),
+                    _ => None,
+                },
+                area: location.map(|location| match location.room {
+                    Some(room) => format!("{}-{room}", location.map).into(),
+                    None => location.map.clone().into(),
+                }),
+                cell: location.map(|location| location.cell.clone().into()),
+            }
+        });
+        let character = self
+            .bar
+            .identity()
+            .filter(|_| online)
+            .map(|identity| Character {
+                level: identity.level,
+                class: identity.class.clone().map(Into::into),
+            });
         let queued = self
             .account
             .as_ref()
-            .and_then(|link| link.queued.as_ref().map(|launch| launch.entry.as_path()))
+            .and_then(|link| link.queued.as_ref())
             .filter(|_| !self.script.running())
-            .map(|script| format!("Waiting to run {}", file_name(script)).into());
-        let state = match (&self.error, status) {
-            (Some(_), _) | (None, Some(Status::Failed(_))) => State::Failed,
-            (None, Some(Status::Online(_))) => State::Online,
-            (None, Some(Status::Offline)) => State::Offline,
-            (None, _) => State::Busy,
-        };
+            .map(|launch| ScriptState {
+                entry: launch.entry.clone(),
+                name: file_name(&launch.entry).into(),
+                phase: ScriptPhase::Queued,
+            });
         Summary {
-            state,
             login,
-            script_failed: queued.is_none() && self.script.failed(),
-            script: queued.or_else(|| self.script.status().map(Into::into)),
-            running: self.script.running(),
+            place,
+            character,
+            script: queued.or_else(|| self.script.state()),
         }
     }
 
@@ -248,13 +327,27 @@ impl RuffleView {
         self.account.as_ref().map(|link| link.username.as_str())
     }
 
-    pub(super) fn retry_sign_in(&mut self, account: &Account, cx: &mut Context<Self>) {
-        let failed = self.account.is_some() && matches!(self.status, Some(Status::Failed(_)));
-        if failed {
+    pub(super) fn signed_out(&self) -> bool {
+        self.account.is_some() && signed_out(self.status.as_ref(), &self.auto_relogin)
+    }
+
+    pub(super) fn sign_in_again(&mut self, account: &Account, cx: &mut Context<Self>) {
+        if self.signed_out() {
             let queued = self.account.take().and_then(|link| link.queued);
             self.sign_in(account, queued, cx);
         }
     }
+}
+
+fn signed_out(status: Option<&Status>, relogin: &Phase) -> bool {
+    matches!(status, Some(Status::Offline | Status::Failed(_))) && !relogging(relogin)
+}
+
+fn relogging(relogin: &Phase) -> bool {
+    matches!(
+        relogin,
+        Phase::Waiting | Phase::Attempt { .. } | Phase::Backoff { .. }
+    )
 }
 
 fn login_label(status: &Status) -> SharedString {
@@ -279,4 +372,26 @@ pub(crate) fn file_name(path: &std::path::Path) -> String {
         || path.display().to_string(),
         |name| name.display().to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_signs_a_logged_out_tab_back_in() {
+        let failed = Status::Failed("Wrong password".into());
+        let attempt = Phase::Attempt { attempt: 1, of: 3 };
+        assert!(signed_out(Some(&Status::Offline), &Phase::Off));
+        assert!(signed_out(Some(&Status::Offline), &Phase::Armed));
+        assert!(signed_out(Some(&failed), &Phase::Off));
+        assert!(!signed_out(Some(&Status::Offline), &Phase::Waiting));
+        assert!(!signed_out(Some(&Status::Offline), &attempt));
+        assert!(!signed_out(Some(&Status::Online(None)), &Phase::Armed));
+        assert!(!signed_out(
+            Some(&Status::LoggingIn { attempt: 1, of: 3 }),
+            &Phase::Off
+        ));
+        assert!(!signed_out(None, &Phase::Off));
+    }
 }

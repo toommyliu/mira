@@ -40,7 +40,7 @@ use crate::{
     bridge::{Bridge, CallError, Event, Packets},
     domain::{
         CombatCooldown,
-        auth::{Credentials, Logins},
+        auth::{Credentials, LOGIN_GATE, Logins},
         bank,
         counter_attack::{self, CounterAttacks},
         grabber, packets, player,
@@ -293,7 +293,7 @@ fn run(
         .set_background_color(Some(ruffle_core::Color::BLACK));
     bridge.attach(&player);
     let phases = outputs.clone();
-    let logins = Rc::new(Logins::default());
+    let logins = Rc::new(Logins::gated(&LOGIN_GATE));
     let counter_attacks = CounterAttacks::default();
     let cooldown = CombatCooldown::default();
     spawn_local(
@@ -528,6 +528,7 @@ fn run(
     for message in early {
         inbox.post(message);
     }
+    let mut signing_in = None;
     'running: loop {
         let mut frame_due = false;
         let deadline = Instant::now() + wait;
@@ -568,7 +569,7 @@ fn run(
                     let connections = bridge.subscribe(auto_relogin::wants);
                     let logins = logins.clone();
                     let settings = automation.auto_relogin();
-                    spawn_local(&inbox, &tasks, async move {
+                    drop(signing_in.replace(spawn(&inbox, async move {
                         bridge.ready().await;
                         sign_in::run(
                             bridge,
@@ -582,14 +583,14 @@ fn run(
                             },
                         )
                         .await
-                    })
+                    })));
                 }
                 Some(Msg::WatchSignIn) => {
                     let statuses = outputs.clone();
                     let bridge = commands_bridge.clone();
                     let connections = bridge.subscribe(auto_relogin::wants);
                     let identified = bridge.clone();
-                    spawn_local(&inbox, &tasks, async move {
+                    drop(signing_in.replace(spawn(&inbox, async move {
                         bridge.ready().await;
                         sign_in::watch(bridge, connections, move |status| {
                             if matches!(status, sign_in::Status::Online(_)) {
@@ -606,7 +607,7 @@ fn run(
                             let _ = statuses.try_send(Output::SignIn(status));
                         })
                         .await
-                    })
+                    })));
                 }
                 Some(Msg::Command(command)) => spawn_local(
                     &inbox,

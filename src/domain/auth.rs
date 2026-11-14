@@ -204,15 +204,57 @@ pub(crate) struct LastLogin {
     pub(crate) server: String,
 }
 
+const LOGIN_GAP: Duration = Duration::from_secs(1);
+const LOGIN_JITTER: Duration = Duration::from_millis(500);
+
+pub(crate) static LOGIN_GATE: LoginGate = LoginGate::new();
+
+pub(crate) struct LoginGate {
+    next: std::sync::Mutex<Option<Instant>>,
+}
+
+impl LoginGate {
+    const fn new() -> Self {
+        Self {
+            next: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn reserve(&self, now: Instant, gap: Duration) -> Duration {
+        let mut next = self
+            .next
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = next.map_or(now, |next| next.max(now));
+        *next = Some(at + gap);
+        at - now
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Logins {
     turn: Mutex<()>,
     last: RefCell<Option<LastLogin>>,
+    gate: Option<&'static LoginGate>,
 }
 
 impl Logins {
+    pub(crate) fn gated(gate: &'static LoginGate) -> Self {
+        Self {
+            gate: Some(gate),
+            ..Self::default()
+        }
+    }
+
     pub(crate) async fn turn(&self) -> MutexGuard<'_, ()> {
         self.turn.lock().await
+    }
+
+    pub(crate) async fn space_out(&self) {
+        if let Some(gate) = self.gate {
+            let gap = LOGIN_GAP + crate::jitter::up_to(LOGIN_JITTER);
+            sleep(gate.reserve(Instant::now(), gap)).await;
+        }
     }
 
     pub(crate) fn connected(&self, loader: &impl Loader) {
@@ -236,6 +278,7 @@ impl Logins {
     }
 
     pub(crate) async fn log_in(&self, loader: &impl Loader) -> Result<bool, CallError> {
+        self.space_out().await;
         let _turn = self.turn().await;
         if bridge::auth::is_logged_in(loader)? || server_selection_shown(loader)? {
             return Ok(true);
@@ -333,6 +376,17 @@ mod tests {
 
     use super::*;
     use crate::domain::testing::FakeLoader;
+
+    #[test]
+    fn logins_across_tabs_wait_their_turn_at_the_gate() {
+        let gate = LoginGate::new();
+        let now = Instant::now();
+        let gap = Duration::from_secs(1);
+        let waits: Vec<_> = (0..3).map(|_| gate.reserve(now, gap)).collect();
+        assert_eq!(waits, [Duration::ZERO, gap, gap * 2]);
+        assert_eq!(gate.reserve(now + gap * 5, gap), Duration::ZERO);
+        assert_eq!(gate.reserve(now + gap * 5, gap), gap);
+    }
 
     fn credentials() -> Credentials {
         Credentials {

@@ -132,6 +132,7 @@ pub(crate) const PADS: [&str; 8] = [
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Location {
     pub(crate) map: String,
+    pub(crate) room: Option<u32>,
     pub(crate) cell: String,
     pub(crate) pad: String,
     pub(crate) cells: Vec<String>,
@@ -144,6 +145,7 @@ pub(crate) fn location(loader: &impl Loader) -> Result<Option<Location>, CallErr
     }
     Ok(Some(Location {
         map: bridge::player::get_map(loader)?.unwrap_or_default(),
+        room: room_number(loader)?,
         cell: bridge::player::get_cell(loader)?.unwrap_or_default(),
         pad: bridge::player::get_pad(loader)?.unwrap_or_default(),
         cells: cells(loader)?,
@@ -830,6 +832,7 @@ mod tests {
                     Value::Bool(true)
                 }
                 "flash.getGameObjectS" => Value::String(json!("player1").to_string()),
+                "flash.getGameObject" => Value::String(json!(format!("{map}-1234")).to_string()),
                 "player.getMap" => Value::String(map.into()),
                 "player.getCell" => Value::String(cell.into()),
                 "player.getPad" => Value::String(pad.into()),
@@ -849,7 +852,13 @@ mod tests {
                     events.subscribe(moves),
                     move |location| {
                         seen.borrow_mut().push(location.map(|location| {
-                            (location.map, location.cell, location.pad, location.cells)
+                            (
+                                location.map,
+                                location.room,
+                                location.cell,
+                                location.pad,
+                                location.cells,
+                            )
                         }))
                     },
                 ));
@@ -886,18 +895,21 @@ mod tests {
                     [
                         Some((
                             "battleon".into(),
+                            Some(1234),
                             "r2".into(),
                             "Left".into(),
                             texts(&["Enter", "r2"])
                         )),
                         Some((
                             "battleon".into(),
+                            Some(1234),
                             "Enter".into(),
                             "Right".into(),
                             texts(&["Enter", "r2"])
                         )),
                         Some((
                             "dage".into(),
+                            Some(1234),
                             "Enter".into(),
                             "Spawn".into(),
                             texts(&["Enter", "Boss"])
