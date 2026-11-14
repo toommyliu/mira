@@ -894,7 +894,7 @@ impl Render for GameBar {
             let chosen = self.chosen.clone();
             move |_: &mut Window, _: &mut gpui::App| chosen.borrow_mut().push(name)
         };
-        let (new, undo) = (pick("new"), pick("undo"));
+        let (new, undo, run) = (pick("new"), pick("undo"), pick("run"));
         let (dismissed, reached) = (self.dismissed.clone(), self.reached.clone());
         div()
             .key_context(FOCUS_SCOPE)
@@ -912,6 +912,11 @@ impl Render for GameBar {
                         let undo = undo.clone();
                         vec![MenuItem::action("Undo", move |window, cx| undo(window, cx))]
                     })
+                    .button(
+                        Button::new("run", "Run")
+                            .w(px(80.0))
+                            .on_click(move |_, window, cx| run(window, cx)),
+                    )
                     .on_dismiss(move |_, _, cx| {
                         dismissed.set(dismissed.get() + 1);
                         cx.stop_propagation();
@@ -1011,6 +1016,18 @@ fn menubar_moves_between_entries_with_left_and_right(cx: &mut TestAppContext) {
     bar.click(Bar::FILE);
     bar.keys("right right enter");
     assert_eq!(bar.chosen(), ["undo", "new", "new"]);
+}
+
+#[gpui::test]
+fn menubar_moves_onto_buttons_with_left_and_right(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.keys("tab right right enter");
+    assert_eq!(bar.chosen(), ["run"]);
+    bar.keys("left enter enter");
+    assert_eq!(bar.chosen(), ["run", "undo"]);
+    bar.click(Bar::EDIT);
+    bar.keys("right enter");
+    assert_eq!(bar.chosen(), ["run", "undo", "new"]);
 }
 
 #[gpui::test]

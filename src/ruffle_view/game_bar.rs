@@ -585,11 +585,11 @@ fn status(phase: &Phase) -> Option<String> {
     }
 }
 
-fn profile_label(view: &RuffleView) -> String {
-    view.automation
-        .auto_attack()
-        .profile
-        .unwrap_or_else(|| profiles::GENERIC.to_owned())
+fn bar_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
+    Button::new(id, label)
+        .variant(Variant::Ghost)
+        .size(Size::Small)
+        .text_size(TEXT_BODY)
 }
 
 fn trigger(
@@ -612,10 +612,7 @@ fn trigger(
         None => format!("{title}{state}"),
     };
     let shrinks = matches!(value, Some(Detail::Text(_)));
-    Button::new(id, label)
-        .variant(Variant::Ghost)
-        .size(Size::Small)
-        .text_size(TEXT_BODY)
+    bar_button(id, label)
         .when(shrinks, |trigger| trigger.flex_shrink(1.0).min_w_0())
         .child(
             div()
@@ -643,13 +640,39 @@ fn trigger(
         }))
 }
 
+enum ScriptControl {
+    Start(Option<SharedString>),
+    Stop(SharedString),
+}
+
+struct Bar {
+    inset: Pixels,
+    live: bool,
+    relogin: bool,
+    relogin_detail: Option<Detail>,
+    attack: bool,
+    script: ScriptControl,
+}
+
 pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
-    let this = cx.weak_entity();
-    let theme = cx.theme().clone();
-    let live = view.in_game();
-    let relogin = view.automation.auto_relogin().enabled;
-    let attack = view.automation.auto_attack().enabled;
-    Menubar::new(("game-bar", cx.entity_id()), "Game")
+    let script = match view.script.loaded() {
+        Some(name) if view.script.running() => ScriptControl::Stop(name.clone()),
+        loaded => ScriptControl::Start(loaded.cloned()),
+    };
+    let bar = Bar {
+        inset: view.bar_inset,
+        live: view.in_game(),
+        relogin: view.automation.auto_relogin().enabled,
+        relogin_detail: relogin_value(view),
+        attack: view.automation.auto_attack().enabled,
+        script,
+    };
+    menubar(bar, cx.weak_entity(), cx)
+}
+
+fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
+    let theme = cx.theme();
+    Menubar::new(("game-bar", this.entity_id()), "Game")
         .flex_none()
         .w_full()
         .h(BAR_HEIGHT)
@@ -658,17 +681,14 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
         .bg(theme.base)
         .border_b_1()
         .border_color(theme.border)
-        .child(super::client::drag_area().flex_none().w(view.bar_inset))
+        .child(super::client::drag_area().flex_none().w(bar.inset))
         .menu(trigger("windows", "Windows", None, None, cx), |_, _| {
             windows_menu()
         })
-        .menu(trigger("scripts", "Scripts", None, None, cx), {
-            let this = this.clone();
-            move |_, cx| {
-                this.read_with(cx, |view, _| scripts_menu(&this, view))
-                    .unwrap_or_default()
-            }
-        })
+        .button(
+            bar_button("scripts", "Scripts")
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(super::OpenScripts), cx)),
+        )
         .popover(trigger("options", "Options", None, None, cx), {
             let this = this.clone();
             move |close, window, cx| match this.read_with(cx, |view, _| view.options()) {
@@ -680,8 +700,8 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
             trigger(
                 "auto-relogin",
                 "Auto relogin",
-                relogin_value(view),
-                Some(relogin),
+                bar.relogin_detail,
+                Some(bar.relogin),
                 cx,
             ),
             {
@@ -692,15 +712,11 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                 }
             },
         )
+        .child(super::client::bar_separator(cx))
+        .button(script_button(bar.script, this.clone()))
         .child(super::client::drag_area().flex_1())
         .menu(
-            trigger(
-                "auto-attack",
-                "Auto attack",
-                Some(Detail::Text(profile_label(view).into())),
-                Some(attack),
-                cx,
-            ),
+            trigger("auto-attack", "Auto attack", None, Some(bar.attack), cx),
             {
                 let this = this.clone();
                 move |_, cx| {
@@ -709,26 +725,47 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
                 }
             },
         )
-        .popover(trigger("jump", "Jump", None, None, cx).disabled(!live), {
-            let this = this.clone();
-            move |close, window, cx| {
-                let location = this
-                    .read_with(cx, |view, _| view.bar.location.clone())
-                    .ok()
-                    .flatten();
-                jump_panel(location, &this, close, window, cx)
-            }
-        })
-        .child(super::client::bar_separator(cx))
-        .child(
-            Button::new("bank", "Bank")
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .text_size(TEXT_BODY)
-                .disabled(!live)
-                .on_click(cx.listener(|this, _, _, _| this.session.command(Command::OpenBank))),
+        .popover(
+            trigger("jump", "Jump", None, None, cx).disabled(!bar.live),
+            {
+                let this = this.clone();
+                move |close, window, cx| {
+                    let location = this
+                        .read_with(cx, |view, _| view.bar.location.clone())
+                        .ok()
+                        .flatten();
+                    jump_panel(location, &this, close, window, cx)
+                }
+            },
         )
-        .on_dismiss(cx.listener(RuffleView::bar_dismissed))
+        .child(super::client::bar_separator(cx))
+        .button(bar_button("bank", "Bank").disabled(!bar.live).on_click({
+            let this = this.clone();
+            move |_, _, cx| update(&this, cx, |view, _| view.session.command(Command::OpenBank))
+        }))
+        .on_dismiss(move |event, window, cx| {
+            update(&this, cx, |view, cx| view.bar_dismissed(event, window, cx))
+        })
+}
+
+fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button {
+    let (verb, name) = match &script {
+        ScriptControl::Start(name) => ("Start", name.as_ref()),
+        ScriptControl::Stop(name) => ("Stop", Some(name)),
+    };
+    let Some(name) = name else {
+        return bar_button("script", verb).disabled(true);
+    };
+    let label = format!("{verb} {name}");
+    bar_button("script", label.clone())
+        .child(verb)
+        .tooltip(label)
+        .on_click(move |_, _, cx| {
+            update(&this, cx, |view, cx| match script {
+                ScriptControl::Start(_) => view.start_loaded_script(cx),
+                ScriptControl::Stop(_) => view.stop_script(cx),
+            })
+        })
 }
 
 fn windows_menu() -> Vec<MenuItem> {
@@ -749,31 +786,6 @@ fn windows_menu() -> Vec<MenuItem> {
             window.dispatch_action(Box::new(super::OpenPackets), cx)
         }),
     ]
-}
-
-fn scripts_menu(this: &WeakEntity<RuffleView>, view: &RuffleView) -> Vec<MenuItem> {
-    let mut items: Vec<MenuItem> = view
-        .script
-        .status()
-        .map(MenuItem::header)
-        .into_iter()
-        .collect();
-    if view.script.running() {
-        items
-            .push(MenuItem::action("Stop", act(this, |view, cx| view.stop_script(cx))).keep_open());
-    } else if let Some(name) = view.script.loaded() {
-        items.push(
-            MenuItem::action(
-                format!("Start {name}"),
-                act(this, |view, cx| view.start_loaded_script(cx)),
-            )
-            .keep_open(),
-        );
-    }
-    items.push(MenuItem::action("Run script…", |window, cx| {
-        window.dispatch_action(Box::new(super::OpenScripts), cx)
-    }));
-    items
 }
 
 fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Vec<MenuItem> {
@@ -1584,6 +1596,55 @@ mod tests {
                 }),
             }
         });
+    }
+
+    struct Bars(fn() -> Vec<Bar>);
+
+    impl gpui::Render for Bars {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            v_flex()
+                .size_full()
+                .gap(px(8.0))
+                .bg(theme.surface)
+                .text_color(theme.text)
+                .font_family(mira_ui::theme::SYSTEM_SANS)
+                .text_body()
+                .children((self.0)().into_iter().enumerate().map(|(index, bar)| {
+                    div()
+                        .id(("bar", index))
+                        .child(menubar(bar, WeakEntity::new_invalid(), cx))
+                }))
+        }
+    }
+
+    #[test]
+    fn snapshot_bar() {
+        for path in mira_ui::snapshot("game-bar", gpui::size(px(900.0), px(160.0)), |_, cx| {
+            cx.new(|_| {
+                Bars(|| {
+                    let bar = |relogin_detail: Option<Detail>, attack, script| Bar {
+                        inset: px(84.0),
+                        live: true,
+                        relogin: relogin_detail.is_some(),
+                        relogin_detail,
+                        attack,
+                        script,
+                    };
+                    vec![
+                        bar(None, false, ScriptControl::Start(None)),
+                        bar(None, true, ScriptControl::Start(Some("hunt.ts".into()))),
+                        bar(
+                            Some(Detail::Working("Attempt 2 of 3".into())),
+                            true,
+                            ScriptControl::Stop("hunt.ts".into()),
+                        ),
+                    ]
+                })
+            })
+        }) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
     }
 
     #[test]
