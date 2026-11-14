@@ -8,7 +8,7 @@ use gpui::{
 use super::{
     Button, Icon,
     menu::{
-        Align, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
+        Align, MENU_MAX_HEIGHT, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
         item_over_trigger, popup, presence, state, trigger_handlers, trigger_probe,
     },
 };
@@ -214,6 +214,7 @@ impl RenderOnce for Select {
                     self.label.clone(),
                     items,
                     PopupKind::ListBox,
+                    MENU_MAX_HEIGHT,
                     from,
                     &state,
                     window,

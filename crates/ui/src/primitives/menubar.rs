@@ -9,7 +9,7 @@ use gpui::{
 use super::{
     Button, MenuItem, PopoverClose,
     button::PressHandler,
-    menu::{self, Align, ItemsBuilder, MenuState, PopupKind},
+    menu::{self, Align, ItemsBuilder, MENU_MAX_HEIGHT, MenuState, PopupKind},
     popover::{self, Content},
 };
 use crate::{
@@ -335,7 +335,17 @@ fn render_entry(
                 window,
                 cx,
                 |from, window| {
-                    menu::popup(&id, label, items, PopupKind::Menu, from, &state, window, cx)
+                    menu::popup(
+                        &id,
+                        label,
+                        items,
+                        PopupKind::Menu,
+                        MENU_MAX_HEIGHT,
+                        from,
+                        &state,
+                        window,
+                        cx,
+                    )
                 },
             )
         }

@@ -7,8 +7,8 @@ use gpui::{
 };
 
 use super::menu::{
-    ItemsBuilder, MenuItem, MenuState, PopupKind, WINDOW_MARGIN, dismiss, dismiss_probe,
-    first_navigable, open, popup, presence, state,
+    ItemsBuilder, MENU_MAX_HEIGHT, MenuItem, MenuState, PopupKind, WINDOW_MARGIN, dismiss,
+    dismiss_probe, first_navigable, open, popup, presence, state,
 };
 use crate::motion::From;
 
@@ -107,6 +107,7 @@ impl RenderOnce for ContextMenu {
                                         self.label.clone(),
                                         items,
                                         PopupKind::Menu,
+                                        MENU_MAX_HEIGHT,
                                         From::Above,
                                         &state,
                                         window,

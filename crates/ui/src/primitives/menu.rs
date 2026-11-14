@@ -23,7 +23,7 @@ use crate::{
 pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
-const MENU_MAX_HEIGHT: Pixels = px(360.0);
+pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
 const ITEM_HEIGHT: Pixels = px(24.0);
 const GAP: Pixels = px(4.0);
 const BORDER: Pixels = px(1.0);
@@ -652,14 +652,18 @@ pub(crate) fn first_navigable(items: &[MenuItem], from_end: bool) -> Option<usiz
     )
 }
 
-pub(crate) fn panel_shell(id: impl Into<ElementId>, scrolls: bool, theme: &Theme) -> Stateful<Div> {
+pub(crate) fn panel_shell(
+    id: impl Into<ElementId>,
+    max_height: Option<Pixels>,
+    theme: &Theme,
+) -> Stateful<Div> {
     div()
         .id(id)
         .occlude()
         .flex()
         .flex_col()
-        .when(scrolls, |panel| {
-            panel.max_h(MENU_MAX_HEIGHT).overflow_y_scroll()
+        .when_some(max_height, |panel, height| {
+            panel.max_h(height).overflow_y_scroll()
         })
         .p(PANEL_INSET)
         .rounded(theme.radius.panel)
@@ -893,7 +897,7 @@ fn submenu_panel(
                 .snap_to_window_with_margin(WINDOW_MARGIN)
                 .child(motion::fade(
                     ("submenu", index),
-                    panel_shell(("submenu-panel", index), true, theme)
+                    panel_shell(("submenu-panel", index), Some(MENU_MAX_HEIGHT), theme)
                         .role(Role::Menu)
                         .aria_label(label.clone())
                         .child({
@@ -977,6 +981,7 @@ pub(crate) fn popup(
     label: SharedString,
     items: Vec<MenuItem>,
     kind: PopupKind,
+    max_height: Pixels,
     from: From,
     state: &Entity<MenuState>,
     window: &mut Window,
@@ -995,7 +1000,7 @@ pub(crate) fn popup(
     let scrolls = metas.iter().all(|meta| meta.submenu.is_none());
     let panel = motion::arrive(
         (id.clone(), "popup"),
-        panel_shell((id.clone(), "panel"), scrolls, theme)
+        panel_shell((id.clone(), "panel"), scrolls.then_some(max_height), theme)
             .role(match kind {
                 PopupKind::Menu => Role::Menu,
                 PopupKind::ListBox => Role::ListBox,
@@ -1069,6 +1074,8 @@ pub struct DropdownMenu {
     trigger: Option<Button>,
     items: ItemsBuilder,
     align: Align,
+    width: Option<Pixels>,
+    max_height: Pixels,
     default_open: bool,
 }
 
@@ -1079,6 +1086,8 @@ impl DropdownMenu {
             trigger: None,
             items: Rc::new(|_, _| Vec::new()),
             align: Align::Start,
+            width: None,
+            max_height: MENU_MAX_HEIGHT,
             default_open: false,
         }
     }
@@ -1095,6 +1104,16 @@ impl DropdownMenu {
 
     pub fn align(mut self, align: Align) -> Self {
         self.align = align;
+        self
+    }
+
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub fn max_height(mut self, height: Pixels) -> Self {
+        self.max_height = height;
         self
     }
 
@@ -1120,6 +1139,7 @@ impl RenderOnce for DropdownMenu {
         if shown {
             let items = (self.items)(window, cx);
             let id = self.id.clone();
+            let (width, max_height) = (self.width, self.max_height);
             let on_outside = dismiss(&state);
             trigger = trigger.attach(
                 attach(
@@ -1129,7 +1149,21 @@ impl RenderOnce for DropdownMenu {
                     window,
                     cx,
                     |from, window| {
-                        popup(&id, label, items, PopupKind::Menu, from, &state, window, cx)
+                        let panel = popup(
+                            &id,
+                            label,
+                            items,
+                            PopupKind::Menu,
+                            max_height,
+                            from,
+                            &state,
+                            window,
+                            cx,
+                        );
+                        match width {
+                            Some(width) => div().w(width).child(panel).into_any_element(),
+                            None => panel,
+                        }
                     },
                 )
                 .into_any_element(),
