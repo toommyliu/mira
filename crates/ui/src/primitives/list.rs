@@ -421,7 +421,9 @@ impl RenderOnce for List {
             .when(matches!(self.height, Height::Fill), |root| {
                 root.flex_1().min_h_0()
             })
-            .on_scroll(contain_scroll)
+            .when(!matches!(self.height, Height::Content), |root| {
+                root.on_scroll(contain_scroll)
+            })
             .child(list)
             .child(bar)
     }
