@@ -53,9 +53,15 @@ impl Locator {
         if !name(repo) {
             return Err(unusable());
         }
-        let tree: Vec<&str> = match segments.next() {
+        let decode = |segment: &str| {
+            percent_encoding::percent_decode_str(segment)
+                .decode_utf8()
+                .map(|segment| segment.into_owned())
+                .map_err(|_| unusable())
+        };
+        let tree: Vec<String> = match segments.next() {
             None => Vec::new(),
-            Some("tree") => segments.collect(),
+            Some("tree") => segments.map(decode).collect::<Result<_, _>>()?,
             Some("blob") => {
                 return Err("That's a link to a file. Link to the package's folder.".into());
             }
@@ -64,7 +70,7 @@ impl Locator {
         let typed = branch.trim();
         let (branch, path) = match (typed.is_empty(), tree.as_slice()) {
             (true, []) => (None, String::new()),
-            (true, [branch, path @ ..]) => (Some((*branch).to_owned()), path.join("/")),
+            (true, [branch, path @ ..]) => (Some(branch.clone()), path.join("/")),
             (false, []) => (Some(typed.to_owned()), String::new()),
             (false, tree) => {
                 let tree = tree.join("/");
@@ -467,6 +473,10 @@ mod tests {
                 Some("feat/x"),
                 "script-packages/dailies"
             ))
+        );
+        assert_eq!(
+            locator("github.com/o/r/tree/main/my%20scripts/d%C3%A9j%C3%A0", ""),
+            Ok(located("o", "r", Some("main"), "my scripts/déjà"))
         );
         assert_eq!(
             locator("github.com/toommyliu/mira", "dev"),
