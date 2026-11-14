@@ -976,18 +976,18 @@ impl ScriptsWindow {
                     items.push(item);
                 }
                 SourceKind::Package { version, .. } => {
-                    let label: SharedString = match version {
-                        Some(version) => format!("{} {version}", source.name).into(),
-                        None => source.name.clone(),
-                    };
-                    packages.push(MenuItem::submenu(
-                        label,
+                    let item = MenuItem::submenu(
+                        source.name.clone(),
                         vec![
                             show(&source.root),
                             MenuItem::action("Update", |_, _| {}).disabled(true),
                             MenuItem::action("Move to Trash", |_, _| {}).disabled(true),
                         ],
-                    ));
+                    );
+                    packages.push(match version {
+                        Some(version) => item.end_slot(Badge::new(version.clone())),
+                        None => item,
+                    });
                 }
             }
         }
