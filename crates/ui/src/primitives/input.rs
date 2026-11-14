@@ -133,6 +133,7 @@ pub struct Input {
     marked: Option<Range<usize>>,
     layout: Option<ShapedLine>,
     bounds: Option<Bounds<Pixels>>,
+    scroll: Pixels,
     selecting: bool,
 }
 
@@ -163,6 +164,7 @@ impl Input {
             marked: None,
             layout: None,
             bounds: None,
+            scroll: Pixels::ZERO,
             selecting: false,
         }
     }
@@ -913,12 +915,15 @@ impl Render for Input {
     }
 }
 
+const CARET_WIDTH: Pixels = px(1.5);
+
 struct TextElement {
     field: Entity<Input>,
 }
 
 struct Prepainted {
     bounds: Bounds<Pixels>,
+    scroll: Pixels,
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
@@ -1027,13 +1032,23 @@ impl gpui::Element for TextElement {
         } else {
             line.x_for_index(field.to_display(field.cursor()))
         };
+        let visible = bounds.size.width - CARET_WIDTH;
+        let mut scroll = field.scroll;
+        if field.focus.is_focused(window) {
+            scroll = scroll.min(caret_x).max(caret_x - visible);
+        }
+        let scroll = scroll.min(line.width - visible).max(Pixels::ZERO);
+        let bounds = Bounds::new(
+            point(bounds.left() - scroll, bounds.top()),
+            size(bounds.size.width + scroll, bounds.size.height),
+        );
         let (selection, cursor) = if field.selected.is_empty() {
             (
                 None,
                 Some(fill(
                     Bounds::new(
                         point(bounds.left() + caret_x, bounds.top() + px(1.0)),
-                        size(px(1.5), bounds.size.height - px(2.0)),
+                        size(CARET_WIDTH, bounds.size.height - px(2.0)),
                     ),
                     theme.text,
                 )),
@@ -1059,6 +1074,7 @@ impl gpui::Element for TextElement {
         };
         Prepainted {
             bounds,
+            scroll,
             line: Some(line),
             cursor,
             selection,
@@ -1105,6 +1121,7 @@ impl gpui::Element for TextElement {
         self.field.update(cx, |field, _| {
             field.layout = Some(line);
             field.bounds = Some(bounds);
+            field.scroll = prepainted.scroll;
         });
     }
 }

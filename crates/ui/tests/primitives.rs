@@ -458,6 +458,24 @@ fn password_input_shows_a_bullet_per_character_and_keeps_it_off_the_clipboard(
 }
 
 #[gpui::test]
+fn input_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    let (input, cx) = focused_input(|input| input, cx);
+    let long = "a".repeat(400);
+    cx.simulate_input(&format!("{long}bcd"));
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let middle = mira_ui::theme::CONTROL_MD / 2.0;
+    cx.simulate_click(point(viewport.width - px(12.0), middle), Modifiers::none());
+    cx.simulate_input("X");
+    assert!(text(&input, cx).find('X').unwrap() >= 400);
+
+    press(cx, "home");
+    cx.simulate_click(point(px(12.0), middle), Modifiers::none());
+    cx.simulate_input("Y");
+    assert!(text(&input, cx).find('Y').unwrap() < 5);
+}
+
+#[gpui::test]
 fn input_stops_growing_at_its_max_length(cx: &mut TestAppContext) {
     use gpui::{ClipboardItem, EntityInputHandler as _};
     let (input, cx) = focused_input(|input| input.max_length(4), cx);
