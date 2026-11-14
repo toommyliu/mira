@@ -452,11 +452,6 @@ fn run(
         &tasks,
         extras::run(bridge.clone(), bridge.subscribe(extras::wants), extras),
     );
-    spawn_local(
-        &inbox,
-        &tasks,
-        game_settings::log_hidden_ads(bridge.subscribe(game_settings::wants)),
-    );
     let spammer_reports = automation.clone();
     let spammer_stops = automation.clone();
     spawn_local(
