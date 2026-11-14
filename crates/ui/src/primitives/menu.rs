@@ -23,7 +23,6 @@ use crate::{
 pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
-const MENU_MIN_WIDTH: Pixels = px(200.0);
 const MENU_MAX_HEIGHT: Pixels = px(360.0);
 const ITEM_HEIGHT: Pixels = px(24.0);
 const GAP: Pixels = px(4.0);
@@ -659,7 +658,6 @@ pub(crate) fn panel_shell(id: impl Into<ElementId>, scrolls: bool, theme: &Theme
         .occlude()
         .flex()
         .flex_col()
-        .min_w(MENU_MIN_WIDTH)
         .when(scrolls, |panel| {
             panel.max_h(MENU_MAX_HEIGHT).overflow_y_scroll()
         })
