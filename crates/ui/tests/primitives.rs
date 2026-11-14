@@ -481,6 +481,63 @@ fn toggling_a_popover_in_a_dialog_keeps_focus_off_the_dialog_search(cx: &mut Tes
     }
 }
 
+struct OptionsThenGo {
+    focus: FocusHandle,
+    pressed: Rc<Cell<bool>>,
+}
+
+impl Render for OptionsThenGo {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let pressed = self.pressed.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                mira_ui::primitives::Popover::new("options")
+                    .trigger(Button::new("options", "Options"))
+                    .content(|_, _, _| {
+                        div()
+                            .debug_selector(|| "options-panel".into())
+                            .child(mira_ui::primitives::Switch::new(
+                                "safe",
+                                "Safe start",
+                                false,
+                            ))
+                            .child(mira_ui::primitives::Switch::new(
+                                "restart", "Restart", false,
+                            ))
+                            .into_any_element()
+                    }),
+            )
+            .child(Button::new("go", "Go").on_click(move |_, _, _| pressed.set(true)))
+    }
+}
+
+#[gpui::test]
+fn escape_closes_a_popover_after_tabbing_past_its_last_control(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let pressed = Rc::new(Cell::new(false));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        OptionsThenGo {
+            focus,
+            pressed: pressed.clone(),
+        }
+    });
+    cx.run_until_parked();
+    for key in ["tab", "enter", "tab", "tab", "escape"] {
+        press(cx, key);
+    }
+    assert!(cx.debug_bounds("options-panel").is_none());
+    assert!(!pressed.get());
+}
+
 struct ServerInPopover {
     picked: Rc<Cell<Option<usize>>>,
 }

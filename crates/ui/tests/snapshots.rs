@@ -369,6 +369,36 @@ fn snapshot_long_notices() {
 }
 
 #[test]
+fn snapshot_popover_tab() {
+    scene_after_keys(
+        "popover-tab",
+        420.0,
+        260.0,
+        &["tab", "enter", "tab", "tab"],
+        |_, _| {
+            div()
+                .flex()
+                .gap(px(8.0))
+                .child(
+                    Popover::new("options")
+                        .trigger(Button::new("options", "Options").end_slot(Icon::ChevronDown))
+                        .content(|_, _, _| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.0))
+                                .child(Switch::new("safe", "Safe start", true))
+                                .child(Switch::new("restart", "Restart on failure", false))
+                                .into_any_element()
+                        }),
+                )
+                .child(Button::new("run", "Run").variant(Variant::Primary))
+                .into_any_element()
+        },
+    );
+}
+
+#[test]
 fn snapshot_sources_short_window() {
     scene_after_keys(
         "sources-short-window",
