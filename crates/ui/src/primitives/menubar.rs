@@ -24,7 +24,7 @@ enum Panel {
 
 struct Entry {
     trigger: Button,
-    panel: Panel,
+    panel: Option<Panel>,
 }
 
 enum Slot {
@@ -61,7 +61,7 @@ impl Menubar {
     ) -> Self {
         self.slots.push(Slot::Entry(Box::new(Entry {
             trigger,
-            panel: Panel::Menu(Rc::new(items)),
+            panel: Some(Panel::Menu(Rc::new(items))),
         })));
         self
     }
@@ -73,7 +73,15 @@ impl Menubar {
     ) -> Self {
         self.slots.push(Slot::Entry(Box::new(Entry {
             trigger,
-            panel: Panel::Popover(Rc::new(content)),
+            panel: Some(Panel::Popover(Rc::new(content))),
+        })));
+        self
+    }
+
+    pub fn button(mut self, button: Button) -> Self {
+        self.slots.push(Slot::Entry(Box::new(Entry {
+            trigger: button,
+            panel: None,
         })));
         self
     }
@@ -108,6 +116,7 @@ struct Bar {
     states: Vec<Entity<MenuState>>,
     triggers: Vec<FocusHandle>,
     enabled: Vec<bool>,
+    panels: Vec<bool>,
     menus: Vec<Option<ItemsBuilder>>,
 }
 
@@ -118,10 +127,10 @@ impl Bar {
             .position(|state| state.read(cx).is_open())
     }
 
-    fn adjacent(&self, from: usize, backwards: bool) -> Option<usize> {
+    fn adjacent(&self, from: usize, backwards: bool, panels_only: bool) -> Option<usize> {
         let step = if backwards { Step::Prev } else { Step::Next };
         nav::step(Some(from), self.states.len(), step, true, |index| {
-            self.enabled[index]
+            self.enabled[index] && (self.panels[index] || !panels_only)
         })
         .filter(|&index| index != from)
     }
@@ -168,7 +177,7 @@ impl Bar {
             return;
         }
         if let Some(open) = self.open_entry(cx) {
-            if let Some(next) = self.adjacent(open, backwards) {
+            if let Some(next) = self.adjacent(open, backwards, true) {
                 self.show(next, true, false, window, cx);
             }
         } else if let Some(at) = self
@@ -176,7 +185,7 @@ impl Bar {
             .iter()
             .position(|trigger| trigger.is_focused(window))
         {
-            if let Some(next) = self.adjacent(at, backwards) {
+            if let Some(next) = self.adjacent(at, backwards, false) {
                 window.focus(&self.triggers[next], cx);
             }
         } else {
@@ -198,6 +207,7 @@ impl Menubar {
             states: Vec::new(),
             triggers: Vec::new(),
             enabled: Vec::new(),
+            panels: Vec::new(),
             menus: Vec::new(),
         };
         let entries = self.slots.iter().filter_map(|slot| match slot {
@@ -214,9 +224,10 @@ impl Menubar {
             bar.triggers
                 .push(nav::focus_handle((entry_id(index), "trigger"), window, cx));
             bar.enabled.push(!entry.trigger.is_disabled());
+            bar.panels.push(entry.panel.is_some());
             bar.menus.push(match &entry.panel {
-                Panel::Menu(items) => Some(items.clone()),
-                Panel::Popover(_) => None,
+                Some(Panel::Menu(items)) => Some(items.clone()),
+                Some(Panel::Popover(_)) | None => None,
             });
         }
         let bar = Rc::new(bar);
@@ -258,6 +269,12 @@ fn render_entry(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let Some(panel) = entry.panel else {
+        return entry
+            .trigger
+            .focus(bar.triggers[index].clone())
+            .into_any_element();
+    };
     let id = entry_id(index);
     let state = bar.states[index].clone();
     let label = entry.trigger.label().clone();
@@ -307,7 +324,7 @@ fn render_entry(
         .trigger(is_open, press, keys)
         .attach(menu::trigger_probe(&state).into_any_element())
         .attach(hover.into_any_element());
-    if let Panel::Popover(_) = entry.panel {
+    if let Panel::Popover(_) = panel {
         popover::focus_first_on_open(&id, &state, window, cx);
     }
     let Some(shown) = menu::presence(&state, window, cx) else {
@@ -325,7 +342,7 @@ fn render_entry(
             }
         })
     };
-    let panel = match entry.panel {
+    let panel = match panel {
         Panel::Menu(items) => {
             let items = items(window, cx);
             menu::attach(
