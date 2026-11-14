@@ -4,47 +4,68 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _, Global,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
+    FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent,
+    MouseButton, ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, WeakEntity,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _,
+    px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone, h_flex,
+    ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
+    components::Empty,
+    h_flex,
+    nav::{Axis, Step},
     primitives::{
-        Alert, Badge, Button, Dialog, Field, Icon, Input, InputEvent, Kbd, List, ListItem,
-        MenuItem, Numeric, Tab, Tabs, ToggleGroup,
+        Align, Button, Dialog, Dot, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
+        MenuItem, Numeric, Scrollbar, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
     },
-    theme::{CONTROL_XS, TEXT_BODY},
+    theme::{CONTROL_MD, CONTROL_SM, ROW, TEXT_BODY, TEXT_SMALL},
     v_flex,
 };
 
 use super::{
-    BAR_HEIGHT,
-    account::Glance,
-    client::{CloseSession, SIDEBAR_WIDTH, bar, bar_title, drag_area, reveal_tab, tab_face},
-    profile_form::{Form, FormStep, FormTrigger, Item, Kind, Rule},
+    client::{CloseSession, SIDEBAR_WIDTH, bar_title, drag_area, reveal_tab, window_bar},
+    form,
+    profile_form::{Form, FormStep, FormTrigger, Item, Rule, Subject},
 };
 use crate::{
     combat_profiles,
     domain::{
         combat::Skill,
-        profiles::{
-            GENERIC, Holder, Library, Measure, OnCooldown, Profile, Who, check_name, same_name,
-        },
+        profiles::{GENERIC, Library, Measure, OnCooldown, Profile, check_name, same_name},
         rotation::Lane,
     },
 };
 
-actions!(mira, [OpenCombatProfiles, SaveProfile]);
+actions!(
+    mira,
+    [OpenCombatProfiles, SaveProfile, NewProfile, FindProfile]
+);
 
 const CONTEXT: &str = "CombatProfiles";
 const WIDTH: f32 = 1000.0;
 const HEIGHT: f32 = 640.0;
-const INSPECTOR_WIDTH: f32 = 300.0;
+const INSPECTOR_WIDTH: Pixels = px(340.0);
+const PADDING: Pixels = px(16.0);
+const STATUS_WIDTH: Pixels = px(420.0);
+const RENAME_INSET: Pixels = px(9.0);
+const SUBJECT_WIDTH: Pixels = px(96.0);
+const SUBJECT_MENU_WIDTH: Pixels = px(140.0);
+const UNIT_WIDTH: Pixels = px(56.0);
+const VALUE_WIDTH: Pixels = px(44.0);
+const CONJUNCTION_WIDTH: Pixels = px(24.0);
+const CONDITION_GAP: Pixels = px(8.0);
 const SLOTS: [u8; 6] = [0, 1, 2, 3, 4, 5];
+const SKILLS: [&str; 6] = [
+    "Auto attack",
+    "Skill 1",
+    "Skill 2",
+    "Skill 3",
+    "Skill 4",
+    "Consumable",
+];
 const MILLIS: Numeric = Numeric {
     min: 0,
     max: 600_000,
@@ -57,7 +78,11 @@ struct Open(WindowHandle<Editor>);
 impl Global for Open {}
 
 pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("cmd-s", SaveProfile, Some(CONTEXT))]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-s", SaveProfile, Some(CONTEXT)),
+        KeyBinding::new("cmd-n", NewProfile, Some(CONTEXT)),
+        KeyBinding::new("cmd-f", FindProfile, Some(CONTEXT)),
+    ]);
 }
 
 pub(crate) fn open(selected: Option<String>, cx: &mut App) {
@@ -136,6 +161,26 @@ impl Section {
             Section::Steps(Lane::Rotation) => "rotation",
         }
     }
+
+    fn copy(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Section::Triggers => (
+                "Triggers",
+                "Casts once when a message appears, before anything else.",
+                "No triggers.",
+            ),
+            Section::Steps(Lane::Priority) => (
+                "Priority",
+                "Checked first, top to bottom. Never waits for a cooldown.",
+                "No priority skills.",
+            ),
+            Section::Steps(Lane::Rotation) => (
+                "Rotation",
+                "Cast in turn from where the last cast left off. Starts over on a new target.",
+                "No skills in the rotation.",
+            ),
+        }
+    }
 }
 
 fn section_of(item: Item) -> (Section, usize) {
@@ -166,20 +211,44 @@ impl Draft {
         }
     }
 
-    fn glance(&self, library: &Library) -> Glance {
-        let (label, tone) = match (&self.saved, self.edited(library)) {
-            (None, _) => ("Not saved yet".into(), Tone::Accent),
-            (Some(_), true) => ("Unsaved changes".into(), Tone::Warning),
-            (Some(_), false) => (shape(&self.form).into(), Tone::Neutral),
-        };
-        Glance { label, tone }
+    fn unsaved(&self, library: &Library) -> Option<(&'static str, Tone)> {
+        match (&self.saved, self.edited(library)) {
+            (None, _) => Some(("Not saved yet", Tone::Accent)),
+            (Some(_), true) => Some(("Unsaved changes", Tone::Warning)),
+            (Some(_), false) => None,
+        }
+    }
+
+    fn taken<'a>(&'a self, library: &'a Library) -> impl Iterator<Item = &'a str> + 'a {
+        library.names().filter(move |name| {
+            self.saved
+                .as_deref()
+                .is_none_or(|saved| !same_name(saved, name))
+        })
+    }
+
+    fn name_note(&self, library: &Library) -> Option<(String, Tone)> {
+        match check_name(&self.name, self.taken(library)) {
+            Err(problem) => Some((problem, Tone::Danger)),
+            Ok(name) => self
+                .saved
+                .as_ref()
+                .filter(|saved| !same_name(saved, &name))
+                .map(|saved| {
+                    (
+                        format!(
+                            "Scripts that use \u{201c}{saved}\u{201d} won't find it after you save."
+                        ),
+                        Tone::Warning,
+                    )
+                }),
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Text {
     Includes,
-    Within,
     Pause,
     Value(usize),
     Name(usize),
@@ -187,7 +256,7 @@ enum Text {
 
 impl Text {
     fn millis(self) -> bool {
-        matches!(self, Text::Within | Text::Pause)
+        matches!(self, Text::Pause)
     }
 }
 
@@ -212,19 +281,22 @@ struct Editor {
     selected: Option<usize>,
     item: Option<Item>,
     name: Entity<Input>,
-    renaming: bool,
+    renaming: Option<String>,
+    search: Entity<Input>,
     profile_scroll: ScrollHandle,
+    lanes_scroll: ScrollHandle,
+    inspector_scroll: ScrollHandle,
     texts: Option<Texts>,
     problem: Option<String>,
     deleting: bool,
     closing: bool,
-    _subscriptions: [Subscription; 3],
+    _subscriptions: [Subscription; 4],
 }
 
 impl Editor {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let library = combat_profiles::library(cx);
-        let drafts = library
+        let drafts: Vec<Draft> = library
             .names()
             .map(|name| Draft {
                 saved: Some(name.to_owned()),
@@ -232,14 +304,32 @@ impl Editor {
                 form: Form::of(&library.get(name).expect("a listed profile exists")),
             })
             .collect();
-        let name = cx.new(|cx| Input::new("Profile name", cx).max_length(60));
+        let selected = (!drafts.is_empty()).then_some(0);
+        let first = drafts
+            .first()
+            .map(|draft| draft.name.clone())
+            .unwrap_or_default();
+        let name = cx.new(|cx| {
+            let mut input = Input::new("Profile name", cx).max_length(60);
+            input.set_text(first, cx);
+            input
+        });
         let name_focus = name.read(cx).focus_handle(cx);
+        let search = cx.new(|cx| {
+            Input::new("Search profiles", cx)
+                .placeholder("Search")
+                .search()
+        });
         let subscriptions = [
             cx.on_blur(&name_focus, window, |this, _, cx| {
-                this.renaming = false;
+                this.renaming = None;
                 cx.notify();
             }),
             cx.subscribe_in(&name, window, Self::name_event),
+            cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
+                InputEvent::Changed => cx.notify(),
+                InputEvent::Submitted => this.step_profile(0, window, cx),
+            }),
             cx.observe_global::<combat_profiles::Store>(|this, cx| {
                 this.library = combat_profiles::library(cx);
                 cx.notify();
@@ -249,11 +339,14 @@ impl Editor {
             focus: cx.focus_handle(),
             library,
             drafts,
-            selected: None,
+            selected,
             item: None,
             name,
-            renaming: false,
+            renaming: None,
+            search,
             profile_scroll: ScrollHandle::new(),
+            lanes_scroll: ScrollHandle::new(),
+            inspector_scroll: ScrollHandle::new(),
             texts: None,
             problem: None,
             deleting: false,
@@ -282,19 +375,35 @@ impl Editor {
             .collect()
     }
 
+    fn entries(&self, cx: &App) -> Vec<usize> {
+        let query = self.search.read(cx).text().trim().to_lowercase();
+        (0..self.drafts.len())
+            .filter(|index| self.drafts[*index].label().to_lowercase().contains(&query))
+            .collect()
+    }
+
     fn select(&mut self, selected: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected == selected {
-            return;
+        if self.selected != selected {
+            self.show(selected, window, cx);
         }
+    }
+
+    fn reveal(&self, cx: &App) {
+        let entries = self.entries(cx);
+        if let Some(row) = entries
+            .iter()
+            .position(|entry| Some(*entry) == self.selected)
+        {
+            reveal_tab(&self.profile_scroll, row, entries.len());
+        }
+    }
+
+    fn show(&mut self, selected: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = selected;
-        reveal_tab(
-            &self.profile_scroll,
-            selected.map_or(0, |index| index + 1),
-            self.drafts.len() + 1,
-        );
+        self.reveal(cx);
         self.item = None;
         self.problem = None;
-        self.renaming = false;
+        self.renaming = None;
         let name = self
             .draft()
             .map(|draft| draft.name.clone())
@@ -311,7 +420,30 @@ impl Editor {
                 .as_deref()
                 .is_some_and(|saved| same_name(saved, name))
         });
-        self.select(index, window, cx);
+        if index.is_some() {
+            self.select(index, window, cx);
+        }
+    }
+
+    fn select_near(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let nearest = index.min(self.drafts.len().saturating_sub(1));
+        self.show((!self.drafts.is_empty()).then_some(nearest), window, cx);
+    }
+
+    fn step_profile(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = self.entries(cx);
+        let next = match entries
+            .iter()
+            .position(|entry| Some(*entry) == self.selected)
+        {
+            Some(at) => at
+                .checked_add_signed(by)
+                .filter(|next| *next < entries.len()),
+            None => (!entries.is_empty()).then_some(0),
+        };
+        if let Some(next) = next {
+            self.select(Some(entries[next]), window, cx);
+        }
     }
 
     fn select_item(&mut self, item: Option<Item>, window: &mut Window, cx: &mut Context<Self>) {
@@ -321,11 +453,22 @@ impl Editor {
     }
 
     fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected.is_none() {
+        let Some(draft) = self.draft() else {
             return;
-        }
-        self.renaming = true;
+        };
+        self.renaming = Some(draft.name.clone());
+        self.search.update(cx, |search, cx| search.set_text("", cx));
+        self.reveal(cx);
         self.name.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(name) = self.renaming.take() else {
+            return;
+        };
+        self.name.update(cx, |input, cx| input.set_text(name, cx));
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -346,9 +489,15 @@ impl Editor {
                     draft.name = text;
                     cx.notify();
                 }
+                let invalid = self.draft().is_some_and(|draft| {
+                    draft
+                        .name_note(&self.library)
+                        .is_some_and(|(_, tone)| tone == Tone::Danger)
+                });
+                input.update(cx, |input, cx| input.set_invalid(invalid, cx));
             }
             InputEvent::Submitted => {
-                self.renaming = false;
+                self.renaming = None;
                 window.focus(&self.focus, cx);
                 cx.notify();
             }
@@ -359,18 +508,11 @@ impl Editor {
         let texts: Vec<(Text, &'static str, String)> = match self.item {
             None => Vec::new(),
             Some(Item::Trigger(index)) => match self.form().triggers.get(index) {
-                Some(trigger) => vec![
-                    (
-                        Text::Includes,
-                        "When this message appears",
-                        trigger.includes.clone(),
-                    ),
-                    (
-                        Text::Within,
-                        "Give up after, in milliseconds",
-                        trigger.within.clone(),
-                    ),
-                ],
+                Some(trigger) => vec![(
+                    Text::Includes,
+                    "When this message appears",
+                    trigger.includes.clone(),
+                )],
                 None => Vec::new(),
             },
             Some(Item::Step(lane, index)) => match self.form().lane(lane).get(index) {
@@ -402,6 +544,12 @@ impl Editor {
                     let mut input = Input::new(label, cx);
                     if field.millis() {
                         input = input.numeric(MILLIS).suffix("ms");
+                    }
+                    if let Text::Name(_) | Text::Value(_) = field {
+                        input = input.small();
+                    }
+                    if let Text::Name(_) = field {
+                        input = input.placeholder("Aura name");
                     }
                     input.set_text(text, cx);
                     input
@@ -476,7 +624,6 @@ impl Editor {
     fn set_text(&mut self, field: Text, text: String, cx: &mut Context<Self>) {
         match field {
             Text::Includes => self.edit_trigger(cx, |trigger| trigger.includes = text),
-            Text::Within => self.edit_trigger(cx, |trigger| trigger.within = text),
             Text::Pause => self.edit_step(cx, |step| step.pause = text),
             Text::Value(rule) => self.edit_rule(rule, cx, |rule| rule.value = text),
             Text::Name(rule) => self.edit_rule(rule, cx, |rule| rule.name = text),
@@ -580,9 +727,23 @@ impl Editor {
         self.select_item(Some(copy), window, cx);
     }
 
-    fn add_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit_step(cx, |step| step.when.push(Rule::default()));
+    fn add_rule(&mut self, subject: Subject, window: &mut Window, cx: &mut Context<Self>) {
+        let mut added = None;
+        self.edit_step(cx, |step| {
+            step.when.push(Rule::new(subject));
+            added = Some(step.when.len() - 1);
+        });
         self.rebuild_texts(window, cx);
+        let field = added.map(|rule| {
+            if subject.aura() {
+                Text::Name(rule)
+            } else {
+                Text::Value(rule)
+            }
+        });
+        if let Some(input) = field.and_then(|field| self.texts.as_ref()?.get(field)) {
+            input.read(cx).focus_handle(cx).focus(window, cx);
+        }
     }
 
     fn remove_rule(&mut self, rule: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -620,13 +781,39 @@ impl Editor {
         self.rename(window, cx);
     }
 
+    fn new_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_profile(Form::of(&Profile::generic()), "New profile", window, cx);
+    }
+
     fn duplicate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let form = self.form().clone();
-        let base = self.draft().map_or_else(
-            || format!("{GENERIC} copy"),
-            |draft| format!("{} copy", draft.name.trim()),
-        );
+        let Some(draft) = self.draft() else {
+            return;
+        };
+        let form = draft.form.clone();
+        let base = format!("{} copy", draft.name.trim());
         self.add_profile(form, &base, window, cx);
+    }
+
+    fn revert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.selected else {
+            return;
+        };
+        let Some(saved) = self.drafts[index].saved.clone() else {
+            self.drafts.remove(index);
+            self.select_near(index, window, cx);
+            return;
+        };
+        let Some(profile) = self.library.get(&saved) else {
+            return;
+        };
+        let draft = &mut self.drafts[index];
+        draft.form = Form::of(&profile);
+        draft.name = saved.clone();
+        self.name.update(cx, |input, cx| input.set_text(saved, cx));
+        self.problem = None;
+        self.renaming = None;
+        self.rebuild_texts(window, cx);
+        cx.notify();
     }
 
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -642,7 +829,7 @@ impl Editor {
             return;
         }
         self.drafts.remove(index);
-        self.select(None, window, cx);
+        self.select_near(index, window, cx);
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -674,17 +861,8 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Result<(), (Option<Item>, String)> {
         let draft = &self.drafts[index];
-        let others: Vec<&str> = self
-            .library
-            .names()
-            .filter(|name| {
-                draft
-                    .saved
-                    .as_deref()
-                    .is_none_or(|saved| !same_name(saved, name))
-            })
-            .collect();
-        let name = check_name(&draft.name, others).map_err(|problem| (None, problem))?;
+        let name = check_name(&draft.name, draft.taken(&self.library))
+            .map_err(|problem| (None, problem))?;
         let profile = draft
             .form
             .parse()
@@ -724,36 +902,81 @@ impl Editor {
     }
 
     fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let rows: Rc<[(SharedString, Glance)]> = std::iter::once((
-            SharedString::from(GENERIC),
-            Glance {
-                label: "Built in".into(),
-                tone: Tone::Neutral,
-            },
-        ))
-        .chain(
-            self.drafts
-                .iter()
-                .map(|draft| (draft.label(), draft.glance(&self.library))),
-        )
-        .collect();
-        let active = self.selected.map_or(0, |index| index + 1);
-        let face = theme.clone();
+        let entries: Rc<[usize]> = self.entries(cx).into();
+        let rows: Rc<[ProfileRow]> = entries
+            .iter()
+            .map(|index| {
+                let draft = &self.drafts[*index];
+                let invalid = draft
+                    .name_note(&self.library)
+                    .is_some_and(|(_, tone)| tone == Tone::Danger);
+                ProfileRow {
+                    title: draft.label(),
+                    mark: if invalid {
+                        Some(Tone::Danger)
+                    } else {
+                        draft.unsaved(&self.library).map(|(_, tone)| tone)
+                    },
+                }
+            })
+            .collect();
+        let active = entries
+            .iter()
+            .position(|entry| Some(*entry) == self.selected)
+            .unwrap_or(entries.len());
+        let rename = self.renaming.is_some().then(|| self.name.clone());
         let this = cx.weak_entity();
         let selector = this.clone();
+        let selectable = entries.clone();
         let profiles = Tabs::new("profiles", "Combat profiles", rows.len(), move |index| {
-            let (title, glance) = &rows[index];
-            let this = this.clone();
-            Tab::new(title.clone())
-                .description(glance.label.clone())
-                .child(tab_face(
-                    &face,
-                    title,
-                    Some(glance.clone()),
-                    index == active,
-                    None,
-                ))
-                .menu(move |_, _| profile_menu(&this, index.checked_sub(1)))
+            let ProfileRow { title, mark } = &rows[index];
+            let entry = entries[index];
+            let current = index == active;
+            let menu = {
+                let this = this.clone();
+                move |_: &mut Window, _: &mut App| profile_menu(&this, entry)
+            };
+            let mut tab = Tab::new(title.clone()).menu(menu.clone());
+            if let (Some(input), true) = (&rename, current) {
+                let canceller = this.clone();
+                tab = tab.child(
+                    div()
+                        .mx(-RENAME_INSET)
+                        .my(px(-4.0))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_key_down(move |event, window, cx| {
+                            if event.keystroke.key == "escape" {
+                                canceller
+                                    .update(cx, |editor, cx| editor.cancel_rename(window, cx))
+                                    .ok();
+                                cx.stop_propagation();
+                            } else if Step::from_key(event, Axis::Vertical).is_some() {
+                                cx.stop_propagation();
+                            }
+                        })
+                        .child(input.clone()),
+                );
+            }
+            if current && rename.is_none() {
+                tab = tab.end_slot(
+                    DropdownMenu::new(("profile-actions", index))
+                        .width(px(180.0))
+                        .trigger(
+                            Button::icon(
+                                ("profile-actions-trigger", index),
+                                Icon::Ellipsis,
+                                "Profile actions",
+                            )
+                            .variant(Variant::Ghost)
+                            .size(Size::XSmall)
+                            .hide_tooltip(),
+                        )
+                        .items(menu),
+                );
+            } else if !current && let Some(tone) = mark {
+                tab = tab.end_slot(Dot::new(*tone));
+            }
+            tab
         })
         .vertical()
         .selected(active)
@@ -761,7 +984,7 @@ impl Editor {
         .on_select(move |index, window, cx| {
             selector
                 .update(cx, |editor, cx| {
-                    editor.select(index.checked_sub(1), window, cx)
+                    editor.select(Some(selectable[index]), window, cx)
                 })
                 .ok();
         });
@@ -776,26 +999,34 @@ impl Editor {
             .text_size(TEXT_BODY)
             .text_color(theme.text)
             .child(
-                h_flex()
+                div()
                     .flex_none()
-                    .gap(px(2.0))
-                    .h(BAR_HEIGHT)
-                    .pr(px(8.0))
-                    .child(drag_area().flex_1())
-                    .child(
-                        Button::icon("new-profile", Icon::Plus, "New profile")
-                            .size(Size::Small)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.add_profile(
-                                    Form::of(&Profile::generic()),
-                                    "New profile",
-                                    window,
-                                    cx,
-                                )
-                            })),
-                    ),
+                    .px(px(8.0))
+                    .pt(px(8.0))
+                    .pb(px(6.0))
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        let by = match event.keystroke.key.as_str() {
+                            "up" => -1,
+                            "down" => 1,
+                            _ => return,
+                        };
+                        this.step_profile(by, window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(self.search.clone()),
             )
-            .child(v_flex().min_h_0().child(profiles))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .child(v_flex().min_h_0().child(profiles))
+                    .child(Scrollbar::new(
+                        "profiles-scrollbar",
+                        self.profile_scroll.clone(),
+                    )),
+            )
             .child(drag_area().flex_1())
             .when(issues > 0, |sidebar| {
                 sidebar.child(
@@ -813,150 +1044,25 @@ impl Editor {
                         }),
                 )
             })
-    }
-
-    fn header(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let title = |text: SharedString| div().min_w_0().truncate().text_title().child(text);
-        let Some(draft) = self.draft() else {
-            return v_flex()
-                .gap(px(10.0))
-                .child(
-                    h_flex()
-                        .gap(px(8.0))
-                        .child(title(GENERIC.into()))
-                        .child(Badge::new("Built in")),
-                )
-                .child(
-                    Alert::new(
-                        "generic-note",
-                        Tone::Neutral,
-                        "Built in profiles can't be changed.",
-                    )
-                    .body("Duplicate it to make your own.")
-                    .action(
-                        Button::new("duplicate-generic", "Duplicate")
-                            .size(Size::Small)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.duplicate(window, cx)),
-                            ),
-                    ),
-                )
-                .into_any_element();
-        };
-        let others: Vec<&str> = self
-            .library
-            .names()
-            .filter(|name| {
-                draft
-                    .saved
-                    .as_deref()
-                    .is_none_or(|saved| !same_name(saved, name))
-            })
-            .collect();
-        let note = match check_name(&draft.name, others) {
-            Err(problem) => Some((problem, theme.danger_text)),
-            Ok(name) => draft
-                .saved
-                .as_ref()
-                .filter(|saved| !same_name(saved, &name))
-                .map(|saved| {
-                    (
-                        format!(
-                            "Scripts that use \u{201c}{saved}\u{201d} won't find it after you save."
-                        ),
-                        theme.warning_text,
-                    )
-                }),
-        };
-        let on_cooldown = usize::from(self.form().on_cooldown == OnCooldown::Wait);
-        let this = cx.weak_entity();
-        let action = |id: &'static str, label: &'static str| {
-            Button::new(id, label)
-                .size(Size::Small)
-                .variant(Variant::Ghost)
-        };
-        v_flex()
-            .gap(px(10.0))
             .child(
-                h_flex()
-                    .gap(px(4.0))
-                    .h(px(30.0))
-                    .child(div().flex_1().min_w_0().map(|name| {
-                        if self.renaming {
-                            name.child(self.name.clone())
-                        } else {
-                            name.child(title(draft.label()))
-                        }
-                    }))
-                    .child(
-                        action("rename-profile", "Rename")
-                            .on_click(cx.listener(|this, _, window, cx| this.rename(window, cx))),
-                    )
-                    .child(
-                        action("duplicate-profile", "Duplicate").on_click(
-                            cx.listener(|this, _, window, cx| this.duplicate(window, cx)),
-                        ),
-                    )
-                    .child(
-                        action("delete-profile-button", "Delete…").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.deleting = true;
-                                cx.notify();
-                            },
-                        )),
-                    ),
-            )
-            .children(note.map(|(note, color)| div().text_small().text_color(color).child(note)))
-            .child(
-                h_flex()
-                    .gap(px(10.0))
-                    .child(
-                        div()
-                            .text_color(theme.text_secondary)
-                            .child("When a skill is cooling down"),
-                    )
-                    .child(
-                        ToggleGroup::new(
-                            "profile-on-cooldown",
-                            "When a skill is cooling down",
-                            ["Skip it", "Wait for it"],
-                            on_cooldown,
+                div().flex_none().p(px(8.0)).child(
+                    Button::new("new-profile", "New profile")
+                        .variant(Variant::Ghost)
+                        .w_full()
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .justify_between()
+                                .child("New profile")
+                                .child(div().text_color(theme.text_tertiary).child("⌘N")),
                         )
-                        .on_select(move |choice, _, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                if let Some(form) = this.form_mut() {
-                                    form.on_cooldown = if choice == 0 {
-                                        OnCooldown::Skip
-                                    } else {
-                                        OnCooldown::Wait
-                                    };
-                                    this.edited_now(cx);
-                                }
-                            });
-                        }),
-                    ),
+                        .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
+                ),
             )
-            .into_any_element()
     }
 
     fn section(&self, theme: &Theme, section: Section, cx: &mut Context<Self>) -> AnyElement {
-        let (title, caption, empty) = match section {
-            Section::Triggers => (
-                "Triggers",
-                "When a message appears, cast its skill once as soon as it's ready. Answered before anything else.",
-                "No triggers.",
-            ),
-            Section::Steps(Lane::Priority) => (
-                "Priority",
-                "Checked first on every attempt, top to bottom. Never waits for a cooldown.",
-                "No priority skills.",
-            ),
-            Section::Steps(Lane::Rotation) => (
-                "Rotation",
-                "Cast in turn from where the last cast left off. Starts over on a new target.",
-                "No skills in the rotation.",
-            ),
-        };
+        let (title, subtitle, empty) = section.copy();
         let editable = self.draft().is_some();
         let form = self.form();
         let cards: Rc<[Card]> = match section {
@@ -966,7 +1072,7 @@ impl Editor {
                 .map(|trigger| Card {
                     slot: u8::from(trigger.skill),
                     summary: trigger.summary().into(),
-                    detail: Some(format!("within {} ms", trigger.within.trim()).into()),
+                    detail: None,
                 })
                 .collect(),
             Section::Steps(lane) => form
@@ -996,16 +1102,7 @@ impl Editor {
             .filter(|(at, _)| *at == section)
             .map(|(_, index)| index);
         let control = if cards.is_empty() {
-            div()
-                .px(px(12.0))
-                .py(px(8.0))
-                .rounded(theme.radius.panel)
-                .border_1()
-                .border_color(theme.hairline)
-                .text_small()
-                .text_color(theme.text_tertiary)
-                .child(empty)
-                .into_any_element()
+            empty_box(theme, empty).into_any_element()
         } else {
             let count = cards.len();
             let list = List::new(section.id(), title, count, move |index| {
@@ -1039,71 +1136,145 @@ impl Editor {
                 list.into_any_element()
             }
         };
-        Field::new(title, control)
-            .description(caption)
-            .when(editable, |field| {
-                field.end_slot(self.add_strip(theme, section, cx))
+        let add = editable.then(|| self.add_menu(section, cx));
+        v_flex()
+            .gap(px(8.0))
+            .child(form::section(
+                title,
+                subtitle,
+                None,
+                div().children(add),
+                theme,
+            ))
+            .when(section == Section::Steps(Lane::Rotation), |lane| {
+                lane.child(self.on_cooldown_row(cx))
             })
+            .child(control)
             .into_any_element()
     }
 
-    fn add_strip(
-        &self,
-        theme: &Theme,
-        section: Section,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let label = match section {
-            Section::Triggers => "Add a trigger that casts",
-            Section::Steps(_) => "Add skill",
-        };
-        h_flex()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .mr(px(2.0))
-                    .text_color(theme.text_tertiary)
-                    .child("Add"),
-            )
-            .children(SLOTS.map(|slot| {
+    fn add_menu(&self, section: Section, cx: &mut Context<Self>) -> DropdownMenu {
+        let this = cx.weak_entity();
+        DropdownMenu::new(SharedString::from(format!("add-{}", section.id())))
+            .align(Align::End)
+            .width(px(200.0))
+            .trigger(
                 Button::new(
-                    SharedString::from(format!("add-{}-{slot}", section.id())),
-                    format!("{label} {slot}"),
+                    SharedString::from(format!("add-{}-trigger", section.id())),
+                    "Add",
                 )
-                .size(Size::XSmall)
-                .w(CONTROL_XS)
-                .px_0()
-                .child(slot.to_string())
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.add(section, slot, window, cx)),
-                )
+                .size(Size::Small)
+                .end_slot(Icon::ChevronDown),
+            )
+            .items(move |_, _| {
+                SLOTS
+                    .into_iter()
+                    .zip(SKILLS)
+                    .map(|(slot, label)| {
+                        let this = this.clone();
+                        MenuItem::action(label, move |window, cx| {
+                            this.update(cx, |editor, cx| editor.add(section, slot, window, cx))
+                                .ok();
+                        })
+                        .start_slot(Kbd::new(slot.to_string()))
+                        .key(slot.to_string())
+                    })
+                    .collect()
+            })
+    }
+
+    fn on_cooldown_row(&self, cx: &mut Context<Self>) -> Div {
+        let this = cx.weak_entity();
+        form::row(
+            "On cooldown",
+            true,
+            ToggleGroup::new(
+                "profile-on-cooldown",
+                "When a skill is cooling down",
+                ["Skip it", "Wait for it"],
+                usize::from(self.form().on_cooldown == OnCooldown::Wait),
+            )
+            .on_select(move |choice, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(form) = this.form_mut() {
+                        form.on_cooldown = if choice == 0 {
+                            OnCooldown::Skip
+                        } else {
+                            OnCooldown::Wait
+                        };
+                        this.edited_now(cx);
+                    }
+                });
+            }),
+        )
+    }
+
+    fn save_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let draft = self.draft();
+        let unsaved = draft.and_then(|draft| draft.unsaved(&self.library));
+        let note = draft.and_then(|draft| draft.name_note(&self.library));
+        let status = match (&self.problem, note, unsaved) {
+            (Some(problem), _, _) => Some((SharedString::from(problem.clone()), theme.danger_text)),
+            (None, Some((note, tone)), _) => Some((note.into(), theme.tone(tone).2)),
+            (None, None, Some((text, tone))) => Some((text.into(), theme.tone(tone).2)),
+            (None, None, None) => None,
+        };
+        let revert = unsaved.is_some().then(|| {
+            let label = if draft.is_some_and(|draft| draft.saved.is_some()) {
+                "Revert"
+            } else {
+                "Discard"
+            };
+            Button::new("revert-profile", label)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .on_click(cx.listener(|this, _, window, cx| this.revert(window, cx)))
+        });
+        h_flex()
+            .flex_none()
+            .gap(px(6.0))
+            .children(status.map(|(text, color)| {
+                div()
+                    .id("profile-status")
+                    .role(Role::Status)
+                    .aria_label(text.clone())
+                    .max_w(STATUS_WIDTH)
+                    .mr(px(6.0))
+                    .truncate()
+                    .text_small()
+                    .text_color(color)
+                    .child(text)
             }))
+            .children(revert)
+            .child(
+                Button::new("save-profile", "Save")
+                    .variant(Variant::Primary)
+                    .size(Size::Small)
+                    .end_slot(key_hint("⌘S"))
+                    .disabled(unsaved.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
+            )
     }
 
     fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let pane = v_flex()
             .id("inspector")
-            .flex_none()
-            .w(px(INSPECTOR_WIDTH))
-            .h_full()
-            .gap(px(16.0))
-            .p(px(16.0))
+            .size_full()
+            .gap(px(14.0))
+            .p(PADDING)
+            .pt(px(12.0))
             .overflow_y_scroll()
-            .border_l_1()
-            .border_color(theme.hairline);
-        let note = |text: &'static str| {
-            div()
-                .text_small()
-                .text_color(theme.text_tertiary)
-                .child(text)
-        };
+            .track_scroll(&self.inspector_scroll);
         if self.draft().is_none() {
-            return pane.child(note("Generic casts skills 1 to 4 in turn."));
+            return pane;
         }
         let (Some(item), Some(texts)) = (self.item, &self.texts) else {
-            return pane.child(note("Select a trigger or a skill to choose when it casts."));
+            return pane.child(form::note(
+                "Select a trigger or a step to edit it.",
+                true,
+                theme,
+            ));
         };
-        let this = cx.weak_entity();
         let skill = match item {
             Item::Trigger(index) => self.form().triggers.get(index).map(|trigger| trigger.skill),
             Item::Step(lane, index) => self.form().lane(lane).get(index).map(|step| step.skill),
@@ -1112,54 +1283,72 @@ impl Editor {
             return pane;
         };
         let slot = u8::from(skill);
+        let this = cx.weak_entity();
         let skill_this = this.clone();
-        let mut pane = pane.child(
-            Field::new(
-                match item {
-                    Item::Trigger(_) => "Cast",
-                    Item::Step(..) => "Skill",
-                },
-                ToggleGroup::new(
-                    "item-skill",
-                    "Skill",
-                    SLOTS
-                        .iter()
-                        .map(|slot| SharedString::from(slot.to_string())),
-                    usize::from(slot),
-                )
-                .full_width()
-                .on_select(move |index, _, cx| {
-                    let _ = skill_this.update(cx, |this, cx| {
-                        this.set_skill(u8::try_from(index).unwrap_or(0), cx)
-                    });
-                }),
-            )
-            .when_some(
-                match slot {
-                    0 => Some("Slot 0 is the auto attack."),
-                    5 => Some("Slot 5 uses the equipped potion or scroll."),
-                    _ => None,
-                },
-                Field::description,
-            ),
+        let skills = h_flex().gap(px(8.0)).children(SLOTS.map(|key| {
+            let on = key == slot;
+            let this = skill_this.clone();
+            Button::new(("item-skill", usize::from(key)), key.to_string())
+                .variant(if on {
+                    Variant::Primary
+                } else {
+                    Variant::Secondary
+                })
+                .pressed(on)
+                .w(CONTROL_MD)
+                .px_0()
+                .on_click(move |_, _, cx| {
+                    let _ = this.update(cx, |this, cx| this.set_skill(key, cx));
+                })
+        }));
+        let pane = pane.child(
+            h_flex()
+                .h(ROW)
+                .justify_between()
+                .gap(px(8.0))
+                .child(heading(item_title(item)))
+                .child(
+                    h_flex()
+                        .gap(px(2.0))
+                        .child(
+                            Button::new("duplicate-item", "Duplicate")
+                                .variant(Variant::Ghost)
+                                .size(Size::Small)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.duplicate_item(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("remove-item", "Remove")
+                                .variant(Variant::Ghost)
+                                .size(Size::Small)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.remove_item(window, cx)),
+                                ),
+                        ),
+                ),
         );
         match item {
-            Item::Trigger(_) => {
-                pane = pane
-                    .child(
-                        Field::new("When this message appears", div().children(texts.get(Text::Includes)))
-                            .description("Matched anywhere in combat and server messages, ignoring case."),
-                    )
-                    .child(
-                        Field::new("Give up after", millis_input(texts, Text::Within))
-                            .inline()
-                            .description("Casts once, as soon as the skill is ready. Repeats heard before then share that cast."),
-                    );
-            }
+            Item::Trigger(_) => pane
+                .child(form::row(
+                    "Message",
+                    true,
+                    div().children(texts.get(Text::Includes)),
+                ))
+                .child(row_note(
+                    theme,
+                    "Matched anywhere in combat and server messages, ignoring case.",
+                ))
+                .child(form::row("Cast", true, skills))
+                .child(row_note(
+                    theme,
+                    "Casts once, as soon as the skill is ready.",
+                )),
             Item::Step(lane, index) => {
                 let Some(step) = self.form().lane(lane).get(index) else {
                     return pane;
                 };
+                let mut pane = pane.child(form::row("Skill", true, skills));
                 if lane == Lane::Rotation {
                     let chosen = match step.on_cooldown {
                         None => 0,
@@ -1171,9 +1360,10 @@ impl Editor {
                         OnCooldown::Wait => "Default waits for it.",
                     };
                     let cooldown_this = this.clone();
-                    pane = pane.child(
-                        Field::new(
-                            "When it's cooling down",
+                    pane = pane
+                        .child(form::row(
+                            "On cooldown",
+                            true,
                             ToggleGroup::new(
                                 "step-on-cooldown",
                                 "When it's cooling down",
@@ -1192,109 +1382,164 @@ impl Editor {
                                     })
                                 });
                             }),
-                        )
-                        .description(profile_default),
-                    );
+                        ))
+                        .child(row_note(theme, profile_default));
                 }
-                let mut conditions = v_flex().gap(px(8.0));
-                for (rule, condition) in step.when.iter().enumerate() {
-                    conditions = conditions
-                        .child(condition_editor(theme, rule, condition, texts, &this, cx));
-                }
-                pane = pane
-                    .child(
-                        Field::new("Cast when all of these hold", conditions)
-                            .when(step.when.is_empty(), |field| {
-                                field.description("None, so it casts whenever it's ready.")
-                            })
-                            .end_slot(
-                                Button::icon("add-rule", Icon::Plus, "Add condition")
-                                    .size(Size::XSmall)
-                                    .hide_tooltip()
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            this.add_rule(window, cx)
+                let conditions = step
+                    .when
+                    .iter()
+                    .enumerate()
+                    .map(|(rule, condition)| condition_editor(rule, condition, texts, &this, cx))
+                    .collect::<Vec<_>>();
+                let hint = step
+                    .when
+                    .iter()
+                    .any(|rule| rule.subject.aura())
+                    .then_some("A missing aura counts as 0.");
+                let adder = this.clone();
+                pane.child(form::row(
+                    "Pause after",
+                    true,
+                    millis_input(texts, Text::Pause),
+                ))
+                .child(
+                    v_flex()
+                        .gap(px(6.0))
+                        .child(
+                            h_flex()
+                                .h(ROW)
+                                .justify_between()
+                                .child(heading("Conditions".into()))
+                                .child(
+                                    DropdownMenu::new("add-rule")
+                                        .align(Align::End)
+                                        .width(SUBJECT_MENU_WIDTH)
+                                        .trigger(
+                                            Button::new("add-rule-trigger", "Add")
+                                                .size(Size::Small)
+                                                .end_slot(Icon::ChevronDown),
+                                        )
+                                        .items(move |_, _| {
+                                            Subject::ALL
+                                                .into_iter()
+                                                .map(|subject| {
+                                                    let adder = adder.clone();
+                                                    MenuItem::action(
+                                                        subject.label(),
+                                                        move |window, cx| {
+                                                            adder
+                                                                .update(cx, |this, cx| {
+                                                                    this.add_rule(
+                                                                        subject, window, cx,
+                                                                    )
+                                                                })
+                                                                .ok();
+                                                        },
+                                                    )
+                                                })
+                                                .collect()
                                         }),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        Field::new("Pause after casting", millis_input(texts, Text::Pause))
-                            .inline(),
-                    );
+                                ),
+                        )
+                        .child(if conditions.is_empty() {
+                            empty_box(theme, "None, so it casts as soon as it's ready.")
+                        } else {
+                            v_flex().gap(px(12.0)).pt(px(2.0)).children(
+                                conditions.into_iter().enumerate().map(|(index, row)| {
+                                    h_flex()
+                                        .items_start()
+                                        .gap(CONDITION_GAP)
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .flex()
+                                                .items_center()
+                                                .h(CONTROL_SM)
+                                                .w(CONJUNCTION_WIDTH)
+                                                .text_small()
+                                                .text_color(theme.text_tertiary)
+                                                .child(if index == 0 { "If" } else { "and" }),
+                                        )
+                                        .child(div().flex_1().min_w_0().child(row))
+                                }),
+                            )
+                        })
+                        .children(hint.map(|hint| form::note(hint, true, theme).mt(px(4.0)))),
+                )
             }
         }
-        pane.child(
-            h_flex()
-                .gap(px(8.0))
-                .child(
-                    Button::new("duplicate-item", "Duplicate")
-                        .size(Size::Small)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.duplicate_item(window, cx)),
-                        ),
-                )
-                .child(
-                    Button::new("remove-item", "Remove")
-                        .size(Size::Small)
-                        .variant(Variant::Danger)
-                        .on_click(cx.listener(|this, _, window, cx| this.remove_item(window, cx))),
-                ),
-        )
     }
 }
 
-fn profile_menu(this: &WeakEntity<Editor>, entry: Option<usize>) -> Vec<MenuItem> {
+fn profile_menu(this: &WeakEntity<Editor>, index: usize) -> Vec<MenuItem> {
     let act = |label: &'static str, run: fn(&mut Editor, &mut Window, &mut Context<Editor>)| {
         let this = this.clone();
         MenuItem::action(label, move |window, cx| {
             this.update(cx, |editor, cx| {
-                editor.select(entry, window, cx);
+                editor.select(Some(index), window, cx);
                 run(editor, window, cx);
             })
             .ok();
         })
     };
-    match entry {
-        None => vec![act("Duplicate", Editor::duplicate)],
-        Some(_) => vec![
-            act("Rename", Editor::rename),
-            act("Duplicate", Editor::duplicate),
-            MenuItem::separator(),
-            act("Delete…", |editor, _, cx| {
-                editor.deleting = true;
-                cx.notify();
-            })
-            .danger(),
-        ],
-    }
+    vec![
+        act("Rename", Editor::rename),
+        act("Duplicate", Editor::duplicate),
+        MenuItem::separator(),
+        act("Delete…", |editor, _, cx| {
+            editor.deleting = true;
+            cx.notify();
+        })
+        .danger(),
+    ]
 }
 
-fn shape(form: &Form) -> String {
-    let parts: Vec<String> = [
-        (form.triggers.len(), "trigger", "triggers"),
-        (form.priority.len(), "priority", "priority"),
-        (form.steps.len(), "in turn", "in turn"),
-    ]
-    .into_iter()
-    .filter(|(count, _, _)| *count > 0)
-    .map(|(count, one, many)| {
-        if count == 1 {
-            format!("1 {one}")
-        } else {
-            format!("{count} {many}")
-        }
-    })
-    .collect();
-    if parts.is_empty() {
-        "Empty".into()
-    } else {
-        parts.join(" · ")
+fn empty_box(theme: &Theme, text: &'static str) -> Div {
+    div()
+        .px(px(12.0))
+        .py(px(8.0))
+        .rounded(theme.radius.panel)
+        .border_1()
+        .border_color(theme.hairline)
+        .text_small()
+        .text_color(theme.text_tertiary)
+        .child(text)
+}
+
+fn item_title(item: Item) -> SharedString {
+    match item {
+        Item::Trigger(index) => format!("Trigger {}", index + 1),
+        Item::Step(Lane::Priority, index) => format!("Priority step {}", index + 1),
+        Item::Step(Lane::Rotation, index) => format!("Rotation step {}", index + 1),
     }
+    .into()
+}
+
+fn heading(text: SharedString) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .font_weight(FontWeight::MEDIUM)
+        .child(text)
+}
+
+fn row_note(theme: &Theme, text: &'static str) -> Div {
+    form::note(text, true, theme)
+        .ml(form::LABEL_WIDTH + px(12.0))
+        .mt(px(-6.0))
+}
+
+fn key_hint(keys: &'static str) -> impl IntoElement {
+    div().text_size(TEXT_SMALL).opacity(0.55).child(keys)
 }
 
 fn millis_input(texts: &Texts, text: Text) -> impl IntoElement + use<> {
     div().w(px(96.0)).children(texts.get(text))
+}
+
+struct ProfileRow {
+    title: SharedString,
+    mark: Option<Tone>,
 }
 
 struct Card {
@@ -1304,167 +1549,193 @@ struct Card {
 }
 
 fn condition_editor(
-    theme: &Theme,
     rule: usize,
     condition: &Rule,
     texts: &Texts,
     this: &WeakEntity<Editor>,
     cx: &mut Context<Editor>,
-) -> impl IntoElement {
-    let toggle = |id: &'static str,
-                  label: &'static str,
-                  options: &[&'static str],
-                  chosen: usize,
-                  apply: fn(&mut Rule, usize)| {
+) -> impl IntoElement + use<> {
+    let theme = cx.theme().clone();
+    let edit = |change: fn(&mut Rule)| {
         let this = this.clone();
-        ToggleGroup::new(
-            (id, rule),
-            label,
-            options.iter().map(|option| SharedString::from(*option)),
-            chosen,
-        )
-        .full_width()
-        .on_select(move |index, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                this.edit_rule(rule, cx, |rule| apply(rule, index))
-            });
-        })
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| this.edit_rule(rule, cx, change));
+        }
     };
-    let kind = toggle(
-        "rule-kind",
-        "Condition",
-        &Kind::ALL.map(Kind::label),
-        Kind::ALL
-            .iter()
-            .position(|kind| *kind == condition.kind)
-            .unwrap_or(0),
-        |rule, index| rule.kind = Kind::ALL[index],
-    );
-    let comparison = {
+    let subject = {
         let this = this.clone();
-        ToggleGroup::new(
-            ("rule-bound", rule),
-            "Comparison",
-            ["≤", "≥"],
-            usize::from(!condition.at_most),
-        )
-        .on_select(move |index, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                this.edit_rule(rule, cx, |rule| rule.at_most = index == 0)
-            });
-        })
-    };
-    let bound = |measure: Option<ToggleGroup>| {
-        h_flex()
-            .gap(px(6.0))
-            .children(measure)
-            .child(comparison)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .children(texts.get(Text::Value(rule))),
-            )
-    };
-    let measure = {
-        let this = this.clone();
-        ToggleGroup::new(
-            ("rule-measure", rule),
-            "Measure",
-            ["Stacks", "Value"],
-            usize::from(condition.measure == Measure::Value),
-        )
-        .on_select(move |index, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                this.edit_rule(rule, cx, |rule| {
-                    rule.measure = if index == 0 {
-                        Measure::Stacks
-                    } else {
-                        Measure::Value
-                    }
-                })
-            });
-        })
-    };
-    let (body, hint) = match condition.kind {
-        Kind::Hp => (
-            v_flex()
-                .gap(px(6.0))
-                .child(toggle(
-                    "rule-who",
-                    "Whose HP",
-                    &["Mine", "Any ally's"],
-                    usize::from(condition.who == Who::AnyAlly),
-                    |rule, index| rule.who = if index == 0 { Who::Me } else { Who::AnyAlly },
-                ))
-                .child(bound(None)),
-            "Points, or a percent like 60%.",
-        ),
-        Kind::Mp => (
-            v_flex().gap(px(6.0)).child(bound(None)),
-            "Points, or a percent like 60%.",
-        ),
-        Kind::Aura => (
-            v_flex()
-                .gap(px(6.0))
-                .children(texts.get(Text::Name(rule)))
-                .child(toggle(
-                    "rule-holder",
-                    "Aura on",
-                    &["On me", "On target"],
-                    usize::from(condition.holder == Holder::Target),
-                    |rule, index| {
-                        rule.holder = if index == 0 {
-                            Holder::Me
-                        } else {
-                            Holder::Target
-                        }
-                    },
-                ))
-                .child(bound(Some(measure))),
-            "A missing aura counts as 0.",
-        ),
-    };
-    v_flex()
-        .p(px(8.0))
-        .rounded(theme.radius.control)
-        .bg(theme.well)
-        .border_1()
-        .border_color(theme.hairline)
-        .child(
-            Field::new(
-                condition.summary(),
-                v_flex().gap(px(6.0)).child(kind).child(body),
-            )
-            .description(hint)
-            .end_slot(
-                Button::icon(("remove-rule", rule), Icon::X, "Remove condition")
-                    .size(Size::XSmall)
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.remove_rule(rule, window, cx)),
+        DropdownMenu::new(("rule-subject", rule))
+            .width(SUBJECT_MENU_WIDTH)
+            .trigger(
+                Button::new(("rule-subject-trigger", rule), condition.subject.label())
+                    .size(Size::Small)
+                    .w(SUBJECT_WIDTH)
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .justify_between()
+                            .child(condition.subject.label())
+                            .child(mira_ui::primitives::icon(
+                                Icon::ChevronDown,
+                                theme.text_tertiary,
+                            )),
                     ),
-            ),
+            )
+            .items({
+                let chosen = condition.subject;
+                move |_, _| {
+                    Subject::ALL
+                        .into_iter()
+                        .map(|subject| {
+                            let this = this.clone();
+                            MenuItem::radio(subject.label(), subject == chosen, move |_, cx| {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.edit_rule(rule, cx, |rule| rule.subject = subject)
+                                });
+                            })
+                        })
+                        .collect()
+                }
+            })
+    };
+    let aura = condition.subject.aura();
+    let bound = Button::new(
+        ("rule-bound", rule),
+        if condition.at_most {
+            "At most"
+        } else {
+            "At least"
+        },
+    )
+    .size(Size::Small)
+    .w(CONTROL_SM)
+    .px_0()
+    .child(if condition.at_most { "≤" } else { "≥" })
+    .on_click(edit(|rule| rule.at_most = !rule.at_most));
+    let unit = Button::new(
+        ("rule-unit", rule),
+        match (aura, condition.measure, condition.percent) {
+            (true, Measure::Stacks, _) => "stacks",
+            (true, Measure::Value, _) => "value",
+            (false, _, true) => "%",
+            (false, _, false) => "pts",
+        },
+    )
+    .size(Size::Small)
+    .w(UNIT_WIDTH)
+    .on_click(edit(if aura {
+        |rule: &mut Rule| {
+            rule.measure = match rule.measure {
+                Measure::Stacks => Measure::Value,
+                Measure::Value => Measure::Stacks,
+            }
+        }
+    } else {
+        |rule: &mut Rule| rule.percent = !rule.percent
+    }));
+    let remove = Button::icon(("remove-rule", rule), Icon::X, "Remove condition")
+        .variant(Variant::Ghost)
+        .size(Size::Small)
+        .hide_tooltip()
+        .on_click(cx.listener(move |this, _, window, cx| this.remove_rule(rule, window, cx)));
+    let measure = h_flex()
+        .gap(CONDITION_GAP)
+        .child(bound)
+        .child(div().w(VALUE_WIDTH).children(texts.get(Text::Value(rule))))
+        .child(unit);
+    if !aura {
+        return h_flex()
+            .gap(CONDITION_GAP)
+            .child(subject)
+            .child(measure)
+            .child(div().flex_1())
+            .child(remove)
+            .into_any_element();
+    }
+    v_flex()
+        .gap(CONDITION_GAP)
+        .child(
+            h_flex()
+                .gap(CONDITION_GAP)
+                .child(subject)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .children(texts.get(Text::Name(rule))),
+                )
+                .child(remove),
         )
+        .child(measure)
+        .into_any_element()
 }
 
 impl Render for Editor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let editable = self.draft().is_some();
-        let edited = self
-            .draft()
-            .is_some_and(|draft| draft.edited(&self.library));
         let unsaved: Vec<SharedString> = self.edited().iter().map(|draft| draft.label()).collect();
         let deleting_name = self.draft().map(Draft::label).unwrap_or_default();
         let sidebar = self.sidebar(&theme, cx);
-        let header = self.header(&theme, cx);
-        let sections: Vec<AnyElement> = Section::ALL
-            .into_iter()
-            .map(|section| self.section(&theme, section, cx))
-            .collect();
-        let inspector = self.inspector(&theme, cx);
+        let sections: Vec<AnyElement> = if self.draft().is_some() {
+            Section::ALL
+                .into_iter()
+                .map(|section| self.section(&theme, section, cx))
+                .collect()
+        } else {
+            vec![
+                Empty::new(
+                    "No combat profiles",
+                    "Make one to choose the skills auto attack, Follower and scripts cast.",
+                )
+                .action(
+                    Button::new("first-profile", "New profile")
+                        .end_slot(key_hint("⌘N"))
+                        .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
+                )
+                .into_any_element(),
+            ]
+        };
+        let save = self.save_controls(&theme, cx);
+        let lanes = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(
+                div()
+                    .id("profile")
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .gap(px(20.0))
+                    .p(PADDING)
+                    .overflow_y_scroll()
+                    .track_scroll(&self.lanes_scroll)
+                    .children(sections),
+            )
+            .child(Scrollbar::new(
+                "profile-scrollbar",
+                self.lanes_scroll.clone(),
+            ));
+        let inspector_pane = div()
+            .relative()
+            .flex_none()
+            .w(INSPECTOR_WIDTH)
+            .h_full()
+            .border_l_1()
+            .border_color(theme.hairline)
+            .child(self.inspector(&theme, cx))
+            .child(Scrollbar::new(
+                "inspector-scrollbar",
+                self.inspector_scroll.clone(),
+            ));
+        let bar = window_bar(window, cx)
+            .child(bar_title("Combat Profiles", cx))
+            .child(drag_area().flex_1())
+            .child(save);
         div()
             .flex()
+            .flex_col()
             .size_full()
             .bg(theme.base)
             .text_size(TEXT_BODY)
@@ -1473,62 +1744,25 @@ impl Render for Editor {
             .id("combat-profiles")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &SaveProfile, window, cx| this.save(window, cx)))
+            .on_action(cx.listener(|this, _: &NewProfile, window, cx| this.new_profile(window, cx)))
+            .on_action(cx.listener(|this, _: &FindProfile, window, cx| {
+                this.search.read(cx).focus_handle(cx).focus(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &CloseSession, window, cx| {
                 if this.may_close(cx) {
                     window.remove_window();
                 }
             }))
             .child(mira_ui::nav::pointer_probe())
-            .child(sidebar)
+            .child(bar)
             .child(
                 div()
                     .flex()
-                    .flex_col()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(
-                        bar(cx)
-                            .pl(px(8.0))
-                            .child(bar_title("Combat Profiles", cx))
-                            .child(drag_area().flex_1())
-                            .child(
-                                Button::new("save-profile", "Save")
-                                    .variant(Variant::Primary)
-                                    .size(Size::Small)
-                                    .tooltip("Save (⌘S)")
-                                    .when(!editable || !edited, Button::hide_tooltip)
-                                    .disabled(!editable || !edited)
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.save(window, cx)),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_h_0()
-                            .child(
-                                div()
-                                    .id("profile")
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h_full()
-                                    .gap(px(24.0))
-                                    .p(px(20.0))
-                                    .overflow_y_scroll()
-                                    .child(header)
-                                    .children(self.problem.clone().map(|problem| {
-                                        Alert::new("save-problem", Tone::Danger, "Not saved")
-                                            .body(problem)
-                                    }))
-                                    .children(sections),
-                            )
-                            .child(inspector),
-                    ),
+                    .min_h_0()
+                    .child(sidebar)
+                    .child(lanes)
+                    .child(inspector_pane),
             )
             .child(
                 Dialog::new(
@@ -1600,6 +1834,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::ruffle_view::BAR_HEIGHT;
 
     fn library_file(name: &str) -> std::path::PathBuf {
         let mut library = Library::default();
@@ -1669,18 +1904,23 @@ mod tests {
     fn snapshot_editor() {
         snapshot("profiles-step", |editor, window, cx| {
             editor.drafts[1].form.steps.pop();
-            editor.add_profile(Form::of(&Profile::generic()), "New profile", window, cx);
+            editor.new_profile(window, cx);
             editor.select_named("Ultra speaker", window, cx);
+            editor.form_mut().unwrap().steps[1].pause = "500".into();
             editor.select_item(Some(Item::Step(Lane::Rotation, 2)), window, cx);
         });
         snapshot("profiles-trigger", |editor, window, cx| {
             editor.select_named("Ultra speaker", window, cx);
+            editor.rename(window, cx);
             editor
                 .name
                 .update(cx, |input, cx| input.set_text("Daily boss", cx));
             editor.select_item(Some(Item::Trigger(0)), window, cx);
         });
-        snapshot("profiles-generic", |_, _, _| {});
+        snapshot("profiles-empty", |editor, window, cx| {
+            editor.drafts.clear();
+            editor.select(None, window, cx);
+        });
     }
 
     fn open_editor<'a>(
@@ -1690,6 +1930,7 @@ mod tests {
         let path = library_file(name);
         cx.update(|cx| {
             mira_ui::init(cx);
+            bind_keys(cx);
             combat_profiles::init(path, cx);
         });
         let (editor, cx) = cx.add_window_view(|window, cx| {
@@ -1713,7 +1954,10 @@ mod tests {
     }
 
     fn profile_row(index: usize) -> gpui::Point<gpui::Pixels> {
-        gpui::point(px(60.0), BAR_HEIGHT + px(29.0 + 52.0 * index as f32))
+        gpui::point(
+            px(60.0),
+            BAR_HEIGHT + px(40.0 + 4.0 + 15.0 + 32.0 * index as f32),
+        )
     }
 
     fn shown(editor: &Entity<Editor>, cx: &mut gpui::VisualTestContext) -> Option<String> {
@@ -1725,12 +1969,13 @@ mod tests {
     #[gpui::test]
     fn arrow_keys_move_between_profiles(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("arrows", cx);
-        click(cx, profile_row(1));
         assert_eq!(shown(&editor, cx).as_deref(), Some("Daily boss"));
-        press(cx, "down");
+        click(cx, profile_row(1));
         assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+        press(cx, "down");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
         press(cx, "up up");
-        assert_eq!(shown(&editor, cx), None);
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Daily boss"));
     }
 
     #[gpui::test]
@@ -1738,7 +1983,7 @@ mod tests {
         let (editor, cx) = open_editor("reveal", cx);
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                for _ in 0..20 {
+                for _ in 0..40 {
                     editor.add_profile(Form::of(&Profile::generic()), "Extra", window, cx);
                 }
             })
@@ -1762,11 +2007,11 @@ mod tests {
     #[gpui::test]
     fn the_selected_profiles_menu_opens_from_the_keyboard(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("menu", cx);
-        click(cx, profile_row(1));
+        click(cx, profile_row(0));
         press(cx, "down shift-f10");
         press(cx, "down enter");
         assert_eq!(shown(&editor, cx).as_deref(), Some("Farming copy"));
-        assert!(editor.read_with(cx, |editor, _| editor.renaming));
+        assert!(editor.read_with(cx, |editor, _| editor.renaming.is_some()));
     }
 
     #[gpui::test]
@@ -1775,7 +2020,7 @@ mod tests {
     ) {
         let (editor, cx) = open_editor("steps", cx);
         let item = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| editor.item);
-        click(cx, profile_row(3));
+        click(cx, profile_row(2));
         let third = cx
             .debug_bounds("row-2")
             .expect("the rotation lists three steps");
@@ -1783,26 +2028,147 @@ mod tests {
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 2)));
         press(cx, "up");
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
-        click(cx, profile_row(3));
+        click(cx, profile_row(2));
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
+    }
+
+    #[gpui::test]
+    fn search_narrows_the_profiles_and_arrows_step_through_the_matches(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, cx) = open_editor("search", cx);
+        press(cx, "cmd-f");
+        cx.simulate_input("a");
+        cx.run_until_parked();
+        press(cx, "down");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+        press(cx, "down");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
+        press(cx, "down");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
+        cx.simulate_input("k");
+        cx.run_until_parked();
+        press(cx, "up");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
+        press(cx, "escape up");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+    }
+
+    #[gpui::test]
+    fn command_n_starts_a_new_profile_named_in_its_row(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("new", cx);
+        press(cx, "cmd-n");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("New profile"));
+        assert!(editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+        cx.simulate_input("Boss rush");
+        press(cx, "enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Boss rush"));
+        assert!(!editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+    }
+
+    #[gpui::test]
+    fn escape_puts_the_name_back_and_stops_renaming(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("cancel", cx);
+        click(cx, profile_row(1));
+        press(cx, "shift-f10");
+        press(cx, "enter");
+        cx.simulate_input("Grinding");
+        cx.run_until_parked();
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Grinding"));
+        press(cx, "escape");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+        assert!(!editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+    }
+
+    #[gpui::test]
+    fn renaming_under_a_search_keeps_the_name_field(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("rename-search", cx);
+        press(cx, "cmd-f");
+        cx.simulate_input("farm");
+        cx.run_until_parked();
+        press(cx, "down");
+        cx.update(|window, cx| editor.update(cx, |editor, cx| editor.rename(window, cx)));
+        cx.run_until_parked();
+        cx.simulate_input("Solo");
+        press(cx, "enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Solo"));
+    }
+
+    #[gpui::test]
+    fn a_new_profile_under_a_search_shows_its_name_field(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("new-search", cx);
+        press(cx, "cmd-f");
+        cx.simulate_input("zzz");
+        cx.run_until_parked();
+        press(cx, "cmd-n");
+        cx.simulate_input("Boss rush");
+        press(cx, "enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Boss rush"));
+    }
+
+    #[gpui::test]
+    fn discarding_the_last_profile_clears_its_save_problem(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("discard-last", cx);
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.drafts.clear();
+                editor.select(None, window, cx);
+                editor.new_profile(window, cx);
+                editor.add(Section::Triggers, 3, window, cx);
+                editor.save(window, cx);
+                assert!(editor.problem.is_some());
+                editor.revert(window, cx);
+                assert_eq!(editor.draft().map(|draft| draft.name.as_str()), None);
+                assert_eq!(editor.problem, None);
+                assert_eq!(editor.item, None);
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn revert_restores_the_saved_profile_and_discards_a_new_one(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("revert", cx);
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.select_named("Farming", window, cx);
+                editor.add(Section::Steps(Lane::Rotation), 4, window, cx);
+                editor.rename(window, cx);
+                editor
+                    .name
+                    .update(cx, |input, cx| input.set_text("Grinding", cx));
+                assert!(editor.draft().unwrap().edited(&editor.library));
+                editor.revert(window, cx);
+                let draft = editor.draft().unwrap();
+                assert_eq!(draft.name, "Farming");
+                assert!(!draft.edited(&editor.library));
+                let saved = editor.drafts.len();
+                editor.new_profile(window, cx);
+                editor.revert(window, cx);
+                assert_eq!(editor.drafts.len(), saved);
+                assert_eq!(
+                    editor.draft().map(|draft| draft.name.as_str()),
+                    Some("Ultra speaker")
+                );
+            })
+        });
     }
 
     #[gpui::test]
     fn millisecond_fields_take_digits_and_step_by_100(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("millis", cx);
-        let within = cx.update(|window, cx| {
+        let pause = cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
                 editor.select_named("Ultra speaker", window, cx);
-                editor.select_item(Some(Item::Trigger(0)), window, cx);
-                editor.texts.as_ref().unwrap().get(Text::Within).unwrap()
+                editor.select_item(Some(Item::Step(Lane::Rotation, 1)), window, cx);
+                editor.texts.as_ref().unwrap().get(Text::Pause).unwrap()
             })
         });
-        cx.update(|window, cx| window.focus(&within.focus_handle(cx), cx));
+        cx.update(|window, cx| window.focus(&pause.focus_handle(cx), cx));
         press(cx, "up");
         cx.simulate_input("x");
         cx.run_until_parked();
-        let saved = editor.read_with(cx, |editor, _| editor.form().triggers[0].within.clone());
-        assert_eq!(saved, "3100");
+        let saved = editor.read_with(cx, |editor, _| editor.form().steps[1].pause.clone());
+        assert_eq!(saved, "500");
     }
 
     #[test]

@@ -9,8 +9,6 @@ use crate::domain::{
     rotation::Lane,
 };
 
-pub(super) const DEFAULT_WITHIN: &str = "3000";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Item {
     Trigger(usize),
@@ -29,7 +27,7 @@ pub(super) struct Form {
 pub(super) struct FormTrigger {
     pub(super) includes: String,
     pub(super) skill: Skill,
-    pub(super) within: String,
+    within: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,46 +39,51 @@ pub(super) struct FormStep {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
-    Hp,
-    Mp,
-    Aura,
+pub(super) enum Subject {
+    MyHp,
+    AllyHp,
+    MyMp,
+    AuraOnMe,
+    AuraOnTarget,
 }
 
-impl Kind {
-    pub(super) const ALL: [Kind; 3] = [Kind::Hp, Kind::Mp, Kind::Aura];
+impl Subject {
+    pub(super) const ALL: [Subject; 5] = [
+        Subject::MyHp,
+        Subject::AllyHp,
+        Subject::MyMp,
+        Subject::AuraOnMe,
+        Subject::AuraOnTarget,
+    ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Kind::Hp => "HP",
-            Kind::Mp => "MP",
-            Kind::Aura => "Aura",
+            Subject::MyHp => "Self HP",
+            Subject::AllyHp => "Ally HP",
+            Subject::MyMp => "Self MP",
+            Subject::AuraOnMe => "Self aura",
+            Subject::AuraOnTarget => "Target aura",
         }
+    }
+
+    pub(super) fn aura(self) -> bool {
+        matches!(self, Subject::AuraOnMe | Subject::AuraOnTarget)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Rule {
-    pub(super) kind: Kind,
-    pub(super) who: Who,
-    pub(super) holder: Holder,
+    pub(super) subject: Subject,
     pub(super) at_most: bool,
     pub(super) value: String,
+    pub(super) percent: bool,
     pub(super) name: String,
     pub(super) measure: Measure,
 }
 
 impl Default for Rule {
     fn default() -> Self {
-        Self {
-            kind: Kind::Hp,
-            who: Who::Me,
-            holder: Holder::Target,
-            at_most: true,
-            value: "50%".into(),
-            name: String::new(),
-            measure: Measure::Stacks,
-        }
+        Self::new(Subject::MyHp)
     }
 }
 
@@ -95,7 +98,7 @@ impl FormTrigger {
         Self {
             includes: String::new(),
             skill,
-            within: DEFAULT_WITHIN.into(),
+            within: Duration::from_secs(3),
         }
     }
 
@@ -113,7 +116,7 @@ impl FormTrigger {
                 "A trigger needs the message text to look for.",
             )?,
             skill: self.skill,
-            within: millis(&self.within, "A trigger's time limit", false)?,
+            within: self.within,
         })
     }
 }
@@ -132,11 +135,14 @@ impl FormStep {
         if self.when.is_empty() {
             return "Always".into();
         }
-        self.when
-            .iter()
-            .map(Rule::summary)
-            .collect::<Vec<_>>()
-            .join(", ")
+        capitalized(
+            &self
+                .when
+                .iter()
+                .map(Rule::summary)
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
     }
 
     fn parse(&self) -> Result<(Vec<Condition>, Duration), String> {
@@ -145,11 +151,23 @@ impl FormStep {
             .iter()
             .map(Rule::parse)
             .collect::<Result<_, _>>()?;
-        Ok((when, millis(&self.pause, "The pause", true)?))
+        Ok((when, millis(&self.pause, "The pause")?))
     }
 }
 
 impl Rule {
+    pub(super) fn new(subject: Subject) -> Self {
+        let aura = subject.aura();
+        Self {
+            subject,
+            at_most: !aura,
+            value: if aura { "1" } else { "50" }.into(),
+            percent: true,
+            name: String::new(),
+            measure: Measure::Stacks,
+        }
+    }
+
     fn sign(&self) -> &'static str {
         if self.at_most { "≤" } else { "≥" }
     }
@@ -164,71 +182,100 @@ impl Rule {
 
     pub(super) fn summary(&self) -> String {
         let value = self.value.trim();
-        match self.kind {
-            Kind::Hp => {
-                let of = match self.who {
-                    Who::Me => "my HP",
-                    Who::AnyAlly => "an ally's HP",
-                };
-                format!("{of} {} {value}", self.sign())
+        let sign = self.sign();
+        let aura = |on: &str| {
+            let name = match self.name.trim() {
+                "" => "an aura",
+                name => name,
+            };
+            match self.measure {
+                Measure::Stacks if value == "1" => format!("{name} on {on} {sign} 1 stack"),
+                Measure::Stacks => format!("{name} on {on} {sign} {value} stacks"),
+                Measure::Value => format!("{name} on {on} value {sign} {value}"),
             }
-            Kind::Mp => format!("my MP {} {value}", self.sign()),
-            Kind::Aura => {
-                let on = match self.holder {
-                    Holder::Me => "on me",
-                    Holder::Target => "on target",
-                };
-                let measure = match self.measure {
-                    Measure::Stacks => "",
-                    Measure::Value => " value",
-                };
-                format!("{} {on}{measure} {} {value}", self.name.trim(), self.sign())
+        };
+        let unit = if self.percent { "%" } else { "" };
+        match self.subject {
+            Subject::MyHp | Subject::AllyHp | Subject::MyMp => {
+                format!("{} {sign} {value}{unit}", self.subject.label())
             }
+            Subject::AuraOnMe => aura("self"),
+            Subject::AuraOnTarget => aura("target"),
         }
     }
 
     fn parse(&self) -> Result<Condition, String> {
-        Ok(match self.kind {
-            Kind::Hp => Condition::Hp {
-                of: self.who,
-                bound: self.bound(amount(&self.value, "HP")?),
-            },
-            Kind::Mp => Condition::Mp {
-                bound: self.bound(amount(&self.value, "MP")?),
-            },
-            Kind::Aura => Condition::Aura {
-                on: self.holder,
+        let hp = |of| -> Result<Condition, String> {
+            Ok(Condition::Hp {
+                of,
+                bound: self.bound(self.amount("HP")?),
+            })
+        };
+        let aura = |on| -> Result<Condition, String> {
+            Ok(Condition::Aura {
+                on,
                 name: text(&self.name, "An aura condition needs the aura's name.")?,
                 measure: self.measure,
                 bound: self.bound(count(&self.value)?),
-            },
-        })
+            })
+        };
+        match self.subject {
+            Subject::MyHp => hp(Who::Me),
+            Subject::AllyHp => hp(Who::AnyAlly),
+            Subject::MyMp => Ok(Condition::Mp {
+                bound: self.bound(self.amount("MP")?),
+            }),
+            Subject::AuraOnMe => aura(Holder::Me),
+            Subject::AuraOnTarget => aura(Holder::Target),
+        }
+    }
+
+    fn amount(&self, what: &str) -> Result<Amount, String> {
+        let value = self.value.trim();
+        let suffix = if self.percent { "%" } else { "" };
+        match (self.percent, Amount::parse(&format!("{value}{suffix}"))) {
+            (true, Ok(amount @ Amount::Percent(_))) | (false, Ok(amount @ Amount::Points(_))) => {
+                Ok(amount)
+            }
+            (true, _) => Err(format!("{what} needs a whole percent from 0 to 100.")),
+            (false, _) => Err(format!("{what} needs a whole number of points.")),
+        }
     }
 
     fn of(condition: &Condition) -> Self {
         let defaults = Rule::default();
+        let vital = |subject, bound: &Bound<Amount>| {
+            let (value, percent) = match bound.limit() {
+                Amount::Points(points) => (points.to_string(), false),
+                Amount::Percent(percent) => (percent.to_string(), true),
+            };
+            Rule {
+                subject,
+                at_most: at_most(bound),
+                value,
+                percent,
+                ..Rule::default()
+            }
+        };
         match condition {
-            Condition::Hp { of, bound } => Rule {
-                kind: Kind::Hp,
-                who: *of,
-                at_most: at_most(bound),
-                value: bound.limit().to_string(),
-                ..defaults
-            },
-            Condition::Mp { bound } => Rule {
-                kind: Kind::Mp,
-                at_most: at_most(bound),
-                value: bound.limit().to_string(),
-                ..defaults
-            },
+            Condition::Hp { of, bound } => vital(
+                match of {
+                    Who::Me => Subject::MyHp,
+                    Who::AnyAlly => Subject::AllyHp,
+                },
+                bound,
+            ),
+            Condition::Mp { bound } => vital(Subject::MyMp, bound),
             Condition::Aura {
                 on,
                 name,
                 measure,
                 bound,
             } => Rule {
-                kind: Kind::Aura,
-                holder: *on,
+                subject: match on {
+                    Holder::Me => Subject::AuraOnMe,
+                    Holder::Target => Subject::AuraOnTarget,
+                },
                 at_most: at_most(bound),
                 value: bound.limit().get().to_string(),
                 name: name.as_str().to_owned(),
@@ -239,13 +286,16 @@ impl Rule {
     }
 }
 
-fn at_most<T>(bound: &Bound<T>) -> bool {
-    matches!(bound, Bound::AtMost(_))
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
-fn amount(value: &str, what: &str) -> Result<Amount, String> {
-    Amount::parse(value)
-        .map_err(|_| format!("{what} needs a whole number of points, or a percent like 60%."))
+fn at_most<T>(bound: &Bound<T>) -> bool {
+    matches!(bound, Bound::AtMost(_))
 }
 
 fn count(value: &str) -> Result<Count, String> {
@@ -261,15 +311,15 @@ fn text(value: &str, missing: &str) -> Result<Text, String> {
     Text::try_from(value.to_owned()).map_err(|_| missing.to_owned())
 }
 
-fn millis(value: &str, what: &str, empty_is_zero: bool) -> Result<Duration, String> {
+fn millis(value: &str, what: &str) -> Result<Duration, String> {
     let value = value.trim();
-    if value.is_empty() && empty_is_zero {
+    if value.is_empty() {
         return Ok(Duration::ZERO);
     }
-    match value.parse::<u64>() {
-        Ok(millis) if millis > 0 || empty_is_zero => Ok(Duration::from_millis(millis)),
-        _ => Err(format!("{what} needs a whole number of milliseconds.")),
-    }
+    value
+        .parse::<u64>()
+        .map(Duration::from_millis)
+        .map_err(|_| format!("{what} needs a whole number of milliseconds."))
 }
 
 fn pause_text(pause: Duration) -> String {
@@ -296,7 +346,7 @@ impl Form {
                 .map(|trigger| FormTrigger {
                     includes: trigger.includes.as_str().to_owned(),
                     skill: trigger.skill,
-                    within: trigger.within.as_millis().to_string(),
+                    within: trigger.within,
                 })
                 .collect(),
             priority: profile
@@ -419,10 +469,10 @@ mod tests {
             form.triggers[0].summary(),
             "When \u{201c}prepares\u{201d} appears"
         );
-        assert_eq!(form.priority[1].summary(), "an ally's HP ≤ 6000");
+        assert_eq!(form.priority[1].summary(), "Ally HP ≤ 6000");
         assert_eq!(
             form.steps[1].summary(),
-            "Burn on target ≤ 0, Spirit Power on me value ≥ 12.5, my MP ≥ 40%"
+            "Burn on target ≤ 0 stacks, Spirit Power on self value ≥ 12.5, Self MP ≥ 40%"
         );
         assert_eq!(form.steps[0].summary(), "Always");
     }
@@ -431,7 +481,7 @@ mod tests {
     fn a_bad_field_names_its_item_and_what_it_needs() {
         let mut form = Form::of(&Profile::generic());
         form.steps[2].when.push(Rule {
-            kind: Kind::Aura,
+            subject: Subject::AuraOnTarget,
             value: "2".into(),
             ..Rule::default()
         });
@@ -456,20 +506,21 @@ mod tests {
         );
         form.priority[0].pause = " ".into();
         form.priority[0].when.push(Rule {
-            value: "120%".into(),
+            value: "120".into(),
             ..Rule::default()
         });
         assert!(form.parse().is_err());
-        form.priority[0].when[0].value = "45%".into();
+        form.priority[0].when[0].percent = false;
+        form.priority[0].when[0].value = "60%".into();
+        assert!(form.parse().is_err());
+        form.priority[0].when[0].percent = true;
+        form.priority[0].when[0].value = "45".into();
         form.triggers.push(FormTrigger::new(skill(3)));
         assert_eq!(
             form.parse().map_err(|problem| problem.at),
             Err(Item::Trigger(0))
         );
         form.triggers[0].includes = "slam".into();
-        form.triggers[0].within = "0".into();
-        assert!(form.parse().is_err());
-        form.triggers[0].within = "1500".into();
         assert!(form.parse().is_ok());
     }
 }
