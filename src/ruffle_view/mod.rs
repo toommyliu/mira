@@ -314,16 +314,19 @@ impl RuffleView {
                     };
                     let selection = menu::show(view, menu, extras).await;
                     menu::sync_modifiers(&input_view);
-                    if this
-                        .update_in(cx, |this, window, _| {
-                            if let Some(MenuSelection::Extra(extra)) = selection
-                                && let Err(error) = this.extras.toggle(extra)
-                            {
-                                tracing::error!(%error, "couldn't save AS3 extras");
-                            }
-                            this.session.close_menu(selection);
-                            this.restore_modifiers(window);
+                    if cx
+                        .update(|window, cx| {
+                            this.update(cx, |this, _| {
+                                if let Some(MenuSelection::Extra(extra)) = selection
+                                    && let Err(error) = this.extras.toggle(extra)
+                                {
+                                    tracing::error!(%error, "couldn't save AS3 extras");
+                                }
+                                this.session.close_menu(selection);
+                                this.restore_modifiers(window);
+                            })
                         })
+                        .and_then(|updated| updated)
                         .is_err()
                     {
                         break;

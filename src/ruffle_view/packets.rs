@@ -1510,7 +1510,9 @@ mod tests {
     fn editing_a_queued_packet_replaces_it_in_place_and_escape_cancels(cx: &mut TestAppContext) {
         let (packets, automation, cx) = open(cx);
         let adding = packets.read_with(cx, |packets, _| packets.adding.clone());
-        packets.update_in(cx, |packets, window, cx| packets.edit_queued(1, window, cx));
+        cx.update(|window, cx| {
+            packets.update(cx, |packets, cx| packets.edit_queued(1, window, cx))
+        });
         press(cx, "cmd-a");
         typed(cx, "%xt%zm%c%{room}%");
         press(cx, "enter");
@@ -1519,7 +1521,9 @@ mod tests {
             ["%xt%zm%a%{room}%", "%xt%zm%c%{room}%"]
         );
 
-        packets.update_in(cx, |packets, window, cx| packets.edit_queued(0, window, cx));
+        cx.update(|window, cx| {
+            packets.update(cx, |packets, cx| packets.edit_queued(0, window, cx))
+        });
         typed(cx, "x");
         press(cx, "escape");
         assert_eq!(text(&adding, cx), "");
