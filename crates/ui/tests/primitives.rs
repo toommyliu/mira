@@ -2,8 +2,8 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     Context, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent, Keystroke,
-    ParentElement as _, Render, SharedString, Styled as _, TestAppContext, VisualTestContext,
-    Window, div, prelude::FluentBuilder as _,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestAppContext, VisualTestContext, Window, div, prelude::FluentBuilder as _,
 };
 use mira_ui::{
     FOCUS_SCOPE,
@@ -259,6 +259,51 @@ fn a_long_menu_with_pinned_rows_fits_a_short_window(cx: &mut TestAppContext) {
         last.top() >= px(0.0) && last.bottom() <= px(240.0),
         "{last:?}"
     );
+}
+
+struct QueueOnAPage {
+    page: gpui::ScrollHandle,
+}
+
+impl Render for QueueOnAPage {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("page")
+            .h(gpui::px(200.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.page)
+            .child(
+                div()
+                    .debug_selector(|| "queue".into())
+                    .child(mira_ui::primitives::List::new(
+                        "queue",
+                        "Queue",
+                        20,
+                        |index| {
+                            mira_ui::primitives::ListItem::new(format!("%xt%zm%packet{index}%"))
+                        },
+                    )),
+            )
+    }
+}
+
+#[gpui::test]
+fn scrolling_over_a_content_height_list_scrolls_the_page(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, ScrollDelta, ScrollEvent, TouchPhase, point, px};
+    cx.update(mira_ui::init);
+    let page = gpui::ScrollHandle::new();
+    let (_, cx) = cx.add_window_view(|_, _| QueueOnAPage { page: page.clone() });
+    cx.run_until_parked();
+    let over = cx.debug_bounds("queue").unwrap().origin + point(px(40.0), px(40.0));
+    cx.simulate_event(ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+        source: Default::default(),
+    });
+    cx.run_until_parked();
+    assert!(page.offset().y < px(0.0), "{:?}", page.offset());
 }
 
 struct Confirm {
