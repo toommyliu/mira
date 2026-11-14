@@ -167,6 +167,7 @@ enum Family {
 }
 
 struct WeaponSpecial {
+    name: &'static str,
     names: &'static [&'static str],
     proc_id: i32,
     family: Family,
@@ -174,46 +175,55 @@ struct WeaponSpecial {
 
 const WEAPON_SPECIALS: &[WeaponSpecial] = &[
     WeaponSpecial {
+        name: "Spiral Carve",
         names: &["spiral carve", "scarve", "spiral"],
         proc_id: 2,
         family: Family::Awe,
     },
     WeaponSpecial {
+        name: "Awe Blast",
         names: &["awe blast", "ablast", "aweblast", "blast"],
         proc_id: 3,
         family: Family::Awe,
     },
     WeaponSpecial {
+        name: "Health Vamp",
         names: &["health vamp", "healthvamp", "hvamp", "hp vamp"],
         proc_id: 4,
         family: Family::Awe,
     },
     WeaponSpecial {
+        name: "Mana Vamp",
         names: &["mana vamp", "manavamp", "mvamp", "mp vamp"],
         proc_id: 5,
         family: Family::Awe,
     },
     WeaponSpecial {
+        name: "Powerword DIE",
         names: &["powerword die", "powerword", "pwd", "pw die"],
         proc_id: 6,
         family: Family::Awe,
     },
     WeaponSpecial {
+        name: "Lacerate",
         names: &["lacerate", "lac"],
         proc_id: 7,
         family: Family::Forge { pattern_id: FORGE },
     },
     WeaponSpecial {
+        name: "Smite",
         names: &["smite"],
         proc_id: 8,
         family: Family::Forge { pattern_id: FORGE },
     },
     WeaponSpecial {
+        name: "Valiance",
         names: &["valiance", "val", "vali"],
         proc_id: 9,
         family: Family::Forge { pattern_id: FORGE },
     },
     WeaponSpecial {
+        name: "Arcana's Concerto",
         names: &[
             "arcana's concerto",
             "arcanas",
@@ -224,21 +234,25 @@ const WEAPON_SPECIALS: &[WeaponSpecial] = &[
         family: Family::Forge { pattern_id: FORGE },
     },
     WeaponSpecial {
+        name: "Acheron",
         names: &["acheron", "ach"],
         proc_id: 11,
         family: Family::Forge { pattern_id: DEPTHS },
     },
     WeaponSpecial {
+        name: "Elysium",
         names: &["elysium", "ely"],
         proc_id: 12,
         family: Family::Forge { pattern_id: WIZARD },
     },
     WeaponSpecial {
+        name: "Praxis",
         names: &["praxis", "prax"],
         proc_id: 13,
         family: Family::Forge { pattern_id: FORGE },
     },
     WeaponSpecial {
+        name: "Dauntless",
         names: &["dauntless", "dtl"],
         proc_id: 14,
         family: Family::Forge {
@@ -246,6 +260,7 @@ const WEAPON_SPECIALS: &[WeaponSpecial] = &[
         },
     },
     WeaponSpecial {
+        name: "Ravenous",
         names: &["ravenous", "rav"],
         proc_id: 15,
         family: Family::Forge { pattern_id: FORGE },
@@ -310,6 +325,13 @@ fn normalize(label: &str) -> String {
         .join(" ")
         .to_lowercase()
         .replace(['\u{2018}', '\u{2019}'], "'")
+}
+
+pub(super) fn special_name(proc_id: i32) -> Option<&'static str> {
+    WEAPON_SPECIALS
+        .iter()
+        .find(|special| special.proc_id == proc_id)
+        .map(|special| special.name)
 }
 
 fn weapon_special(label: &str) -> Option<&'static WeaponSpecial> {

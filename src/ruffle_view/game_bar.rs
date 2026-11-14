@@ -295,6 +295,10 @@ impl BarState {
         self.location = location;
     }
 
+    pub(super) fn location(&self) -> Option<&Location> {
+        self.location.as_ref()
+    }
+
     pub(super) fn identified(&mut self, identity: Option<Identity>) {
         self.identity = identity;
     }
@@ -1345,6 +1349,7 @@ mod tests {
     #[test]
     fn jump_moves_between_cells_and_pads_from_the_keyboard() {
         let location = Location {
+            map: "battleon".into(),
             cell: "r2".into(),
             pad: "Left".into(),
             cells: vec!["Enter".into(), "r2".into(), "r3".into()],
@@ -1584,6 +1589,7 @@ mod tests {
     fn snapshot_jump() {
         snapshot("game-jump", 420.0, |_| {
             let location = Location {
+                map: "battleon".into(),
                 cell: "r3".into(),
                 pad: "Left".into(),
                 cells: (1..=14).map(|cell| format!("r{cell}")).collect(),

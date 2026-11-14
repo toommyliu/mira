@@ -50,8 +50,8 @@ pub(crate) struct Monster {
     pub(super) hp: f64,
     pub(super) max_hp: f64,
     pub(super) level: f64,
-    state: Option<State>,
-    auras: Vec<Aura>,
+    pub(super) state: Option<State>,
+    pub(super) auras: Vec<Aura>,
     #[serde(skip)]
     available: bool,
     pub(crate) aggressive: bool,
@@ -64,10 +64,26 @@ pub(crate) struct Drop {
     pub(super) name: String,
     pub(super) quantity: i32,
     pub(super) rate: Option<f64>,
-    boosted_rate: Option<f64>,
-    event_drop: bool,
-    quest_gated: bool,
-    required_quest_ids: Vec<i64>,
+    pub(super) boosted_rate: Option<f64>,
+    pub(super) event_drop: bool,
+    pub(super) quest_gated: bool,
+    pub(super) required_quest_ids: Vec<i64>,
+    #[serde(skip)]
+    pub(super) category: String,
+    #[serde(skip)]
+    pub(super) member: bool,
+    #[serde(skip)]
+    pub(super) coins: bool,
+    #[serde(skip)]
+    pub(super) rarity: Option<i32>,
+    #[serde(skip)]
+    pub(super) max_stack: Option<i32>,
+    #[serde(skip)]
+    pub(super) varies: bool,
+    #[serde(skip)]
+    pub(super) gating_quests: Vec<String>,
+    #[serde(skip)]
+    pub(super) objective_of: Vec<String>,
 }
 
 pub(crate) fn cell_state(loader: &impl Loader) -> String {
@@ -115,6 +131,7 @@ pub(crate) const PADS: [&str; 8] = [
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Location {
+    pub(crate) map: String,
     pub(crate) cell: String,
     pub(crate) pad: String,
     pub(crate) cells: Vec<String>,
@@ -126,6 +143,7 @@ pub(crate) fn location(loader: &impl Loader) -> Result<Option<Location>, CallErr
         return Ok(None);
     }
     Ok(Some(Location {
+        map: bridge::player::get_map(loader)?.unwrap_or_default(),
         cell: bridge::player::get_cell(loader)?.unwrap_or_default(),
         pad: bridge::player::get_pad(loader)?.unwrap_or_default(),
         cells: cells(loader)?,
@@ -506,17 +524,35 @@ struct DropItem {
     event_drop: bool,
     #[serde(rename = "bQuestGated", default, deserialize_with = "wire::flag")]
     quest_gated: bool,
-    #[serde(rename = "questGated", default, deserialize_with = "listed")]
-    quest_names: bool,
+    #[serde(rename = "questGated", default, deserialize_with = "names")]
+    gating_quests: Vec<String>,
+    #[serde(rename = "questObjective", default, deserialize_with = "names")]
+    objective_of: Vec<String>,
+    #[serde(rename = "iRty", default, deserialize_with = "wire::integer")]
+    rarity: Option<i32>,
+    #[serde(rename = "iStk", default, deserialize_with = "wire::integer")]
+    max_stack: Option<i32>,
     #[serde(rename = "sReqQuests", default, deserialize_with = "wire::text")]
     required_quests: String,
+    #[serde(rename = "sType", default, deserialize_with = "wire::text")]
+    category: String,
+    #[serde(rename = "bUpg", default, deserialize_with = "wire::flag")]
+    member: bool,
+    #[serde(rename = "bCoins", default, deserialize_with = "wire::flag")]
+    coins: bool,
 }
 
-fn listed<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
-    Ok(matches!(
-        serde_json::Value::deserialize(input)?,
-        serde_json::Value::Array(names) if !names.is_empty()
-    ))
+fn names<'de, D: Deserializer<'de>>(input: D) -> Result<Vec<String>, D::Error> {
+    Ok(match serde_json::Value::deserialize(input)? {
+        serde_json::Value::Array(names) => names
+            .into_iter()
+            .filter_map(|name| match name {
+                serde_json::Value::String(name) if !name.trim().is_empty() => Some(name),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
 impl DropItem {
@@ -544,8 +580,18 @@ impl DropItem {
             rate: self.rate.map(|rate| (rate / divisor).min(100.0)),
             boosted_rate: self.boosted_rate.map(|rate| (rate / divisor).min(100.0)),
             event_drop: self.event_drop,
-            quest_gated: self.quest_gated || self.quest_names || !required_quest_ids.is_empty(),
+            quest_gated: self.quest_gated
+                || !self.gating_quests.is_empty()
+                || !required_quest_ids.is_empty(),
             required_quest_ids,
+            category: self.category,
+            member: self.member,
+            coins: self.coins,
+            rarity: self.rarity.filter(|rarity| *rarity > 0),
+            max_stack: self.max_stack.filter(|stack| *stack > 0),
+            varies: self.varies,
+            gating_quests: self.gating_quests,
+            objective_of: self.objective_of,
         })
     }
 }
@@ -684,7 +730,9 @@ mod tests {
             "MonMapID": mon_map_id,
             "items": {
                 "11": { "ItemID": 11, "sName": "Frogzard Scale", "iQty": 4, "bVaryQty": true,
-                        "iRate": 200, "iRateBoosted": "300", "sReqQuests": "7, 3,7,x,0" },
+                        "iRate": 200, "iRateBoosted": "300", "sReqQuests": "7, 3,7,x,0",
+                        "sType": "Resource", "bUpg": 1, "bCoins": "0", "iRty": 16, "iStk": 100,
+                        "questGated": ["Spin the Wheel"], "questObjective": ["Bounty Hunter"] },
                 "12": { "ItemID": 12, "sName": "Frog Hat", "iQty": 1, "iRate": 2.5,
                         "bEventDrop": 1, "questGated": [] },
                 "13": { "ItemID": 0 }
@@ -782,6 +830,7 @@ mod tests {
                     Value::Bool(true)
                 }
                 "flash.getGameObjectS" => Value::String(json!("player1").to_string()),
+                "player.getMap" => Value::String(map.into()),
                 "player.getCell" => Value::String(cell.into()),
                 "player.getPad" => Value::String(pad.into()),
                 "world.getCells" if map == "battleon" => texts(&["Enter", "r2"]),
@@ -799,9 +848,9 @@ mod tests {
                     loader,
                     events.subscribe(moves),
                     move |location| {
-                        seen.borrow_mut().push(
-                            location.map(|location| (location.cell, location.pad, location.cells)),
-                        )
+                        seen.borrow_mut().push(location.map(|location| {
+                            (location.map, location.cell, location.pad, location.cells)
+                        }))
                     },
                 ));
                 let publish = |packet: serde_json::Value| {
@@ -835,9 +884,24 @@ mod tests {
                 assert_eq!(
                     *reports.borrow(),
                     [
-                        Some(("r2".into(), "Left".into(), texts(&["Enter", "r2"]))),
-                        Some(("Enter".into(), "Right".into(), texts(&["Enter", "r2"]))),
-                        Some(("Enter".into(), "Spawn".into(), texts(&["Enter", "Boss"]))),
+                        Some((
+                            "battleon".into(),
+                            "r2".into(),
+                            "Left".into(),
+                            texts(&["Enter", "r2"])
+                        )),
+                        Some((
+                            "battleon".into(),
+                            "Enter".into(),
+                            "Right".into(),
+                            texts(&["Enter", "r2"])
+                        )),
+                        Some((
+                            "dage".into(),
+                            "Enter".into(),
+                            "Spawn".into(),
+                            texts(&["Enter", "Boss"])
+                        )),
                         None,
                     ]
                 );
@@ -875,6 +939,35 @@ mod tests {
                           "boostedRate": null, "eventDrop": true, "questGated": false,
                           "requiredQuestIds": [] },
                     ])
+                );
+                assert_eq!(
+                    drops
+                        .iter()
+                        .map(|drop| (drop.category.as_str(), drop.member, drop.coins))
+                        .collect::<Vec<_>>(),
+                    [("Resource", true, false), ("", false, false)]
+                );
+                assert_eq!(
+                    drops
+                        .iter()
+                        .map(|drop| (
+                            drop.rarity,
+                            drop.max_stack,
+                            drop.varies,
+                            drop.gating_quests.clone(),
+                            drop.objective_of.clone()
+                        ))
+                        .collect::<Vec<_>>(),
+                    [
+                        (
+                            Some(16),
+                            Some(100),
+                            true,
+                            vec!["Spin the Wheel".to_owned()],
+                            vec!["Bounty Hunter".to_owned()]
+                        ),
+                        (None, None, false, Vec::new(), Vec::new()),
+                    ]
                 );
 
                 let (loader, scene) = scene(quiet("r2"), events.clone(), Vec::new());

@@ -48,10 +48,10 @@ pub(crate) struct Aura {
     name: String,
     value: Option<AuraValue>,
     stack: i32,
-    category: Option<String>,
+    pub(super) category: Option<String>,
     icon: Option<String>,
-    persistent: bool,
-    duration: f64,
+    pub(super) persistent: bool,
+    pub(super) duration: f64,
     expires_at: Option<f64>,
 }
 

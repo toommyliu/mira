@@ -1,32 +1,40 @@
+use std::collections::{HashMap, HashSet};
+
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
-    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
+    ActiveTheme as _, FOCUS_SCOPE, PointerCursor as _, StyledExt as _, Theme, Tone,
     components::Empty,
     h_flex,
     primitives::{
-        Badge, Button, Icon, Input, InputEvent, List, ListItem, Select, Spinner, VirtualList,
-        button::{Size, Variant},
+        Align, Badge, Button, DropdownMenu, Icon, Input, InputEvent, ListItem, MenuItem, Scrollbar,
+        Select, Spinner, VirtualList,
+        button::{Joined, Size, Variant},
     },
-    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL, TEXT_TITLE, tabular},
+    theme::{LINE_BODY, ROW, TEXT_BODY, TEXT_TITLE, tabular},
+    v_flex,
 };
 
 use super::{
-    BAR_HEIGHT, Client,
+    Client,
     client::CloseSession,
-    shown_tab::{self, ShownTab, Target},
+    form::LABEL_WIDTH,
+    shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
     automation::{quests::Registered, register_items},
     bridge::CallError,
     domain::{
-        grabber::{Act, Action, Entry, Group, Job, Line, Load, LoadKind, Reply, Snapshot, Source},
+        grabber::{
+            Act, Action, Entry, Group, Job, Line, Load, LoadKind, Reply, Snapshot, Source, percent,
+        },
         inventory::ItemQuery,
+        world::Location,
     },
     ruffle::Command,
 };
@@ -35,12 +43,13 @@ actions!(mira, [OpenLoaderGrabber]);
 
 const WIDTH: f32 = 880.0;
 const HEIGHT: f32 = 640.0;
-const SIDEBAR: Pixels = px(164.0);
-const INSPECTOR: Pixels = px(300.0);
-const LOADER_ROW: Pixels = px(56.0);
-const SEARCH_ROW: Pixels = px(48.0);
-const HEADING_ROW: Pixels = px(28.0);
-const FOOTER: Pixels = px(44.0);
+const MIN_WIDTH: f32 = 720.0;
+const MIN_HEIGHT: f32 = 420.0;
+const INSPECTOR: Pixels = px(340.0);
+const SEARCH: Pixels = px(200.0);
+const SOURCE: Pixels = px(156.0);
+const META: Pixels = px(96.0);
+const ID: Pixels = px(68.0);
 const MAX_SEARCH: usize = 64;
 
 struct Open(WindowHandle<LoaderGrabber>);
@@ -64,6 +73,7 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
             size(px(WIDTH), px(HEIGHT)),
             cx,
         ))),
+        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         titlebar: Some(TitlebarOptions {
             title: Some("Loader/grabber".into()),
             appears_transparent: true,
@@ -94,32 +104,127 @@ enum Drops {
     Unavailable,
 }
 
+#[derive(Clone)]
+struct Outcome {
+    text: SharedString,
+    failed: bool,
+}
+
+impl Outcome {
+    fn done(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            failed: false,
+        }
+    }
+
+    fn failed(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            failed: true,
+        }
+    }
+
+    fn color(&self, theme: &Theme) -> Hsla {
+        if self.failed {
+            theme.danger_text
+        } else {
+            theme.accent_text
+        }
+    }
+}
+
+struct Loader {
+    input: Entity<Input>,
+    problem: Option<SharedString>,
+    outcome: Option<Outcome>,
+    loading: Option<Task<()>>,
+    _events: Subscription,
+}
+
+impl Loader {
+    fn new(
+        kind: LoadKind,
+        label: &'static str,
+        source: Source,
+        cx: &mut Context<LoaderGrabber>,
+    ) -> Self {
+        let input = cx.new(|cx| Input::new(label, cx).placeholder(kind.placeholder()));
+        let events = cx.subscribe(&input, move |this, input, event, cx| match event {
+            InputEvent::Changed => {
+                input.update(cx, |input, cx| input.set_invalid(false, cx));
+                if let Some(loader) = this.loader_mut(source) {
+                    loader.problem = None;
+                }
+                cx.notify();
+            }
+            InputEvent::Submitted => this.load(source, kind, cx),
+        });
+        Self {
+            input,
+            problem: None,
+            outcome: None,
+            loading: None,
+            _events: events,
+        }
+    }
+
+    fn reset(&mut self, cx: &mut App) {
+        self.problem = None;
+        self.outcome = None;
+        self.loading = None;
+        self.input
+            .update(cx, |input, cx| input.set_invalid(false, cx));
+    }
+}
+
+struct Listed {
+    quests: Vec<i32>,
+    drops: Vec<ItemQuery>,
+}
+
+impl Listed {
+    fn has(&self, act: &Act) -> bool {
+        match act {
+            Act::Register { quest_id } => self.quests.contains(quest_id),
+            Act::RegisterDrop { name } => self.has_drop(name),
+            Act::Game(_) => false,
+        }
+    }
+
+    fn has_drop(&self, name: &str) -> bool {
+        let query = ItemQuery::Name(name.to_owned());
+        self.drops.iter().any(|known| known.same(&query))
+    }
+}
+
 pub(crate) struct LoaderGrabber {
     client: Entity<Client>,
     focus: FocusHandle,
     tab: Target,
     shown: Option<ShownTab>,
-    kind: LoadKind,
-    ids: Entity<Input>,
+    shop: Loader,
+    quests: Loader,
     search: Entity<Input>,
     source: Source,
     snapshot: Option<Snapshot>,
     problem: Option<Problem>,
     selected: Option<i64>,
-    drops: Option<(f64, Drops)>,
-    notice: Option<SharedString>,
+    drops: HashMap<i64, Drops>,
+    outcome: Option<(i64, Outcome)>,
     reading: Option<Task<()>>,
-    loading: Option<Task<()>>,
-    acting: Option<Task<()>>,
-    reading_drops: Option<Task<()>>,
-    _ids_events: Subscription,
+    acting: Option<(Act, Task<()>)>,
+    reading_drops: HashMap<i64, Task<()>>,
+    opened: HashSet<i32>,
+    inspector_scroll: ScrollHandle,
+    located: Option<Location>,
+    taken: Option<Outcome>,
+    taking: Option<Task<()>>,
     _subscriptions: [Subscription; 2],
 }
 
 impl LoaderGrabber {
     fn new(client: Entity<Client>, tab: Target, cx: &mut Context<Self>) -> Self {
-        let kind = LoadKind::Shop;
-        let (ids, ids_events) = ids_input(kind, "", cx);
         let search = cx.new(|cx| {
             Input::new("Search", cx)
                 .placeholder("Search names and IDs")
@@ -139,20 +244,23 @@ impl LoaderGrabber {
             focus: cx.focus_handle(),
             tab,
             shown: None,
-            kind,
-            ids,
+            shop: Loader::new(LoadKind::Shop, "Shop ID", Source::Shop, cx),
+            quests: Loader::new(LoadKind::Quests, "Quest IDs", Source::Quests, cx),
             search,
             source: Source::Shop,
             snapshot: None,
             problem: None,
             selected: None,
-            drops: None,
-            notice: None,
+            drops: HashMap::new(),
+            outcome: None,
             reading: None,
-            loading: None,
             acting: None,
-            reading_drops: None,
-            _ids_events: ids_events,
+            reading_drops: HashMap::new(),
+            opened: HashSet::new(),
+            inspector_scroll: ScrollHandle::new(),
+            located: None,
+            taken: None,
+            taking: None,
             _subscriptions: subscriptions,
         };
         grabber.show(cx);
@@ -170,14 +278,50 @@ impl LoaderGrabber {
             &mut self.tab,
             &self.client,
             |this: &mut Self, cx| this.show(cx),
-            |_, _| Vec::new(),
+            |automation, cx| {
+                vec![
+                    watch_changes(automation.watch_drops(), cx),
+                    watch_changes(automation.watch_quests(), cx),
+                ]
+            },
             cx,
         );
+        let (moved, new_map) = self.follow_location(cx);
+        if switched || new_map {
+            self.drops.clear();
+            self.reading_drops.clear();
+        }
         if switched {
-            self.notice = None;
-            self.loading = None;
+            self.shop.reset(cx);
+            self.quests.reset(cx);
+            self.outcome = None;
             self.acting = None;
+            self.taken = None;
+            self.taking = None;
             self.open_source(self.source, None, cx);
+        } else if moved && self.source == Source::Monsters {
+            self.read(cx);
+        }
+    }
+
+    fn follow_location(&mut self, cx: &App) -> (bool, bool) {
+        let view = self.shown.as_ref().and_then(|shown| shown.view.upgrade());
+        let view = view.as_ref().map(|view| view.read(cx));
+        let location = view.and_then(|view| view.bar.location());
+        if location == self.located.as_ref() {
+            return (false, false);
+        }
+        let map = |location: Option<&Location>| location.map(|location| location.map.clone());
+        let new_map = map(location) != map(self.located.as_ref());
+        self.located = location.cloned();
+        (true, new_map)
+    }
+
+    fn loader_mut(&mut self, source: Source) -> Option<&mut Loader> {
+        match source {
+            Source::Shop => Some(&mut self.shop),
+            Source::Quests => Some(&mut self.quests),
+            _ => None,
         }
     }
 
@@ -202,8 +346,9 @@ impl LoaderGrabber {
         self.snapshot = None;
         self.problem = None;
         self.selected = selected;
-        self.drops = None;
-        self.reading_drops = None;
+        self.outcome = None;
+        self.taken = None;
+        self.opened.clear();
         self.read(cx);
     }
 
@@ -225,8 +370,7 @@ impl LoaderGrabber {
                         this.problem = Some(Problem::NotInGame);
                     }
                     Ok(Err(error)) => {
-                        this.notice = Some(format!("Couldn't refresh: {error}").into());
-                        this.problem = Some(Problem::Failed(error.to_string().into()));
+                        this.problem = Some(Problem::Failed(error.to_string().into()))
                     }
                     Err(_) => {}
                 }
@@ -239,8 +383,6 @@ impl LoaderGrabber {
     fn take(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
         self.problem = None;
         self.snapshot = Some(snapshot);
-        self.drops = None;
-        self.reading_drops = None;
         match self.selected.and_then(|key| self.entry(key)).cloned() {
             Some(entry) => self.follow_drops(&entry, cx),
             None => self.selected = None,
@@ -256,6 +398,10 @@ impl LoaderGrabber {
     }
 
     fn select(&mut self, key: i64, cx: &mut Context<Self>) {
+        if self.selected != Some(key) {
+            self.outcome = None;
+            self.opened.clear();
+        }
         self.selected = Some(key);
         if let Some(entry) = self.entry(key).cloned() {
             self.follow_drops(&entry, cx);
@@ -264,95 +410,88 @@ impl LoaderGrabber {
     }
 
     fn follow_drops(&mut self, entry: &Entry, cx: &mut Context<Self>) {
-        let Some(mon_map_id) = entry.drops_from else {
-            self.drops = None;
-            self.reading_drops = None;
-            return;
-        };
-        if self
-            .drops
-            .as_ref()
-            .is_some_and(|(shown, _)| *shown == mon_map_id)
-        {
+        let key = entry.key;
+        if matches!(self.drops.get(&key), Some(Drops::Ready(_) | Drops::Reading)) {
             return;
         }
+        let Some(mon_map_id) = entry.drops_from else {
+            return;
+        };
         let Some(answer) = self.send(|reply| Job::Drops { mon_map_id, reply }, cx) else {
             return;
         };
-        self.drops = Some((mon_map_id, Drops::Reading));
-        self.reading_drops = Some(cx.spawn(async move |this, cx| {
+        self.drops.insert(key, Drops::Reading);
+        let task = cx.spawn(async move |this, cx| {
             let result = answer.recv().await;
             let _ = this.update(cx, |this, cx| {
-                this.reading_drops = None;
+                this.reading_drops.remove(&key);
                 let drops = match result {
                     Ok(Ok(Some(group))) => Drops::Ready(group),
                     _ => Drops::Unavailable,
                 };
-                this.drops = Some((mon_map_id, drops));
+                this.drops.insert(key, drops);
                 cx.notify();
             });
-        }));
+        });
+        self.reading_drops.insert(key, task);
     }
 
-    fn set_kind(&mut self, kind: LoadKind, cx: &mut Context<Self>) {
-        if kind == self.kind {
+    fn load(&mut self, source: Source, kind: LoadKind, cx: &mut Context<Self>) {
+        let Some(loader) = self.loader_mut(source) else {
+            return;
+        };
+        if loader.loading.is_some() {
             return;
         }
-        let text = self.ids.read(cx).text().to_owned();
-        let (ids, events) = ids_input(kind, &text, cx);
-        self.kind = kind;
-        self.ids = ids;
-        self._ids_events = events;
-        self.notice = None;
-        cx.notify();
-    }
-
-    fn load(&mut self, cx: &mut Context<Self>) {
-        if self.loading.is_some() {
+        let text = loader.input.read(cx).text().to_owned();
+        if kind.takes_ids() && text.trim().is_empty() {
             return;
         }
-        let text = self.ids.read(cx).text().to_owned();
-        let load = match self.kind.parse(&text) {
+        let load = match kind.parse(&text) {
             Ok(load) => load,
             Err(problem) => {
-                self.ids.update(cx, |input, cx| input.set_invalid(true, cx));
-                self.notice = Some(problem.message().into());
+                loader.problem = Some(problem.message().into());
+                loader
+                    .input
+                    .update(cx, |input, cx| input.set_invalid(true, cx));
                 cx.notify();
                 return;
             }
         };
         let described = describe(&load);
-        let next = match &load {
-            Load::Shop(_) => Some((Source::Shop, None)),
-            Load::Quests(ids) => Some((Source::Quests, ids.first().map(|id| i64::from(*id)))),
-            Load::HairShop(_) | Load::ArmorCustomizer => None,
+        let lists = matches!(load, Load::Shop(_) | Load::Quests(_));
+        let first = match &load {
+            Load::Quests(ids) => ids.first().map(|id| i64::from(*id)),
+            _ => None,
         };
         let Some(answer) = self.send(|reply| Job::Load { load, reply }, cx) else {
-            self.notice = Some("Open a tab first".into());
-            cx.notify();
             return;
         };
-        self.notice = Some(format!("Loading {described}…").into());
-        self.loading = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let result = answer.recv().await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = None;
-                let notice = match result {
-                    Ok(Ok(true)) => match next {
-                        Some((source, selected)) => {
-                            this.open_source(source, selected, cx);
-                            format!("Loaded {described}")
-                        }
-                        None => format!("Opened {described}"),
-                    },
-                    Ok(Ok(false)) => format!("Couldn't load {described}"),
-                    Ok(Err(error)) => error.to_string(),
-                    Err(_) => "The tab closed".into(),
+                let outcome = match result {
+                    Ok(Ok(true)) if lists => Outcome::done(format!("Loaded {described}")),
+                    Ok(Ok(true)) => Outcome::done(format!("Opened {described}")),
+                    Ok(Ok(false)) => Outcome::failed(format!("Couldn't load {described}")),
+                    Ok(Err(error)) => Outcome::failed(error.to_string()),
+                    Err(_) => Outcome::failed("The tab closed"),
                 };
-                this.notice = Some(notice.into());
+                let refresh = lists && !outcome.failed && this.source == source;
+                if let Some(loader) = this.loader_mut(source) {
+                    loader.loading = None;
+                    loader.outcome = Some(outcome);
+                }
+                if refresh {
+                    this.open_source(source, first, cx);
+                }
                 cx.notify();
             });
-        }));
+        });
+        if let Some(loader) = self.loader_mut(source) {
+            loader.outcome = None;
+            loader.loading = Some(task);
+        }
         cx.notify();
     }
 
@@ -360,28 +499,28 @@ impl LoaderGrabber {
         let Some(automation) = self.shown.as_ref().map(|shown| shown.automation.clone()) else {
             return;
         };
-        let action = match &act {
+        let action = match act {
             Act::Register { quest_id } => {
                 automation.update_quests(|state| {
                     state.register([Registered {
-                        quest_id: *quest_id,
+                        quest_id,
                         reward_item_id: None,
                     }])
                 });
-                self.notice =
-                    Some(format!("Registered quest {quest_id} in this tab's environment").into());
                 cx.notify();
                 return;
             }
-            Act::AddDrop { name } => {
+            Act::RegisterDrop { name } => {
                 automation.update_drops(|state| {
-                    register_items(&mut state.items, vec![ItemQuery::Name(name.clone())])
+                    register_items(&mut state.items, vec![ItemQuery::Name(name)])
                 });
-                self.notice = Some(format!("Added {name} to this tab's drops").into());
                 cx.notify();
                 return;
             }
-            Act::Game(action) => action.clone(),
+            Act::Game(action) => action,
+        };
+        let Some(key) = self.selected else {
+            return;
         };
         if self.acting.is_some() {
             return;
@@ -396,28 +535,112 @@ impl LoaderGrabber {
         ) else {
             return;
         };
-        self.notice = Some(format!("{}…", act.label()).into());
-        self.acting = Some(cx.spawn(async move |this, cx| {
+        self.outcome = None;
+        let done = action.clone();
+        let task = cx.spawn(async move |this, cx| {
             let result = answer.recv().await;
             let _ = this.update(cx, |this, cx| {
                 this.acting = None;
-                let notice: SharedString = match result {
-                    Ok(Ok(true)) => action.done().into(),
-                    Ok(Ok(false)) => action.failed().into(),
-                    Ok(Err(error)) => error.to_string().into(),
-                    Err(_) => "The tab closed".into(),
+                let outcome = match result {
+                    Ok(Ok(true)) => Outcome::done(done.done()),
+                    Ok(Ok(false)) => Outcome::failed(done.failed()),
+                    Ok(Err(error)) => Outcome::failed(error.to_string()),
+                    Err(_) => Outcome::failed("The tab closed"),
                 };
-                this.notice = Some(notice);
+                this.outcome = Some((key, outcome));
                 this.read(cx);
+            });
+        });
+        self.acting = Some((Act::Game(action), task));
+        cx.notify();
+    }
+
+    fn copy(&mut self, key: i64, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.outcome = Some((key, Outcome::done("Copied")));
+        cx.notify();
+    }
+
+    fn take_all(&mut self, save: bool, cx: &mut Context<Self>) {
+        let source = self.source;
+        let Some(answer) = self.send(|reply| Job::Raw { source, reply }, cx) else {
+            return;
+        };
+        self.taken = None;
+        self.taking = Some(cx.spawn(async move |this, cx| {
+            let text = match answer.recv().await {
+                Ok(Ok(Some(text))) => Ok(text),
+                Ok(Ok(None)) if save => Err("Nothing to export".to_owned()),
+                Ok(Ok(None)) => Err("Nothing to copy".to_owned()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("The tab closed".to_owned()),
+            };
+            let outcome = match (text, save) {
+                (Err(problem), _) => Some(Outcome::failed(problem)),
+                (Ok(text), false) => this
+                    .update(cx, |_, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    })
+                    .ok()
+                    .map(|()| Outcome::done("Copied")),
+                (Ok(text), true) => {
+                    let directory = dirs::document_dir()
+                        .or_else(dirs::home_dir)
+                        .unwrap_or_default();
+                    let name = format!("{}.json", source.name().to_lowercase().replace(' ', "-"));
+                    let Ok(chosen) =
+                        this.update(cx, |_, cx| cx.prompt_for_new_path(&directory, Some(&name)))
+                    else {
+                        return;
+                    };
+                    match chosen.await {
+                        Ok(Ok(Some(path))) => Some(
+                            match cx
+                                .background_spawn(async move { std::fs::write(&path, text) })
+                                .await
+                            {
+                                Ok(()) => Outcome::done("Saved"),
+                                Err(error) => Outcome::failed(format!("Couldn't save: {error}")),
+                            },
+                        ),
+                        Ok(Err(error)) => Some(Outcome::failed(format!("Couldn't save: {error}"))),
+                        Ok(Ok(None)) | Err(_) => None,
+                    }
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.taking = None;
+                this.taken = outcome;
+                cx.notify();
             });
         }));
         cx.notify();
     }
 
-    fn copy(&mut self, text: String, what: &str, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.notice = Some(format!("Copied {what}").into());
+    fn toggle_details(&mut self, item_id: i32, cx: &mut Context<Self>) {
+        if !self.opened.remove(&item_id) {
+            self.opened.insert(item_id);
+        }
         cx.notify();
+    }
+
+    fn listed(&self) -> Listed {
+        match &self.shown {
+            Some(shown) => Listed {
+                quests: shown
+                    .automation
+                    .quests()
+                    .quests
+                    .iter()
+                    .map(|registered| registered.quest_id)
+                    .collect(),
+                drops: shown.automation.drops().items,
+            },
+            None => Listed {
+                quests: Vec::new(),
+                drops: Vec::new(),
+            },
+        }
     }
 
     fn shown_entries(&self, cx: &App) -> Vec<Entry> {
@@ -437,94 +660,161 @@ impl LoaderGrabber {
             .collect()
     }
 
-    fn loader_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let this = cx.weak_entity();
-        let kind = Select::new(
-            "load-kind",
-            "Load",
-            LoadKind::ALL
+        let sources = Select::new(
+            "grab-source",
+            "Source",
+            Source::ALL
                 .iter()
-                .map(|kind| SharedString::from(kind.name())),
-            LoadKind::ALL.iter().position(|kind| *kind == self.kind),
+                .map(|source| SharedString::from(source.name())),
+            Source::ALL.iter().position(|source| *source == self.source),
         )
-        .width(px(168.0))
+        .width(SOURCE)
         .on_select(move |index, _, cx| {
-            let _ = this.update(cx, |this, cx| this.set_kind(LoadKind::ALL[index], cx));
+            let _ = this.update(cx, |this, cx| {
+                if this.source != Source::ALL[index] {
+                    this.open_source(Source::ALL[index], None, cx);
+                }
+            });
         });
-        div()
-            .flex()
+        let loader = match self.source {
+            Source::Shop => Some(&self.shop),
+            Source::Quests => Some(&self.quests),
+            _ => None,
+        };
+        let fields = loader.map(|loader| self.loader_fields(loader, theme, cx));
+        let problem = loader
+            .and_then(|loader| loader.problem.clone())
+            .map(|problem| {
+                div()
+                    .text_small()
+                    .text_color(theme.danger_text)
+                    .child(problem)
+            });
+        let taking = self.taking.is_some();
+        let menu_this = cx.weak_entity();
+        let menu = DropdownMenu::new("grab-source-menu")
+            .trigger(
+                Button::icon("grab-source-menu-trigger", Icon::Ellipsis, "More actions")
+                    .variant(Variant::Ghost)
+                    .hide_tooltip(),
+            )
+            .align(Align::End)
+            .items(move |_, _| {
+                [("Copy all", false), ("Export all…", true)]
+                    .into_iter()
+                    .map(|(label, save)| {
+                        let this = menu_this.clone();
+                        MenuItem::action(label, move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.take_all(save, cx));
+                        })
+                        .disabled(taking)
+                    })
+                    .collect()
+            });
+        v_flex()
             .flex_none()
-            .items_center()
-            .gap(px(8.0))
-            .h(LOADER_ROW)
+            .gap(px(6.0))
             .px(px(16.0))
+            .py(px(10.0))
             .border_b_1()
             .border_color(theme.hairline)
-            .child(kind)
-            .when(self.kind.takes_ids(), |row| {
-                row.child(div().flex_1().min_w_0().child(self.ids.clone()))
-            })
-            .when(!self.kind.takes_ids(), |row| row.child(div().flex_1()))
             .child(
-                Button::new(
-                    "load",
-                    if self.kind.takes_ids() {
-                        "Load"
-                    } else {
-                        "Open"
-                    },
+                h_flex()
+                    .gap(px(8.0))
+                    .child(sources)
+                    .children(fields)
+                    .child(div().flex_1())
+                    .children(self.taken.as_ref().map(|outcome| {
+                        div()
+                            .flex_none()
+                            .text_small()
+                            .text_color(outcome.color(theme))
+                            .child(outcome.text.clone())
+                    }))
+                    .child(div().w(SEARCH).min_w(px(120.0)).child(self.search.clone()))
+                    .child(
+                        Button::icon("grab-refresh", Icon::RotateCcw, "Refresh")
+                            .variant(Variant::Ghost)
+                            .busy(self.reading.is_some())
+                            .hide_tooltip()
+                            .on_click(cx.listener(|this, _, _, cx| this.read(cx))),
+                    )
+                    .child(menu),
+            )
+            .children(problem)
+    }
+
+    fn loader_fields(&self, loader: &Loader, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let source = self.source;
+        let busy = loader.loading.is_some();
+        let empty = loader.input.read(cx).text().trim().is_empty();
+        let load = Button::new(("load", source as usize), "Load")
+            .variant(Variant::Primary)
+            .busy(busy)
+            .disabled(empty)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let kind = match source {
+                    Source::Quests => LoadKind::Quests,
+                    _ => LoadKind::Shop,
+                };
+                this.load(source, kind, cx)
+            }));
+        let control = if source == Source::Shop {
+            let this = cx.weak_entity();
+            let more = DropdownMenu::new("load-more")
+                .trigger(
+                    Button::icon("load-more-trigger", Icon::ChevronDown, "Other loads")
+                        .variant(Variant::Primary)
+                        .joined(Joined::Previous)
+                        .disabled(busy)
+                        .hide_tooltip(),
                 )
-                .variant(Variant::Primary)
-                .busy(self.loading.is_some())
-                .disabled(self.shown.is_none())
-                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-            )
-    }
-
-    fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let count = self
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.entries.len());
-        let current = self.source;
-        let this = cx.weak_entity();
-        div()
-            .flex_none()
-            .w(SIDEBAR)
-            .p(px(12.0))
-            .border_r_1()
-            .border_color(theme.hairline)
+                .items(move |_, _| {
+                    [
+                        ("Load as hair shop", LoadKind::HairShop, empty),
+                        ("Open armor customizer", LoadKind::ArmorCustomizer, false),
+                    ]
+                    .into_iter()
+                    .map(|(label, kind, off)| {
+                        let this = this.clone();
+                        MenuItem::action(label, move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.load(Source::Shop, kind, cx));
+                        })
+                        .disabled(off)
+                    })
+                    .collect()
+                });
+            h_flex()
+                .child(load.joined(Joined::Next))
+                .child(more)
+                .into_any_element()
+        } else {
+            load.into_any_element()
+        };
+        h_flex()
+            .gap(px(8.0))
+            .min_w_0()
             .child(
-                List::new("grab-sources", "Sources", Source::ALL.len(), move |index| {
-                    let source = Source::ALL[index];
-                    let item = ListItem::new(source.name());
-                    match count {
-                        Some(count) if source == current => item.end_slot(count.to_string()),
-                        _ => item,
-                    }
-                })
-                .selected(Source::ALL.iter().position(|source| *source == self.source))
-                .on_select(move |index, _, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.source != Source::ALL[index] {
-                            this.open_source(Source::ALL[index], None, cx);
-                        }
-                    });
-                }),
+                div()
+                    .flex_none()
+                    .w(px(if source == Source::Shop { 150.0 } else { 240.0 }))
+                    .child(loader.input.clone()),
             )
+            .child(control)
+            .children(loader.outcome.as_ref().map(|outcome| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_small()
+                    .text_color(outcome.color(theme))
+                    .child(outcome.text.clone())
+            }))
     }
 
-    fn list_column(
-        &self,
-        theme: &Theme,
-        entries: &[Entry],
-        height: Pixels,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let heading = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.heading.clone());
+    fn list_column(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let entries = self.shown_entries(cx);
         let body = match (&self.snapshot, &self.problem) {
             (None, Some(problem)) => problem_note(problem).into_any_element(),
             (None, None) => div()
@@ -549,78 +839,119 @@ impl LoaderGrabber {
                 let selected = self
                     .selected
                     .and_then(|key| rows.iter().position(|entry| entry.key == key));
-                let lookup = rows.clone();
-                let keys = rows.clone();
+                let (lookup, keys, row_theme) = (rows.clone(), rows.clone(), theme.clone());
                 let this = cx.weak_entity();
-                VirtualList::new(
-                    "grab-entries",
-                    self.source.name(),
-                    rows.len(),
-                    move |index| row(&lookup[index]),
-                )
-                .selected(selected)
-                .height(height)
-                .on_select(move |index, _, cx| {
-                    let key = keys[index].key;
-                    let _ = this.update(cx, |this, cx| this.select(key, cx));
-                })
-                .into_any_element()
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.columns(theme))
+                    .child(
+                        VirtualList::new(
+                            "grab-entries",
+                            self.source.name(),
+                            rows.len(),
+                            move |index| line(&lookup[index], &row_theme),
+                        )
+                        .selected(selected)
+                        .fill()
+                        .on_select(move |index, _, cx| {
+                            let key = keys[index].key;
+                            let _ = this.update(cx, |this, cx| this.select(key, cx));
+                        }),
+                    )
+                    .into_any_element()
             }
         };
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .flex_1()
             .min_w_0()
             .px(px(12.0))
+            .pb(px(12.0))
+            .child(body)
+    }
+
+    fn columns(&self, theme: &Theme) -> Div {
+        let (heading, color) = match (&self.problem, &self.snapshot) {
+            (Some(Problem::Failed(error)), _) => (
+                SharedString::from(format!("Couldn't refresh: {error}")),
+                theme.danger_text,
+            ),
+            (
+                _,
+                Some(Snapshot {
+                    heading: Some(heading),
+                    ..
+                }),
+            ) => (heading.clone().into(), theme.text_secondary),
+            _ => ("Name".into(), theme.text_tertiary),
+        };
+        let [meta, id] = self.source.columns();
+        h_flex()
+            .flex_none()
+            .h(px(28.0))
+            .gap(px(8.0))
+            .pl(px(13.0))
+            .pr(px(9.0) + Scrollbar::GUTTER)
+            .text_small()
+            .text_color(theme.text_tertiary)
             .child(
                 div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(8.0))
-                    .h(SEARCH_ROW)
-                    .child(div().flex_1().min_w_0().child(self.search.clone()))
-                    .child(
-                        Button::icon("grab-refresh", Icon::RotateCcw, "Refresh")
-                            .size(Size::Small)
-                            .variant(Variant::Ghost)
-                            .busy(self.reading.is_some())
-                            .disabled(self.shown.is_none())
-                            .tooltip("Read it again from the game")
-                            .on_click(cx.listener(|this, _, _, cx| this.read(cx))),
-                    ),
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(color)
+                    .child(heading),
             )
-            .when_some(heading, |column, heading| {
-                column.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .h(HEADING_ROW)
-                        .truncate()
-                        .text_size(TEXT_SMALL)
-                        .text_color(theme.text_secondary)
-                        .child(heading),
-                )
-            })
-            .child(body)
+            .child(div().flex_none().w(META).text_right().child(meta))
+            .child(div().flex_none().w(ID).text_right().child(id))
+    }
+
+    fn inspector_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        div()
+            .relative()
+            .flex_none()
+            .w(INSPECTOR)
+            .min_h_0()
+            .border_l_1()
+            .border_color(theme.hairline)
+            .child(
+                div()
+                    .id("grab-inspector")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.inspector_scroll)
+                    .p(px(16.0))
+                    .child(self.inspector(theme, cx)),
+            )
+            .child(Scrollbar::new(
+                "grab-inspector-scrollbar",
+                self.inspector_scroll.clone(),
+            ))
     }
 
     fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let Some(entry) = self.selected.and_then(|key| self.entry(key)).cloned() else {
+            let pickable = self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.entries.is_empty());
             return div()
                 .py(px(32.0))
                 .text_center()
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
+                .text_small()
                 .text_color(theme.text_tertiary)
-                .child("Pick something to see its details and actions.")
+                .when(pickable, |note| {
+                    note.child("Pick something to see its details and actions.")
+                })
                 .into_any_element();
         };
-        let busy = self.acting.is_some();
-        let acts = entry.acts.iter().enumerate().map(|(index, act)| {
-            let act = act.clone();
+        let listed = self.listed();
+        let more = self.more_menu(&entry, cx);
+        let acting = self.acting.as_ref().map(|(act, _)| act.clone());
+        let acts = entry.acts.iter().enumerate().map(|(index, offer)| {
+            let act = offer.act.clone();
+            let busy = acting.as_ref() == Some(&act);
+            let waiting = acting.is_some() && !busy && matches!(act, Act::Game(_));
             Button::new(("grab-act", index), act.label())
                 .size(Size::Small)
                 .variant(if index == 0 {
@@ -628,57 +959,53 @@ impl LoaderGrabber {
                 } else {
                     Variant::Secondary
                 })
-                .disabled(busy && matches!(act, Act::Game(_)))
-                .tooltip(tooltip(&act))
+                .busy(busy)
+                .disabled(!offer.enabled || waiting || listed.has(&act))
+                .when_some(tooltip(&act), |button, tooltip| button.tooltip(tooltip))
                 .on_click(cx.listener(move |this, _, _, cx| this.act(act.clone(), cx)))
         });
-        let (name, id, json) = (entry.name.clone(), entry.id.clone(), entry.json.clone());
-        let id_label = entry.id_label;
-        let copies = [
-            Button::new("copy-name", "Copy name")
-                .size(Size::Small)
-                .variant(Variant::Ghost)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.copy(name.clone(), "the name", cx)),
-                ),
-            Button::new("copy-id", format!("Copy {id_label}"))
-                .size(Size::Small)
-                .variant(Variant::Ghost)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.copy(id.clone(), &format!("the {id_label}"), cx)
-                })),
-            Button::new("copy-json", "Copy JSON")
-                .size(Size::Small)
-                .variant(Variant::Ghost)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.copy(json.clone(), "the JSON", cx)),
-                ),
-        ];
-        let drops = match &self.drops {
-            Some((mon_map_id, drops)) if entry.drops_from == Some(*mon_map_id) => Some(drops),
-            _ => None,
-        };
-        div()
-            .flex()
-            .flex_col()
+        let outcome = self
+            .outcome
+            .as_ref()
+            .filter(|(key, _)| *key == entry.key)
+            .map(|(_, outcome)| {
+                div()
+                    .max_w_full()
+                    .truncate()
+                    .text_small()
+                    .text_color(outcome.color(theme))
+                    .child(outcome.text.clone())
+            });
+        let drops = (self.source == Source::Monsters)
+            .then(|| self.drops.get(&entry.key))
+            .flatten();
+        let unseen = drops.is_none() && entry.drops_from.is_none();
+        v_flex()
             .gap(px(14.0))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
+                v_flex()
                     .gap(px(6.0))
                     .child(
-                        div()
-                            .text_size(TEXT_TITLE)
-                            .line_height(LINE_BODY)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(entry.name.clone()),
+                        h_flex()
+                            .items_start()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .pt(px(1.0))
+                                    .text_size(TEXT_TITLE)
+                                    .line_height(LINE_BODY)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(entry.name.clone()),
+                            )
+                            .child(more),
                     )
                     .when(!entry.badges.is_empty(), |header| {
                         header.child(div().flex().flex_wrap().gap(px(4.0)).children(
                             entry.badges.iter().map(|badge| {
                                 Badge::new(*badge).tone(match *badge {
-                                    "Equipped" | "Here" => Tone::Accent,
+                                    "Equipped" => Tone::Accent,
                                     "AC" => Tone::Warning,
                                     _ => Tone::Neutral,
                                 })
@@ -686,8 +1013,14 @@ impl LoaderGrabber {
                         ))
                     }),
             )
-            .when(!entry.acts.is_empty(), |inspector| {
-                inspector.child(div().flex().flex_wrap().gap(px(6.0)).children(acts))
+            .when(!entry.acts.is_empty() || outcome.is_some(), |inspector| {
+                inspector.child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap(px(6.0))
+                        .children(acts)
+                        .children(outcome),
+                )
             })
             .child(facts(theme, &entry.facts))
             .children(
@@ -695,24 +1028,139 @@ impl LoaderGrabber {
                     .groups
                     .iter()
                     .enumerate()
-                    .map(|(index, group)| self.group(theme, index, group, cx)),
+                    .map(|(index, group)| self.group(theme, index, group, &listed, cx)),
             )
             .children(drops.map(|drops| {
                 match drops {
-                    Drops::Ready(group) => self.group(theme, entry.groups.len(), group, cx),
-                    Drops::Reading => section(theme, "Drops")
+                    Drops::Ready(group) => {
+                        self.group(theme, entry.groups.len(), group, &listed, cx)
+                    }
+                    Drops::Reading => caption(theme, "Drops")
                         .child(Spinner::new("grab-drops").size(px(14.0)))
                         .into_any_element(),
-                    Drops::Unavailable => section(theme, "Drops")
+                    Drops::Unavailable => caption(theme, "Drops")
                         .child(quiet(theme, "Couldn't read this monster's drops."))
                         .into_any_element(),
                 }
             }))
-            .when(
-                entry.drops_from.is_none() && self.source == Source::Monsters,
-                |inspector| inspector.child(quiet(theme, "Drops show for monsters in your cell.")),
+            .when(unseen && self.source == Source::Monsters, |inspector| {
+                inspector.child(quiet(theme, "Drops show for monsters in your cell."))
+            })
+            .into_any_element()
+    }
+
+    fn more_menu(&self, entry: &Entry, cx: &mut Context<Self>) -> DropdownMenu {
+        let this = cx.weak_entity();
+        let key = entry.key;
+        let copies = [
+            ("Copy name".to_owned(), entry.name.clone()),
+            (copy_id(entry.id_label), entry.id.clone()),
+            ("Copy JSON".to_owned(), entry.json.clone()),
+        ];
+        DropdownMenu::new("grab-more")
+            .trigger(
+                Button::icon("grab-more-trigger", Icon::Ellipsis, "More actions")
+                    .size(Size::Small)
+                    .variant(Variant::Ghost)
+                    .hide_tooltip(),
             )
-            .child(div().flex().flex_wrap().gap(px(2.0)).children(copies))
+            .align(Align::End)
+            .items(move |_, _| {
+                copies
+                    .iter()
+                    .map(|(label, text)| {
+                        let (this, text) = (this.clone(), text.clone());
+                        MenuItem::action(label.clone(), move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.copy(key, text.clone(), cx));
+                        })
+                    })
+                    .collect()
+            })
+    }
+
+    fn detailed_line(
+        &self,
+        theme: &Theme,
+        id: usize,
+        line: &Line,
+        register: Option<Button>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = line.item_id.unwrap_or(id as i32);
+        let open = self.opened.contains(&key);
+        let small = |text: String, color: Hsla| {
+            div()
+                .flex_none()
+                .text_small()
+                .font_features(tabular())
+                .text_color(color)
+                .child(text)
+        };
+        let row = h_flex()
+            .id(("grab-line-row", id))
+            .gap(px(6.0))
+            .h(ROW)
+            .mx(px(-4.0))
+            .px(px(4.0))
+            .rounded(theme.radius.item)
+            .pointer_cursor(theme)
+            .hover(|style| style.bg(theme.fill))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_details(key, cx)))
+            .child(
+                Button::icon(
+                    ("grab-line-open", id),
+                    if open {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    },
+                    format!("Details for {}", line.name),
+                )
+                .size(Size::XSmall)
+                .variant(Variant::Ghost)
+                .hide_tooltip()
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_details(key, cx))),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(6.0))
+                    .child(div().min_w_0().truncate().child(line.name.clone()))
+                    .when(line.quantity > 1, |name| {
+                        let amount = if line.varies {
+                            format!("×1–{}", line.quantity)
+                        } else {
+                            format!("×{}", line.quantity)
+                        };
+                        name.child(small(amount, theme.text_tertiary))
+                    }),
+            )
+            .children(
+                line.item_id
+                    .map(|item_id| small(item_id.to_string(), theme.text_tertiary)),
+            )
+            .child(
+                small(
+                    line.chance.map(percent).unwrap_or_default(),
+                    theme.text_secondary,
+                )
+                .min_w(px(32.0))
+                .text_right(),
+            )
+            .children(register);
+        v_flex()
+            .id(("grab-line", id))
+            .child(row)
+            .when(open, |line_view| {
+                line_view.child(
+                    div()
+                        .pl(px(26.0))
+                        .pt(px(2.0))
+                        .pb(px(8.0))
+                        .child(facts(theme, &line.facts)),
+                )
+            })
             .into_any_element()
     }
 
@@ -721,67 +1169,69 @@ impl LoaderGrabber {
         theme: &Theme,
         index: usize,
         group: &Group,
+        listed: &Listed,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        section(theme, group.title)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .rounded(theme.radius.panel)
-                    .border_1()
-                    .border_color(theme.hairline)
-                    .bg(theme.surface)
-                    .children(group.lines.iter().enumerate().map(|(line_index, line)| {
-                        let add = Act::AddDrop {
-                            name: line.name.clone(),
-                        };
-                        div()
-                            .id(("grab-line", index * 1000 + line_index))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .min_h(px(32.0))
-                            .pl(px(10.0))
-                            .pr(px(4.0))
-                            .when(line_index > 0, |row| {
-                                row.border_t_1().border_color(theme.hairline)
-                            })
-                            .child(div().flex_1().min_w_0().truncate().child(line.name.clone()))
-                            .child(amount(theme, line))
-                            .child(
-                                Button::icon(
-                                    ("grab-line-add", index * 1000 + line_index),
-                                    Icon::Plus,
-                                    format!("Add {} to drops", line.name),
-                                )
-                                .size(Size::Small)
-                                .variant(Variant::Ghost)
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.act(add.clone(), cx)),
-                                ),
-                            )
-                    })),
-            )
+        let rows = group.lines.iter().enumerate().map(|(line_index, line)| {
+            let id = index * 1000 + line_index;
+            let register = line.item_id.map(|_| {
+                if listed.has_drop(&line.name) {
+                    Button::icon(
+                        ("grab-line-add", id),
+                        Icon::Check,
+                        format!("{} is a registered drop", line.name),
+                    )
+                    .size(Size::Small)
+                    .disabled(true)
+                    .hide_tooltip()
+                } else {
+                    let act = Act::RegisterDrop {
+                        name: line.name.clone(),
+                    };
+                    Button::icon(
+                        ("grab-line-add", id),
+                        Icon::Plus,
+                        format!("Register {} as a drop", line.name),
+                    )
+                    .size(Size::Small)
+                    .tooltip("Register drop")
+                    .on_click(cx.listener(move |this, _, _, cx| this.act(act.clone(), cx)))
+                }
+            });
+            if !line.facts.is_empty() {
+                return self.detailed_line(theme, id, line, register, cx);
+            }
+            let (amount, color) = amount(theme, line);
+            h_flex()
+                .id(("grab-line", id))
+                .gap(px(8.0))
+                .h(ROW)
+                .child(div().flex_1().min_w_0().truncate().child(line.name.clone()))
+                .children(detail(line).map(|text| {
+                    div()
+                        .flex_none()
+                        .text_small()
+                        .font_features(tabular())
+                        .text_color(theme.text_tertiary)
+                        .child(text)
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w(px(32.0))
+                        .text_right()
+                        .text_small()
+                        .font_features(tabular())
+                        .text_color(color)
+                        .child(amount),
+                )
+                .children(register)
+                .into_any_element()
+        });
+        caption(theme, group.title)
+            .child(v_flex().children(rows))
             .into_any_element()
     }
-}
-
-fn ids_input(
-    kind: LoadKind,
-    text: &str,
-    cx: &mut Context<LoaderGrabber>,
-) -> (Entity<Input>, Subscription) {
-    let input = cx.new(|cx| {
-        let mut input = Input::new(kind.placeholder(), cx).placeholder(kind.placeholder());
-        input.set_text(text.to_owned(), cx);
-        input
-    });
-    let events = cx.subscribe(&input, |this, input, event, cx| match event {
-        InputEvent::Changed => input.update(cx, |input, cx| input.set_invalid(false, cx)),
-        InputEvent::Submitted => this.load(cx),
-    });
-    (input, events)
 }
 
 fn describe(load: &Load) -> String {
@@ -794,38 +1244,65 @@ fn describe(load: &Load) -> String {
     }
 }
 
-fn tooltip(act: &Act) -> &'static str {
+fn tooltip(act: &Act) -> Option<&'static str> {
     match act {
-        Act::Game(Action::Buy { .. }) => "Buy one purchase of it",
-        Act::Game(Action::Accept { .. }) => "Accept it now",
-        Act::Game(Action::FakeComplete { .. }) => {
-            "Make this client treat it as done, so quests and maps that need it open. The server doesn't change."
-        }
-        Act::Game(Action::Equip { .. }) => "Equip it",
-        Act::Game(Action::Deposit { .. }) => "Move it to the bank",
-        Act::Game(Action::Withdraw { .. }) => "Move it to the inventory",
-        Act::Game(Action::Jump { .. }) => "Jump to this monster's cell",
+        Act::Game(Action::FakeComplete { .. }) => Some(
+            "Make this client treat it as done, so quests and maps that need it open. The server doesn't change.",
+        ),
         Act::Register { .. } => {
-            "Accept and turn it in whenever it's ready, from this tab's environment"
+            Some("Accept and turn it in whenever it's ready, from this tab's environment")
         }
-        Act::AddDrop { .. } => "Pick it up whenever it drops, from this tab's environment",
+        Act::RegisterDrop { .. } => {
+            Some("Pick it up whenever it drops, from this tab's environment")
+        }
+        Act::Game(_) => None,
     }
 }
 
-fn row(entry: &Entry) -> ListItem {
+fn copy_id(id_label: &str) -> String {
+    match id_label {
+        "Item ID" => "Copy item ID".into(),
+        "Quest ID" => "Copy quest ID".into(),
+        other => format!("Copy {other}"),
+    }
+}
+
+fn line(entry: &Entry, theme: &Theme) -> ListItem {
+    let tags = entry.badges.join(" · ");
     ListItem::new(entry.name.clone())
-        .description(format!("{} {}", entry.id_label, entry.id))
+        .child(
+            h_flex()
+                .gap(px(8.0))
+                .min_w_0()
+                .child(div().min_w_0().truncate().child(entry.name.clone()))
+                .when(!tags.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_small()
+                            .text_color(theme.text_tertiary)
+                            .child(tags),
+                    )
+                }),
+        )
         .end_slot(
             h_flex()
-                .gap(px(4.0))
-                .children(entry.badges.iter().map(|badge| Badge::new(*badge)))
-                .when(!entry.meta.is_empty(), |end| end.child(entry.meta.clone())),
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .w(META)
+                        .text_right()
+                        .truncate()
+                        .when(entry.here, |meta| meta.text_color(theme.accent_text))
+                        .child(entry.meta.clone()),
+                )
+                .child(div().w(ID).text_right().child(entry.id.clone())),
         )
 }
 
-fn amount(theme: &Theme, line: &Line) -> Div {
+fn amount(theme: &Theme, line: &Line) -> (String, Hsla) {
     let held = line.held.total();
-    let (text, color) = if line.needed {
+    if line.needed {
         let color = if held >= line.quantity {
             theme.accent_text
         } else {
@@ -833,43 +1310,40 @@ fn amount(theme: &Theme, line: &Line) -> Div {
         };
         (format!("{held}/{}", line.quantity), color)
     } else {
-        let mut text = format!("×{}", line.quantity);
+        (format!("×{}", line.quantity), theme.text_secondary)
+    }
+}
+
+fn detail(line: &Line) -> Option<String> {
+    let mut parts = Vec::new();
+    if line.needed {
+        if line.held.bank > 0 {
+            parts.push(format!("{} in bank", line.held.bank));
+        }
+    } else {
         if let Some(chance) = line.chance {
-            text.push_str(&format!(" · {}%", (chance * 100.0).round() / 100.0));
+            parts.push(percent(chance));
         }
+        let held = line.held.total();
         if held > 0 {
-            text.push_str(&format!(" · have {held}"));
+            parts.push(format!("{held} owned"));
         }
-        (text, theme.text_secondary)
-    };
-    let in_bank = (line.held.bank > 0).then(|| format!("{} in bank", line.held.bank));
-    div()
-        .flex()
-        .flex_none()
-        .flex_col()
-        .items_end()
-        .text_size(TEXT_SMALL)
-        .font_features(tabular())
-        .text_color(color)
-        .child(text)
-        .children(in_bank.map(|text| div().text_color(theme.text_tertiary).child(text)))
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn facts(theme: &Theme, facts: &[(&'static str, String)]) -> Div {
-    div()
-        .flex()
-        .flex_col()
+    v_flex()
         .gap(px(4.0))
         .children(facts.iter().map(|(label, value)| {
-            div()
-                .flex()
+            h_flex()
+                .items_start()
                 .gap(px(12.0))
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
+                .text_small()
                 .child(
                     div()
                         .flex_none()
-                        .w(px(96.0))
+                        .w(LABEL_WIDTH)
                         .text_color(theme.text_tertiary)
                         .child(*label),
                 )
@@ -883,10 +1357,10 @@ fn facts(theme: &Theme, facts: &[(&'static str, String)]) -> Div {
         }))
 }
 
-fn section(theme: &Theme, title: &'static str) -> Div {
-    div().flex().flex_col().gap(px(6.0)).child(
+fn caption(theme: &Theme, title: &'static str) -> Div {
+    v_flex().gap(px(4.0)).child(
         div()
-            .text_size(TEXT_SMALL)
+            .text_small()
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_secondary)
             .child(title),
@@ -895,8 +1369,7 @@ fn section(theme: &Theme, title: &'static str) -> Div {
 
 fn quiet(theme: &Theme, text: &'static str) -> Div {
     div()
-        .text_size(TEXT_SMALL)
-        .line_height(LINE_SMALL)
+        .text_small()
         .text_color(theme.text_tertiary)
         .child(text)
 }
@@ -936,47 +1409,24 @@ impl Render for LoaderGrabber {
             window,
             cx,
         );
-        let entries = self.shown_entries(cx);
-        let heading = self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.heading.is_some());
-        let list_height = (window.viewport_size().height
-            - BAR_HEIGHT
-            - LOADER_ROW
-            - SEARCH_ROW
-            - if heading { HEADING_ROW } else { px(0.0) }
-            - FOOTER
-            - px(12.0))
-        .max(px(120.0));
         let body = if self.shown.is_some() {
-            div()
-                .flex()
+            v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(self.sidebar(&theme, cx))
-                .child(self.list_column(&theme, &entries, list_height, cx))
+                .child(self.toolbar(&theme, cx))
                 .child(
-                    div()
-                        .id("grab-inspector")
-                        .flex_none()
-                        .w(INSPECTOR)
+                    h_flex()
+                        .items_stretch()
+                        .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .p(px(16.0))
-                        .border_l_1()
-                        .border_color(theme.hairline)
-                        .child(self.inspector(&theme, cx)),
+                        .child(self.list_column(&theme, cx))
+                        .child(self.inspector_pane(&theme, cx)),
                 )
-                .into_any_element()
         } else {
-            div()
-                .flex_1()
-                .child(Empty::new(
-                    "No tabs open",
-                    "Open a tab to load and grab from it.",
-                ))
-                .into_any_element()
+            v_flex().flex_1().child(Empty::new(
+                "No tabs open",
+                "Open a tab to load and grab from it.",
+            ))
         };
         div()
             .flex()
@@ -991,21 +1441,73 @@ impl Render for LoaderGrabber {
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
             .child(header)
-            .child(self.loader_row(&theme, cx))
             .child(body)
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .h(FOOTER)
-                    .px(px(16.0))
-                    .border_t_1()
-                    .border_color(theme.hairline)
-                    .text_size(TEXT_SMALL)
-                    .text_color(theme.text_secondary)
-                    .truncate()
-                    .children(self.notice.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Focusable as _, TestAppContext, VisualTestContext};
+
+    use super::*;
+    use crate::automation::settings::Automation;
+
+    fn open(cx: &mut TestAppContext) -> (Entity<LoaderGrabber>, &mut VisualTestContext) {
+        let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(mira_ui::init);
+        let (grabber, cx) = cx.add_window_view(|window, cx| {
+            window.activate_window();
+            let client = Client::empty_for_tests(&folder, cx);
+            let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+            grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+            grabber
+        });
+        cx.run_until_parked();
+        (grabber, cx)
+    }
+
+    fn press(cx: &mut VisualTestContext, keys: &'static str) {
+        cx.simulate_keystrokes(keys);
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse(keys).unwrap(),
+        });
+        cx.run_until_parked();
+    }
+
+    fn typed(cx: &mut VisualTestContext, text: &str) {
+        cx.simulate_input(text);
+        cx.run_until_parked();
+    }
+
+    fn shop_field(
+        grabber: &Entity<LoaderGrabber>,
+        cx: &mut VisualTestContext,
+    ) -> (String, Option<String>) {
+        grabber.read_with(cx, |grabber, cx| {
+            (
+                grabber.shop.input.read(cx).text().to_owned(),
+                grabber.shop.problem.as_ref().map(ToString::to_string),
             )
+        })
+    }
+
+    #[gpui::test]
+    fn a_load_the_field_cant_read_keeps_the_text_and_says_why(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        let input = grabber.read_with(cx, |grabber, _| grabber.shop.input.clone());
+        cx.update(|window, cx| window.focus(&input.focus_handle(cx), cx));
+        press(cx, "enter");
+        assert_eq!(shop_field(&grabber, cx), (String::new(), None));
+
+        typed(cx, "12a");
+        press(cx, "enter");
+        assert_eq!(
+            shop_field(&grabber, cx),
+            ("12a".into(), Some("IDs are whole numbers above 0".into()))
+        );
+
+        typed(cx, "4");
+        assert_eq!(shop_field(&grabber, cx), ("12a4".into(), None));
     }
 }

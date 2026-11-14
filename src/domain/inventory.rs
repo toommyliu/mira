@@ -99,7 +99,7 @@ pub(crate) struct Item {
     member: bool,
     coins: bool,
     pool: ItemPool,
-    class_rank: Option<i32>,
+    pub(super) class_rank: Option<i32>,
     pub(super) enhancement: Option<Enhancement>,
 }
 
@@ -108,8 +108,8 @@ pub(crate) struct Item {
 pub(crate) struct Enhancement {
     id: i32,
     pub(super) level: i32,
-    pattern_id: Option<i32>,
-    proc_id: Option<i32>,
+    pub(super) pattern_id: Option<i32>,
+    pub(super) proc_id: Option<i32>,
     dps: Option<i32>,
     range: Option<i32>,
     rarity: Option<i32>,
