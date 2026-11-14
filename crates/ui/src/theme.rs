@@ -54,6 +54,7 @@ pub const PANEL_INSET: Pixels = px(4.0);
 
 pub const FOCUS_RING: Pixels = px(2.0);
 pub const FOCUS_GAP: Pixels = px(2.0);
+pub const RING_ROOM: Pixels = px(6.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {

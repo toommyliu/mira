@@ -266,6 +266,7 @@ pub fn focus_first(container: &FocusHandle, window: &mut Window, cx: &mut App) {
 }
 
 pub fn trap_tab(container: &FocusHandle, backwards: bool, window: &mut Window, cx: &mut App) {
+    request_reveal(cx);
     for _ in 0..64 {
         if backwards {
             window.focus_prev(cx);

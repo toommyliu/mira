@@ -1,26 +1,45 @@
 use gpui::{
-    AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
-    px, size,
+    AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Window, div, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, Tone,
+    ActiveTheme as _, FOCUS_SCOPE, Tone,
     components::StatusLabel,
     primitives::{
-        Activity, Alert, Badge, Button, Dialog, Dot, DropdownMenu, Icon, List, ListItem, MenuItem,
-        Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs, ToggleGroup, ToggleItem,
+        Activity, Alert, Badge, Button, Checkbox, CheckedState, Dialog, Dot, DropdownMenu, Icon,
+        List, ListItem, MenuItem, Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs,
+        ToggleGroup, ToggleItem,
         button::{Joined, Size, Variant},
     },
     snapshot,
     theme::{SYSTEM_SANS, TEXT_BODY},
 };
 
-struct Scene(fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement);
+struct Scene(
+    fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
+    gpui::FocusHandle,
+);
+
+impl Scene {
+    fn open(
+        render: fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> gpui::Entity<Scene> {
+        let scene = cx.new(|cx| Scene(render, cx.focus_handle()));
+        let focus = scene.read(cx).1.clone();
+        window.focus(&focus, cx);
+        scene
+    }
+}
 
 impl Render for Scene {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         div()
             .size_full()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.1)
             .p(px(16.0))
             .bg(theme.base)
             .text_color(theme.text)
@@ -36,9 +55,26 @@ fn scene(
     height: f32,
     render: fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
 ) {
-    for path in snapshot(name, size(px(width), px(height)), move |_, cx| {
-        cx.new(|_| Scene(render))
+    for path in snapshot(name, size(px(width), px(height)), move |window, cx| {
+        Scene::open(render, window, cx)
     }) {
+        assert!(path.exists(), "{} was not written", path.display());
+    }
+}
+
+fn scene_after_keys(
+    name: &str,
+    width: f32,
+    height: f32,
+    keys: &[&'static str],
+    render: fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
+) {
+    for path in mira_ui::snapshot_after(
+        name,
+        size(px(width), px(height)),
+        keys,
+        move |window, cx| Scene::open(render, window, cx),
+    ) {
         assert!(path.exists(), "{} was not written", path.display());
     }
 }
@@ -173,6 +209,60 @@ fn snapshot_dialog() {
             .action(Button::new("save", "Save").variant(Variant::Primary))
             .into_any_element()
     });
+}
+
+#[test]
+fn snapshot_dialog_small_window() {
+    scene("dialog-small-window", 340.0, 280.0, |_, _| {
+        Dialog::new("boosts", true, "Add boosts you own")
+            .alert()
+            .description("Adding one from your bank moves it to your inventory.")
+            .body(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .children((0..12usize).map(|index| {
+                        Checkbox::new(
+                            ("boost", index),
+                            format!("Class Experience Boost {}", index + 1),
+                            if index < 3 {
+                                CheckedState::Checked
+                            } else {
+                                CheckedState::Unchecked
+                            },
+                        )
+                    })),
+            )
+            .action(Button::new("cancel", "Cancel"))
+            .action(Button::new("add", "Add 3 boosts").variant(Variant::Primary))
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_dialog_initial_focus() {
+    scene_after_keys(
+        "dialog-initial-focus",
+        520.0,
+        300.0,
+        &["f19"],
+        |window, cx| {
+            let field = |label: &'static str, window: &mut Window, cx: &mut Context<Scene>| {
+                let input = window.use_keyed_state(label, cx, |_, cx| {
+                    mira_ui::primitives::Input::new(label, cx)
+                });
+                mira_ui::primitives::Field::new(label, input)
+            };
+            Dialog::new("add-account", true, "Add account")
+                .body(field("Username", window, cx))
+                .body(field("Password", window, cx))
+                .action(Button::new("cancel", "Cancel"))
+                .action(Button::new("save", "Save").variant(Variant::Primary))
+                .on_close(|_, _| {})
+                .into_any_element()
+        },
+    );
 }
 
 #[test]
