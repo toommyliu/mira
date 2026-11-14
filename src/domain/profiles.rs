@@ -23,8 +23,6 @@ pub(crate) struct Profile {
 pub(crate) struct Trigger {
     pub(crate) includes: Text,
     pub(crate) skill: Skill,
-    #[serde(with = "millis")]
-    pub(crate) within: Duration,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,7 +464,7 @@ mod tests {
     fn boss_healer() -> serde_json::Value {
         json!({
             "onCooldown": "skip",
-            "triggers": [{ "includes": "prepares", "skill": 3, "within": 3000 }],
+            "triggers": [{ "includes": "prepares", "skill": 3 }],
             "priority": [
                 { "skill": 5, "when": [{ "type": "hp", "of": "me", "atMost": "30%" }] },
                 { "skill": 2, "when": [{ "type": "hp", "of": "anyAlly", "atMost": 6000 }] }
@@ -539,9 +537,9 @@ mod tests {
         );
         assert!(serde_json::from_value::<Profile>(json!({ "onCooldown": "skip", "priority": [{ "skill": 1, "onCooldown": "wait" }], "steps": [] })).is_err());
         for trigger in [
-            json!({ "includes": " ", "skill": 3, "within": 1000 }),
-            json!({ "includes": "slam", "skill": 9, "within": 1000 }),
-            json!({ "includes": "slam", "skill": 3 }),
+            json!({ "includes": " ", "skill": 3 }),
+            json!({ "includes": "slam", "skill": 9 }),
+            json!({ "skill": 3 }),
         ] {
             assert!(
                 serde_json::from_value::<Profile>(

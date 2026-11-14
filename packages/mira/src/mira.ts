@@ -83,7 +83,6 @@ const wireStep = <S extends PriorityStep>(step: S) => ({
 
 const wireProfile = (profile: Profile) => ({
   ...profile,
-  triggers: profile.triggers?.map((trigger) => ({ ...trigger, within: millis(trigger.within) })),
   priority: profile.priority?.map(wireStep),
   steps: profile.steps.map(wireStep),
 });
@@ -297,11 +296,9 @@ export type Condition =
       readonly measure?: "stacks" | "value";
     } & Bound<number>);
 export type Trigger = {
-  /** Matched against combat and server messages, ignoring case and extra spaces. */
+  /** Matched against combat and server messages, ignoring case and extra spaces. A match casts the skill once, as soon as it's ready, unless 3 seconds pass after the latest match. Matches heard before the cast share it. */
   readonly includes: string;
   readonly skill: Skill;
-  /** A matching message casts the skill once, as soon as it's ready, unless this much time passes after the latest match. Matches heard before the cast share it. */
-  readonly within: Duration.Input;
 };
 export type PriorityStep = {
   readonly skill: Skill;

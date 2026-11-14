@@ -360,7 +360,7 @@ mod tests {
                         "Boss",
                         json!({
                             "onCooldown": "skip",
-                            "triggers": [{ "includes": "prepares", "skill": 4, "within": 1000 }],
+                            "triggers": [{ "includes": "prepares", "skill": 4 }],
                             "steps": [{ "skill": 1 }]
                         }),
                     )]),

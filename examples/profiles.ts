@@ -2,7 +2,7 @@ import { Combat, Player, type Profile } from "mira";
 
 const BOSS: Profile = {
   onCooldown: "skip",
-  triggers: [{ includes: "prepares", skill: 3, within: "3 seconds" }],
+  triggers: [{ includes: "prepares", skill: 3 }],
   priority: [
     { skill: 5, when: [{ type: "hp", of: "me", atMost: "30%" }] },
     { skill: 2, when: [{ type: "hp", of: "anyAlly", atMost: "60%" }] },

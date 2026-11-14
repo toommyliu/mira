@@ -1342,7 +1342,7 @@ impl Editor {
                 .child(form::row("Cast", true, skills))
                 .child(row_note(
                     theme,
-                    "Casts once, as soon as the skill is ready.",
+                    "Casts once, as soon as the skill is ready. Gives up if that takes more than 3 seconds.",
                 )),
             Item::Step(lane, index) => {
                 let Some(step) = self.form().lane(lane).get(index) else {
@@ -1844,7 +1844,7 @@ mod tests {
             "Ultra speaker".into(),
             profile(json!({
                 "onCooldown": "wait",
-                "triggers": [{ "includes": "prepares a massive attack", "skill": 3, "within": 3000 }],
+                "triggers": [{ "includes": "prepares a massive attack", "skill": 3 }],
                 "priority": [
                     { "skill": 5, "when": [{ "type": "hp", "of": "me", "atMost": "30%" }] }
                 ],

@@ -27,7 +27,6 @@ pub(super) struct Form {
 pub(super) struct FormTrigger {
     pub(super) includes: String,
     pub(super) skill: Skill,
-    within: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,7 +97,6 @@ impl FormTrigger {
         Self {
             includes: String::new(),
             skill,
-            within: Duration::from_secs(3),
         }
     }
 
@@ -116,7 +114,6 @@ impl FormTrigger {
                 "A trigger needs the message text to look for.",
             )?,
             skill: self.skill,
-            within: self.within,
         })
     }
 }
@@ -346,7 +343,6 @@ impl Form {
                 .map(|trigger| FormTrigger {
                     includes: trigger.includes.as_str().to_owned(),
                     skill: trigger.skill,
-                    within: trigger.within,
                 })
                 .collect(),
             priority: profile
@@ -449,7 +445,7 @@ mod tests {
     fn a_saved_profile_comes_back_unchanged_through_the_form() {
         let saved = profile(json!({
             "onCooldown": "wait",
-            "triggers": [{ "includes": "prepares", "skill": 3, "within": 3000 }],
+            "triggers": [{ "includes": "prepares", "skill": 3 }],
             "priority": [
                 { "skill": 5, "when": [{ "type": "hp", "of": "me", "atMost": "30%" }] },
                 { "skill": 2, "pauseAfter": 400, "when": [{ "type": "hp", "of": "anyAlly", "atMost": 6000 }] }

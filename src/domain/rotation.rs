@@ -12,6 +12,7 @@ use super::{
 use crate::bridge::{self, CallError, Event, Loader, Subscription, Value};
 
 const SLOTS: usize = 6;
+const TRIGGER_WINDOW: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Vitals {
@@ -170,7 +171,7 @@ impl Rotation {
             let Some(heard) = *pending else {
                 continue;
             };
-            if now.saturating_duration_since(heard) > trigger.within {
+            if now.saturating_duration_since(heard) > TRIGGER_WINDOW {
                 *pending = None;
             } else if snapshot.ready(trigger.skill) {
                 return Some(Cast {
@@ -672,9 +673,9 @@ mod tests {
         let mut fight = Fight::default();
         let mut rotation = Rotation::new(profile(json!({
             "onCooldown": "skip",
-            "triggers": [{ "includes": "Prepares  a", "skill": 3, "within": 1000 }],
+            "triggers": [{ "includes": "Prepares  a", "skill": 3 }],
             "priority": [{ "skill": 5 }],
-            "steps": [{ "skill": 1, "pauseAfter": 5000 }]
+            "steps": [{ "skill": 1, "pauseAfter": 9000 }]
         })));
         let start = Instant::now();
         let at = |millis| start + Duration::from_millis(millis);
@@ -695,8 +696,9 @@ mod tests {
         assert_eq!(skill(rotation.decide(&fight.snapshot(), at(1300))), Some(3));
         rotation.hear("prepares a slam", at(2000));
         fight.blocked = vec![3, 5];
-        assert_eq!(skill(rotation.decide(&fight.snapshot(), at(3100))), None);
+        assert_eq!(skill(rotation.decide(&fight.snapshot(), at(5100))), None);
         fight.blocked = vec![5];
-        assert_eq!(skill(rotation.decide(&fight.snapshot(), at(5000))), Some(1));
+        assert_eq!(skill(rotation.decide(&fight.snapshot(), at(5200))), None);
+        assert_eq!(skill(rotation.decide(&fight.snapshot(), at(9000))), Some(1));
     }
 }

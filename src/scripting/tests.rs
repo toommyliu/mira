@@ -1741,7 +1741,7 @@ export default function* () {
   yield* Combat.kill("Boss", {
     profile: {
       onCooldown: "wait",
-      triggers: [{ includes: "prepares", skill: 3, within: "1.5 seconds" }],
+      triggers: [{ includes: "prepares", skill: 3 }],
       priority: [{ skill: 2, pauseAfter: "0.5 seconds" }],
       steps: [{ skill: 1, when: [{ type: "hp", of: "anyAlly", atMost: "60%" }] }, { skill: 4 }],
     },
@@ -1831,7 +1831,7 @@ export default function* () {
             profile: Some(ProfileChoice::Inline(
                 serde_json::from_value(serde_json::json!({
                     "onCooldown": "wait",
-                    "triggers": [{ "includes": "prepares", "skill": 3, "within": 1500 }],
+                    "triggers": [{ "includes": "prepares", "skill": 3 }],
                     "priority": [{ "skill": 2, "pauseAfter": 500 }],
                     "steps": [
                         { "skill": 1, "when": [{ "type": "hp", "of": "anyAlly", "atMost": "60%" }] },
