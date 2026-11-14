@@ -36,7 +36,7 @@ package mira.module {
 			setVisible(player.pMC.mcChar, visible);
 			setVisible(player.pMC.pname, visible);
 			setVisible(player.pMC.shadow, visible);
-			setVisible(player.petMC, visible);
+			setVisible(player.petMC, visible && player.pMC.visible);
 			setVisible(player.pMC.cShadow, visible);
 			setAlpha(player.pMC.shadow, enabled ? 0 : 1);
 		}
