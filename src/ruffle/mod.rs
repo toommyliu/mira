@@ -549,14 +549,11 @@ fn run(
                 }) => {
                     let statuses = outputs.clone();
                     let bridge = commands_bridge.clone();
-                    let loaded = bridge.subscribe(|event| matches!(event, Event::Loaded));
                     let connections = bridge.subscribe(auto_relogin::wants);
                     let logins = logins.clone();
                     let settings = automation.auto_relogin();
                     spawn_local(&inbox, &tasks, async move {
-                        while !bridge.loaded() {
-                            let _ = loaded.next().await;
-                        }
+                        bridge.ready().await;
                         sign_in::run(
                             bridge,
                             logins,
@@ -574,13 +571,10 @@ fn run(
                 Some(Msg::WatchSignIn) => {
                     let statuses = outputs.clone();
                     let bridge = commands_bridge.clone();
-                    let loaded = bridge.subscribe(|event| matches!(event, Event::Loaded));
                     let connections = bridge.subscribe(auto_relogin::wants);
                     let identified = bridge.clone();
                     spawn_local(&inbox, &tasks, async move {
-                        while !bridge.loaded() {
-                            let _ = loaded.next().await;
-                        }
+                        bridge.ready().await;
                         sign_in::watch(bridge, connections, move |status| {
                             if matches!(status, sign_in::Status::Online(_)) {
                                 match player::identity(&identified) {
@@ -727,6 +721,7 @@ async fn run_command(
     cooldown: CombatCooldown,
     command: Command,
 ) {
+    bridge.ready().await;
     let done = match command {
         Command::FetchBoosts(found) => {
             let _ = found.try_send(boosts::fetch(&bridge).await);

@@ -157,6 +157,7 @@ pub(crate) async fn answer(
         reply,
         ..
     } = call;
+    bridge.ready().await;
     reply.send(
         serve(
             &bridge,

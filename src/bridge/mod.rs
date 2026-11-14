@@ -79,6 +79,16 @@ impl Bridge {
         self.0.loaded.get()
     }
 
+    pub(crate) async fn ready(&self) {
+        if self.loaded() {
+            return;
+        }
+        let loads = self.subscribe(|event| *event == Event::Loaded);
+        while !self.loaded() {
+            let _ = loads.next().await;
+        }
+    }
+
     pub(crate) fn subscribe(&self, wants: impl Fn(&Event) -> bool + 'static) -> Subscription {
         self.0.events.subscribe(wants)
     }
@@ -454,6 +464,12 @@ mod tests {
     }
 
     fn fixture() -> (Arc<Mutex<Player>>, Bridge) {
+        let (player, bridge) = unloaded_fixture();
+        player.lock().unwrap().run_frame();
+        (player, bridge)
+    }
+
+    fn unloaded_fixture() -> (Arc<Mutex<Player>>, Bridge) {
         let movie = SwfMovie::from_data(
             &fixture_swf(),
             "file:///mira/fixture.swf".into(),
@@ -467,7 +483,6 @@ mod tests {
             .with_external_interface(Box::new(bridge.clone()))
             .build();
         bridge.attach(&player);
-        player.lock().unwrap().run_frame();
         (player, bridge)
     }
 
@@ -503,6 +518,26 @@ mod tests {
             bridge.call("probe.missing", vec![]),
             Err(CallError::Unavailable("probe.missing"))
         );
+    }
+
+    #[test]
+    fn waiting_for_the_loader_ends_once_its_callbacks_are_registered() {
+        let (player, bridge) = unloaded_fixture();
+        let mut waiting = pin!(bridge.ready());
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(
+            bridge.call("probe.echo", vec!["hello".into()]),
+            Err(CallError::Unavailable("probe.echo"))
+        );
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+
+        player.lock().unwrap().run_frame();
+        assert!(waiting.poll(&mut context).is_ready());
+        assert_eq!(
+            bridge.call("probe.echo", vec!["hello".into()]),
+            Ok("hello".into())
+        );
+        assert_eq!(ready(bridge.ready()), Some(()));
     }
 
     #[test]
