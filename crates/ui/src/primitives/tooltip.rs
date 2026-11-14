@@ -21,12 +21,14 @@ const WARM: Duration = Duration::from_millis(400);
 const GAP: Pixels = px(6.0);
 const MARGIN: Pixels = px(8.0);
 const HEIGHT: Pixels = px(26.0);
+const INSET: Pixels = px(9.0);
 
 #[derive(IntoElement)]
 pub struct Tooltip {
     id: ElementId,
     label: SharedString,
     trigger: AnyElement,
+    start: bool,
 }
 
 impl Tooltip {
@@ -39,7 +41,13 @@ impl Tooltip {
             id: id.into(),
             label: label.into(),
             trigger: trigger.into_any_element(),
+            start: false,
         }
+    }
+
+    pub fn align_start(mut self) -> Self {
+        self.start = true;
+        self
     }
 }
 
@@ -48,10 +56,15 @@ impl RenderOnce for Tooltip {
         let trigger = div()
             .id(self.id.clone())
             .relative()
-            .flex_none()
+            .min_w_0()
             .aria_description(self.label.clone())
             .child(self.trigger);
-        attach(trigger, (self.id, "tooltip"), self.label, false, window, cx)
+        let id = ElementId::from((self.id, "tooltip"));
+        let popup_id = id.clone();
+        let (label, start) = (self.label, self.start);
+        hover(trigger, id, false, window, cx, move |at, window, cx| {
+            popup(popup_id, label, at, start, window, cx)
+        })
     }
 }
 
@@ -79,7 +92,7 @@ pub fn attach(
     let id = id.into();
     let popup_id = id.clone();
     hover(trigger, id, focused, window, cx, move |at, window, cx| {
-        popup(popup_id, label, at, window, cx)
+        popup(popup_id, label, at, false, window, cx)
     })
 }
 
@@ -162,22 +175,24 @@ fn popup(
     id: ElementId,
     label: SharedString,
     trigger: Bounds<Pixels>,
+    start: bool,
     window: &Window,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
     let room_above = trigger.top() - GAP - HEIGHT >= MARGIN;
     let room_below = trigger.bottom() + GAP + HEIGHT <= window.viewport_size().height - MARGIN;
-    let (position, anchor) = if room_above || !room_below {
-        (
-            point(trigger.center().x, trigger.top() - GAP),
-            Anchor::BottomCenter,
-        )
+    let above = room_above || !room_below;
+    let x = if start {
+        trigger.left() - INSET
     } else {
-        (
-            point(trigger.center().x, trigger.bottom() + GAP),
-            Anchor::TopCenter,
-        )
+        trigger.center().x
+    };
+    let (position, anchor) = match (above, start) {
+        (true, false) => (point(x, trigger.top() - GAP), Anchor::BottomCenter),
+        (true, true) => (point(x, trigger.top() - GAP), Anchor::BottomLeft),
+        (false, false) => (point(x, trigger.bottom() + GAP), Anchor::TopCenter),
+        (false, true) => (point(x, trigger.bottom() + GAP), Anchor::TopLeft),
     };
     deferred(
         anchored()
