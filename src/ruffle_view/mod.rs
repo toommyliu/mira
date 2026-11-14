@@ -176,6 +176,15 @@ impl RuffleView {
                             });
                             continue;
                         }
+                        Output::Link(url) => {
+                            if this
+                                .update(cx, |_: &mut Self, cx| cx.open_url(url.as_str()))
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                         Output::FrameClock(enabled) => {
                             if this
                                 .update(cx, |this: &mut Self, _| {

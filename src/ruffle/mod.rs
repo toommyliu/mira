@@ -84,6 +84,7 @@ pub(crate) enum Output {
     Stage(Option<view::StageFit>),
     Beep,
     Packets(Vec<Captured>),
+    Link(url::Url),
 }
 
 #[derive(Clone)]
@@ -259,7 +260,12 @@ fn run(
     let bridge = Bridge::default();
     let player = PlayerBuilder::new()
         .with_boxed_renderer(surface.renderer(viewport)?)
-        .with_navigator(Navigator::new(net, inbox.clone(), tasks.clone()))
+        .with_navigator(Navigator::new(
+            net,
+            inbox.clone(),
+            tasks.clone(),
+            outputs.clone(),
+        ))
         .with_boxed_audio(backends::audio::audio())
         .with_external_interface(Box::new(bridge.clone()))
         .with_ui(Ui::new(arboard::Clipboard::new()?, outputs.clone()))
