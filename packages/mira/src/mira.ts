@@ -19,6 +19,9 @@ const army = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const auth = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "auth", op, ...args });
 
+const autoRelogin = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "autoRelogin", op, ...args });
+
 const player = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "player", op, ...args });
 
@@ -123,6 +126,27 @@ export const Auth = {
   /** Matches the server name exactly, ignoring case. */
   connect: (server: string) => auth<ConnectResult>("connect", { server }),
   logout: () => auth<void>("logout"),
+};
+
+export type AutoReloginSettings = {
+  readonly enabled: boolean;
+  /** `null` logs back into the last server. */
+  readonly server: string | null;
+  /** Up to 300. */
+  readonly delaySeconds: number;
+  /** Up to 10. */
+  readonly retries: number;
+  /** From 1 to 600. */
+  readonly backoffSeconds: number;
+  /** From `backoffSeconds` to 600. */
+  readonly backoffCapSeconds: number;
+};
+
+export const AutoRelogin = {
+  get: () => autoRelogin<AutoReloginSettings>("get"),
+  /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
+  update: (patch: Partial<AutoReloginSettings>) =>
+    autoRelogin<AutoReloginSettings>("update", patch),
 };
 
 export type State = "dead" | "idle" | "combat";
