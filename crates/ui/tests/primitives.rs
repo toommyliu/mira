@@ -484,11 +484,13 @@ fn toggling_a_popover_in_a_dialog_keeps_focus_off_the_dialog_search(cx: &mut Tes
 struct OptionsThenGo {
     focus: FocusHandle,
     pressed: Rc<Cell<bool>>,
+    toggled: Rc<std::cell::RefCell<Vec<&'static str>>>,
 }
 
 impl Render for OptionsThenGo {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let pressed = self.pressed.clone();
+        let toggled = self.toggled.clone();
         div()
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
@@ -496,17 +498,16 @@ impl Render for OptionsThenGo {
             .child(
                 mira_ui::primitives::Popover::new("options")
                     .trigger(Button::new("options", "Options"))
-                    .content(|_, _, _| {
+                    .content(move |_, _, _| {
+                        let switch = |id: &'static str| {
+                            let toggled = toggled.clone();
+                            mira_ui::primitives::Switch::new(id, id, false)
+                                .on_toggle(move |_, _, _| toggled.borrow_mut().push(id))
+                        };
                         div()
                             .debug_selector(|| "options-panel".into())
-                            .child(mira_ui::primitives::Switch::new(
-                                "safe",
-                                "Safe start",
-                                false,
-                            ))
-                            .child(mira_ui::primitives::Switch::new(
-                                "restart", "Restart", false,
-                            ))
+                            .child(switch("safe"))
+                            .child(switch("restart"))
                             .into_any_element()
                     }),
             )
@@ -515,12 +516,13 @@ impl Render for OptionsThenGo {
 }
 
 #[gpui::test]
-fn escape_closes_a_popover_after_tabbing_past_its_last_control(cx: &mut TestAppContext) {
+fn tab_cycles_inside_an_open_popover_and_escape_still_closes_it(cx: &mut TestAppContext) {
     cx.update(|cx| {
         mira_ui::init(cx);
         cx.set_reduce_motion(true);
     });
     let pressed = Rc::new(Cell::new(false));
+    let toggled = Rc::default();
     let (_, cx) = cx.add_window_view(|window, cx| {
         let focus = cx.focus_handle();
         window.activate_window();
@@ -528,12 +530,24 @@ fn escape_closes_a_popover_after_tabbing_past_its_last_control(cx: &mut TestAppC
         OptionsThenGo {
             focus,
             pressed: pressed.clone(),
+            toggled: Rc::clone(&toggled),
         }
     });
     cx.run_until_parked();
-    for key in ["tab", "enter", "tab", "tab", "escape"] {
+    for key in [
+        "tab",
+        "enter",
+        "tab",
+        "space",
+        "tab",
+        "space",
+        "shift-tab",
+        "space",
+        "escape",
+    ] {
         press(cx, key);
     }
+    assert_eq!(*toggled.borrow(), ["restart", "safe", "restart"]);
     assert!(cx.debug_bounds("options-panel").is_none());
     assert!(!pressed.get());
 }
