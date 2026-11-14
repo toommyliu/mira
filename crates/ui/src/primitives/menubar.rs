@@ -13,7 +13,7 @@ use super::{
     popover::{self, Content},
 };
 use crate::{
-    FOCUS_SCOPE, FocusNext, FocusPrevious, h_flex, motion,
+    FOCUS_SCOPE, h_flex, motion,
     nav::{self, Step},
 };
 
@@ -369,15 +369,7 @@ fn render_entry(
         Panel::Popover(content) => {
             let close = PopoverClose::returning_focus(state.clone());
             let content = content(&close, window, cx);
-            let focus = state.read(cx).focus();
-            let (next, previous) = (focus.clone(), focus);
-            let panel = popover::panel(&id, label, close, None, cx)
-                .key_context(FOCUS_SCOPE)
-                .on_action(move |_: &FocusNext, window, cx| nav::trap_tab(&next, false, window, cx))
-                .on_action(move |_: &FocusPrevious, window, cx| {
-                    nav::trap_tab(&previous, true, window, cx)
-                })
-                .child(content);
+            let panel = popover::panel(&id, label, close, None, cx).child(content);
             menu::attach(Align::Start, &state, on_outside, window, cx, |from, _| {
                 menu::fading(motion::arrive((id.clone(), "popover"), panel, from), shown)
             })
