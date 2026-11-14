@@ -89,11 +89,19 @@ fn main() -> anyhow::Result<()> {
             };
             let accounts = data.join("accounts.json");
             let manager_device = device.clone();
+            let start = settings::start(cx);
             let opened = cx.open_window(options, |window, cx| {
                 settings::follow_system(window);
-                let view =
-                    ruffle_view::Client::new(data, accounts.clone(), device, armies, window, cx)
-                        .expect("create the AQW player view");
+                let view = ruffle_view::Client::new(
+                    data,
+                    accounts.clone(),
+                    device,
+                    armies,
+                    start == settings::Start::Client,
+                    window,
+                    cx,
+                )
+                .expect("create the AQW player view");
                 window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
                 view
             });
@@ -148,6 +156,15 @@ fn main() -> anyhow::Result<()> {
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
             });
+            if start == settings::Start::Manager {
+                ruffle_view::open_accounts(
+                    main,
+                    client.clone(),
+                    accounts.clone(),
+                    manager_device.clone(),
+                    cx,
+                );
+            }
             cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
                 let (client, accounts, device) =
                     (client.clone(), accounts.clone(), manager_device.clone());
