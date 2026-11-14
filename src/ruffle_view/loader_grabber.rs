@@ -12,8 +12,8 @@ use mira_ui::{
     components::Empty,
     h_flex,
     primitives::{
-        Align, Badge, Button, DropdownMenu, Icon, Input, InputEvent, ListItem, MenuItem, Scrollbar,
-        Select, Spinner, VirtualList,
+        Align, Badge, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input,
+        InputEvent, ListItem, MenuItem, Scrollbar, Select, Spinner, VirtualList,
         button::{Joined, Size, Variant},
     },
     theme::{LINE_BODY, ROW, TEXT_BODY, TEXT_TITLE, tabular},
@@ -37,6 +37,7 @@ use crate::{
         world::Location,
     },
     ruffle::Command,
+    settings,
 };
 
 actions!(mira, [OpenLoaderGrabber]);
@@ -178,6 +179,11 @@ impl Loader {
     }
 }
 
+struct ShopWarning {
+    load: Load,
+    quiet: bool,
+}
+
 struct Listed {
     quests: Vec<i32>,
     drops: Vec<ItemQuery>,
@@ -220,6 +226,7 @@ pub(crate) struct LoaderGrabber {
     located: Option<Location>,
     taken: Option<Outcome>,
     taking: Option<Task<()>>,
+    shop_warning: Option<ShopWarning>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -261,6 +268,7 @@ impl LoaderGrabber {
             located: None,
             taken: None,
             taking: None,
+            shop_warning: None,
             _subscriptions: subscriptions,
         };
         grabber.show(cx);
@@ -298,6 +306,7 @@ impl LoaderGrabber {
             self.acting = None;
             self.taken = None;
             self.taking = None;
+            self.shop_warning = None;
             self.open_source(self.source, None, cx);
         } else if moved && self.source == Source::Monsters {
             self.read(cx);
@@ -458,6 +467,30 @@ impl LoaderGrabber {
                 return;
             }
         };
+        if matches!(load, Load::Shop(_) | Load::HairShop(_)) && settings::shop_warning(cx) {
+            self.shop_warning = Some(ShopWarning { load, quiet: false });
+            cx.notify();
+            return;
+        }
+        self.start(source, load, cx);
+    }
+
+    fn confirm_shop_warning(&mut self, cx: &mut Context<Self>) {
+        let Some(warning) = self.shop_warning.take() else {
+            return;
+        };
+        if warning.quiet {
+            settings::set_shop_warning(false, cx);
+        }
+        self.start(Source::Shop, warning.load, cx);
+    }
+
+    fn dismiss_shop_warning(&mut self, cx: &mut Context<Self>) {
+        self.shop_warning = None;
+        cx.notify();
+    }
+
+    fn start(&mut self, source: Source, load: Load, cx: &mut Context<Self>) {
         let described = describe(&load);
         let lists = matches!(load, Load::Shop(_) | Load::Quests(_));
         let first = match &load {
@@ -771,7 +804,8 @@ impl LoaderGrabber {
                         .disabled(busy)
                         .hide_tooltip(),
                 )
-                .items(move |_, _| {
+                .items(move |_, cx| {
+                    let warn = settings::shop_warning(cx);
                     [
                         ("Load as hair shop", LoadKind::HairShop, empty),
                         ("Open armor customizer", LoadKind::ArmorCustomizer, false),
@@ -784,6 +818,12 @@ impl LoaderGrabber {
                         })
                         .disabled(off)
                     })
+                    .chain([
+                        MenuItem::separator(),
+                        MenuItem::switch("Warn before loading", warn, move |_, cx| {
+                            settings::set_shop_warning(!warn, cx)
+                        }),
+                    ])
                     .collect()
                 });
             h_flex()
@@ -811,6 +851,47 @@ impl LoaderGrabber {
                     .text_color(outcome.color(theme))
                     .child(outcome.text.clone())
             }))
+    }
+
+    fn shop_warning_dialog(&self, cx: &mut Context<Self>) -> Dialog {
+        let warning = self.shop_warning.as_ref();
+        let title = warning.map_or_else(String::new, |warning| {
+            format!("Load {}?", describe(&warning.load))
+        });
+        let quiet = if warning.is_some_and(|warning| warning.quiet) {
+            CheckedState::Checked
+        } else {
+            CheckedState::Unchecked
+        };
+        let toggling = cx.weak_entity();
+        let closing = cx.weak_entity();
+        Dialog::new("shop-warning", warning.is_some(), title)
+            .alert()
+            .description("Make sure you're in the correct map when loading this shop.")
+            .footer_start_slot(
+                Checkbox::new("shop-warning-quiet", "Don't warn me again", quiet).on_toggle(
+                    move |on, _, cx| {
+                        let _ = toggling.update(cx, |this, cx| {
+                            if let Some(warning) = &mut this.shop_warning {
+                                warning.quiet = on;
+                            }
+                            cx.notify();
+                        });
+                    },
+                ),
+            )
+            .action(
+                Button::new("shop-warning-cancel", "Cancel")
+                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_shop_warning(cx))),
+            )
+            .action(
+                Button::new("shop-warning-load", "Load")
+                    .variant(Variant::Primary)
+                    .on_click(cx.listener(|this, _, _, cx| this.confirm_shop_warning(cx))),
+            )
+            .on_close(move |_, cx| {
+                let _ = closing.update(cx, |this, cx| this.dismiss_shop_warning(cx));
+            })
     }
 
     fn list_column(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -1442,6 +1523,7 @@ impl Render for LoaderGrabber {
             .child(mira_ui::nav::pointer_probe())
             .child(header)
             .child(body)
+            .child(self.shop_warning_dialog(cx))
     }
 }
 
@@ -1455,7 +1537,13 @@ mod tests {
     fn open(cx: &mut TestAppContext) -> (Entity<LoaderGrabber>, &mut VisualTestContext) {
         let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        cx.update(mira_ui::init);
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let settings = folder.join(format!("settings-{:x}.json", u64::from_ne_bytes(random)));
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            settings::init(settings, |_| {}, cx);
+        });
         let (grabber, cx) = cx.add_window_view(|window, cx| {
             window.activate_window();
             let client = Client::empty_for_tests(&folder, cx);
@@ -1480,6 +1568,21 @@ mod tests {
         cx.run_until_parked();
     }
 
+    fn focus_shop_field(grabber: &Entity<LoaderGrabber>, cx: &mut VisualTestContext) {
+        let input = grabber.read_with(cx, |grabber, _| grabber.shop.input.clone());
+        cx.update(|window, cx| window.focus(&input.focus_handle(cx), cx));
+    }
+
+    fn shop_warning(
+        grabber: &Entity<LoaderGrabber>,
+        cx: &mut VisualTestContext,
+    ) -> Option<(String, bool)> {
+        grabber.read_with(cx, |grabber, _| {
+            let warning = grabber.shop_warning.as_ref()?;
+            Some((describe(&warning.load), warning.quiet))
+        })
+    }
+
     fn shop_field(
         grabber: &Entity<LoaderGrabber>,
         cx: &mut VisualTestContext,
@@ -1495,8 +1598,7 @@ mod tests {
     #[gpui::test]
     fn a_load_the_field_cant_read_keeps_the_text_and_says_why(cx: &mut TestAppContext) {
         let (grabber, cx) = open(cx);
-        let input = grabber.read_with(cx, |grabber, _| grabber.shop.input.clone());
-        cx.update(|window, cx| window.focus(&input.focus_handle(cx), cx));
+        focus_shop_field(&grabber, cx);
         press(cx, "enter");
         assert_eq!(shop_field(&grabber, cx), (String::new(), None));
 
@@ -1509,5 +1611,59 @@ mod tests {
 
         typed(cx, "4");
         assert_eq!(shop_field(&grabber, cx), ("12a4".into(), None));
+    }
+
+    #[gpui::test]
+    fn loading_a_shop_warns_until_told_not_to(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        focus_shop_field(&grabber, cx);
+        typed(cx, "1234");
+        press(cx, "enter");
+        assert_eq!(
+            shop_warning(&grabber, cx),
+            Some(("shop 1234".into(), false))
+        );
+
+        press(cx, "escape");
+        assert_eq!(shop_warning(&grabber, cx), None);
+        assert!(cx.update(|_, cx| settings::shop_warning(cx)));
+
+        press(cx, "enter");
+        assert_eq!(
+            shop_warning(&grabber, cx),
+            Some(("shop 1234".into(), false))
+        );
+        press(cx, "space");
+        assert_eq!(shop_warning(&grabber, cx), Some(("shop 1234".into(), true)));
+        press(cx, "tab");
+        press(cx, "tab");
+        press(cx, "enter");
+        assert_eq!(shop_warning(&grabber, cx), None);
+        assert!(!cx.update(|_, cx| settings::shop_warning(cx)));
+
+        focus_shop_field(&grabber, cx);
+        press(cx, "enter");
+        assert_eq!(shop_warning(&grabber, cx), None);
+    }
+
+    #[test]
+    fn snapshot_shop_warning() {
+        let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let size = gpui::size(px(WIDTH), px(HEIGHT));
+        for written in mira_ui::snapshot("grabber-shop-warning", size, move |_, cx| {
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&folder, cx);
+                let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+                grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                grabber.shop_warning = Some(ShopWarning {
+                    load: Load::Shop(1234),
+                    quiet: false,
+                });
+                grabber
+            })
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 }

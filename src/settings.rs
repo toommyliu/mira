@@ -55,6 +55,7 @@ struct Settings {
     appearance: Appearance,
     pointer_cursors: bool,
     script_folders: Vec<PathBuf>,
+    skip_shop_warning: bool,
 }
 
 impl Settings {
@@ -153,6 +154,14 @@ pub(crate) fn remove_script_folder(folder: &Path, cx: &mut App) {
     change(cx, |settings| {
         settings.script_folders.retain(|kept| kept != folder);
     });
+}
+
+pub(crate) fn shop_warning(cx: &App) -> bool {
+    !cx.global::<Store>().settings.skip_shop_warning
+}
+
+pub(crate) fn set_shop_warning(on: bool, cx: &mut App) {
+    change(cx, |settings| settings.skip_shop_warning = !on);
 }
 
 fn choose(appearance: Appearance, cx: &mut App) {
@@ -301,6 +310,7 @@ mod tests {
             appearance: Appearance::Dark,
             pointer_cursors: true,
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
+            skip_shop_warning: true,
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
