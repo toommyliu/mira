@@ -164,6 +164,8 @@ fn tab_menu(
                 .variant(Variant::Ghost)
                 .size(Size::Small)
                 .text_size(TEXT_BODY)
+                .flex_shrink(1.0)
+                .min_w_0()
                 .when(pinned, |trigger| {
                     trigger.start_slot(icon(Icon::Pin, theme.accent_text).with_transformation(
                         Transformation::rotate(radians(std::f32::consts::FRAC_PI_4)),
@@ -261,17 +263,17 @@ mod tests {
         );
     }
 
-    struct Scene(Target);
+    struct Scene(Target, &'static str);
 
     impl Render for Scene {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
             let [main, alt] = [1, 2].map(EntityId::from);
-            let tabs = vec![(main, "Artix".into()), (alt, "Alt 1".into())];
+            let tabs = vec![(main, "Artix".into()), (alt, self.1.into())];
             let target = self.0;
             let (tool, shown) = match target {
                 Target::Selected => ("Packets", "Artix"),
-                Target::Pinned(_) => ("Follower", "Alt 1"),
+                Target::Pinned(_) => ("Follower", self.1),
             };
             let menu = tab_menu(shown.into(), target, tabs, Some(main), |_, _, _| {}, cx)
                 .default_open(matches!(target, Target::Pinned(_)));
@@ -287,12 +289,23 @@ mod tests {
 
     #[test]
     fn snapshot_tool_header() {
-        for (name, target) in [
-            ("tool-header-following", Target::Selected),
-            ("tool-header-pinned", Target::Pinned(EntityId::from(2))),
+        for (name, target, alt, width) in [
+            ("tool-header-following", Target::Selected, "Alt 1", 420.0),
+            (
+                "tool-header-pinned",
+                Target::Pinned(EntityId::from(2)),
+                "Alt 1",
+                420.0,
+            ),
+            (
+                "tool-header-narrow",
+                Target::Pinned(EntityId::from(2)),
+                "Sepulchure farm alt",
+                340.0,
+            ),
         ] {
-            for path in mira_ui::snapshot(name, size(px(420.0), px(260.0)), move |_, cx| {
-                cx.new(|_| Scene(target))
+            for path in mira_ui::snapshot(name, size(px(width), px(260.0)), move |_, cx| {
+                cx.new(|_| Scene(target, alt))
             }) {
                 assert!(path.exists(), "{} was not written", path.display());
             }

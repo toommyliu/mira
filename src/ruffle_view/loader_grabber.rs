@@ -759,13 +759,6 @@ impl LoaderGrabber {
                     .child(sources)
                     .children(fields)
                     .child(div().flex_1())
-                    .children(self.taken.as_ref().map(|outcome| {
-                        div()
-                            .flex_none()
-                            .text_small()
-                            .text_color(outcome.color(theme))
-                            .child(outcome.text.clone())
-                    }))
                     .child(div().w(SEARCH).min_w(px(120.0)).child(self.search.clone()))
                     .child(
                         Button::icon("grab-refresh", Icon::RotateCcw, "Refresh")
@@ -838,8 +831,8 @@ impl LoaderGrabber {
             .min_w_0()
             .child(
                 div()
-                    .flex_none()
                     .w(px(if source == Source::Shop { 150.0 } else { 240.0 }))
+                    .min_w(px(120.0))
                     .child(loader.input.clone()),
             )
             .child(control)
@@ -1489,7 +1482,20 @@ impl Render for LoaderGrabber {
             Self::retarget,
             window,
             cx,
-        );
+        )
+        .children(self.taken.as_ref().map(|outcome| {
+            div()
+                .id("grab-status")
+                .role(gpui::Role::Status)
+                .aria_label(outcome.text.clone())
+                .min_w_0()
+                .max_w(px(360.0))
+                .pr(px(16.0))
+                .truncate()
+                .text_small()
+                .text_color(outcome.color(&theme))
+                .child(outcome.text.clone())
+        }));
         let body = if self.shown.is_some() {
             v_flex()
                 .flex_1()
@@ -1645,6 +1651,28 @@ mod tests {
         focus_shop_field(&grabber, cx);
         press(cx, "enter");
         assert_eq!(shop_warning(&grabber, cx), None);
+    }
+
+    #[test]
+    fn snapshot_narrow_toolbar() {
+        let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let size = gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT));
+        for written in mira_ui::snapshot("grabber-narrow", size, move |_, cx| {
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&folder, cx);
+                let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+                grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                grabber.source = Source::Quests;
+                grabber.taken = Some(Outcome {
+                    text: "Couldn't save: the volume is read-only".into(),
+                    failed: true,
+                });
+                grabber
+            })
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 
     #[test]
