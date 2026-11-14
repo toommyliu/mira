@@ -342,6 +342,7 @@ pub(crate) struct MenuState {
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_height: Rc<Cell<Pixels>>,
     pub(crate) item_offset: Cell<Option<Point<Pixels>>>,
+    reveal: Cell<bool>,
     closed_at: Option<Instant>,
     pointer: Option<Point<Pixels>>,
     started: bool,
@@ -362,6 +363,7 @@ impl MenuState {
             trigger_bounds: Rc::default(),
             panel_height: Rc::default(),
             item_offset: Cell::new(None),
+            reveal: Cell::new(false),
             closed_at: None,
             pointer: None,
             started: false,
@@ -508,6 +510,7 @@ pub(crate) fn open(
         menu.closed_at = None;
         menu.pointer = None;
         menu.highlighted = highlighted;
+        menu.reveal.set(true);
         menu.submenu = None;
         menu.position = position;
         menu.return_focus = return_focus;
@@ -686,12 +689,34 @@ fn key_down(
             };
             state.update(cx, |menu, cx| {
                 menu.highlighted = Some(next);
+                menu.reveal.set(true);
                 menu.submenu = None;
                 cx.notify();
             });
         }
     }
     cx.stop_propagation();
+}
+
+fn reveal_highlighted(
+    menu: &MenuState,
+    highlighted: Option<usize>,
+    pinned: usize,
+    window: &mut Window,
+) {
+    if !menu.reveal.get() {
+        return;
+    }
+    let Some(index) = highlighted.and_then(|index| index.checked_sub(pinned)) else {
+        menu.reveal.set(false);
+        return;
+    };
+    if menu.rest_scroll.bounds().size.height <= Pixels::ZERO {
+        window.request_animation_frame();
+        return;
+    }
+    menu.reveal.set(false);
+    menu.rest_scroll.scroll_to_item(index);
 }
 
 fn current(metas: &[Meta], menu: &MenuState) -> (Option<usize>, Option<(usize, Option<usize>)>) {
@@ -1116,6 +1141,7 @@ pub(crate) fn popup(
     cx: &App,
 ) -> AnyElement {
     let shown = presence(state, window, cx).unwrap_or(0.0);
+    let max_height = max_height.min(window.viewport_size().height - WINDOW_MARGIN * 2.0);
     let theme = &cx.theme().clone();
     let metas = metas(&items);
     let menu = state.read(cx);
@@ -1127,9 +1153,9 @@ pub(crate) fn popup(
     let keys_metas = metas.clone();
     let next_state = state.clone();
     let prev_state = state.clone();
-    let scrolls = metas.iter().all(|meta| meta.submenu.is_none());
     let rest_scroll = menu.rest_scroll.clone();
     let count = items.iter().take_while(|item| item.pinned).count();
+    reveal_highlighted(menu, highlighted, count, window);
     let mut pinned = rows(
         items,
         &metas,
@@ -1140,45 +1166,48 @@ pub(crate) fn popup(
         theme,
     );
     let rest = pinned.split_off(count);
-    let split = scrolls && count > 0;
+    let split = count > 0;
     let panel = motion::arrive(
         (id.clone(), "popup"),
-        panel_shell(
-            (id.clone(), "panel"),
-            (scrolls && !split).then_some(max_height),
-            theme,
-        )
-        .role(match kind {
-            PopupKind::Menu => Role::Menu,
-            PopupKind::ListBox => Role::ListBox,
-        })
-        .aria_label(label)
-        .track_focus(&focus)
-        .on_key_down(move |event, window, cx| {
-            key_down(&keys_metas, kind, &keys_state, event, window, cx)
-        })
-        .on_action(move |_: &FocusNext, window, cx| {
-            close(&next_state, true, window, cx);
-            cx.propagate();
-        })
-        .on_action(move |_: &FocusPrevious, window, cx| {
-            close(&prev_state, true, window, cx);
-            cx.propagate();
-        })
-        .children(pinned)
-        .map(|panel| {
-            if split {
-                panel.child(scrolling(
-                    ElementId::from((id.clone(), "rest")),
-                    max_height,
-                    false,
-                    rest,
-                    &rest_scroll,
-                ))
-            } else {
-                panel.children(rest)
-            }
-        }),
+        panel_shell((id.clone(), "panel"), (!split).then_some(max_height), theme)
+            .map(|panel| {
+                if split {
+                    panel.max_h(max_height)
+                } else {
+                    panel.track_scroll(&rest_scroll)
+                }
+            })
+            .role(match kind {
+                PopupKind::Menu => Role::Menu,
+                PopupKind::ListBox => Role::ListBox,
+            })
+            .aria_label(label)
+            .track_focus(&focus)
+            .on_key_down(move |event, window, cx| {
+                key_down(&keys_metas, kind, &keys_state, event, window, cx)
+            })
+            .on_action(move |_: &FocusNext, window, cx| {
+                close(&next_state, true, window, cx);
+                cx.propagate();
+            })
+            .on_action(move |_: &FocusPrevious, window, cx| {
+                close(&prev_state, true, window, cx);
+                cx.propagate();
+            })
+            .children(pinned)
+            .map(|panel| {
+                if split {
+                    panel.child(scrolling(
+                        ElementId::from((id.clone(), "rest")),
+                        max_height,
+                        false,
+                        rest,
+                        &rest_scroll,
+                    ))
+                } else {
+                    panel.children(rest)
+                }
+            }),
         from,
     );
     fading(panel, shown)
@@ -1195,11 +1224,15 @@ fn scrolling(
     let measured = handle.clone();
     div()
         .relative()
+        .flex()
+        .flex_col()
+        .min_h_0()
         .child(
             div()
                 .id(id.clone())
                 .flex()
                 .flex_col()
+                .min_h_0()
                 .max_h(height)
                 .when(fixed, |rest| rest.h(height))
                 .when(overflows, |rest| rest.pr(Scrollbar::GUTTER))
@@ -1262,6 +1295,7 @@ impl RenderOnce for MenuList {
         let keys_metas = metas.clone();
         let leave_state = state.clone();
         let count = self.items.iter().take_while(|item| item.pinned).count();
+        reveal_highlighted(state.read(cx), highlighted, count, window);
         let mut pinned = rows(
             self.items,
             &metas,
