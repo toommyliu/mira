@@ -857,6 +857,35 @@ fn status_label_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
     assert!(bounds.size.height > mira_ui::theme::LINE_BODY);
 }
 
+struct NarrowAlert;
+
+impl Render for NarrowAlert {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(gpui::px(300.0)).child(
+            mira_ui::primitives::Alert::new(
+                "save",
+                mira_ui::Tone::Danger,
+                "Couldn't save the setups",
+            )
+            .body("Couldn't write ~/Library/Application Support/Mira/setups.json: the disk is full")
+            .action(
+                div()
+                    .debug_selector(|| "retry".into())
+                    .child(Button::new("retry", "Retry")),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn alert_wraps_its_body_and_keeps_its_action_inside(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| NarrowAlert);
+    cx.run_until_parked();
+    let retry = cx.debug_bounds("retry").unwrap();
+    assert!(retry.right() <= gpui::px(300.0), "{retry:?}");
+}
+
 struct NarrowSwitch;
 
 impl Render for NarrowSwitch {
