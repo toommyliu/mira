@@ -205,6 +205,62 @@ fn a_long_menu_with_submenus_scrolls_inside_the_window(cx: &mut TestAppContext) 
     );
 }
 
+struct Servers {
+    focus: FocusHandle,
+}
+
+impl Render for Servers {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("server")
+                    .trigger(Button::new("server", "Server"))
+                    .items(|_, _| {
+                        let mut items = vec![
+                            MenuItem::action("Their own servers", |_, _| {}).pinned(),
+                            MenuItem::separator().pinned(),
+                        ];
+                        items.extend((0..30usize).map(|index| {
+                            let item = MenuItem::action(format!("Server {index}"), |_, _| {});
+                            if index == 29 {
+                                item.start_slot(div().debug_selector(|| "last".into()))
+                            } else {
+                                item
+                            }
+                        }));
+                        items
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_long_menu_with_pinned_rows_fits_a_short_window(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Servers { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(240.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter", "end"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let last = cx.debug_bounds("last").unwrap();
+    assert!(
+        last.top() >= px(0.0) && last.bottom() <= px(240.0),
+        "{last:?}"
+    );
+}
+
 struct Confirm {
     focus: FocusHandle,
     pressed: Rc<Cell<Option<&'static str>>>,

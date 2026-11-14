@@ -707,14 +707,16 @@ fn reveal_highlighted(
     if !menu.reveal.get() {
         return;
     }
+    let Some(index) = highlighted.and_then(|index| index.checked_sub(pinned)) else {
+        menu.reveal.set(false);
+        return;
+    };
     if menu.rest_scroll.bounds().size.height <= Pixels::ZERO {
         window.request_animation_frame();
         return;
     }
     menu.reveal.set(false);
-    if let Some(index) = highlighted.and_then(|index| index.checked_sub(pinned)) {
-        menu.rest_scroll.scroll_to_item(index);
-    }
+    menu.rest_scroll.scroll_to_item(index);
 }
 
 fn current(metas: &[Meta], menu: &MenuState) -> (Option<usize>, Option<(usize, Option<usize>)>) {
@@ -1168,7 +1170,13 @@ pub(crate) fn popup(
     let panel = motion::arrive(
         (id.clone(), "popup"),
         panel_shell((id.clone(), "panel"), (!split).then_some(max_height), theme)
-            .when(!split, |panel| panel.track_scroll(&rest_scroll))
+            .map(|panel| {
+                if split {
+                    panel.max_h(max_height)
+                } else {
+                    panel.track_scroll(&rest_scroll)
+                }
+            })
             .role(match kind {
                 PopupKind::Menu => Role::Menu,
                 PopupKind::ListBox => Role::ListBox,
@@ -1216,11 +1224,15 @@ fn scrolling(
     let measured = handle.clone();
     div()
         .relative()
+        .flex()
+        .flex_col()
+        .min_h_0()
         .child(
             div()
                 .id(id.clone())
                 .flex()
                 .flex_col()
+                .min_h_0()
                 .max_h(height)
                 .when(fixed, |rest| rest.h(height))
                 .when(overflows, |rest| rest.pr(Scrollbar::GUTTER))
