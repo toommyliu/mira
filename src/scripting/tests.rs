@@ -14,6 +14,7 @@ use super::{
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
+    dialog::{Dialog, Request as DG, ToDialogs},
     drops::Request as D,
     environment::{BoostRequest as BR, DropRequest as DR, QuestRequest as QR},
     events::Request as EV,
@@ -24,7 +25,7 @@ use super::{
     player::Request as P,
     players::Request as PL,
     quests::Request as Q,
-    runtime::Player,
+    runtime::{Dialogs, Player},
     shops::Request as S,
     world::Request as W,
 };
@@ -93,6 +94,7 @@ fn start(folder: &Folder, entry: &str, limits: Limits, player: Player) -> Starte
         Supplied::Values(Values::new()),
         limits,
         player,
+        Box::new(|_| {}),
     )
 }
 
@@ -102,6 +104,7 @@ fn start_with(
     inputs: Supplied,
     limits: Limits,
     player: Player,
+    dialogs: Dialogs,
 ) -> Started {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let sink = logs.clone();
@@ -118,6 +121,7 @@ fn start_with(
             sink.lock().unwrap().push(format!("{prefix}{message}"));
         }),
         player,
+        dialogs,
         move |outcome| {
             let _ = finished.send(outcome);
         },
@@ -198,6 +202,7 @@ fn run_with_inputs(files: &[(&str, &str)], inputs: Supplied) -> Finished {
         files[0].0,
         inputs,
         Limits::default(),
+        Box::new(|_| {}),
         Box::new(|_| {}),
     )
     .finish()
@@ -1420,6 +1425,160 @@ fn a_reply_after_a_run_stops_never_reaches_the_next_run() {
     .finish();
     assert_eq!(reading.outcome, Outcome::Completed);
     assert_eq!(reading.logs, ["battleon"]);
+}
+
+#[derive(Debug, PartialEq)]
+enum Shown {
+    Open(DG),
+    Close,
+}
+
+fn asking(
+    answer: impl Fn(Dialog, &mut Vec<Dialog>) + Send + 'static,
+) -> (Dialogs, Arc<Mutex<Vec<Shown>>>) {
+    let shown = Arc::new(Mutex::new(Vec::new()));
+    let seen = shown.clone();
+    let held = Mutex::new(Vec::new());
+    let dialogs: Dialogs = Box::new(move |message| match message {
+        ToDialogs::Open(dialog) => {
+            seen.lock()
+                .unwrap()
+                .push(Shown::Open(dialog.request.clone()));
+            answer(dialog, &mut held.lock().unwrap());
+        }
+        ToDialogs::Close(id) => {
+            held.lock().unwrap().retain(|dialog| dialog.id != id);
+            seen.lock().unwrap().push(Shown::Close);
+        }
+    });
+    (dialogs, shown)
+}
+
+#[test]
+fn dialogs_answer_with_what_the_user_chose() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Script } from "mira";
+
+export default function* () {
+  console.log(String(yield* Script.alert("Bank is full")));
+  console.log(String(yield* Script.confirm("Deposit?", { title: "Bank", confirm: "Deposit", cancel: "Skip" })));
+  console.log(String(yield* Script.confirm("Sell?")));
+  console.log(String(yield* Script.prompt("Monster?", { default: "Frogzard", placeholder: "Name" })));
+  console.log(String(yield* Script.prompt("Kills?")));
+  console.log(JSON.stringify(yield* Script.prompt("Note?")));
+}
+"#,
+    )]);
+    let (dialogs, shown) = asking(|dialog, _| match &dialog.request {
+        DG::Confirm { message, .. } if message == "Sell?" => dialog.cancel(),
+        DG::Prompt { message, .. } if message == "Kills?" => dialog.cancel(),
+        DG::Prompt { message, .. } if message == "Note?" => dialog.accept(""),
+        _ => dialog.accept("Frogzard"),
+    });
+    let finished = start_with(
+        &folder,
+        "main.ts",
+        Supplied::Values(Values::new()),
+        Limits::default(),
+        Box::new(|_| {}),
+        dialogs,
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        ["undefined", "true", "false", "Frogzard", "null", "\"\""]
+    );
+    let text = |text: &str| Some(text.to_owned());
+    assert_eq!(
+        shown.lock().unwrap()[..3],
+        [
+            Shown::Open(DG::Alert {
+                message: "Bank is full".into(),
+                title: None
+            }),
+            Shown::Open(DG::Confirm {
+                message: "Deposit?".into(),
+                title: text("Bank"),
+                confirm: text("Deposit"),
+                cancel: text("Skip")
+            }),
+            Shown::Open(DG::Confirm {
+                message: "Sell?".into(),
+                title: None,
+                confirm: None,
+                cancel: None
+            }),
+        ]
+    );
+    assert_eq!(
+        shown.lock().unwrap()[3],
+        Shown::Open(DG::Prompt {
+            message: "Monster?".into(),
+            title: None,
+            default: text("Frogzard"),
+            placeholder: text("Name")
+        })
+    );
+}
+
+#[test]
+fn a_timeout_or_a_stop_closes_an_open_dialog() {
+    let folder = Folder::new(&[
+        (
+            "timeout.ts",
+            r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  const answer = yield* Script.confirm("Keep going?").pipe(Effect.timeoutOption("50 millis"));
+  console.log(answer._tag);
+}
+"#,
+        ),
+        (
+            "stop.ts",
+            "import { Script } from \"mira\";\nexport default function* () { yield* Script.prompt(\"Kills?\"); }\n",
+        ),
+    ]);
+    let (dialogs, shown) = asking(|dialog, held| held.push(dialog));
+    let finished = start_with(
+        &folder,
+        "timeout.ts",
+        Supplied::Values(Values::new()),
+        Limits::default(),
+        Box::new(|_| {}),
+        dialogs,
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["None"]);
+    assert!(matches!(
+        shown.lock().unwrap()[..],
+        [Shown::Open(DG::Confirm { .. }), Shown::Close]
+    ));
+
+    let (dialogs, shown) = asking(|dialog, held| held.push(dialog));
+    let started = start_with(
+        &folder,
+        "stop.ts",
+        Supplied::Values(Values::new()),
+        Limits::default(),
+        Box::new(|_| {}),
+        dialogs,
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while shown.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the prompt opened");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    started.run.stop();
+    assert_eq!(started.finish().outcome, Outcome::Stopped);
+    assert!(matches!(
+        shown.lock().unwrap()[..],
+        [Shown::Open(DG::Prompt { .. }), Shown::Close]
+    ));
 }
 
 #[test]
@@ -2761,4 +2920,196 @@ export default function* () {
     assert!(army_requests(player.seen()).contains(&AY::Leave {
         label: "taunt".into()
     }));
+}
+
+fn run_asking(folder: &Folder, entry: &str, limits: Limits, dialogs: Dialogs) -> Started {
+    start_with(
+        folder,
+        entry,
+        Supplied::Values(Values::new()),
+        limits,
+        Box::new(|_| {}),
+        dialogs,
+    )
+}
+
+#[test]
+fn a_runaway_loop_of_dialogs_fails_the_script_instead_of_flooding_the_ui() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  yield* Effect.all(
+    Array.from({ length: 1_000 }, (_, i) => Script.alert(`spam ${i}`)),
+    { concurrency: "unbounded" },
+  );
+}
+"#,
+    )]);
+    let (dialogs, shown) = asking(|dialog, held| held.push(dialog));
+    let finished = run_asking(&folder, "main.ts", Limits::default(), dialogs).finish();
+    let (message, stack) = failure(&finished.outcome);
+    assert_eq!(
+        message,
+        "A script can have at most 100 dialogs open at once"
+    );
+    assert!(stack.contains("main.ts:6"), "{stack}");
+    let shown = shown.lock().unwrap();
+    let opened = shown
+        .iter()
+        .filter(|shown| matches!(shown, Shown::Open(_)))
+        .count();
+    let closed = shown.iter().filter(|shown| **shown == Shown::Close).count();
+    assert_eq!((opened, closed), (100, 100));
+}
+
+#[test]
+fn a_dialog_slot_frees_up_once_it_is_answered_or_closed() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  for (let i = 0; i < 250; i++) yield* Script.confirm(`answered ${i}`);
+  for (let i = 0; i < 250; i++) yield* Script.confirm(`closed ${i}`).pipe(Effect.timeoutOption("0 millis"));
+  const all = yield* Effect.all(
+    Array.from({ length: 100 }, (_, i) => Script.prompt(String(i))),
+    { concurrency: "unbounded" },
+  );
+  console.log(all.join(","));
+}
+"#,
+    )]);
+    let (dialogs, _) = asking(|dialog, held| match &dialog.request {
+        DG::Prompt { message, .. } => {
+            let message = message.clone();
+            dialog.accept(&message);
+        }
+        DG::Confirm { message, .. } if message.starts_with("closed") => held.push(dialog),
+        _ => dialog.accept(""),
+    });
+    let finished = run_asking(&folder, "main.ts", Limits::default(), dialogs).finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let expected: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+    assert_eq!(finished.logs, [expected.join(",")]);
+}
+
+#[test]
+fn answers_racing_a_timeout_settle_each_dialog_exactly_once() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect, Option } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  let answered = 0;
+  let timedOut = 0;
+  for (let i = 0; i < 300; i++) {
+    const result = yield* Script.confirm(String(i)).pipe(Effect.timeoutOption("1 millis"));
+    if (Option.isSome(result)) answered++;
+    else timedOut++;
+  }
+  console.log(`${answered + timedOut}`);
+}
+"#,
+    )]);
+    let (dialogs, shown) = asking(|dialog, _| {
+        std::thread::spawn(move || {
+            let mut random = [0; 1];
+            getrandom::getrandom(&mut random).unwrap();
+            std::thread::sleep(Duration::from_micros(u64::from(random[0]) * 8));
+            dialog.accept("");
+        });
+    });
+    let finished = run_asking(&folder, "main.ts", Limits::default(), dialogs).finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["300"]);
+    let opened = shown
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|shown| matches!(shown, Shown::Open(_)))
+        .count();
+    assert_eq!(opened, 300);
+}
+
+#[test]
+fn malformed_dialog_arguments_fail_the_script_at_the_call() {
+    for (call, expected) in [
+        ("Script.confirm(42 as any)", "Mira can't show"),
+        (
+            "Script.prompt(\"Kills?\", { default: 100 as any })",
+            "Mira can't show",
+        ),
+        (
+            "Script.alert(\"x\", { title: { nested: true } as any })",
+            "Mira can't show",
+        ),
+    ] {
+        let folder = Folder::new(&[(
+            "main.ts",
+            &format!(
+                "import {{ Script }} from \"mira\";\nexport default function* () {{\n  yield* {call};\n}}\n"
+            ),
+        )]);
+        let (dialogs, shown) = asking(|dialog, _| dialog.accept(""));
+        let finished = run_asking(&folder, "main.ts", Limits::default(), dialogs).finish();
+        let (message, stack) = failure(&finished.outcome);
+        assert!(message.starts_with(expected), "{call}: {message}");
+        assert!(stack.contains("main.ts:3"), "{call}: {stack}");
+        assert!(shown.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_dialog_the_script_will_not_let_go_of_still_ends_on_stop() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  yield* Effect.uninterruptible(Script.confirm("Can't interrupt me"));
+}
+"#,
+    )]);
+    let (dialogs, shown) = asking(|dialog, held| held.push(dialog));
+    let limits = Limits {
+        stop_grace: Duration::from_millis(200),
+        ..Limits::default()
+    };
+    let started = run_asking(&folder, "main.ts", limits, dialogs);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while shown.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the confirm opened");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    started.run.stop();
+    let finished = started.finish();
+    assert_eq!(finished.outcome, Outcome::Stopped);
+    assert!(finished.elapsed < Duration::from_secs(3));
+}
+
+#[test]
+fn a_detached_dialog_does_not_keep_the_script_running() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Script } from "mira";
+
+export default function* () {
+  yield* Effect.forkDetach(Script.alert("Still open after the script ends"));
+  console.log("done");
+}
+"#,
+    )]);
+    let (dialogs, shown) = asking(|dialog, held| held.push(dialog));
+    let finished = run_asking(&folder, "main.ts", Limits::default(), dialogs).finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["done"]);
+    assert!(finished.elapsed < Duration::from_secs(3));
+    assert!(shown.lock().unwrap().len() <= 1);
 }

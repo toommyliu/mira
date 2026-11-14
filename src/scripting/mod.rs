@@ -4,6 +4,7 @@ mod automation;
 mod bank;
 mod calls;
 mod combat;
+mod dialog;
 mod drops;
 mod environment;
 mod events;
@@ -22,7 +23,8 @@ mod shops;
 mod typings;
 mod world;
 
-pub(crate) use calls::{Calls, RunId, ToPlayer, answer};
+pub(crate) use calls::{CallId, Calls, RunId, ToPlayer, answer};
+pub(crate) use dialog::{Dialog, Request as DialogRequest, ToDialogs};
 pub(crate) use inputs::{
     Definition, ExtractError, Field, Kind, Supplied, Values, check_number, extract, number,
 };

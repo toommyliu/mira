@@ -1,20 +1,31 @@
 import * as Effect from "effect/Effect";
 
-import { send } from "./native.ts";
+import { send, type Channel } from "./native.ts";
 
 const failure = (message: string, stack: string | undefined): Error =>
   Object.assign(new Error(message), { stack });
 
-export const call = <A>(request: object): Effect.Effect<A> => {
-  const { stack } = new Error();
-  return Effect.callback<A>((resume) => {
-    const cancel = send(request, (settled) => {
-      resume(
-        "ok" in settled
-          ? Effect.succeed(settled.ok as A)
-          : Effect.die(failure(settled.error, stack)),
-      );
+const over =
+  (channel: Channel) =>
+  <A>(request: object): Effect.Effect<A> => {
+    const { stack } = new Error();
+    return Effect.callback<A>((resume) => {
+      try {
+        const cancel = send(channel, request, (settled) => {
+          resume(
+            "ok" in settled
+              ? Effect.succeed(settled.ok as A)
+              : Effect.die(failure(settled.error, stack)),
+          );
+        });
+        return Effect.sync(cancel);
+      } catch (error) {
+        resume(Effect.die(failure(error instanceof Error ? error.message : String(error), stack)));
+        return;
+      }
     });
-    return Effect.sync(cancel);
-  });
-};
+  };
+
+export const call = over("call");
+
+export const ask = over("ask");

@@ -40,6 +40,7 @@ pub struct Dialog {
     id: ElementId,
     open: bool,
     alert: bool,
+    fit_window: bool,
     title: SharedString,
     width: Pixels,
     description: Option<SharedString>,
@@ -55,6 +56,7 @@ impl Dialog {
             id: id.into(),
             open,
             alert: false,
+            fit_window: false,
             title: title.into(),
             width: px(420.0),
             description: None,
@@ -67,6 +69,11 @@ impl Dialog {
 
     pub fn alert(mut self) -> Self {
         self.alert = true;
+        self
+    }
+
+    pub fn fit_window(mut self) -> Self {
+        self.fit_window = true;
         self
     }
 
@@ -209,6 +216,9 @@ impl RenderOnce for Dialog {
                                 .flex_col()
                                 .gap(px(16.0))
                                 .w(self.width)
+                                .when(self.fit_window, |panel| {
+                                    panel.max_h(viewport.height - px(32.0))
+                                })
                                 .p(px(20.0))
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.overlay)

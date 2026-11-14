@@ -3,9 +3,13 @@ pub mod components;
 pub mod motion;
 pub mod nav;
 pub mod primitives;
+#[cfg(feature = "test-support")]
+mod snapshot;
 pub mod theme;
 
 pub use assets::Assets;
+#[cfg(feature = "test-support")]
+pub use snapshot::snapshot;
 pub use theme::{ActiveTheme, PointerCursor, Theme, Tone};
 
 use std::rc::Rc;

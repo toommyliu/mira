@@ -75,6 +75,7 @@ fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
 }
 
 pub(crate) fn bind_keys(cx: &mut App) {
+    super::script_dialog::bind_keys(cx);
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-t", NewSession, None),
         gpui::KeyBinding::new("cmd-w", CloseSession, None),

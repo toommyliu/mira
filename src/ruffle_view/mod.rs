@@ -12,6 +12,7 @@ mod packets;
 mod profile_form;
 mod profiles;
 mod script;
+mod script_dialog;
 mod script_form;
 mod scripts;
 mod shown_tab;
@@ -775,6 +776,10 @@ impl Render for RuffleView {
             .size_full()
             .when(!self.tiled, |root| root.child(self.bar(cx)))
             .child(player)
+            .when_some(
+                self.script.dialogs().filter(|_| self.selected),
+                |root, dialogs| root.child(dialogs),
+            )
     }
 }
 
