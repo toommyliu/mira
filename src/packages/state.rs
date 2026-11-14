@@ -60,6 +60,8 @@ pub(crate) fn start(cx: &mut App) {
     let resources = bundled::resources();
     packages(cx).update(cx, |packages, cx| {
         packages.resources = resources.clone();
+        packages.activity = Some(Activity::Checking);
+        cx.notify();
         let store = packages.store.clone();
         let prepared = cx.background_spawn(async move {
             if let Some(resources) = &resources
@@ -73,7 +75,10 @@ pub(crate) fn start(cx: &mut App) {
             if let Err(error) = prepared.await {
                 tracing::warn!(%error, "couldn't clean up unfinished package downloads");
             }
-            let Ok(checked) = this.update(cx, |this, cx| this.check(true, cx)) else {
+            let Ok(checked) = this.update(cx, |this, cx| {
+                this.activity = None;
+                this.check(true, cx)
+            }) else {
                 return;
             };
             if let Err(message) = checked.await {
@@ -313,6 +318,28 @@ mod tests {
         fake::{Fake, Reply},
         store::tests::{Bin, receipt, stage_files},
     };
+
+    #[gpui::test]
+    async fn package_actions_wait_for_startup_cleanup(cx: &mut TestAppContext) {
+        let root = scratch("state");
+        let (_bin, trash) = Bin::new(&root);
+        let store = Store::new(root.join("packages"), trash);
+        let fake = Fake::start();
+        let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
+        cx.update(|cx| {
+            cx.set_global(Shared(packages.clone()));
+            start(cx);
+        });
+        let early = packages
+            .update(cx, |packages, cx| {
+                packages.install_link("github.com/o/r", "", cx)
+            })
+            .await;
+        assert_eq!(early, Err(Failure::Other(BUSY.into())));
+        cx.run_until_parked();
+        packages.read_with(cx, |packages, _| assert_eq!(packages.activity(), None));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[gpui::test]
     async fn launch_checks_only_log_failures_but_manual_checks_report_them(
