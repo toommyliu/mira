@@ -10,7 +10,7 @@ use super::{
     Button,
     menu::{self, MenuState},
 };
-use crate::{ActiveTheme as _, motion, nav};
+use crate::{ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, motion, nav};
 
 pub(crate) type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
 
@@ -66,12 +66,16 @@ pub(crate) fn panel(
 ) -> Stateful<Div> {
     let theme = cx.theme();
     let focus = close.state.read(cx).focus();
+    let (next, previous) = (focus.clone(), focus.clone());
     div()
         .id((id.clone(), "panel"))
         .role(Role::Dialog)
         .aria_label(label)
         .occlude()
+        .key_context(FOCUS_SCOPE)
         .track_focus(&focus)
+        .on_action(move |_: &FocusNext, window, cx| nav::trap_tab(&next, false, window, cx))
+        .on_action(move |_: &FocusPrevious, window, cx| nav::trap_tab(&previous, true, window, cx))
         .on_key_down(move |event, window, cx| {
             if event.keystroke.key == "escape" {
                 close.close(window, cx);
