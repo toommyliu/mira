@@ -32,6 +32,8 @@ impl AssetSource for Assets {
             "icons/chevron-up.svg" => include_str!("../assets/icons/lucide/chevron-up.svg"),
             "icons/clock.svg" => include_str!("../assets/icons/lucide/clock.svg"),
             "icons/ellipsis.svg" => include_str!("../assets/icons/lucide/ellipsis.svg"),
+            "icons/eye.svg" => include_str!("../assets/icons/lucide/eye.svg"),
+            "icons/eye-off.svg" => include_str!("../assets/icons/lucide/eye-off.svg"),
             "icons/layout-grid.svg" => include_str!("../assets/icons/lucide/layout-grid.svg"),
             "icons/minus.svg" => include_str!("../assets/icons/lucide/minus.svg"),
             "icons/pin.svg" => include_str!("../assets/icons/lucide/pin.svg"),
