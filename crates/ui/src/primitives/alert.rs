@@ -77,6 +77,7 @@ impl RenderOnce for Alert {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_w_0()
                     .gap(px(2.0))
                     .child(
                         div()

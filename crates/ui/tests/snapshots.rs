@@ -338,6 +338,37 @@ fn snapshot_select_short_window() {
 }
 
 #[test]
+fn snapshot_long_notices() {
+    for path in snapshot("long-notices", size(px(420.0), px(300.0)), |window, cx| {
+        mira_ui::primitives::Toaster::push(
+            mira_ui::primitives::Toast::new("Couldn't load profile")
+                .body(
+                    "Couldn't read ~/Documents/Mira/profiles/void-highlord.yaml: permission denied",
+                )
+                .tone(Tone::Danger),
+            cx,
+        );
+        Scene::open(
+            |window, cx| {
+                div()
+                    .size_full()
+                    .child(
+                        Alert::new("save", Tone::Danger, "Couldn't save the setups")
+                            .body("Couldn't write ~/Library/Application Support/Mira/setups.json: the disk is full")
+                            .action(Button::new("retry", "Retry").size(Size::Small)),
+                    )
+                    .child(mira_ui::primitives::Toaster::layer(window, cx))
+                    .into_any_element()
+            },
+            window,
+            cx,
+        )
+    }) {
+        assert!(path.exists(), "{} was not written", path.display());
+    }
+}
+
+#[test]
 fn snapshot_sources_short_window() {
     scene_after_keys(
         "sources-short-window",
