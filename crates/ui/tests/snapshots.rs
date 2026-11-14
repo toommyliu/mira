@@ -316,6 +316,75 @@ fn snapshot_menu() {
 }
 
 #[test]
+fn snapshot_select_short_window() {
+    scene_after_keys(
+        "select-short-window",
+        340.0,
+        240.0,
+        &["tab", "enter"],
+        |_, _| {
+            Select::new(
+                "profile",
+                "Profile",
+                (1..=20)
+                    .map(|index| SelectOption::new(format!("Ultra boss {index}")))
+                    .collect::<Vec<_>>(),
+                Some(16),
+            )
+            .width(px(200.0))
+            .into_any_element()
+        },
+    );
+}
+
+#[test]
+fn snapshot_sources_short_window() {
+    scene_after_keys(
+        "sources-short-window",
+        420.0,
+        300.0,
+        &["tab", "enter", "end", "up", "right"],
+        |_, _| {
+            DropdownMenu::new("sources")
+                .trigger(Button::new("sources", "Sources").end_slot(Icon::ChevronDown))
+                .items(|_, _| {
+                    let folder = |path: &str| {
+                        MenuItem::submenu(
+                            path.to_owned(),
+                            vec![
+                                MenuItem::action("Show in Finder", |_, _| {}),
+                                MenuItem::action("Remove from library", |_, _| {}),
+                            ],
+                        )
+                    };
+                    let mut items = vec![MenuItem::header("Folders")];
+                    items.extend(
+                        [
+                            "scripts",
+                            "aqw-community",
+                            "legion",
+                            "dailies",
+                            "bosses",
+                            "merge",
+                        ]
+                        .map(|name| folder(&format!("~/Documents/Mira/{name}"))),
+                    );
+                    items.push(MenuItem::action("Add folder…", |_, _| {}));
+                    items.push(MenuItem::separator());
+                    items.push(MenuItem::header("Packages"));
+                    items.extend(
+                        [("@lucent/dailies", "0.0.3"), ("@lucent/ultras", "1.2.0")]
+                            .map(|(name, version)| folder(name).end_slot(Badge::new(version))),
+                    );
+                    items.push(MenuItem::action("Install package…", |_, _| {}));
+                    items
+                })
+                .into_any_element()
+        },
+    );
+}
+
+#[test]
 fn snapshot_menubar() {
     scene("menubar", 560.0, 300.0, |_, cx| {
         let theme = cx.theme().clone();
