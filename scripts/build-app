@@ -15,6 +15,20 @@ cargo build --profile "$profile" --locked
 bundle=target/Mira.app/Contents
 mkdir -p "$bundle/MacOS"
 cp "target/$directory/mira" "$bundle/MacOS/mira"
+resources="$bundle/Resources"
+rm -rf "$resources/script-packages" "$resources/script-packages.json"
+mkdir -p "$resources"
+if git cat-file -e HEAD:script-packages 2>/dev/null; then
+    git archive HEAD script-packages | tar -x -C "$resources"
+    commit=$(git rev-parse HEAD)
+    trees=
+    for package in $(git ls-tree -d --name-only HEAD script-packages/); do
+        name=${package#script-packages/}
+        tree=$(git rev-parse "HEAD:$package")
+        trees="$trees${trees:+,}\"$name\":\"$tree\""
+    done
+    printf '{"commit":"%s","trees":{%s}}\n' "$commit" "$trees" > "$resources/script-packages.json"
+fi
 cat > "$bundle/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
