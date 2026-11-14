@@ -504,6 +504,73 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
     let finished = run_in(&folder, "script/module.ts", Limits::default(), None);
     assert_eq!(finished.outcome, Outcome::Completed);
     assert_eq!(finished.logs, ["function"]);
+
+    let packages = Folder::new(&[
+        ("outside.ts", "export const secret = 1;\n"),
+        ("dailies/package.json", r#"{"name":"Dailies","mira":{}}"#),
+        (
+            "dailies/lib/prepare.ts",
+            "export const prepared = \"ready\";\n",
+        ),
+        (
+            "dailies/scripts/farming/hunt.ts",
+            "import { prepared } from \"../../lib/prepare.ts\";\nexport default function* () { console.log(prepared); }\n",
+        ),
+        (
+            "dailies/scripts/escape.ts",
+            "import \"../../outside.ts\";\nexport default function* () {}\n",
+        ),
+        (
+            "dailies/scripts/linked.ts",
+            "import \"../lib/link.ts\";\nexport default function* () {}\n",
+        ),
+        ("npm/package.json", r#"{"name":"left-pad"}"#),
+        ("npm/lib/pad.ts", "export const pad = 1;\n"),
+        (
+            "npm/scripts/pad.ts",
+            "import \"../lib/pad.ts\";\nexport default function* () {}\n",
+        ),
+        (
+            "future/package.json",
+            r#"{"name":"Future","mira":{"requires":"999.0.0"}}"#,
+        ),
+        (
+            "future/scripts/later.ts",
+            "export default function* () {}\n",
+        ),
+    ]);
+    std::os::unix::fs::symlink(
+        packages.0.join("outside.ts"),
+        packages.0.join("dailies/lib/link.ts"),
+    )
+    .unwrap();
+    let finished = run_in(
+        &packages,
+        "dailies/scripts/farming/hunt.ts",
+        Limits::default(),
+        None,
+    );
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["ready"]);
+    for entry in [
+        "dailies/scripts/escape.ts",
+        "dailies/scripts/linked.ts",
+        "npm/scripts/pad.ts",
+    ] {
+        let finished = run_in(&packages, entry, Limits::default(), None);
+        assert!(
+            matches!(finished.outcome, Outcome::Failed { .. }),
+            "{entry} should fail to import, got {:?}",
+            finished.outcome
+        );
+    }
+    let finished = run_in(
+        &packages,
+        "future/scripts/later.ts",
+        Limits::default(),
+        None,
+    );
+    assert_eq!(failure(&finished.outcome).0, "Needs Mira 999.0.0 or newer.");
 }
 
 #[test]

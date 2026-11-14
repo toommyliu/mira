@@ -21,6 +21,7 @@ use rquickjs::{
 };
 
 use super::inputs::position;
+use crate::packages::{Manifest, ManifestError};
 
 include!(concat!(env!("OUT_DIR"), "/runtime_assets.rs"));
 
@@ -29,6 +30,13 @@ pub(super) const PRELUDE: &str = "internal:/mira/prelude.js";
 pub(super) const BOOTSTRAP: &str = "internal:/mira/bootstrap.js";
 
 pub(crate) const SCRIPT_EXTENSIONS: [&str; 4] = ["ts", "mts", "js", "mjs"];
+
+pub(crate) fn runnable(name: &str) -> bool {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    SCRIPT_EXTENSIONS.contains(&extension) && !stem.ends_with(".d")
+}
 
 fn asset(path: &str) -> Option<&'static str> {
     ASSETS
@@ -47,12 +55,17 @@ struct Shared {
 }
 
 impl Modules {
-    pub(super) fn new(root: PathBuf) -> Self {
-        Self(Rc::new(Shared {
+    pub(super) fn for_entry(entry: &Path) -> std::result::Result<Self, String> {
+        let folder = entry
+            .parent()
+            .and_then(|folder| fs::canonicalize(folder).ok())
+            .ok_or_else(|| format!("{} doesn't exist", entry.display()))?;
+        let root = package_root(&folder)?.unwrap_or(folder);
+        Ok(Self(Rc::new(Shared {
             root,
             entry: OnceCell::new(),
             maps: RefCell::default(),
-        }))
+        })))
     }
 
     pub(super) fn entry(&self, path: &Path) -> std::result::Result<String, String> {
@@ -182,6 +195,26 @@ impl Modules {
             .unwrap_or((row, column));
         Some(format!("{prefix}{file}:{row}:{column}{suffix}"))
     }
+}
+
+fn package_root(folder: &Path) -> std::result::Result<Option<PathBuf>, String> {
+    for scripts in folder
+        .ancestors()
+        .filter(|dir| dir.file_name() == Some("scripts".as_ref()))
+    {
+        let Some(root) = scripts.parent() else {
+            continue;
+        };
+        let Ok(bytes) = fs::read(root.join("package.json")) else {
+            continue;
+        };
+        match Manifest::parse(&bytes) {
+            Ok(_) => return Ok(Some(root.to_owned())),
+            Err(ManifestError::NotAPackage) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(None)
 }
 
 fn package(name: &str) -> std::result::Result<String, String> {

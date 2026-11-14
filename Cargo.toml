@@ -28,14 +28,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 encoding_rs = "0.8.35"
 getrandom = "0.2"
+hex = "0.4"
 gpui.workspace = true
 gpui_platform.workspace = true
+libc = "0.2"
 mira-ui.workspace = true
 objc2 = "0.6"
+percent-encoding = "2"
 oxc = { version = "0.157", features = ["codegen", "semantic", "transformer"] }
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSView", "NSResponder", "NSGraphics", "NSWindow"] }
 objc2-core-graphics = "0.3"
-objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSNotification"] }
+objc2-foundation = { version = "0.3", features = ["NSError", "NSFileManager", "NSGeometry", "NSNotification", "NSURL"] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "CAMetalLayer", "CATransaction"] }
 raw-window-handle = "0.6"
 regex = "1"
@@ -47,12 +50,15 @@ ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dca
 ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
+semver = "1"
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

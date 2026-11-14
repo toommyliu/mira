@@ -19,7 +19,7 @@ use mira_ui::{
     primitives::{
         Alert, Align, Badge, Button, Checkbox, CheckedState, Dot, DropdownMenu, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Popover, Radio, RadioGroup, Scrollbar, Select,
-        Switch, ToggleGroup, ToggleItem, VirtualList,
+        Switch, Toaster, ToggleGroup, ToggleItem, VirtualList,
         button::{Size, Variant},
     },
     theme::{LINE_BODY, LINE_SMALL, RING_ROOM, ROW, TEXT_BODY, TEXT_SMALL},
@@ -31,6 +31,7 @@ use super::{
     account::file_name,
     client::CloseSession,
     form::{LABEL_WIDTH, note, row, row_label, switch_row},
+    package_dialogs::{PackageDialogs, PackageEvent},
     script_form::{
         Draft, FieldDraft, Queued, ROOMS, SPECIFIC_ROOM, TabState, drafts, error, room_choice,
         room_note, starting, values,
@@ -40,10 +41,9 @@ use super::{
 use crate::{
     account_settings::{self, RoomNumber, Rooms, Scripts as ScriptOptions},
     accounts::AccountId,
+    packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
-    scripting::{
-        self, Definition, ExtractError, Kind, Launch, SCRIPT_EXTENSIONS, Supplied, Values,
-    },
+    scripting::{self, Definition, ExtractError, Kind, Launch, Supplied, Values},
     settings,
 };
 
@@ -89,6 +89,7 @@ enum SourceKind {
     Package {
         version: Option<SharedString>,
         description: Option<SharedString>,
+        origin: Option<Origin>,
     },
 }
 
@@ -97,7 +98,7 @@ struct Source {
     root: PathBuf,
     name: SharedString,
     kind: SourceKind,
-    readable: bool,
+    problem: Option<SharedString>,
     scripts: usize,
 }
 
@@ -120,7 +121,7 @@ impl Library {
             }
             Err(error) => {
                 tracing::warn!(%error, path = %source.root.display(), "couldn't read a script source");
-                source.readable = false;
+                source.problem.get_or_insert("Can't read".into());
             }
         }
         self.sources.push(source);
@@ -190,6 +191,16 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
         }
     }
     for root in added {
+        if let Some((source, scripts)) = package(root.clone()) {
+            library.add(
+                Source {
+                    kind: SourceKind::Folder,
+                    ..source
+                },
+                scripts,
+            );
+            continue;
+        }
         let name = root.file_name().map_or_else(
             || root.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -198,13 +209,12 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
             root: root.clone(),
             name: name.into(),
             kind: SourceKind::Folder,
-            readable: true,
+            problem: None,
             scripts: 0,
         };
         library.add(source, scan(root));
     }
-    for root in package_roots(packages) {
-        let (source, scripts) = package(root);
+    for (source, scripts) in package_roots(packages).into_iter().filter_map(package) {
         library.add(source, scripts);
     }
     library
@@ -217,58 +227,63 @@ fn package_roots(packages: &Path) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = items
         .filter_map(Result::ok)
         .map(|item| item.path())
-        .filter(|path| path.join("package.json").is_file())
+        .filter(|path| {
+            path.join("package.json").is_file() || path.join(packages::RECEIPT).is_file()
+        })
         .collect();
     roots.sort();
     roots
 }
 
-fn package(root: PathBuf) -> (Source, io::Result<Vec<Entry>>) {
-    let folder_name = root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let manifest = fs::read(root.join("package.json")).and_then(|bytes| {
-        serde_json::from_slice::<serde_json::Value>(&bytes).map_err(io::Error::from)
-    });
-    let text = |manifest: &serde_json::Value, key: &str| {
-        manifest
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(|text| SharedString::from(text.to_owned()))
+fn package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
+    let (origin, problem) = match packages::origin(&root) {
+        Ok(origin) => (origin, None),
+        Err(problem) => (None, Some(SharedString::from(problem))),
     };
-    let (name, kind, scripts) = match manifest {
-        Ok(manifest) => {
-            let scripts = match scan(&root.join("scripts")) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-                scanned => scanned,
-            };
-            (
-                text(&manifest, "name").unwrap_or_else(|| folder_name.into()),
-                SourceKind::Package {
-                    version: text(&manifest, "version"),
-                    description: text(&manifest, "description"),
-                },
-                scripts,
-            )
-        }
-        Err(error) => (
-            folder_name.into(),
-            SourceKind::Package {
-                version: None,
-                description: None,
-            },
-            Err(error),
-        ),
-    };
-    let source = Source {
+    let installed = origin.is_some() || problem.is_some();
+    let mut source = Source {
+        name: root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into(),
         root,
-        name,
-        kind,
-        readable: true,
+        kind: SourceKind::Package {
+            version: None,
+            description: None,
+            origin: origin.clone(),
+        },
+        problem,
         scripts: 0,
     };
-    (source, scripts)
+    let bytes = match fs::read(source.root.join("package.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !installed => return None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            source.problem = Some("Its package.json is missing.".into());
+            return Some((source, Ok(Vec::new())));
+        }
+        Err(error) => return Some((source, Err(error))),
+    };
+    let manifest = match Manifest::parse(&bytes) {
+        Ok(manifest) => manifest,
+        Err(ManifestError::NotAPackage) if !installed => return None,
+        Err(error) => {
+            source.problem = Some(error.to_string().into());
+            return Some((source, Ok(Vec::new())));
+        }
+    };
+    let scripts = match scan(&source.root.join("scripts")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        scanned => scanned,
+    };
+    source.name = manifest.name.into();
+    source.kind = SourceKind::Package {
+        version: manifest.version.map(Into::into),
+        description: manifest.description.map(Into::into),
+        origin,
+    };
+    Some((source, scripts))
 }
 
 fn scan(root: &Path) -> io::Result<Vec<Entry>> {
@@ -298,7 +313,7 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
             if let Err(error) = visit(root, &path, entries) {
                 tracing::warn!(%error, path = %path.display(), "couldn't read a script folder");
             }
-        } else if runnable(name) {
+        } else if scripting::runnable(name) {
             let folder = dir
                 .strip_prefix(root)
                 .ok()
@@ -323,13 +338,6 @@ pub(super) fn home_relative(path: &Path) -> SharedString {
             |rest| Path::new("~").join(rest).display().to_string(),
         )
         .into()
-}
-
-fn runnable(name: &str) -> bool {
-    let Some((stem, extension)) = name.rsplit_once('.') else {
-        return false;
-    };
-    SCRIPT_EXTENSIONS.contains(&extension) && !stem.ends_with(".d")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -413,8 +421,9 @@ pub(super) struct ScriptsWindow {
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
     tabs: HashMap<EntityId, TabState>,
+    package_dialogs: Entity<PackageDialogs>,
     _view_changes: Option<Subscription>,
-    _subscriptions: [Subscription; 3],
+    _subscriptions: [Subscription; 5],
 }
 
 struct Form {
@@ -451,7 +460,17 @@ impl ScriptsWindow {
                 .search()
         });
         let room = cx.new(|cx| Input::new("Room number", cx).max_length(5));
+        let package_dialogs = cx.new(PackageDialogs::new);
         let subscriptions = [
+            cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
+            cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
+                if let PackageEvent::Installed(dir) = event {
+                    this.pane = Pane::Library;
+                    this.filter = Some(this.packages.join(dir));
+                }
+                this.generation += 1;
+                this.rescan(cx);
+            }),
             cx.observe(&client, |this, _, cx| this.show(cx)),
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Changed => {
@@ -505,6 +524,7 @@ impl ScriptsWindow {
             displayed: None,
             detail_scroll: ScrollHandle::new(),
             tabs: HashMap::new(),
+            package_dialogs,
             _view_changes: None,
             _subscriptions: subscriptions,
         };
@@ -646,9 +666,15 @@ impl ScriptsWindow {
         let packages = self.packages.clone();
         let types = self.types.clone();
         let scanned = cx.background_spawn(async move {
-            let folders = iter::once(&built_in).chain(&added);
+            let library = scan_all(&built_in, &added, &packages);
+            let packages = library
+                .sources
+                .iter()
+                .filter(|source| matches!(source.kind, SourceKind::Package { .. }))
+                .map(|source| &source.root);
+            let folders = iter::once(&built_in).chain(&added).chain(packages);
             scripting::link_types(folders.map(PathBuf::as_path), &types);
-            scan_all(&built_in, &added, &packages)
+            library
         });
         self.scanning = Some(cx.spawn(async move |this, cx| {
             let scanned = scanned.await;
@@ -893,11 +919,10 @@ impl ScriptsWindow {
         ];
         let mut packages = Vec::new();
         for added in &library.sources {
-            let count: SharedString = if added.readable {
-                added.scripts.to_string().into()
-            } else {
-                "Can't read".into()
-            };
+            let count = added
+                .problem
+                .clone()
+                .unwrap_or_else(|| added.scripts.to_string().into());
             let item = source(added.name.clone(), &added.root, count);
             match added.kind {
                 SourceKind::Folder => items.push(item),
@@ -914,26 +939,32 @@ impl ScriptsWindow {
 
     fn sources(&self, cx: &mut Context<Self>) -> DropdownMenu {
         let this = cx.entity().downgrade();
-        let unreadable = self
-            .library
-            .as_ref()
-            .is_some_and(|library| library.sources.iter().any(|source| !source.readable));
+        let troubled = self.library.as_ref().is_some_and(|library| {
+            library
+                .sources
+                .iter()
+                .any(|source| source.problem.is_some())
+        });
+        let updates = packages::packages(cx).read(cx).any_available();
+        let dot = match (troubled, updates) {
+            (true, _) => Some(Tone::Danger),
+            (false, true) => Some(Tone::Accent),
+            (false, false) => None,
+        };
         DropdownMenu::new("sources")
             .trigger(
                 Button::new("sources", "Sources")
-                    .when(unreadable, |button| {
-                        button.start_slot(Dot::new(Tone::Danger))
-                    })
+                    .when_some(dot, |button, tone| button.start_slot(Dot::new(tone)))
                     .end_slot(Icon::ChevronDown),
             )
             .items(move |_, cx| {
                 this.upgrade()
-                    .map(|scripts| scripts.read(cx).source_items(&this))
+                    .map(|scripts| scripts.read(cx).source_items(&this, cx))
                     .unwrap_or_default()
             })
     }
 
-    fn source_items(&self, this: &WeakEntity<Self>) -> Vec<MenuItem> {
+    fn source_items(&self, this: &WeakEntity<Self>, cx: &App) -> Vec<MenuItem> {
         let act =
             |label: &'static str, root: &Path, f: fn(&mut Self, PathBuf, &mut Context<Self>)| {
                 let this = this.clone();
@@ -966,29 +997,22 @@ impl ScriptsWindow {
             match &source.kind {
                 SourceKind::Folder => {
                     let path = home_relative(&source.root);
-                    let item = if source.readable {
-                        MenuItem::submenu(path, vec![show(&source.root), remove(&source.root)])
-                    } else {
-                        MenuItem::submenu(path, vec![locate(&source.root), remove(&source.root)])
-                            .start_slot(Dot::new(Tone::Danger))
-                            .description("Can't read")
+                    let item = match &source.problem {
+                        None => {
+                            MenuItem::submenu(path, vec![show(&source.root), remove(&source.root)])
+                        }
+                        Some(problem) => MenuItem::submenu(
+                            path,
+                            vec![locate(&source.root), remove(&source.root)],
+                        )
+                        .start_slot(Dot::new(Tone::Danger))
+                        .description(problem.clone()),
                     };
                     items.push(item);
                 }
-                SourceKind::Package { version, .. } => {
-                    let item = MenuItem::submenu(
-                        source.name.clone(),
-                        vec![
-                            show(&source.root),
-                            MenuItem::action("Update", |_, _| {}).disabled(true),
-                            MenuItem::action("Move to Trash", |_, _| {}).disabled(true),
-                        ],
-                    );
-                    packages.push(match version {
-                        Some(version) => item.end_slot(Badge::new(version.clone())),
-                        None => item,
-                    });
-                }
+                SourceKind::Package {
+                    version, origin, ..
+                } => packages.push(self.package_item(source, version, origin, &show, cx)),
             }
         }
         let add = this.clone();
@@ -998,9 +1022,103 @@ impl ScriptsWindow {
         items.push(MenuItem::separator());
         items.push(MenuItem::header("Packages"));
         items.extend(packages);
-        items.push(MenuItem::action("Install package…", |_, _| {}).disabled(true));
-        items.push(MenuItem::action("Check for updates", |_, _| {}).disabled(true));
+        let state = packages::packages(cx).read(cx);
+        let busy = state.activity().is_some();
+        let dialogs = self.package_dialogs.clone();
+        items.push(
+            MenuItem::action("Install package…", move |window, cx| {
+                dialogs.update(cx, |dialogs, cx| dialogs.open_install(window, cx));
+            })
+            .disabled(busy),
+        );
+        let installed = sources.iter().any(|source| {
+            matches!(
+                source.kind,
+                SourceKind::Package {
+                    origin: Some(_),
+                    ..
+                }
+            )
+        });
+        let checking = matches!(state.activity(), Some(packages::Activity::Checking));
+        let dialogs = self.package_dialogs.clone();
+        items.push(
+            MenuItem::action(
+                if checking {
+                    "Checking for updates…"
+                } else {
+                    "Check for updates"
+                },
+                move |_, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)),
+            )
+            .disabled(busy || !installed),
+        );
         items
+    }
+
+    fn package_item(
+        &self,
+        source: &Source,
+        version: &Option<SharedString>,
+        origin: &Option<Origin>,
+        show: &dyn Fn(&Path) -> MenuItem,
+        cx: &App,
+    ) -> MenuItem {
+        let state = packages::packages(cx).read(cx);
+        let busy = state.activity().is_some();
+        let dir = source
+            .root
+            .file_name()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = source.name.clone();
+        let mut actions = vec![show(&source.root)];
+        if let Some(origin) = origin {
+            let url = origin.url.clone();
+            actions.push(MenuItem::action("Open on GitHub", move |_, cx| {
+                cx.open_url(&url);
+            }));
+            let dialogs = self.package_dialogs.clone();
+            let (dir, name) = (dir.clone(), name.clone());
+            actions.push(
+                MenuItem::action("Update", move |_, cx| {
+                    dialogs.update(cx, |dialogs, cx| {
+                        dialogs.update(dir.clone(), name.clone(), false, cx)
+                    });
+                })
+                .disabled(busy),
+            );
+        }
+        let dialogs = self.package_dialogs.clone();
+        let target = dir.clone();
+        actions.push(
+            MenuItem::action("Move to Trash", move |_, cx| {
+                dialogs.update(cx, |dialogs, cx| {
+                    dialogs.remove(target.clone(), name.clone(), cx)
+                });
+            })
+            .disabled(busy),
+        );
+        let item = MenuItem::submenu(source.name.clone(), actions);
+        let label = version
+            .clone()
+            .or_else(|| origin.as_ref().map(|origin| origin.commit.clone().into()));
+        let item = match label {
+            Some(label) => item.end_slot(Badge::new(label)),
+            None => item,
+        };
+        match (&source.problem, state.status(&dir)) {
+            (Some(problem), _) => item
+                .start_slot(Dot::new(Tone::Danger))
+                .description(problem.clone()),
+            (None, Some(Status::Available)) => item
+                .start_slot(Dot::new(Tone::Accent))
+                .description("Update available"),
+            (None, Some(Status::Failed(message))) => item
+                .start_slot(Dot::new(Tone::Warning))
+                .description(message.clone()),
+            (None, None) => item,
+        }
     }
 
     fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
@@ -1803,8 +1921,8 @@ fn first_script(rows: &[Row]) -> usize {
 }
 
 fn source_meta(source: &Source) -> SharedString {
-    if !source.readable {
-        return "Can't read".into();
+    if let Some(problem) = &source.problem {
+        return problem.clone();
     }
     match &source.kind {
         SourceKind::Package {
@@ -2074,6 +2192,8 @@ impl Render for ScriptsWindow {
             .child(toolbar)
             .child(body)
             .child(footer)
+            .child(self.package_dialogs.clone())
+            .child(Toaster::layer(window, cx))
     }
 }
 
@@ -2138,6 +2258,8 @@ fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
 mod tests {
     use super::*;
 
+    const RECEIPT: &str = r#"{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"1111111111111111111111111111111111111111","tree":"2222222222222222222222222222222222222222","files":{}}"#;
+
     #[test]
     fn the_library_lists_runnable_scripts_grouped_by_source() {
         let mut random = [0; 8];
@@ -2147,6 +2269,7 @@ mod tests {
         let built_in = temp.join("scripts");
         let community = temp.join("community");
         let missing = temp.join("unplugged");
+        let authoring = temp.join("authoring");
         let packages = temp.join("packages");
         assert_eq!(scan_all(&built_in, &[], &packages), Library::default());
         for (file, contents) in [
@@ -2161,19 +2284,41 @@ mod tests {
             ("community/daily.ts", ""),
             ("community/bosses/dage.ts", ""),
             (
+                "authoring/package.json",
+                r#"{"name":"Work in progress","mira":{}}"#,
+            ),
+            ("authoring/scripts/draft.ts", ""),
+            ("authoring/lib/helper.ts", ""),
+            (
                 "packages/dailies/package.json",
-                r#"{"name":"@lucent/dailies","version":"0.0.3","description":"Daily runs."}"#,
+                r#"{"name":"@lucent/dailies","version":"0.0.3","description":"Daily runs.","mira":{}}"#,
             ),
             ("packages/dailies/scripts/spin.ts", ""),
             ("packages/dailies/lib/wheel.ts", ""),
             ("packages/broken/package.json", "{"),
+            ("packages/broken/.mira-install.json", RECEIPT),
+            ("packages/deleted/.mira-install.json", RECEIPT),
+            ("packages/deleted/scripts/spin.ts", ""),
+            ("packages/stripped/package.json", r#"{"name":"left-pad"}"#),
+            ("packages/stripped/.mira-install.json", RECEIPT),
+            (
+                "packages/future/package.json",
+                r#"{"name":"Future","mira":{"requires":"999.0.0"}}"#,
+            ),
+            ("packages/future/scripts/later.ts", ""),
+            ("packages/npm/package.json", r#"{"name":"left-pad"}"#),
+            ("packages/npm/scripts/pad.ts", ""),
             ("packages/not-a-package/loose.ts", ""),
         ] {
             let path = temp.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, contents).unwrap();
         }
-        let library = scan_all(&built_in, &[community.clone(), missing.clone()], &packages);
+        let library = scan_all(
+            &built_in,
+            &[community.clone(), missing.clone(), authoring.clone()],
+            &packages,
+        );
         let listed: Vec<(Option<usize>, Option<&str>, &str)> = library
             .entries
             .iter()
@@ -2188,40 +2333,81 @@ mod tests {
                 (None, Some("farming"), "hunt.ts"),
                 (Some(0), None, "daily.ts"),
                 (Some(0), Some("bosses"), "dage.ts"),
-                (Some(3), None, "spin.ts"),
+                (Some(2), None, "draft.ts"),
+                (Some(4), None, "spin.ts"),
             ]
         );
-        let sources: Vec<(&Path, &str, bool, usize)> = library
+        let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
             .sources
             .iter()
             .map(|source| {
                 (
                     source.root.as_path(),
                     source.name.as_ref(),
-                    source.readable,
+                    source.problem.as_deref(),
                     source.scripts,
                 )
             })
             .collect();
+        let invalid = sources[3].2.unwrap();
+        assert!(
+            invalid.starts_with("Its package.json isn't valid: "),
+            "{invalid}"
+        );
         assert_eq!(
             sources,
             [
-                (community.as_path(), "community", true, 2),
-                (missing.as_path(), "unplugged", false, 0),
-                (packages.join("broken").as_path(), "broken", false, 0),
+                (community.as_path(), "community", None, 2),
+                (missing.as_path(), "unplugged", Some("Can't read"), 0),
+                (authoring.as_path(), "Work in progress", None, 1),
+                (
+                    packages.join("broken").as_path(),
+                    "broken",
+                    Some(invalid),
+                    0
+                ),
                 (
                     packages.join("dailies").as_path(),
                     "@lucent/dailies",
-                    true,
+                    None,
                     1
+                ),
+                (
+                    packages.join("deleted").as_path(),
+                    "deleted",
+                    Some("Its package.json is missing."),
+                    0
+                ),
+                (
+                    packages.join("future").as_path(),
+                    "future",
+                    Some("Needs Mira 999.0.0 or newer."),
+                    0
+                ),
+                (
+                    packages.join("stripped").as_path(),
+                    "stripped",
+                    Some(
+                        "This isn't a Mira script package. Its package.json needs a \"mira\" field."
+                    ),
+                    0
                 ),
             ]
         );
+        for index in [3, 5, 7] {
+            assert!(matches!(
+                &library.sources[index].kind,
+                SourceKind::Package { origin: Some(origin), .. }
+                    if origin.url == "https://github.com/o/r"
+            ));
+        }
+        assert_eq!(library.sources[2].kind, SourceKind::Folder);
         assert_eq!(
-            library.sources[3].kind,
+            library.sources[4].kind,
             SourceKind::Package {
                 version: Some("0.0.3".into()),
                 description: Some("Daily runs.".into()),
+                origin: None,
             }
         );
         fs::remove_dir_all(temp).unwrap();
@@ -2239,7 +2425,7 @@ mod tests {
             root: PathBuf::from(name),
             name: name.to_owned().into(),
             kind: SourceKind::Folder,
-            readable: true,
+            problem: None,
             scripts: 0,
         };
         let library = Library {
@@ -2294,6 +2480,84 @@ mod tests {
         assert!(names_in("hunt", Scope::Source(1)).is_empty());
     }
 
+    struct OpenSources(Entity<ScriptsWindow>);
+
+    impl Render for OpenSources {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let menu = self
+                .0
+                .update(cx, |scripts, cx| scripts.sources(cx))
+                .width(px(320.0))
+                .default_open(true);
+            div()
+                .size_full()
+                .bg(cx.theme().base)
+                .p(px(16.0))
+                .child(div().w(px(140.0)).child(menu))
+        }
+    }
+
+    #[test]
+    fn snapshot_package_sources() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-sources-{:x}", u64::from_ne_bytes(random)));
+        let commit = "4e1c2f0".to_owned() + &"0".repeat(33);
+        let receipt = format!(
+            r#"{{"repository":1,"owner":"toommyliu","repo":"mira","path":"script-packages/dailies","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
+        );
+        for (file, contents) in [
+            (
+                "packages/toommyliu-mira-dailies/package.json",
+                r#"{"name":"Dailies","mira":{}}"#,
+            ),
+            ("packages/toommyliu-mira-dailies/scripts/spin.ts", ""),
+            (
+                "packages/toommyliu-mira-dailies/.mira-install.json",
+                receipt.as_str(),
+            ),
+            (
+                "packages/farming/package.json",
+                r#"{"name":"Farming","version":"1.2.0","mira":{}}"#,
+            ),
+            ("packages/farming/scripts/hunt.ts", ""),
+            (
+                "packages/future/package.json",
+                r#"{"name":"Future","mira":{"requires":"9.0.0"}}"#,
+            ),
+        ] {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let size = gpui::size(px(560.0), px(440.0));
+        for written in mira_ui::snapshot("scripts-sources-packages", size, move |window, cx| {
+            let temp = temp.clone();
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::packages(cx).update(cx, |packages, _| {
+                packages.mark("toommyliu-mira-dailies", Status::Available)
+            });
+            let scripts = cx.new(|cx| {
+                let client = Client::empty_for_tests(&temp, cx);
+                ScriptsWindow::new(
+                    client,
+                    temp.join("scripts"),
+                    temp.join("types"),
+                    Target::Selected,
+                    window,
+                    cx,
+                )
+            });
+            let library = scan_all(&temp.join("scripts"), &[], &temp.join("packages"));
+            scripts.update(cx, |scripts, _| scripts.library = Some(library));
+            cx.new(|_| OpenSources(scripts))
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
     #[test]
     fn snapshot_nested_library() {
         let mut random = [0; 8];
@@ -2314,6 +2578,7 @@ mod tests {
         for written in mira_ui::snapshot("scripts-nested", size, move |window, cx| {
             let temp = temp.clone();
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
             cx.new(|cx| {
                 let client = Client::empty_for_tests(&temp, cx);
                 let mut scripts = ScriptsWindow::new(

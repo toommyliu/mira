@@ -4,19 +4,23 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, Global, InteractiveElement as _,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement as _,
     IntoElement, KeyBinding, Menu, MenuItem, ParentElement as _, Render, SharedString, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
+    Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
     components::Group,
-    primitives::{Select, Switch},
+    primitives::{Input, InputEvent, Select, Switch},
     theme::TEXT_BODY,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::ruffle_view::{CloseSession, bar_title, drag_area, window_bar};
+use crate::{
+    packages,
+    ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
+};
 
 actions!(
     settings,
@@ -104,7 +108,7 @@ struct Store {
 
 impl Global for Store {}
 
-const SETTINGS_HEIGHT: f32 = 275.0;
+const SETTINGS_HEIGHT: f32 = 385.0;
 
 struct Open(WindowHandle<SettingsWindow>);
 
@@ -276,9 +280,7 @@ fn open(cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| SettingsWindow {
-            focus: cx.focus_handle(),
-        });
+        let view = cx.new(SettingsWindow::new);
         window.focus(&view.read(cx).focus.clone(), cx);
         view
     }) {
@@ -289,6 +291,41 @@ fn open(cx: &mut App) {
 
 struct SettingsWindow {
     focus: FocusHandle,
+    github_token: Entity<Input>,
+    _token_changes: Subscription,
+}
+
+impl SettingsWindow {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let saved = packages::packages(cx)
+            .read(cx)
+            .token()
+            .unwrap_or_default()
+            .to_owned();
+        let github_token = cx.new(|cx| {
+            let mut input = Input::new("GitHub token", cx)
+                .password()
+                .placeholder("Optional");
+            input.set_text(saved, cx);
+            input
+        });
+        let token_changes = cx.subscribe(&github_token, |_, input, event, cx| {
+            if !matches!(event, InputEvent::Changed) {
+                return;
+            }
+            let text = input.read(cx).text().to_owned();
+            let saved =
+                packages::packages(cx).update(cx, |packages, cx| packages.set_token(&text, cx));
+            if let Err(error) = saved {
+                tracing::error!(%error, "couldn't save the GitHub token");
+            }
+        });
+        Self {
+            focus: cx.focus_handle(),
+            github_token,
+            _token_changes: token_changes,
+        }
+    }
 }
 
 impl Render for SettingsWindow {
@@ -364,6 +401,16 @@ impl Render for SettingsWindow {
                                     change(cx, |settings| settings.pointer_cursors = on)
                                 }),
                             ),
+                    )
+                    .child(
+                        Group::new().title("GitHub").row(
+                            "Token",
+                            Some(
+                                "For private packages and a higher rate limit. A read-only fine-grained token is safest."
+                                    .into(),
+                            ),
+                            div().w(px(200.0)).child(self.github_token.clone()),
+                        ),
                     ),
             )
     }
@@ -419,10 +466,15 @@ mod tests {
                     settings: Settings::default(),
                     on_change: |_| {},
                 });
+                packages::init(
+                    std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                    std::env::temp_dir().join("mira-settings-snapshot-token"),
+                    cx,
+                );
                 cx.new(|cx| {
-                    let focus = cx.focus_handle();
-                    window.focus(&focus, cx);
-                    SettingsWindow { focus }
+                    let settings = SettingsWindow::new(cx);
+                    window.focus(&settings.focus, cx);
+                    settings
                 })
             },
         ) {
