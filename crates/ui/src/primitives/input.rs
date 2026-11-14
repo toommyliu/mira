@@ -11,7 +11,7 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use super::{Button, Icon, button::Size};
+use super::{Button, Icon, button::Size, icon};
 use crate::{
     ActiveTheme as _,
     theme::{CONTROL_MD, CONTROL_SM, LINE_BODY, TEXT_BODY, TEXT_SMALL, tabular},
@@ -879,6 +879,9 @@ impl Render for Input {
             })
             .when(self.numeric.is_some(), |field| {
                 field.font_features(tabular())
+            })
+            .when(self.search, |field| {
+                field.child(icon(Icon::Search, theme.text_tertiary).mr(px(2.0)))
             })
             .child(
                 div()

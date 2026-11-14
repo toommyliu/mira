@@ -37,6 +37,7 @@ impl AssetSource for Assets {
             "icons/pin.svg" => include_str!("../assets/icons/lucide/pin.svg"),
             "icons/plus.svg" => include_str!("../assets/icons/lucide/plus.svg"),
             "icons/rotate-ccw.svg" => include_str!("../assets/icons/lucide/rotate-ccw.svg"),
+            "icons/search.svg" => include_str!("../assets/icons/lucide/search.svg"),
             "icons/square.svg" => include_str!("../assets/icons/lucide/square.svg"),
             "icons/x.svg" => include_str!("../assets/icons/lucide/x.svg"),
             SIDEBAR => include_str!("../assets/icons/sidebar.svg"),
