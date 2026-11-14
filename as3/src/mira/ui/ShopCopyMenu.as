@@ -52,7 +52,8 @@ package mira.ui {
       return [
         CopyMenu.option("Copy Name", String(shop.sName)),
         CopyMenu.option("Copy Shop ID", String(shop.ShopID)),
-        CopyMenu.option("Copy Shop", JSON.stringify(Shops.getShop(), null, 2), "shop " + shop.sName)
+        CopyMenu.option("Copy Shop", JSON.stringify(Shops.getShop(), null, 2), "shop " + shop.sName),
+        CopyMenu.wiki(shop.sName)
       ];
     }
   }

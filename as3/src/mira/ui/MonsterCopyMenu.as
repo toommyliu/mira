@@ -26,7 +26,8 @@ package mira.ui {
         CopyMenu.option("Copy Name", name),
         CopyMenu.option("Copy Monster ID", String(monster.objData.MonID)),
         CopyMenu.option("Copy Monster Map ID", String(monster.dataLeaf.MonMapID)),
-        CopyMenu.option("Copy Monster", JSON.stringify(World.monsterRow(monster), null, 2), "monster " + name)
+        CopyMenu.option("Copy Monster", JSON.stringify(World.monsterRow(monster), null, 2), "monster " + name),
+        CopyMenu.wiki(name)
       ];
     }
   }

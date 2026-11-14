@@ -6,6 +6,8 @@ package mira.ui {
   import flash.events.Event;
   import flash.events.MouseEvent;
   import flash.geom.ColorTransform;
+  import flash.net.URLRequest;
+  import flash.net.navigateToURL;
   import flash.system.ApplicationDomain;
   import flash.system.System;
   import flash.utils.Dictionary;
@@ -85,6 +87,10 @@ package mira.ui {
       return {label: label, value: value, note: note || value};
     }
 
+    public static function wiki(name:String):Object {
+      return {label: "Open Wiki", url: "https://aqwwiki.wikidot.com/" + encodeURIComponent(name)};
+    }
+
     public static function open(found:Array):void {
       var rowClass:Class = Main.getInstance().getGameDomain().getDefinition("cProto") as Class;
       var menu:MovieClip = Main.Game.ui.cMenu;
@@ -151,7 +157,9 @@ package mira.ui {
       var option:Object = options[int(row.name.substr(1))];
       tint(row.parent["mHi"], PICKED_COLOR);
       Main.Game.ui.cMenu.fClose();
-      if (option.value != null) {
+      if (option.url != null) {
+        navigateToURL(new URLRequest(option.url), "_blank");
+      } else if (option.value != null) {
         System.setClipboard(option.value);
         Main.Game.addUpdate("Copied: " + option.note);
       }

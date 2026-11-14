@@ -50,7 +50,7 @@ package mira.ui {
       }
 
       var row:Object = copied || (sold ? Shops.getItem({shopItemId: item.ShopItemID}) : Inventory.row(item));
-      found.push(CopyMenu.option("Copy Item", JSON.stringify(row, null, 2), "item " + item.sName));
+      found.push(CopyMenu.option("Copy Item", JSON.stringify(row, null, 2), "item " + item.sName), CopyMenu.wiki(item.sName));
       return found;
     }
   }
