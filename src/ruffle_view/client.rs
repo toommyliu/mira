@@ -487,7 +487,7 @@ impl Client {
         }
         match self.sessions.get(self.active) {
             Some(session) => {
-                self.tab_scroll.scroll_to_item(self.active);
+                reveal_tab(&self.tab_scroll, self.active, self.sessions.len());
                 window.focus(&session.view.focus_handle(cx), cx)
             }
             None => window.focus(&self.focus, cx),
@@ -669,7 +669,7 @@ impl Client {
                     )
                     .child(self.grid_toggle(cx)),
             )
-            .child(div().flex_none().px(px(6.0)).py(px(4.0)).child(tabs))
+            .child(div().flex_none().child(tabs))
             .child(drag_area().flex_1())
             .child(
                 div().flex_none().p(px(8.0)).child(
@@ -865,6 +865,16 @@ pub(super) fn tab_face(
                         .child(glance.label)
                 })),
         )
+}
+
+pub(super) fn reveal_tab(scroll: &ScrollHandle, index: usize, count: usize) {
+    if index == 0 {
+        scroll.set_offset(gpui::Point::default());
+    } else if index + 1 == count {
+        scroll.scroll_to_bottom();
+    } else {
+        scroll.scroll_to_item(index);
+    }
 }
 
 fn traffic_lights_inset(window: &Window) -> Pixels {

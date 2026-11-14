@@ -407,7 +407,7 @@ impl RenderOnce for Tabs {
             .flex()
             .map(|list| {
                 if self.vertical {
-                    list.flex_col().gap(px(2.0))
+                    list.flex_col().gap(px(2.0)).px(px(6.0)).py(px(4.0))
                 } else {
                     list.gap(px(16.0))
                         .border_b_1()

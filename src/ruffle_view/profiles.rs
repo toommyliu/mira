@@ -24,7 +24,7 @@ use mira_ui::{
 use super::{
     BAR_HEIGHT,
     account::Glance,
-    client::{CloseSession, SIDEBAR_WIDTH, bar, bar_title, drag_area, tab_face},
+    client::{CloseSession, SIDEBAR_WIDTH, bar, bar_title, drag_area, reveal_tab, tab_face},
     profile_form::{Form, FormStep, FormTrigger, Item, Kind, Rule},
 };
 use crate::{
@@ -287,8 +287,11 @@ impl Editor {
             return;
         }
         self.selected = selected;
-        self.profile_scroll
-            .scroll_to_item(selected.map_or(0, |index| index + 1));
+        reveal_tab(
+            &self.profile_scroll,
+            selected.map_or(0, |index| index + 1),
+            self.drafts.len() + 1,
+        );
         self.item = None;
         self.problem = None;
         self.renaming = false;
@@ -792,7 +795,7 @@ impl Editor {
                             })),
                     ),
             )
-            .child(v_flex().min_h_0().px(px(6.0)).py(px(4.0)).child(profiles))
+            .child(v_flex().min_h_0().child(profiles))
             .child(drag_area().flex_1())
             .when(issues > 0, |sidebar| {
                 sidebar.child(

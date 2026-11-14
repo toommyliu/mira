@@ -1141,7 +1141,7 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1"]);
 
-    let third = point(px(20.0), px(79.0));
+    let third = point(px(20.0), px(83.0));
     cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
