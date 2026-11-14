@@ -20,5 +20,10 @@ package mira.ui {
     public static function setPercentagesEnabled(enabled:Boolean):void {
       Percentages.setEnabled(enabled);
     }
+
+    [BridgeExport]
+    public static function setHideMusicButtonEnabled(enabled:Boolean):void {
+      MusicButton.setEnabled(enabled);
+    }
   }
 }
