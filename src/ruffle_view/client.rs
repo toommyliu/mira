@@ -36,7 +36,7 @@ use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
     ruffle::{Inbox, Msg, extras},
-    script_inputs,
+    script_inputs, settings,
 };
 
 actions!(
@@ -227,6 +227,7 @@ impl Client {
         accounts: PathBuf,
         device: reqwest::header::HeaderValue,
         armies: Armies,
+        blank_tab: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Entity<Client>> {
@@ -239,7 +240,11 @@ impl Client {
             sessions: Vec::new(),
             active: 0,
             layout: Layout::Single,
-            sidebar: Sidebar::Hidden,
+            sidebar: if settings::sidebar(cx) {
+                Sidebar::Full
+            } else {
+                Sidebar::Hidden
+            },
             numbered: 0,
             focus: cx.focus_handle(),
             tab_scroll: ScrollHandle::new(),
@@ -255,7 +260,9 @@ impl Client {
                 }
             }),
         });
-        client.update(cx, |client, cx| client.open_session(None, window, cx))?;
+        if blank_tab {
+            client.update(cx, |client, cx| client.open_session(None, window, cx))?;
+        }
         Ok(client)
     }
 
@@ -658,6 +665,7 @@ impl Client {
             Sidebar::Hidden => Sidebar::Full,
             Sidebar::Full => Sidebar::Hidden,
         };
+        settings::set_sidebar(self.sidebar == Sidebar::Full, cx);
         super::native::present_next_frame_with_players(window);
         cx.notify();
     }

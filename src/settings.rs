@@ -49,9 +49,30 @@ impl Appearance {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Start {
+    #[default]
+    Client,
+    Manager,
+}
+
+impl Start {
+    const ALL: [Start; 2] = [Start::Client, Start::Manager];
+
+    fn label(self) -> &'static str {
+        match self {
+            Start::Client => "Client",
+            Start::Manager => "Manager",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
+    start: Start,
+    sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
     script_folders: Vec<PathBuf>,
@@ -82,6 +103,8 @@ struct Store {
 }
 
 impl Global for Store {}
+
+const SETTINGS_HEIGHT: f32 = 275.0;
 
 struct Open(WindowHandle<SettingsWindow>);
 
@@ -126,6 +149,18 @@ pub(crate) fn appearance_menu(cx: &App) -> MenuItem {
             MenuItem::action("Dark", UseDarkAppearance).checked(chosen == Appearance::Dark),
         ],
     })
+}
+
+pub(crate) fn start(cx: &App) -> Start {
+    cx.global::<Store>().settings.start
+}
+
+pub(crate) fn sidebar(cx: &App) -> bool {
+    cx.global::<Store>().settings.sidebar
+}
+
+pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
+    change(cx, |settings| settings.sidebar = open);
 }
 
 pub(crate) fn script_folders(cx: &App) -> &[PathBuf] {
@@ -227,7 +262,7 @@ fn open(cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(480.0), px(180.0)),
+            size(px(480.0), px(SETTINGS_HEIGHT)),
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
@@ -266,6 +301,10 @@ impl Render for SettingsWindow {
         let chosen = Appearance::ALL
             .iter()
             .position(|&appearance| appearance == settings.appearance);
+        let starts = Start::ALL
+            .map(|start| SharedString::from(start.label()))
+            .to_vec();
+        let start = Start::ALL.iter().position(|&start| start == settings.start);
         div()
             .flex()
             .flex_col()
@@ -283,31 +322,49 @@ impl Render for SettingsWindow {
                     .child(drag_area().flex_1()),
             )
             .child(
-                div().px(px(16.0)).pt(px(12.0)).child(
-                    Group::new()
-                        .title("Appearance")
-                        .row(
-                            "Theme",
-                            None,
-                            Select::new("appearance", "Theme", appearances, chosen)
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.0))
+                    .px(px(16.0))
+                    .pt(px(12.0))
+                    .child(
+                        Group::new().title("General").row(
+                            "Open at launch",
+                            Some("Start in a game tab or your account list.".into()),
+                            Select::new("start", "Open at launch", starts, start)
                                 .width(px(128.0))
                                 .align_item_with_trigger()
-                                .on_select(|index, _, cx| choose(Appearance::ALL[index], cx)),
-                        )
-                        .row(
-                            "Pointer cursors",
-                            Some("Show a hand cursor over clickable controls.".into()),
-                            Switch::new(
-                                "pointer-cursors",
-                                "Pointer cursors",
-                                settings.pointer_cursors,
-                            )
-                            .hide_label()
-                            .on_toggle(|on, _, cx| {
-                                change(cx, |settings| settings.pointer_cursors = on)
-                            }),
+                                .on_select(|index, _, cx| {
+                                    change(cx, |settings| settings.start = Start::ALL[index])
+                                }),
                         ),
-                ),
+                    )
+                    .child(
+                        Group::new()
+                            .title("Appearance")
+                            .row(
+                                "Theme",
+                                None,
+                                Select::new("appearance", "Theme", appearances, chosen)
+                                    .width(px(128.0))
+                                    .align_item_with_trigger()
+                                    .on_select(|index, _, cx| choose(Appearance::ALL[index], cx)),
+                            )
+                            .row(
+                                "Pointer cursors",
+                                Some("Show a hand cursor over clickable controls.".into()),
+                                Switch::new(
+                                    "pointer-cursors",
+                                    "Pointer cursors",
+                                    settings.pointer_cursors,
+                                )
+                                .hide_label()
+                                .on_toggle(|on, _, cx| {
+                                    change(cx, |settings| settings.pointer_cursors = on)
+                                }),
+                            ),
+                    ),
             )
     }
 }
@@ -327,7 +384,11 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap(), Settings::default());
         assert_eq!(Settings::default().appearance, Appearance::System);
         assert!(!Settings::default().pointer_cursors);
+        assert_eq!(Settings::default().start, Start::Client);
+        assert!(!Settings::default().sidebar);
         let chosen = Settings {
+            start: Start::Manager,
+            sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
@@ -345,5 +406,27 @@ mod tests {
             }
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_settings_window() {
+        for written in mira_ui::snapshot(
+            "settings",
+            size(px(480.0), px(SETTINGS_HEIGHT)),
+            |window, cx| {
+                cx.set_global(Store {
+                    path: PathBuf::new(),
+                    settings: Settings::default(),
+                    on_change: |_| {},
+                });
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    SettingsWindow { focus }
+                })
+            },
+        ) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 }
