@@ -479,6 +479,7 @@ fn card(
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .items_start()
                     .gap(px(12.0))
                     .opacity(content)
@@ -487,6 +488,7 @@ fn card(
                             .flex()
                             .flex_col()
                             .flex_1()
+                            .min_w_0()
                             .py(px(2.0))
                             .child(
                                 div()
