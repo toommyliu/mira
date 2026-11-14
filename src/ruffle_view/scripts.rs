@@ -1763,7 +1763,13 @@ impl ScriptsWindow {
                         ListItem::header(source.name.clone()).end_slot(source_meta(source))
                     }
                     Row::Script(entry) => match &entry.folder {
-                        Some(folder) => ListItem::new(entry.name.clone()).end_slot(folder.clone()),
+                        Some(folder) => ListItem::new(entry.name.clone()).end_slot(
+                            div()
+                                .max_w(px(100.0))
+                                .truncate()
+                                .text_ellipsis_start()
+                                .child(folder.clone()),
+                        ),
                         None => ListItem::new(entry.name.clone()),
                     },
                 }
@@ -2286,6 +2292,47 @@ mod tests {
             ["[community]", "daily.ts"]
         );
         assert!(names_in("hunt", Scope::Source(1)).is_empty());
+    }
+
+    #[test]
+    fn snapshot_nested_library() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-scripts-{:x}", u64::from_ne_bytes(random)));
+        for file in [
+            "scripts/hunt.ts",
+            "scripts/bosses/dage.ts",
+            "scripts/legion/daily-quests/ultras/temple.ts",
+            "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
+        ] {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        let size = gpui::size(px(WIDTH), px(HEIGHT));
+        for written in mira_ui::snapshot("scripts-nested", size, move |window, cx| {
+            let temp = temp.clone();
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&temp, cx);
+                let mut scripts = ScriptsWindow::new(
+                    client,
+                    temp.join("scripts"),
+                    temp.join("types"),
+                    Target::Selected,
+                    window,
+                    cx,
+                );
+                scripts.shown = Some(ShownTab::fake(
+                    "Alt 1",
+                    crate::automation::settings::Automation::default(),
+                ));
+                scripts
+            })
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 
     #[test]
