@@ -10,7 +10,7 @@ pub mod theme;
 
 pub use assets::Assets;
 #[cfg(feature = "test-support")]
-pub use snapshot::snapshot;
+pub use snapshot::{snapshot, snapshot_after};
 pub use style::{StyledExt, h_flex, v_flex};
 pub use theme::{ActiveTheme, PointerCursor, Theme, Tone};
 

@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    App, Entity, HeadlessAppContext, Pixels, PlatformHeadlessRenderer, Render, Size, Window,
+    App, Entity, HeadlessAppContext, Keystroke, Pixels, PlatformHeadlessRenderer, Render, Size,
+    Window,
 };
 use gpui_apple::{AppleTextSystem, metal_renderer::MetalHeadlessRenderer};
 
@@ -10,6 +11,15 @@ use crate::{Assets, Theme};
 pub fn snapshot<V: Render + 'static>(
     name: &str,
     size: Size<Pixels>,
+    build: impl Fn(&mut Window, &mut App) -> Entity<V>,
+) -> Vec<PathBuf> {
+    snapshot_after(name, size, &[], build)
+}
+
+pub fn snapshot_after<V: Render + 'static>(
+    name: &str,
+    size: Size<Pixels>,
+    keys: &[&'static str],
     build: impl Fn(&mut Window, &mut App) -> Entity<V>,
 ) -> Vec<PathBuf> {
     let dir = snapshot_dir();
@@ -35,6 +45,18 @@ pub fn snapshot<V: Render + 'static>(
                 .open_window(size, |window, cx| build(window, cx))
                 .expect("open a headless window");
             cx.run_until_parked();
+            cx.update_window(window.into(), |_, window, _| window.activate_window())
+                .expect("activate the window");
+            for key in keys {
+                let Ok(keystroke) = Keystroke::parse(key) else {
+                    panic!("{key} is not a keystroke");
+                };
+                cx.update_window(window.into(), |_, window, cx| {
+                    window.dispatch_keystroke(keystroke, cx);
+                })
+                .expect("press the key");
+                cx.run_until_parked();
+            }
             cx.update_window(window.into(), |_, window, _| window.refresh())
                 .expect("redraw the window");
             cx.run_until_parked();

@@ -25,6 +25,8 @@ pub(crate) struct DialogState {
     closed_at: Option<std::time::Instant>,
     return_focus: Option<FocusHandle>,
     focus: FocusHandle,
+    footer_start: FocusHandle,
+    actions: FocusHandle,
     scroll: ScrollHandle,
 }
 
@@ -35,6 +37,8 @@ impl DialogState {
             closed_at: None,
             return_focus: None,
             focus: cx.focus_handle(),
+            footer_start: cx.focus_handle(),
+            actions: cx.focus_handle(),
             scroll: ScrollHandle::new(),
         }
     }
@@ -118,9 +122,15 @@ impl RenderOnce for Dialog {
         let state = window.use_keyed_state((self.id.clone(), "dialog"), cx, |_, cx| {
             DialogState::new(cx)
         });
-        let (was_open, focus, scroll) = {
+        let (was_open, focus, footer_start, actions, scroll) = {
             let state = state.read(cx);
-            (state.was_open, state.focus.clone(), state.scroll.clone())
+            (
+                state.was_open,
+                state.focus.clone(),
+                state.footer_start.clone(),
+                state.actions.clone(),
+                state.scroll.clone(),
+            )
         };
         if self.open != was_open {
             let opening = self.open;
@@ -136,9 +146,13 @@ impl RenderOnce for Dialog {
                 }
             });
             let focus = focus.clone();
+            let (footer_start, actions) = (footer_start.clone(), actions.clone());
             window.defer(cx, move |window, cx| {
                 if opening {
                     nav::focus_first(&focus, window, cx);
+                    if footer_start.contains_focused(window, cx) {
+                        nav::focus_first(&actions, window, cx);
+                    }
                 } else if let Some(handle) = restore {
                     window.focus(&handle, cx);
                 }
@@ -164,6 +178,7 @@ impl RenderOnce for Dialog {
             Size::Small
         };
         let backdrop_close = dismiss.clone();
+        let close_focus = nav::focus_handle((self.id.clone(), "close"), window, cx).tab_index(1);
         let close_id = self.id.clone();
         let next_focus = focus.clone();
         let prev_focus = focus.clone();
@@ -267,6 +282,7 @@ impl RenderOnce for Dialog {
                                                             "Close",
                                                         )
                                                         .size(close_size)
+                                                        .focus(close_focus)
                                                         .on_click(move |_, window, cx| {
                                                             dismiss(window, cx)
                                                         }),
@@ -323,6 +339,8 @@ impl RenderOnce for Dialog {
                                                 .pt(px(4.0))
                                                 .child(
                                                     h_flex()
+                                                        .id((self.id.clone(), "footer-start"))
+                                                        .track_focus(&footer_start)
                                                         .flex_grow(1.0)
                                                         .min_w_0()
                                                         .gap(px(6.0))
@@ -330,6 +348,8 @@ impl RenderOnce for Dialog {
                                                 )
                                                 .child(
                                                     h_flex()
+                                                        .id((self.id.clone(), "actions"))
+                                                        .track_focus(&actions)
                                                         .flex_wrap()
                                                         .justify_end()
                                                         .gap(px(6.0))

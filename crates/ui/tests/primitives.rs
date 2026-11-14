@@ -114,6 +114,41 @@ fn dialog_moves_tab_between_its_controls_without_a_focus_scope(cx: &mut TestAppC
     assert_eq!(pressed.get(), Some("leave"));
 }
 
+struct SaveChanges {
+    pressed: Rc<Cell<Option<&'static str>>>,
+}
+
+impl Render for SaveChanges {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let press = |name: &'static str| {
+            let pressed = self.pressed.clone();
+            move |_: &gpui::ClickEvent, _: &mut Window, _: &mut gpui::App| pressed.set(Some(name))
+        };
+        div().size_full().child(
+            Dialog::new("unsaved", true, "Save your changes?")
+                .alert()
+                .footer_start_slot(Button::new("discard", "Don't save").on_click(press("discard")))
+                .action(Button::new("cancel", "Cancel").on_click(press("cancel")))
+                .action(Button::new("save", "Save all").on_click(press("save"))),
+        )
+    }
+}
+
+#[gpui::test]
+fn return_in_a_dialog_never_starts_on_its_footer_start_control(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let pressed = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        SaveChanges {
+            pressed: pressed.clone(),
+        }
+    });
+    cx.run_until_parked();
+    press(cx, "enter");
+    assert_eq!(pressed.get(), Some("cancel"));
+}
+
 struct BoostPicker;
 
 impl Render for BoostPicker {
@@ -147,6 +182,46 @@ fn dialog_keeps_its_actions_inside_a_window_smaller_than_it(cx: &mut TestAppCont
     let add = cx.debug_bounds("add").unwrap();
     assert!(add.left() >= px(0.0) && add.right() <= px(340.0), "{add:?}");
     assert!(add.top() >= px(0.0) && add.bottom() <= px(280.0), "{add:?}");
+}
+
+struct AddAccount {
+    username: gpui::Entity<mira_ui::primitives::Input>,
+    closed: Rc<Cell<bool>>,
+}
+
+impl Render for AddAccount {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            Dialog::new("add-account", true, "Add account")
+                .body(self.username.clone())
+                .action(Button::new("save", "Save"))
+                .on_close({
+                    let closed = self.closed.clone();
+                    move |_, _| closed.set(true)
+                }),
+        )
+    }
+}
+
+#[gpui::test]
+fn dialog_opens_on_its_first_field_and_reaches_close_last(cx: &mut TestAppContext) {
+    use gpui::{AppContext as _, Focusable as _};
+    cx.update(mira_ui::init);
+    let closed = Rc::new(Cell::new(false));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        AddAccount {
+            username: cx.new(|cx| mira_ui::primitives::Input::new("Username", cx)),
+            closed: closed.clone(),
+        }
+    });
+    cx.run_until_parked();
+    let username = view.read_with(cx, |view, cx| view.username.focus_handle(cx));
+    assert!(cx.update(|window, _| username.is_focused(window)));
+    for key in ["tab", "tab", "enter"] {
+        press(cx, key);
+    }
+    assert!(closed.get());
 }
 
 struct SearchAndOptions {
