@@ -7,9 +7,10 @@ use gpui::{
     Window, div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
-    ActiveTheme as _,
+    ActiveTheme as _, StyledExt as _,
     primitives::{Button, Dialog, Input, Scrollbar, button::Variant},
-    theme::{LINE_BODY, TEXT_BODY},
+    theme::LINE_BODY,
+    v_flex,
 };
 
 use crate::scripting::{CallId, Dialog as Asked, DialogRequest, ToDialogs};
@@ -41,7 +42,7 @@ const MAX_LABEL: usize = 24;
 const MAX_TITLE: usize = 60;
 const WIDTH: Pixels = px(420.0);
 const WINDOW_MARGIN: Pixels = px(16.0);
-const STOP_INSET: Pixels = px(12.0);
+const STOP_INSET: Pixels = px(10.0);
 
 #[derive(Debug, PartialEq)]
 struct Content {
@@ -260,16 +261,15 @@ impl Render for ScriptDialogs {
             accept,
         } = Content::of(request, &self.script);
         let theme = cx.theme();
+        let overflowing = self.scroll.max_offset().y > px(0.0);
         let scroller = div()
             .id("script-dialog-message")
-            .min_h(LINE_BODY * 2.0)
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .when(self.scroll.max_offset().y > px(0.0), |scroller| {
-                scroller.pr(Scrollbar::GUTTER)
+            .when(overflowing, |scroller| {
+                scroller.min_h(LINE_BODY * 2.0).pr(Scrollbar::GUTTER)
             })
-            .text_size(TEXT_BODY)
-            .line_height(LINE_BODY)
+            .text_body()
             .text_color(theme.text_secondary)
             .child(message);
         let prompt = match (&self.prompt, request) {
@@ -311,10 +311,8 @@ impl Render for ScriptDialogs {
                     linear_color_stop(to, 1.0),
                 ))
         };
-        let message = div()
+        let message = v_flex()
             .relative()
-            .flex()
-            .flex_col()
             .min_h_0()
             .child(scroller)
             .when(scrolled > px(0.5), |message| {
@@ -335,56 +333,35 @@ impl Render for ScriptDialogs {
                 "script-dialog-scrollbar",
                 self.scroll.clone(),
             ));
-        let stop = self.stop.clone();
-        let actions = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .pt(px(4.0))
-            .child(
-                div().ml(-STOP_INSET).child(
-                    Button::new("script-dialog-stop", "Stop script")
-                        .variant(Variant::Ghost)
-                        .on_click(move |_, _, cx| stop(cx)),
-                ),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .gap(px(8.0))
-                    .when_some(cancel, |answers, cancel| {
-                        answers.child(Button::new("script-dialog-cancel", cancel).on_click(
-                            cx.listener(|this, event: &ClickEvent, _, cx| {
-                                if event.click_count() == 1 {
-                                    this.answer(false, By::Pointer, cx);
-                                }
-                            }),
-                        ))
-                    })
-                    .child(
-                        Button::new("script-dialog-accept", accept)
-                            .variant(Variant::Primary)
-                            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                if event.click_count() == 1 {
-                                    this.answer(true, By::Pointer, cx);
-                                }
-                            })),
-                    ),
-            );
-        let body = div()
-            .flex()
-            .flex_col()
+        let body = v_flex()
             .min_h_0()
             .gap(px(12.0))
             .debug_selector(|| "script-dialog-body".into())
             .child(message)
-            .children(prompt)
-            .child(actions);
+            .children(prompt);
+        let stop = self.stop.clone();
+        let stop = div().ml(-STOP_INSET).child(
+            Button::new("script-dialog-stop", "Stop script")
+                .variant(Variant::Ghost)
+                .on_click(move |_, _, cx| stop(cx)),
+        );
+        let answer = |accept: bool| {
+            cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.click_count() == 1 {
+                    this.answer(accept, By::Pointer, cx);
+                }
+            })
+        };
+        let cancel = cancel
+            .map(|cancel| Button::new("script-dialog-cancel", cancel).on_click(answer(false)));
+        let accept = div()
+            .flex_none()
+            .debug_selector(|| "script-dialog-accept".into())
+            .child(
+                Button::new("script-dialog-accept", accept)
+                    .variant(Variant::Primary)
+                    .on_click(answer(true)),
+            );
         let width = WIDTH.min(window.viewport_size().width - WINDOW_MARGIN * 2.0);
         let this = cx.weak_entity();
         let dialog = Dialog::new("script-dialog", self.waiting(), title)
@@ -392,6 +369,9 @@ impl Render for ScriptDialogs {
             .fit_window()
             .width(width)
             .body(body)
+            .footer_start_slot(stop)
+            .when_some(cancel, Dialog::action)
+            .action(accept)
             .on_close(move |_, cx| {
                 let _ = this.update(cx, |this, cx| this.answer(false, By::Key, cx));
             });
@@ -419,7 +399,10 @@ mod tests {
     use gpui::{
         Bounds, KeyUpEvent, Keystroke, Modifiers, Pixels, TestAppContext, VisualTestContext, point,
     };
-    use mira_ui::{FOCUS_SCOPE, theme::SYSTEM_SANS};
+    use mira_ui::{
+        FOCUS_SCOPE,
+        theme::{SYSTEM_SANS, TEXT_BODY},
+    };
     use serde_json::{Value as Json, json};
 
     use super::*;
@@ -713,8 +696,7 @@ mod tests {
         let (_, deposit) = asks.open(confirm("Deposit?"));
         let (_, sell) = asks.open(confirm("Sell everything?"));
         settle(cx);
-        let body = cx.debug_bounds("script-dialog-body").unwrap();
-        let accept = body.bottom_right() - point(px(30.0), px(14.0));
+        let accept = cx.debug_bounds("script-dialog-accept").unwrap().center();
         for click_count in [1, 2] {
             cx.simulate_event(gpui::MouseDownEvent {
                 button: gpui::MouseButton::Left,
@@ -794,12 +776,13 @@ mod tests {
             settle(cx);
             let viewport = cx.update(|window, _| window.viewport_size());
             let body: Bounds<Pixels> = cx.debug_bounds("script-dialog-body").unwrap();
+            let accept: Bounds<Pixels> = cx.debug_bounds("script-dialog-accept").unwrap();
             assert!(
                 body.top() >= px(0.0)
-                    && body.bottom() <= viewport.height - px(16.0)
                     && body.left() >= px(0.0)
-                    && body.right() <= viewport.width,
-                "{body:?} in {viewport:?}"
+                    && accept.bottom() <= viewport.height - px(16.0)
+                    && accept.right() <= viewport.width - px(16.0),
+                "{body:?} and {accept:?} in {viewport:?}"
             );
             press(cx, "enter");
             assert_eq!(answer(), Some(json!(true)));
