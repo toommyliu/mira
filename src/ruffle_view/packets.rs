@@ -1387,12 +1387,10 @@ impl Render for Packets {
             .map_or(0, |automation| automation.spammer().packets.len());
         let labels = [("Log", 0), ("Send", queued)];
         let body = match (&automation, self.page) {
-            (None, _) => div()
-                .py(px(24.0))
-                .text_center()
-                .text_small()
-                .text_color(theme.text_tertiary)
-                .child("No tabs open"),
+            (None, _) => v_flex().flex_1().child(Empty::new(
+                "No tabs open",
+                "Open a tab to log and send its packets.",
+            )),
             (Some(automation), Page::Log) => self.log_page(&theme, automation, window, cx),
             (Some(automation), Page::Send) => self.send_page(&theme, automation, cx),
         };

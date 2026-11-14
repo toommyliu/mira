@@ -7,7 +7,7 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
-    components::Chips,
+    components::{Chips, Empty},
     h_flex,
     primitives::{
         Button, Checkbox, CheckedState, Dialog, Icon, Input, InputEvent, Switch,
@@ -1385,12 +1385,10 @@ impl Render for Environment {
         });
         let body = match &automation {
             Some(automation) => self.body(&theme, automation, window, cx),
-            None => div()
-                .py(px(24.0))
-                .text_center()
-                .text_small()
-                .text_color(theme.text_tertiary)
-                .child("No tabs open"),
+            None => v_flex().flex_1().child(Empty::new(
+                "No tabs open",
+                "Open a tab to set its drops, quests and boosts.",
+            )),
         };
         div()
             .flex()
@@ -1677,6 +1675,21 @@ mod tests {
                     found,
                 };
                 environment
+            })
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_no_tabs() {
+        let folder = std::env::temp_dir().join(format!("mira-environment-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let size = gpui::size(px(WIDTH), px(360.0));
+        for written in mira_ui::snapshot("environment-no-tabs", size, move |window, cx| {
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&folder, cx);
+                Environment::new(client, Target::Selected, window, cx)
             })
         }) {
             assert!(written.exists(), "{} was not written", written.display());
