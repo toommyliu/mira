@@ -31,6 +31,8 @@ use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
     ruffle::{Inbox, Msg, extras},
+    script_inputs,
+    scripting::Launch,
 };
 
 actions!(
@@ -389,9 +391,10 @@ impl Client {
     ) -> anyhow::Result<()> {
         match self.session_of(&account.id()) {
             Some(index) => {
+                let launch = script_inputs::launch(script, cx);
                 self.sessions[index].view.update(cx, |view, cx| {
                     view.retry_sign_in(account, cx);
-                    view.queue_script(script, replace, cx);
+                    view.queue_script(launch, replace, cx);
                 });
                 Ok(())
             }
@@ -406,10 +409,11 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        let launch = script.map(|script| script_inputs::launch(script, cx));
         let view = self
             .open_session(Some(account), window, cx)
             .with_context(|| format!("couldn't open {}", account.name))?;
-        view.update(cx, |view, cx| view.sign_in(account, script, cx));
+        view.update(cx, |view, cx| view.sign_in(account, launch, cx));
         Ok(())
     }
 
@@ -479,7 +483,7 @@ impl Client {
         picker.update(cx, |picker, cx| picker.show(tab, account.as_ref(), cx));
     }
 
-    pub(super) fn start_script_in(&mut self, tab: usize, script: PathBuf, cx: &mut Context<Self>) {
+    pub(super) fn start_script_in(&mut self, tab: usize, script: Launch, cx: &mut Context<Self>) {
         if let Some(session) = self.sessions.iter().find(|session| session.number == tab) {
             session
                 .view

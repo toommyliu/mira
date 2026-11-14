@@ -12,6 +12,7 @@ mod logging;
 mod net;
 mod ruffle;
 mod ruffle_view;
+mod script_inputs;
 mod scripting;
 mod settings;
 
@@ -55,6 +56,7 @@ fn main() -> anyhow::Result<()> {
             settings::init(data.join("settings.json"), set_menus, cx);
             account_settings::init(data.join("account-settings"), cx);
             combat_profiles::init(data.join("combat-profiles.json"), cx);
+            script_inputs::init(data.join("script-inputs.json"), cx);
             let installed = types.clone();
             let folders: Vec<_> = iter::once(scripts.clone())
                 .chain(settings::script_folders(cx).iter().cloned())

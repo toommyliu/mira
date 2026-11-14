@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
 use gpui::{Context, EventEmitter, SharedString};
 use mira_ui::Tone;
 
 use super::{Loading, RuffleView};
-use crate::{accounts::Account, automation::sign_in::Status};
+use crate::{accounts::Account, automation::sign_in::Status, scripting::Launch};
 
 pub(crate) struct Changed;
 
@@ -16,7 +14,7 @@ impl EventEmitter<Identified> for RuffleView {}
 
 pub(super) struct Link {
     username: String,
-    queued: Option<PathBuf>,
+    queued: Option<Launch>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -61,7 +59,7 @@ impl RuffleView {
     pub(super) fn sign_in(
         &mut self,
         account: &Account,
-        script: Option<PathBuf>,
+        script: Option<Launch>,
         cx: &mut Context<Self>,
     ) {
         self.account = Some(Link {
@@ -89,7 +87,7 @@ impl RuffleView {
         self.changed(cx);
     }
 
-    pub(super) fn queue_script(&mut self, script: PathBuf, replace: bool, cx: &mut Context<Self>) {
+    pub(super) fn queue_script(&mut self, script: Launch, replace: bool, cx: &mut Context<Self>) {
         let Some(link) = &mut self.account else {
             return;
         };
@@ -137,7 +135,7 @@ impl RuffleView {
         let queued = self
             .account
             .as_ref()
-            .and_then(|link| link.queued.as_deref())
+            .and_then(|link| link.queued.as_ref().map(|launch| launch.entry.as_path()))
             .filter(|_| !self.script.running())
             .map(|script| format!("Waiting to run {}", file_name(script)).into());
         let state = match (&self.error, status) {
@@ -157,7 +155,8 @@ impl RuffleView {
 
     pub(super) fn glance(&self) -> Option<Glance> {
         let link = self.account.as_ref();
-        let queued = link.and_then(|link| link.queued.as_deref());
+        let queued =
+            link.and_then(|link| link.queued.as_ref().map(|launch| launch.entry.as_path()));
         if self.error.is_some() {
             return Some(Glance::new("Couldn't start", Tone::Danger));
         }
@@ -216,7 +215,7 @@ impl RuffleView {
         let link = self.account.as_ref();
         let status = self.status.as_ref();
         let queued = link
-            .and_then(|link| link.queued.as_deref())
+            .and_then(|link| link.queued.as_ref().map(|launch| launch.entry.as_path()))
             .filter(|_| !self.script.running());
         let server = match status {
             Some(Status::Online(server)) => server.clone().map(Into::into),

@@ -18,6 +18,7 @@ use rquickjs::{
 
 use super::{
     calls::{self, Call, CallId, Replier, Reply, Request, RunId, ToPlayer},
+    inputs::{self, Supplied},
     limits::{CappedAllocator, Clock, Limits, Tripped},
     modules::{BOOTSTRAP, ModuleLoader, ModuleResolver, Modules, PRELUDE},
 };
@@ -68,6 +69,12 @@ struct Link {
     commands: mpsc::Sender<Command>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Launch {
+    pub(crate) entry: PathBuf,
+    pub(crate) inputs: Supplied,
+}
+
 pub(crate) struct Run {
     commands: mpsc::Sender<Command>,
     clock: Arc<Clock>,
@@ -76,7 +83,7 @@ pub(crate) struct Run {
 
 impl Run {
     pub(crate) fn start(
-        entry: PathBuf,
+        launch: Launch,
         limits: Limits,
         log: Log,
         player: Player,
@@ -96,7 +103,7 @@ impl Run {
                     player: Rc::new(player),
                     commands: replies,
                 };
-                let outcome = execute(&entry, limits, &shared, &inbox, log, link.clone());
+                let outcome = execute(&launch, limits, &shared, &inbox, log, link.clone());
                 (link.player)(ToPlayer::Ended(run));
                 finish(outcome);
             })?;
@@ -131,22 +138,37 @@ enum Phase {
 type Settled = Rc<RefCell<Option<Outcome>>>;
 
 fn execute(
-    entry: &Path,
+    launch: &Launch,
     limits: Limits,
     clock: &Arc<Clock>,
     commands: &mpsc::Receiver<Command>,
     log: Log,
     link: Link,
 ) -> Outcome {
-    let root = match entry.parent().map(std::fs::canonicalize) {
+    let root = match launch.entry.parent().map(std::fs::canonicalize) {
         Some(Ok(root)) => root,
-        _ => return failed(format!("{} doesn't exist", entry.display())),
+        _ => return failed(format!("{} doesn't exist", launch.entry.display())),
     };
     let modules = Modules::new(root);
-    let entry = match modules.entry(entry) {
+    let entry = match modules.entry(&launch.entry) {
         Ok(entry) => entry,
         Err(message) => return failed(message),
     };
+    let path = Path::new(&entry);
+    let display = modules.display(path);
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => return failed(format!("couldn't read {display}: {error}")),
+    };
+    let prepared = inputs::prepare(&display, path, &text, &launch.inputs);
+    if clock.stop_requested() {
+        return Outcome::Stopped;
+    }
+    let values = match prepared {
+        Ok(values) => serde_json::Value::Object(values).to_string(),
+        Err(message) => return failed(message),
+    };
+    modules.retain_entry(entry.clone(), text);
     let refused = Rc::new(Cell::new(false));
     let Ok(runtime) = Runtime::new_with_alloc(CappedAllocator::new(limits.memory, refused.clone()))
     else {
@@ -162,7 +184,7 @@ fn execute(
         return failed("couldn't start the script runtime".into());
     };
     let outcome = run(
-        &runtime, &context, &modules, &entry, limits, clock, commands, log, link,
+        &runtime, &context, &modules, &entry, &values, limits, clock, commands, log, link,
     );
     match outcome {
         Outcome::Failed { .. } if refused.get() => Outcome::Killed(Limit::Memory),
@@ -176,6 +198,7 @@ fn run(
     context: &Context,
     modules: &Modules,
     entry: &str,
+    inputs: &str,
     limits: Limits,
     clock: &Arc<Clock>,
     commands: &mpsc::Receiver<Command>,
@@ -185,7 +208,7 @@ fn run(
     let settled: Settled = Rc::default();
     let started = Instant::now();
     let setup = context.with(|ctx| {
-        setup(&ctx, entry, started, Rc::new(log), link, clock)
+        setup(&ctx, entry, inputs, started, Rc::new(log), link, clock)
             .map_err(|error| describe(error, modules))
     });
     let (hooks, start, import) = match setup {
@@ -352,6 +375,7 @@ impl Hooks {
 fn setup<'js>(
     ctx: &Ctx<'js>,
     entry: &str,
+    inputs: &str,
     started: Instant,
     log: Rc<Log>,
     link: Link,
@@ -370,6 +394,7 @@ fn setup<'js>(
         .catch(ctx)?;
     let install: Function = prelude.get("install").catch(ctx)?;
     let host = Object::new(ctx.clone()).catch(ctx)?;
+    host.set("inputs", inputs).catch(ctx)?;
     host.set(
         "now",
         Function::new(ctx.clone(), move || {

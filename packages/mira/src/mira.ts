@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
+import { inputs } from "./inputs.ts";
 import { exited, exiting, failed, stopping } from "./run.ts";
 import { call } from "./call.ts";
 
@@ -726,7 +727,57 @@ export const Settings = {
 
 export type ExitOptions = { readonly logout?: boolean; readonly closeTab?: boolean };
 
+type InputCommon = { readonly label: string; readonly description?: string };
+type InputOptions = readonly [string, ...string[]];
+
+export type Input =
+  | (InputCommon & {
+      readonly type: "string";
+      readonly required?: boolean;
+      readonly default?: string;
+    })
+  | (InputCommon & {
+      readonly type: "number";
+      readonly integer?: boolean;
+      readonly min?: number;
+      readonly max?: number;
+      readonly default?: number;
+    })
+  | (InputCommon & { readonly type: "boolean"; readonly default?: boolean })
+  | (InputCommon & {
+      readonly type: "select";
+      readonly options: InputOptions;
+      readonly multiple?: false;
+      readonly default?: string;
+    })
+  | (InputCommon & {
+      readonly type: "select";
+      readonly options: InputOptions;
+      readonly multiple: true;
+      readonly default?: readonly string[];
+    });
+
+export type Inputs = { readonly [key: string]: Input };
+
+type InputValue<F> = F extends { readonly type: "number" }
+  ? number
+  : F extends { readonly type: "boolean" }
+    ? boolean
+    : F extends {
+          readonly type: "select";
+          readonly multiple: true;
+          readonly options: readonly (infer O)[];
+        }
+      ? readonly O[]
+      : F extends { readonly type: "select"; readonly options: readonly (infer O)[] }
+        ? O
+        : string;
+
+export type InputValues<D extends Inputs> = { readonly [K in keyof D]: InputValue<D[K]> };
+
 export const Script = {
+  /** The values this run started with. Pass `typeof inputs` to type them; Mira checks the values, not the type. */
+  inputs: <D extends Inputs = Inputs>(): InputValues<D> => inputs.values as InputValues<D>,
   sleep: (duration: Duration.Input) => Effect.sleep(duration),
   /** Aborts when the script is stopped or exits, before cleanup runs, or when it ends. */
   signal: stopping.signal,

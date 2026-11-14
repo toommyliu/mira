@@ -1,9 +1,11 @@
 import { AbortController, AbortSignal, reportListenerErrors } from "./abort.ts";
 import { connect, deliver, type Native } from "./native.ts";
+import { inputs } from "./inputs.ts";
 
 type Level = "debug" | "info" | "warn" | "error";
 
 type Host = Native & {
+  readonly inputs: string;
   readonly now: () => number;
   readonly log: (level: Level, message: string) => void;
 };
@@ -56,8 +58,17 @@ const decodeUtf8 = (bytes: Uint8Array): string => {
   return text;
 };
 
+const freeze = (value: unknown): unknown => {
+  if (typeof value === "object" && value !== null) {
+    for (const item of Object.values(value)) freeze(item);
+    Object.freeze(value);
+  }
+  return value;
+};
+
 export function install(host: Host) {
   connect(host);
+  inputs.values = freeze(JSON.parse(host.inputs)) as Readonly<Record<string, unknown>>;
   const timers = new Map<number, Timer>();
   let lastId = 0;
   const schedule = (id: number, delay: unknown, run: () => void) => {

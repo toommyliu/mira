@@ -9,6 +9,7 @@ mod environment;
 mod events;
 mod feeds;
 mod house;
+mod inputs;
 mod inventory;
 mod limits;
 mod modules;
@@ -22,9 +23,12 @@ mod typings;
 mod world;
 
 pub(crate) use calls::{Calls, RunId, ToPlayer, answer};
+pub(crate) use inputs::{
+    Definition, ExtractError, Field, Kind, Supplied, Values, check_number, extract, number,
+};
 pub(crate) use limits::Limits;
 pub(crate) use modules::SCRIPT_EXTENSIONS;
-pub(crate) use runtime::{Level, Limit, Outcome, Run};
+pub(crate) use runtime::{Launch, Level, Limit, Outcome, Run};
 pub(crate) use typings::{install_types, link_types};
 #[cfg(test)]
 mod tests;

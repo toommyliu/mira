@@ -14,9 +14,9 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
-        Activity, Badge, Button, Dialog, Dot, DropdownMenu, Field, Icon, Input, InputEvent, List,
-        ListItem, MenuItem, Popover, Radio, RadioGroup, Select, StatusDot, Switch, ToggleGroup,
-        ToggleItem, VirtualList,
+        Activity, Alert, Badge, Button, Checkbox, CheckedState, Dialog, Dot, DropdownMenu, Field,
+        Icon, Input, InputEvent, List, ListItem, MenuItem, Popover, Radio, RadioGroup, Select,
+        StatusDot, Switch, ToggleGroup, ToggleItem, VirtualList,
         button::{Size, Variant},
     },
     theme::{CONTROL_MD, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
@@ -27,14 +27,17 @@ use super::{
     account::file_name,
     client::Tab,
     script_form::{
-        FieldSpec, Kind, Queued, ROOMS, SPECIFIC_ROOM, TabState, Value, room_choice, room_note,
-        sample_fields, summary,
+        Draft, FieldDraft, Queued, ROOMS, SPECIFIC_ROOM, TabState, drafts, error, room_choice,
+        room_note, starting, values,
     },
 };
 use crate::{
     account_settings::{self, RoomNumber, Rooms, Scripts},
     accounts::AccountId,
-    scripting::{self, SCRIPT_EXTENSIONS},
+    script_inputs,
+    scripting::{
+        self, Definition, ExtractError, Kind, Launch, SCRIPT_EXTENSIONS, Supplied, Values,
+    },
     settings,
 };
 
@@ -310,12 +313,6 @@ enum Pane {
     Queue,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum FormKey {
-    Script(PathBuf),
-    Queued(u64),
-}
-
 pub(super) struct Picker {
     client: WeakEntity<Client>,
     folder: PathBuf,
@@ -333,18 +330,31 @@ pub(super) struct Picker {
     filter: Option<PathBuf>,
     pane: Pane,
     queued: usize,
-    next_id: u64,
-    values: HashMap<FormKey, Vec<Value>>,
-    form: Option<Form>,
+    chosen: Option<PathBuf>,
+    forms: HashMap<PathBuf, Form>,
+    generation: u64,
+    loading: Option<(PathBuf, Task<()>)>,
     tabs: HashMap<usize, TabState>,
     _subscriptions: [Subscription; 3],
 }
 
 struct Form {
-    key: FormKey,
-    fields: &'static [FieldSpec],
-    texts: Vec<Option<Entity<Input>>>,
-    _changes: Vec<Subscription>,
+    generation: u64,
+    state: FormState,
+}
+
+enum FormState {
+    Broken {
+        title: &'static str,
+        message: SharedString,
+    },
+    Plain,
+    Fields {
+        definition: Definition,
+        drafts: Vec<FieldDraft>,
+        texts: Vec<Option<Entity<Input>>>,
+        _changes: Vec<Subscription>,
+    },
 }
 
 impl Picker {
@@ -367,6 +377,7 @@ impl Picker {
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Changed => {
                     this.pane = Pane::Library;
+                    this.chosen = None;
                     this.selected = first_script(&this.rows(cx));
                     cx.notify();
                 }
@@ -406,9 +417,10 @@ impl Picker {
             filter: None,
             pane: Pane::Library,
             queued: 0,
-            next_id: 0,
-            values: HashMap::new(),
-            form: None,
+            chosen: None,
+            forms: HashMap::new(),
+            generation: 0,
+            loading: None,
             tabs: HashMap::new(),
             _subscriptions: subscriptions,
         }
@@ -419,6 +431,8 @@ impl Picker {
         self.tab = tab;
         self.pane = Pane::Library;
         self.queued = 0;
+        self.chosen = None;
+        self.generation += 1;
         self.search.update(cx, |search, cx| search.set_text("", cx));
         let number = match account.map(|account| account_settings::get(account, cx).scripts.rooms) {
             Some(Rooms::Specific { number }) => number.get().to_string(),
@@ -564,25 +578,23 @@ impl Picker {
 
     fn set_filter(&mut self, filter: Option<PathBuf>, cx: &mut Context<Self>) {
         self.filter = filter;
+        self.chosen = None;
         self.selected = first_script(&self.rows(cx));
         cx.notify();
     }
 
-    fn run(&mut self, script: PathBuf, cx: &mut Context<Self>) {
+    fn run_selected(&mut self, cx: &mut Context<Self>) {
+        if self.tab(cx).is_none_or(|tab| tab.running) || self.room_pending {
+            return;
+        }
+        let Some((launch, _)) = self.launch(cx) else {
+            return;
+        };
         let tab = self.tab;
         let _ = self
             .client
-            .update(cx, |client, cx| client.start_script_in(tab, script, cx));
+            .update(cx, |client, cx| client.start_script_in(tab, launch, cx));
         self.close(cx);
-    }
-
-    fn run_selected(&mut self, cx: &mut Context<Self>) {
-        if self.tab(cx).is_some_and(|tab| tab.running) || !self.form_valid() || self.room_pending {
-            return;
-        }
-        if let Some(Row::Script(entry)) = self.rows(cx).get(self.selected) {
-            self.run(entry.path.clone(), cx);
-        }
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -602,6 +614,7 @@ impl Picker {
             index = next;
             if matches!(rows[index], Row::Script(_)) {
                 self.selected = index;
+                self.chosen = None;
                 cx.notify();
                 return;
             }
@@ -613,14 +626,18 @@ impl Picker {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Run".into()),
+            prompt: Some("Choose".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = chosen.await else {
                 return;
             };
             if let Some(path) = paths.into_iter().next() {
-                let _ = this.update(cx, |this, cx| this.run(path, cx));
+                let _ = this.update(cx, |this, cx| {
+                    this.pane = Pane::Library;
+                    this.chosen = Some(path);
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -785,76 +802,213 @@ impl Picker {
         cx.notify();
     }
 
-    fn sync_form(&mut self, target: Option<(FormKey, PathBuf)>, cx: &mut Context<Self>) {
-        if self.form.as_ref().map(|form| &form.key) == target.as_ref().map(|(key, _)| key) {
+    fn target(&self, cx: &App) -> Option<Entry> {
+        if let Some(path) = &self.chosen {
+            return Some(Entry {
+                name: file_name(path).into(),
+                path: path.clone(),
+                folder: None,
+                source: None,
+            });
+        }
+        let rows = self.rows(cx);
+        match rows.get(self.selected.min(rows.len().saturating_sub(1))) {
+            Some(Row::Script(entry)) => Some(entry.clone()),
+            _ => None,
+        }
+    }
+
+    fn load_form(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let current = self
+            .forms
+            .get(path)
+            .is_some_and(|form| form.generation == self.generation);
+        let pending = self
+            .loading
+            .as_ref()
+            .is_some_and(|(loading, _)| loading == path);
+        if current || pending {
             return;
         }
-        let Some((key, script)) = target else {
-            self.form = None;
+        let script = path.to_owned();
+        let read = cx.background_spawn(async move {
+            let display = file_name(&script);
+            let text = fs::read_to_string(&script).map_err(|error| {
+                (
+                    "This script can't be read",
+                    format!("Couldn't read {display}: {error}"),
+                )
+            })?;
+            scripting::extract(&display, &script, &text).map_err(|error| match error {
+                ExtractError::Syntax(message) => ("This script has a syntax error", message),
+                ExtractError::Inputs(message) => ("This script's inputs are invalid", message),
+            })
+        });
+        let path = path.to_owned();
+        let generation = self.generation;
+        let task = cx.spawn({
+            let path = path.clone();
+            async move |this, cx| {
+                let read = read.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading = None;
+                    this.loaded(path, generation, read, cx);
+                    cx.notify();
+                });
+            }
+        });
+        self.loading = Some((path, task));
+    }
+
+    fn loaded(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        read: Result<Option<Definition>, (&'static str, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(form) = self.forms.get_mut(&path)
+            && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
+            && definition == read
+        {
+            form.generation = generation;
+            return;
+        }
+        let state = match read {
+            Err((title, message)) => FormState::Broken {
+                title,
+                message: message.into(),
+            },
+            Ok(None) => FormState::Plain,
+            Ok(Some(definition)) => {
+                let saved = match script_inputs::saved(&path, cx) {
+                    Supplied::Values(values) => values,
+                    Supplied::StoreUnreadable => Values::new(),
+                };
+                let drafts = drafts(&definition, &saved);
+                let mut texts = Vec::new();
+                let mut changes = Vec::new();
+                for (index, (field, draft)) in definition.fields().iter().zip(&drafts).enumerate() {
+                    let Draft::Text(text) = &draft.draft else {
+                        texts.push(None);
+                        continue;
+                    };
+                    let invalid = error(field, draft).is_some();
+                    let label = field.label.clone();
+                    let text = text.clone();
+                    let input = cx.new(|cx| {
+                        let mut input = Input::new(label, cx);
+                        input.set_text(text, cx);
+                        input.set_invalid(invalid, cx);
+                        input
+                    });
+                    let path = path.clone();
+                    changes.push(cx.subscribe(
+                        &input,
+                        move |this, input, event: &InputEvent, cx| {
+                            if matches!(event, InputEvent::Changed) {
+                                let text = input.read(cx).text().to_owned().into();
+                                this.set_draft(&path, index, Draft::Text(text), cx);
+                            }
+                        },
+                    ));
+                    texts.push(Some(input));
+                }
+                FormState::Fields {
+                    definition,
+                    drafts,
+                    texts,
+                    _changes: changes,
+                }
+            }
+        };
+        self.forms.insert(path, Form { generation, state });
+    }
+
+    fn set_draft(&mut self, path: &Path, index: usize, draft: Draft, cx: &mut Context<Self>) {
+        let Some(Form {
+            state:
+                FormState::Fields {
+                    definition,
+                    drafts,
+                    texts,
+                    ..
+                },
+            ..
+        }) = self.forms.get_mut(path)
+        else {
             return;
         };
-        let fields = sample_fields(&script);
-        let values = self
-            .values
-            .entry(key.clone())
-            .or_insert_with(|| fields.iter().map(FieldSpec::initial).collect())
-            .clone();
-        let mut texts = Vec::new();
-        let mut changes = Vec::new();
-        for (index, (field, value)) in fields.iter().zip(values).enumerate() {
-            let Value::Text(text) = value else {
-                texts.push(None);
-                continue;
+        let (Some(field), Some(slot)) = (definition.fields().get(index), drafts.get_mut(index))
+        else {
+            return;
+        };
+        *slot = FieldDraft { draft, stale: None };
+        if let Some(Some(input)) = texts.get(index) {
+            let invalid = error(field, slot).is_some();
+            input.update(cx, |input, cx| input.set_invalid(invalid, cx));
+        }
+        cx.notify();
+    }
+
+    fn reset_form(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(Form {
+            state:
+                FormState::Fields {
+                    definition,
+                    drafts,
+                    texts,
+                    ..
+                },
+            ..
+        }) = self.forms.get_mut(path)
+        else {
+            return;
+        };
+        for ((field, draft), input) in definition.fields().iter().zip(drafts).zip(texts) {
+            *draft = FieldDraft {
+                draft: starting(field),
+                stale: None,
             };
-            let invalid = field.error(&Value::Text(text.clone())).is_some();
-            let input = cx.new(|cx| {
-                let mut input = Input::new(field.label, cx);
-                input.set_text(text, cx);
-                input.set_invalid(invalid, cx);
-                input
-            });
-            let key = key.clone();
-            changes.push(
-                cx.subscribe(&input, move |this, input, event: &InputEvent, cx| {
-                    if !matches!(event, InputEvent::Changed) {
-                        return;
-                    }
-                    let value = Value::Text(input.read(cx).text().to_owned().into());
-                    let invalid = fields[index].error(&value).is_some();
-                    input.update(cx, |input, cx| input.set_invalid(invalid, cx));
-                    if let Some(values) = this.values.get_mut(&key) {
-                        values[index] = value;
-                    }
-                    cx.notify();
-                }),
-            );
-            texts.push(Some(input));
+            if let (Some(input), Draft::Text(text)) = (input, &draft.draft) {
+                let invalid = error(field, draft).is_some();
+                let text = text.clone();
+                input.update(cx, |input, cx| {
+                    input.set_text(text, cx);
+                    input.set_invalid(invalid, cx);
+                });
+            }
         }
-        self.form = Some(Form {
-            key,
-            fields,
-            texts,
-            _changes: changes,
-        });
+        cx.notify();
     }
 
-    fn set_value(&mut self, index: usize, value: Value, cx: &mut Context<Self>) {
-        if let Some(form) = &self.form
-            && let Some(values) = self.values.get_mut(&form.key)
-        {
-            values[index] = value;
-            cx.notify();
+    fn launch_values(&self, path: &Path, cx: &App) -> Option<(Option<&Definition>, Values)> {
+        match &self.forms.get(path)?.state {
+            FormState::Broken { .. } => None,
+            FormState::Plain => Some((None, Values::new())),
+            FormState::Fields {
+                definition, drafts, ..
+            } => {
+                if script_inputs::unreadable(cx) {
+                    return None;
+                }
+                Some((Some(definition), values(definition, drafts)?))
+            }
         }
     }
 
-    fn form_values(&self) -> Option<(&Form, &[Value])> {
-        let form = self.form.as_ref()?;
-        Some((form, self.values.get(&form.key)?))
-    }
-
-    fn form_valid(&self) -> bool {
-        self.form_values()
-            .is_none_or(|(form, values)| valid_fields(form.fields, values))
+    fn launch(&mut self, cx: &mut Context<Self>) -> Option<(Launch, Queued)> {
+        let entry = self.target(cx)?;
+        let (definition, values) = self.launch_values(&entry.path, cx)?;
+        let launch = Launch {
+            entry: entry.path.clone(),
+            inputs: Supplied::Values(values.clone()),
+        };
+        let queued = Queued::new(entry.name, launch.clone(), definition, &values);
+        if definition.is_some() {
+            script_inputs::save(&entry.path, values, cx);
+        }
+        Some((launch, queued))
     }
 
     fn queue(&self) -> &[Queued] {
@@ -869,32 +1023,15 @@ impl Picker {
             .is_some_and(|state| state.queue_running)
     }
 
-    fn queued_values(&self, queued: &Queued) -> &[Value] {
-        self.values
-            .get(&FormKey::Queued(queued.id))
-            .map_or(&[][..], Vec::as_slice)
-    }
-
     fn tab_state(&mut self) -> &mut TabState {
         self.tabs.entry(self.tab).or_default()
     }
 
     fn add_to_queue(&mut self, cx: &mut Context<Self>) {
-        let Some((form, values)) = self.form_values() else {
+        let Some((_, queued)) = self.launch(cx) else {
             return;
         };
-        let FormKey::Script(path) = &form.key else {
-            return;
-        };
-        let (path, values) = (path.clone(), values.to_vec());
-        let id = self.next_id;
-        self.next_id += 1;
-        self.values.insert(FormKey::Queued(id), values);
-        self.tab_state().queue.push(Queued {
-            id,
-            name: file_name(&path).into(),
-            path,
-        });
+        self.tab_state().queue.push(queued);
         cx.notify();
     }
 
@@ -916,21 +1053,17 @@ impl Picker {
         if index >= state.queue.len() {
             return;
         }
-        let removed = state.queue.remove(index);
+        state.queue.remove(index);
         state.queue_running &= !state.queue.is_empty();
         let remaining = state.queue.len();
-        self.values.remove(&FormKey::Queued(removed.id));
         self.queued = index.min(remaining.saturating_sub(1));
         cx.notify();
     }
 
     fn clear_queue(&mut self, cx: &mut Context<Self>) {
         let state = self.tab_state();
-        let removed: Vec<u64> = state.queue.drain(..).map(|queued| queued.id).collect();
+        state.queue.clear();
         state.queue_running = false;
-        for id in removed {
-            self.values.remove(&FormKey::Queued(id));
-        }
         self.queued = 0;
         cx.notify();
     }
@@ -1047,77 +1180,159 @@ impl Picker {
             .width(px(400.0))
     }
 
-    fn inputs(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let Some((form, values)) = self.form_values() else {
-            return div().into_any_element();
+    fn inputs(&self, theme: &Theme, path: &Path, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(form) = self.forms.get(path) else {
+            return muted(theme, "Reading inputs…").into_any_element();
         };
-        if form.fields.is_empty() {
-            return muted(theme, "This script has no inputs.").into_any_element();
-        }
+        let (definition, drafts, texts) = match &form.state {
+            FormState::Broken { title, message } => {
+                return Alert::new("script-broken", Tone::Danger, *title)
+                    .body(message.clone())
+                    .into_any_element();
+            }
+            FormState::Plain => {
+                return muted(theme, "This script has no inputs.").into_any_element();
+            }
+            FormState::Fields {
+                definition,
+                drafts,
+                texts,
+                ..
+            } => (definition, drafts, texts),
+        };
         let this = cx.entity().downgrade();
+        let unreadable = script_inputs::unreadable(cx).then(|| {
+            let this = this.clone();
+            Alert::new(
+                "inputs-unreadable",
+                Tone::Warning,
+                "Saved inputs couldn't be read",
+            )
+            .body("Start fresh to back up the file and use each script's defaults.")
+            .action(
+                Button::new("inputs-start-fresh", "Start fresh")
+                    .size(Size::Small)
+                    .on_click(move |_, _, cx| {
+                        script_inputs::start_fresh(cx);
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                    }),
+            )
+        });
+        let stale = drafts.iter().any(|draft| draft.stale.is_some()).then(|| {
+            let this = this.clone();
+            let path = path.to_owned();
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.0))
+                .child(muted(
+                    theme,
+                    "Some saved values don't fit this script anymore.",
+                ))
+                .child(
+                    Button::new("inputs-reset", "Reset")
+                        .size(Size::Small)
+                        .on_click(move |_, _, cx| {
+                            let _ = this.update(cx, |this, cx| this.reset_form(&path, cx));
+                        }),
+                )
+        });
+        let fields =
+            definition
+                .fields()
+                .iter()
+                .zip(drafts)
+                .enumerate()
+                .map(|(index, (field, draft))| {
+                    let set = {
+                        let this = this.clone();
+                        let path = path.to_owned();
+                        move |draft: Draft, cx: &mut App| {
+                            let _ =
+                                this.update(cx, |this, cx| this.set_draft(&path, index, draft, cx));
+                        }
+                    };
+                    let problem = error(field, draft);
+                    let control = match (&field.kind, &draft.draft, &texts[index]) {
+                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
+                            let switch = Switch::new(("input", index), field.label.clone(), *on)
+                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx));
+                            let switch = match &field.description {
+                                Some(description) => switch.description(description.clone()),
+                                None => switch,
+                            };
+                            return div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(switch)
+                                .when_some(problem, |slot, problem| {
+                                    slot.child(error_text(theme, problem))
+                                })
+                                .into_any_element();
+                        }
+                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => Select::new(
+                            ("input", index),
+                            field.label.clone(),
+                            options.iter().cloned().map(SharedString::from),
+                            *chosen,
+                        )
+                        .placeholder("Choose…")
+                        .width(px(200.0))
+                        .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
+                        .into_any_element(),
+                        (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
+                            let set = Rc::new(set);
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .children(options.iter().enumerate().map(|(option, label)| {
+                                    let set = set.clone();
+                                    let chosen = chosen.clone();
+                                    let state = if chosen[option] {
+                                        CheckedState::Checked
+                                    } else {
+                                        CheckedState::Unchecked
+                                    };
+                                    Checkbox::new(
+                                        SharedString::from(format!("input-{index}-{option}")),
+                                        label.clone(),
+                                        state,
+                                    )
+                                    .on_toggle(
+                                        move |on, _, cx| {
+                                            let mut chosen = chosen.clone();
+                                            chosen[option] = on;
+                                            set(Draft::Choices(chosen), cx);
+                                        },
+                                    )
+                                }))
+                                .into_any_element()
+                        }
+                        (kind, _, Some(input)) => div()
+                            .when(matches!(kind, Kind::Number { .. }), |slot| {
+                                slot.w(px(120.0))
+                            })
+                            .child(input.clone())
+                            .into_any_element(),
+                        _ => div().into_any_element(),
+                    };
+                    Field::new(field.label.clone(), control)
+                        .when_some(field.description.clone(), |field, description| {
+                            field.description(description)
+                        })
+                        .error(problem)
+                        .into_any_element()
+                });
         div()
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .children(
-                form.fields
-                    .iter()
-                    .zip(values)
-                    .enumerate()
-                    .map(
-                        |(index, (field, value))| match (field.kind, value, &form.texts[index]) {
-                            (Kind::Toggle, Value::Toggle(on), _) => {
-                                let this = this.clone();
-                                Switch::new(("input", index), field.label, *on)
-                                    .when_some(field.description, |switch, description| {
-                                        switch.description(description)
-                                    })
-                                    .on_toggle(move |on, _, cx| {
-                                        let _ = this.update(cx, |this, cx| {
-                                            this.set_value(index, Value::Toggle(on), cx)
-                                        });
-                                    })
-                                    .into_any_element()
-                            }
-                            (Kind::Choice(options), Value::Choice(chosen), _) => {
-                                let this = this.clone();
-                                Field::new(
-                                    field.label,
-                                    Select::new(
-                                        ("input", index),
-                                        field.label,
-                                        options.iter().map(|option| SharedString::from(*option)),
-                                        Some(*chosen),
-                                    )
-                                    .width(px(200.0))
-                                    .on_select(
-                                        move |chosen, _, cx| {
-                                            let _ = this.update(cx, |this, cx| {
-                                                this.set_value(index, Value::Choice(chosen), cx)
-                                            });
-                                        },
-                                    ),
-                                )
-                                .when_some(field.description, |field, description| {
-                                    field.description(description)
-                                })
-                                .into_any_element()
-                            }
-                            (kind, value, Some(input)) => Field::new(
-                                field.label,
-                                div()
-                                    .when(matches!(kind, Kind::Number), |slot| slot.w(px(120.0)))
-                                    .child(input.clone()),
-                            )
-                            .when_some(field.description, |field, description| {
-                                field.description(description)
-                            })
-                            .error(field.error(value))
-                            .into_any_element(),
-                            _ => div().into_any_element(),
-                        },
-                    ),
-            )
+            .children(unreadable)
+            .children(stale)
+            .children(fields)
             .into_any_element()
     }
 
@@ -1131,6 +1346,7 @@ impl Picker {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
+        let inputs = self.inputs(theme, &entry.path, cx);
         div()
             .flex()
             .flex_col()
@@ -1144,7 +1360,7 @@ impl Picker {
                     .disabled(!can_queue)
                     .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
             ))
-            .child(self.inputs(theme, cx))
+            .child(inputs)
             .into_any_element()
     }
 
@@ -1174,7 +1390,31 @@ impl Picker {
                     .disabled(current)
                     .on_click(cx.listener(|this, _, _, cx| this.remove_queued(cx))),
             ))
-            .child(self.inputs(theme, cx))
+            .child(if queued.rows.is_empty() {
+                muted(theme, "This script has no inputs.").into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .children(queued.rows.iter().map(|(label, value)| {
+                        div()
+                            .flex()
+                            .gap(px(12.0))
+                            .text_size(TEXT_BODY)
+                            .line_height(LINE_BODY)
+                            .child(
+                                div()
+                                    .w(px(140.0))
+                                    .flex_none()
+                                    .truncate()
+                                    .text_color(theme.text_secondary)
+                                    .child(label.clone()),
+                            )
+                            .child(div().flex_1().min_w_0().child(value.clone()))
+                    }))
+                    .into_any_element()
+            })
             .into_any_element()
     }
 
@@ -1193,12 +1433,7 @@ impl Picker {
         let running = self.queue_running();
         let rows: Rc<[(SharedString, SharedString)]> = queue
             .iter()
-            .map(|queued| {
-                (
-                    queued.name.clone(),
-                    summary(sample_fields(&queued.path), self.queued_values(queued)),
-                )
-            })
+            .map(|queued| (queued.name.clone(), queued.summary.clone()))
             .collect();
         let this = cx.entity().downgrade();
         let that = this.clone();
@@ -1324,12 +1559,14 @@ impl Picker {
             .on_select(move |index, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.selected = index;
+                    this.chosen = None;
                     cx.notify();
                 });
             })
             .on_activate(move |index, _, cx| {
                 let _ = that.update(cx, |this, cx| {
                     this.selected = index;
+                    this.chosen = None;
                     this.run_selected(cx);
                 });
             })
@@ -1391,34 +1628,20 @@ impl Render for Picker {
         let theme = cx.theme().clone();
         let tab = self.tab(cx);
         let rows = self.rows(cx);
-        let count = rows.len();
-        let selected = rows
-            .get(self.selected.min(count.saturating_sub(1)))
-            .cloned();
-        let chosen = match &selected {
-            Some(Row::Script(entry)) => Some(entry.clone()),
-            _ => None,
-        };
+        let chosen = self.target(cx);
+        if self.open
+            && let Some(entry) = &chosen
+        {
+            self.load_form(&entry.path, cx);
+        }
         self.queued = self.queued.min(self.queue().len().saturating_sub(1));
-        let target = match self.pane {
-            Pane::Library => chosen
-                .as_ref()
-                .map(|entry| (FormKey::Script(entry.path.clone()), entry.path.clone())),
-            Pane::Queue => self
-                .queue()
-                .get(self.queued)
-                .map(|queued| (FormKey::Queued(queued.id), queued.path.clone())),
-        };
-        self.sync_form(target, cx);
-        let valid = self.form_valid();
+        let valid = chosen
+            .as_ref()
+            .is_some_and(|entry| self.launch_values(&entry.path, cx).is_some());
         let running = tab.as_ref().is_some_and(|tab| tab.running);
         let queued = self.queue().len();
         let queue_running = self.queue_running();
         let room_ready = !self.room_pending;
-        let queue_valid = self
-            .queue()
-            .iter()
-            .all(|queued| valid_fields(sample_fields(&queued.path), self.queued_values(queued)));
         let status: SharedString = tab
             .as_ref()
             .filter(|tab| tab.running)
@@ -1533,19 +1756,12 @@ impl Render for Picker {
                 } else {
                     Button::new("queue-start", "Start queue")
                         .variant(Variant::Primary)
-                        .disabled(tab.is_none() || queued == 0 || !queue_valid || !room_ready)
+                        .disabled(tab.is_none() || queued == 0 || !room_ready)
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
                 }),
         };
         dialog.on_close(move |window, cx| close(&(), window, cx))
     }
-}
-
-fn valid_fields(fields: &[FieldSpec], values: &[Value]) -> bool {
-    fields
-        .iter()
-        .zip(values)
-        .all(|(field, value)| field.error(value).is_none())
 }
 
 fn heading(
@@ -1617,6 +1833,14 @@ fn option_row(
         .gap(px(16.0))
         .child(option_text(theme, label, description))
         .child(div().flex_none().pt(px(1.0)).child(control))
+}
+
+fn error_text(theme: &Theme, text: SharedString) -> impl IntoElement {
+    div()
+        .text_size(TEXT_SMALL)
+        .line_height(LINE_SMALL)
+        .text_color(theme.danger_text)
+        .child(text)
 }
 
 fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
