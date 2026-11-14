@@ -414,7 +414,7 @@ fn numeric_input_takes_digits_and_steps_within_its_range(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn password_input_shows_a_bullet_per_character_and_keeps_it_off_the_clipboard(
+fn password_input_hides_its_text_until_revealed_and_keeps_it_off_the_clipboard(
     cx: &mut TestAppContext,
 ) {
     use gpui::{Bounds, ClipboardItem, EntityInputHandler as _, Modifiers, point, px};
@@ -454,6 +454,16 @@ fn password_input_shows_a_bullet_per_character_and_keeps_it_off_the_clipboard(
     assert_eq!(
         input.read_with(cx, |input, _| input.text().to_string()),
         "ab\u{1F642}c"
+    );
+
+    cx.update(|_, cx| input.update(cx, |input, cx| input.reveal(true, cx)));
+    cx.run_until_parked();
+    assert!((caret_x(4, cx) - 3.0 * bullet).abs() > 1.0);
+    press(cx, "shift-left");
+    press(cx, "cmd-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("unchanged".into())
     );
 }
 

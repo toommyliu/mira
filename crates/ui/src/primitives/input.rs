@@ -117,11 +117,13 @@ pub struct Input {
     placeholder: SharedString,
     search: bool,
     password: bool,
+    revealed: bool,
     max_length: Option<usize>,
     numeric: Option<Numeric>,
     suffix: Option<SharedString>,
     small: bool,
     pill: bool,
+    bare: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     typing: bool,
@@ -148,11 +150,13 @@ impl Input {
             placeholder: SharedString::default(),
             search: false,
             password: false,
+            revealed: false,
             max_length: None,
             numeric: None,
             suffix: None,
             small: false,
             pill: false,
+            bare: false,
             undo: Vec::new(),
             redo: Vec::new(),
             typing: false,
@@ -209,6 +213,22 @@ impl Input {
         self
     }
 
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
+    }
+
+    pub fn reveal(&mut self, revealed: bool, cx: &mut Context<Self>) {
+        if self.revealed != revealed {
+            self.revealed = revealed;
+            cx.notify();
+        }
+    }
+
+    fn masked(&self) -> bool {
+        self.password && !self.revealed
+    }
+
     pub fn text(&self) -> &str {
         &self.content
     }
@@ -248,7 +268,7 @@ impl Input {
     }
 
     fn display_text(&self) -> SharedString {
-        if self.password {
+        if self.masked() {
             BULLET
                 .to_string()
                 .repeat(self.content.graphemes(true).count())
@@ -259,7 +279,7 @@ impl Input {
     }
 
     fn to_display(&self, offset: usize) -> usize {
-        if self.password {
+        if self.masked() {
             self.content[..offset].graphemes(true).count() * BULLET.len_utf8()
         } else {
             offset
@@ -267,7 +287,7 @@ impl Input {
     }
 
     fn from_display(&self, offset: usize) -> usize {
-        if self.password {
+        if self.masked() {
             self.content
                 .grapheme_indices(true)
                 .nth(offset / BULLET.len_utf8())
@@ -784,7 +804,11 @@ impl Render for Input {
         }
         self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
-        let height = if self.small { CONTROL_SM } else { CONTROL_MD };
+        let height = match (self.bare, self.small) {
+            (true, _) => LINE_BODY,
+            (false, true) => CONTROL_SM,
+            (false, false) => CONTROL_MD,
+        };
         let radius = if self.pill {
             height / 2.0
         } else {
@@ -851,26 +875,38 @@ impl Render for Input {
             .gap(px(4.0))
             .w_full()
             .h(height)
-            .pl(px(8.0))
-            .pr(px(if clearable { 2.0 } else { 8.0 }))
-            .rounded(radius)
-            .bg(theme.fill)
-            .border_1()
-            .border_color(match (self.invalid, self.pill) {
-                (true, _) => theme.danger,
-                (false, true) => theme.fill,
-                (false, false) => theme.border,
+            .when(!self.bare, |field| {
+                field
+                    .pl(px(8.0))
+                    .pr(px(if clearable || self.password { 2.0 } else { 8.0 }))
+                    .rounded(radius)
+                    .bg(theme.fill)
+                    .border_1()
+                    .border_color(match (self.invalid, self.pill) {
+                        (true, _) => theme.danger,
+                        (false, true) => theme.fill,
+                        (false, false) => theme.border,
+                    })
             })
             .when(focused, |field| {
-                field.child(theme.ring_around(
-                    if self.invalid {
-                        theme.danger
-                    } else {
-                        theme.focus
-                    },
-                    radius,
-                    px(1.0),
-                ))
+                let color = if self.invalid {
+                    theme.danger
+                } else {
+                    theme.focus
+                };
+                if self.bare {
+                    field.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom(px(-3.0))
+                            .h(px(1.0))
+                            .bg(color),
+                    )
+                } else {
+                    field.child(theme.ring_around(color, radius, px(1.0)))
+                }
             })
             .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
             .line_height(LINE_BODY)
@@ -897,6 +933,28 @@ impl Render for Input {
                         .flex_none()
                         .text_color(theme.text_tertiary)
                         .child(suffix),
+                )
+            })
+            .when(self.password, |field| {
+                let entity = cx.entity();
+                let revealed = self.revealed;
+                field.child(
+                    Button::icon(
+                        "reveal",
+                        if revealed { Icon::EyeOff } else { Icon::Eye },
+                        if revealed {
+                            "Hide password"
+                        } else {
+                            "Show password"
+                        },
+                    )
+                    .size(Size::Small)
+                    .on_click(move |_, window, cx| {
+                        entity.update(cx, |field, cx| {
+                            field.reveal(!revealed, cx);
+                            window.focus(&field.focus, cx);
+                        })
+                    }),
                 )
             })
             .when(clearable, |field| {
