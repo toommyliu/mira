@@ -1,6 +1,9 @@
-use std::{path::PathBuf, rc::Rc, time::Duration};
-
-use anyhow::Context as _;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable,
@@ -11,8 +14,12 @@ use gpui::{
 };
 
 use super::{
-    Changed, Details, Glance, Identified, RuffleView, Summary, Target, manager::OpenAccounts,
-    script::CloseTab, scripts::OpenScripts,
+    Changed, Details, Glance, Identified, RuffleView, ScriptPhase, ScriptState, Summary, Target,
+    Updated,
+    launches::{self, Launch, Launches},
+    manager::OpenAccounts,
+    script::CloseTab,
+    scripts::OpenScripts,
 };
 use mira_ui::{
     ActiveTheme as _, Theme, Tone,
@@ -72,6 +79,7 @@ fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
 
 pub(crate) fn bind_keys(cx: &mut App) {
     super::script_dialog::bind_keys(cx);
+    super::manager::bind_keys(cx);
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-t", NewSession, None),
         gpui::KeyBinding::new("cmd-w", CloseSession, None),
@@ -108,6 +116,10 @@ pub struct Client {
     tab_scroll: ScrollHandle,
     shortcut_hints: bool,
     shortcut_hint_delay: Option<Task<()>>,
+    launches: Launches,
+    pacing: bool,
+    unopened: HashMap<AccountId, SharedString>,
+    ended: HashMap<AccountId, ScriptState>,
     _activation: Subscription,
 }
 
@@ -118,6 +130,7 @@ struct Session {
     view: Entity<RuffleView>,
     player: Inbox,
     _changes: Subscription,
+    _moved: Subscription,
     _identified: Subscription,
     _close: Subscription,
 }
@@ -232,6 +245,10 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
+            launches: Launches::default(),
+            pacing: false,
+            unopened: HashMap::new(),
+            ended: HashMap::new(),
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if !window.is_window_active() {
                     this.hide_shortcut_hints(cx);
@@ -259,6 +276,10 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
+            launches: Launches::default(),
+            pacing: false,
+            unopened: HashMap::new(),
+            ended: HashMap::new(),
             _activation: Subscription::new(|| {}),
         })
     }
@@ -303,6 +324,7 @@ impl Client {
             view: view.clone(),
             player,
             _changes: cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()),
+            _moved: cx.subscribe(&view, |_, _, _: &Updated, cx| cx.emit(Updated)),
             _identified: cx.subscribe(&view, |this, view, Identified(name), cx| {
                 this.link(&view, name, cx)
             }),
@@ -354,17 +376,21 @@ impl Client {
     pub(crate) fn launch(
         &mut self,
         account: &Account,
+        server: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> anyhow::Result<()> {
-        match self.session_of(&account.id()) {
-            Some(index) => {
-                self.sessions[index]
-                    .view
-                    .update(cx, |view, cx| view.retry_sign_in(account, cx));
-                Ok(())
-            }
-            None => self.open_account(account, account.script.clone(), window, cx),
+    ) {
+        if self.needs_login(&account.id(), cx) {
+            self.wait_to_launch(
+                Launch {
+                    account: account.id(),
+                    script: None,
+                    replace: false,
+                    server,
+                },
+                window,
+                cx,
+            );
         }
     }
 
@@ -373,19 +399,122 @@ impl Client {
         account: &Account,
         script: PathBuf,
         replace: bool,
+        server: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> anyhow::Result<()> {
-        match self.session_of(&account.id()) {
-            Some(index) => {
+    ) {
+        let id = account.id();
+        match self.session_of(&id) {
+            Some(index) if !self.needs_login(&id, cx) => {
+                if self.launches.remove(&id) {
+                    cx.notify();
+                }
                 let launch = script_inputs::launch(script, cx);
-                self.sessions[index].view.update(cx, |view, cx| {
-                    view.retry_sign_in(account, cx);
-                    view.queue_script(launch, replace, cx);
-                });
-                Ok(())
+                self.sessions[index]
+                    .view
+                    .update(cx, |view, cx| view.queue_script(launch, replace, cx));
             }
-            None => self.open_account(account, Some(script), window, cx),
+            _ => self.wait_to_launch(
+                Launch {
+                    account: id,
+                    script: Some(script),
+                    replace,
+                    server,
+                },
+                window,
+                cx,
+            ),
+        }
+    }
+
+    fn needs_login(&self, account: &AccountId, cx: &App) -> bool {
+        self.session_of(account)
+            .is_none_or(|index| self.sessions[index].view.read(cx).signed_out())
+    }
+
+    pub(crate) fn waiting(&self, account: &AccountId) -> Option<(usize, usize)> {
+        self.launches.position(account)
+    }
+
+    pub(crate) fn unopened(&self, account: &AccountId) -> Option<SharedString> {
+        self.unopened.get(account).cloned()
+    }
+
+    pub(crate) fn ended(&self, account: &AccountId) -> Option<ScriptState> {
+        self.ended.get(account).cloned()
+    }
+
+    pub(crate) fn loaded_scripts(&self, cx: &App) -> Vec<PathBuf> {
+        self.sessions
+            .iter()
+            .filter_map(|session| session.view.read(cx).script.entry().cloned())
+            .collect()
+    }
+
+    fn wait_to_launch(&mut self, launch: Launch, window: &mut Window, cx: &mut Context<Self>) {
+        self.unopened.remove(&launch.account);
+        self.launches.add(launch);
+        cx.notify();
+        if self.pacing {
+            return;
+        }
+        self.pacing = true;
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(Ok(Some(wait))) =
+                cx.update(|window, cx| this.update(cx, |client, cx| client.launch_due(window, cx)))
+            {
+                cx.background_executor().timer(wait).await;
+            }
+        })
+        .detach();
+    }
+
+    fn launch_due(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Duration> {
+        if let Some(launch) = self.launches.take_due(Instant::now(), launches::jitter()) {
+            self.open_waiting(launch, window, cx);
+            cx.notify();
+        }
+        let wait = self.launches.wait(Instant::now());
+        self.pacing = wait.is_some();
+        wait
+    }
+
+    fn open_waiting(&mut self, launch: Launch, window: &mut Window, cx: &mut Context<Self>) {
+        let Launch {
+            account: id,
+            script,
+            replace,
+            server,
+        } = launch;
+        let account = match Accounts::open(self.accounts.clone()) {
+            Ok(accounts) => accounts.get(&id).cloned(),
+            Err(error) => {
+                self.unopened.insert(id, error.into());
+                return;
+            }
+        };
+        let Some(account) = account else {
+            return;
+        };
+        let account = Account {
+            server: server.or(account.server),
+            ..account
+        };
+        match self.session_of(&id) {
+            Some(index) => {
+                let launch = script.map(|script| script_inputs::launch(script, cx));
+                self.sessions[index].view.update(cx, |view, cx| {
+                    view.sign_in_again(&account, cx);
+                    if let Some(launch) = launch {
+                        view.queue_script(launch, replace, cx);
+                    }
+                });
+            }
+            None => {
+                if let Err(error) = self.open_account(&account, script, window, cx) {
+                    self.unopened.insert(id, format!("{error:#}").into());
+                }
+            }
         }
     }
 
@@ -397,14 +526,23 @@ impl Client {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         let launch = script.map(|script| script_inputs::launch(script, cx));
-        let view = self
-            .open_session(Some(account), window, cx)
-            .with_context(|| format!("couldn't open {}", account.name))?;
+        let view = self.open_session(Some(account), window, cx)?;
         view.update(cx, |view, cx| view.sign_in(account, launch, cx));
         Ok(())
     }
 
+    pub(crate) fn restart_script(&mut self, account: &AccountId, cx: &mut Context<Self>) {
+        if let Some(index) = self.session_of(account) {
+            self.sessions[index]
+                .view
+                .update(cx, |view, cx| view.start_loaded_script(cx));
+        }
+    }
+
     pub(crate) fn stop_script(&mut self, account: &AccountId, cx: &mut Context<Self>) {
+        if self.launches.remove(account) {
+            cx.notify();
+        }
         if let Some(index) = self.session_of(account) {
             self.sessions[index]
                 .view
@@ -449,6 +587,9 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.launches.remove(account) {
+            cx.notify();
+        }
         if let Some(index) = self.session_of(account) {
             self.close_session(index, window, cx);
         }
@@ -458,7 +599,23 @@ impl Client {
         if index >= self.sessions.len() {
             return;
         }
-        self.sessions.remove(index);
+        let session = self.sessions.remove(index);
+        if let Some(account) = &session.account
+            && self.launches.remove(account)
+        {
+            cx.notify();
+        }
+        if let Some(account) = session.account
+            && let Some(mut last) = session.view.read(cx).script.state()
+        {
+            if matches!(
+                last.phase,
+                ScriptPhase::Running | ScriptPhase::NeedsInput | ScriptPhase::Stopping
+            ) {
+                last.phase = ScriptPhase::Stopped;
+            }
+            self.ended.insert(account, last);
+        }
         if index < self.active || self.active == self.sessions.len() {
             self.active = self.active.saturating_sub(1);
         }
@@ -1041,6 +1198,8 @@ impl Drop for Client {
         }
     }
 }
+
+impl gpui::EventEmitter<Updated> for Client {}
 
 impl Focusable for Client {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {

@@ -242,6 +242,7 @@ pub(crate) async fn recover(
     let mut backoff = Duration::from_secs(settings.backoff_seconds.into()).min(cap);
     let mut attempt = 1;
     loop {
+        logins.space_out().await;
         phase(Phase::Attempt { attempt, of });
         let turn = logins.turn().await;
         let result = attempt_once(loader, credentials, server).await;

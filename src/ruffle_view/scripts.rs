@@ -316,7 +316,7 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
     Ok(())
 }
 
-fn home_relative(path: &Path) -> SharedString {
+pub(super) fn home_relative(path: &Path) -> SharedString {
     dirs::home_dir()
         .and_then(|home| path.strip_prefix(home).ok())
         .map_or_else(
@@ -1835,7 +1835,7 @@ fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
     cut(kept).into()
 }
 
-fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedString {
+pub(super) fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedString {
     let font = window.text_style().font();
     fit_path(path, |text| {
         let run = TextRun {

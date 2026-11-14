@@ -56,6 +56,7 @@ struct Settings {
     pointer_cursors: bool,
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
+    hidden_recent_scripts: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -153,6 +154,26 @@ pub(crate) fn replace_script_folder(old: &Path, new: PathBuf, cx: &mut App) {
 pub(crate) fn remove_script_folder(folder: &Path, cx: &mut App) {
     change(cx, |settings| {
         settings.script_folders.retain(|kept| kept != folder);
+    });
+}
+
+pub(crate) fn hidden_recent_scripts(cx: &App) -> &[PathBuf] {
+    &cx.global::<Store>().settings.hidden_recent_scripts
+}
+
+pub(crate) fn hide_recent_script(script: PathBuf, cx: &mut App) {
+    change(cx, |settings| {
+        if !settings.hidden_recent_scripts.contains(&script) {
+            settings.hidden_recent_scripts.push(script);
+        }
+    });
+}
+
+pub(crate) fn show_recent_script(script: &Path, cx: &mut App) {
+    change(cx, |settings| {
+        settings
+            .hidden_recent_scripts
+            .retain(|hidden| hidden != script);
     });
 }
 
@@ -311,6 +332,7 @@ mod tests {
             pointer_cursors: true,
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
+            hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);

@@ -100,6 +100,8 @@ pub(crate) fn factions(loader: &impl Loader) -> Result<Vec<Faction>, CallError> 
 pub(crate) struct Identity {
     pub(crate) name: String,
     pub(crate) guild: Option<String>,
+    pub(crate) level: Option<u32>,
+    pub(crate) class: Option<String>,
 }
 
 pub(crate) fn identity(loader: &impl Loader) -> Result<Option<Identity>, CallError> {
@@ -120,9 +122,20 @@ fn identity_of(data: &Value) -> Option<Identity> {
         },
         _ => None,
     };
+    let level = match data.get("intLevel") {
+        Some(Value::Number(level)) if *level >= 1.0 => Some(*level as u32),
+        Some(Value::String(level)) => level.parse().ok(),
+        _ => None,
+    };
+    let class = match data.get("strClassName") {
+        Some(Value::String(class)) if !class.trim().is_empty() => Some(class.trim().to_owned()),
+        _ => None,
+    };
     Some(Identity {
         name: name.clone(),
         guild,
+        level,
+        class,
     })
 }
 
@@ -980,12 +993,17 @@ mod tests {
         assert!(loader.count("flash.getGameObject") > 0);
     }
     #[test]
-    fn identity_reads_the_players_own_name_and_guild() {
+    fn identity_reads_the_players_own_name_guild_level_and_class() {
         let data = |guild: Value| {
             Value::Object(
                 [
                     ("strUsername".to_owned(), Value::String("player1".into())),
                     ("guild".to_owned(), guild),
+                    ("intLevel".to_owned(), Value::Number(86.0)),
+                    (
+                        "strClassName".to_owned(),
+                        Value::String("Blaze Binder".into()),
+                    ),
                 ]
                 .into(),
             )
@@ -996,6 +1014,8 @@ mod tests {
             Some(Identity {
                 name: "player1".into(),
                 guild: Some("Guild One".into()),
+                level: Some(86),
+                class: Some("Blaze Binder".into()),
             })
         );
         assert_eq!(
@@ -1003,6 +1023,8 @@ mod tests {
             Some(Identity {
                 name: "player1".into(),
                 guild: None,
+                level: Some(86),
+                class: Some("Blaze Binder".into()),
             })
         );
         assert_eq!(identity_of(&Value::Null), None);

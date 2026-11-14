@@ -8,21 +8,22 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::auth::Credentials;
+use crate::{
+    domain::auth::Credentials,
+    setups::{self, Member, Setup},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AccountId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Account {
     pub(crate) name: String,
     pub(crate) username: String,
     pub(crate) password: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) server: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) script: Option<PathBuf>,
 }
 
 impl AccountId {
@@ -54,7 +55,6 @@ pub(crate) struct Draft {
     pub(crate) username: String,
     pub(crate) password: String,
     pub(crate) server: Option<String>,
-    pub(crate) script: Option<PathBuf>,
 }
 
 impl Draft {
@@ -64,7 +64,6 @@ impl Draft {
             username: account.username.clone(),
             password: account.password.clone(),
             server: account.server.clone(),
-            script: account.script.clone(),
         }
     }
 }
@@ -72,7 +71,6 @@ impl Draft {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Change {
     pub(crate) server: Option<Option<String>>,
-    pub(crate) script: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -81,7 +79,7 @@ pub(crate) enum Invalid {
     NoUsername,
     #[error("Enter a password.")]
     NoPassword,
-    #[error("{0} is already an account.")]
+    #[error("You've already added {0}. Edit that account instead.")]
     Taken(String),
 }
 
@@ -93,37 +91,140 @@ pub(crate) enum SaveError {
     Io(#[from] io::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SetupError {
+    #[error(transparent)]
+    Invalid(#[from] setups::Invalid),
+    #[error("couldn't save the setups: {0}")]
+    Io(#[from] io::Error),
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
     accounts: Vec<Account>,
+    #[serde(default)]
+    setups: Option<Vec<Setup>>,
 }
 
 pub(crate) struct Accounts {
     path: PathBuf,
     list: Vec<Account>,
+    setups: Vec<Setup>,
 }
 
 impl Accounts {
     pub(crate) fn open(path: PathBuf) -> Result<Self, String> {
-        let list = match fs::read(&path) {
+        let (list, setups) = match fs::read(&path) {
             Ok(bytes) => {
-                serde_json::from_slice::<File>(&bytes)
-                    .map_err(|error| format!("{} isn't valid: {error}", path.display()))?
-                    .accounts
+                let file = serde_json::from_slice::<File>(&bytes)
+                    .map_err(|error| format!("{} isn't valid: {error}", path.display()))?;
+                let setups = file.setups.unwrap_or_else(|| {
+                    setups::seeded(legacy_scripts(&bytes)).into_iter().collect()
+                });
+                (file.accounts, setups)
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), Vec::new()),
             Err(error) => return Err(format!("couldn't read {}: {error}", path.display())),
         };
-        Ok(Self { path, list })
+        Ok(Self { path, list, setups })
     }
 
     pub(crate) fn list(&self) -> &[Account] {
         &self.list
     }
 
+    pub(crate) fn setups(&self) -> &[Setup] {
+        &self.setups
+    }
+
+    pub(crate) fn setup(&self, name: &str) -> Option<&Setup> {
+        self.setups.iter().find(|setup| setup.name == name)
+    }
+
+    pub(crate) fn create_setup(
+        &mut self,
+        script: Option<PathBuf>,
+        members: Vec<Member>,
+    ) -> io::Result<String> {
+        let name = setups::unused_name(&self.setups, setups::NEW);
+        let mut setups = self.setups.clone();
+        setups.push(Setup {
+            name: name.clone(),
+            script,
+            server: None,
+            members,
+        });
+        self.commit(self.list.clone(), setups)?;
+        Ok(name)
+    }
+
+    pub(crate) fn rename_setup(&mut self, old: &str, name: &str) -> Result<String, SetupError> {
+        let setups = setups::renamed_setup(&self.setups, old, name)?;
+        self.commit(self.list.clone(), setups)?;
+        Ok(name.trim().to_owned())
+    }
+
+    pub(crate) fn edit_setup(
+        &mut self,
+        name: &str,
+        edit: impl FnOnce(&mut Setup),
+    ) -> io::Result<()> {
+        let mut setups = self.setups.clone();
+        if let Some(setup) = setups.iter_mut().find(|setup| setup.name == name) {
+            edit(setup);
+        }
+        self.commit(self.list.clone(), setups)
+    }
+
+    pub(crate) fn duplicate_setup(&mut self, name: &str) -> io::Result<Option<String>> {
+        let Some(original) = self.setup(name).cloned() else {
+            return Ok(None);
+        };
+        let copy = setups::unused_name(&self.setups, &format!("{name} copy"));
+        let mut setups = self.setups.clone();
+        setups.push(Setup {
+            name: copy.clone(),
+            ..original
+        });
+        self.commit(self.list.clone(), setups)?;
+        Ok(Some(copy))
+    }
+
+    pub(crate) fn remove_setup(&mut self, name: &str) -> io::Result<()> {
+        let setups = self
+            .setups
+            .iter()
+            .filter(|setup| setup.name != name)
+            .cloned()
+            .collect();
+        self.commit(self.list.clone(), setups)
+    }
+
+    fn commit(&mut self, list: Vec<Account>, setups: Vec<Setup>) -> io::Result<()> {
+        write(&self.path, &list, &setups)?;
+        self.list = list;
+        self.setups = setups;
+        Ok(())
+    }
+
     pub(crate) fn get(&self, id: &AccountId) -> Option<&Account> {
         self.list.iter().find(|account| &account.id() == id)
+    }
+
+    pub(crate) fn check(&self, editing: Option<&AccountId>, draft: &Draft) -> Result<(), Invalid> {
+        let username = draft.username.trim();
+        if username.is_empty() {
+            return Err(Invalid::NoUsername);
+        }
+        if draft.password.is_empty() {
+            return Err(Invalid::NoPassword);
+        }
+        let id = AccountId::of(username);
+        if editing != Some(&id) && self.get(&id).is_some() {
+            return Err(Invalid::Taken(username.to_owned()));
+        }
+        Ok(())
     }
 
     pub(crate) fn save(
@@ -131,17 +232,9 @@ impl Accounts {
         editing: Option<&AccountId>,
         draft: Draft,
     ) -> Result<AccountId, SaveError> {
+        self.check(editing, &draft)?;
         let username = draft.username.trim().to_owned();
-        if username.is_empty() {
-            return Err(Invalid::NoUsername.into());
-        }
-        if draft.password.is_empty() {
-            return Err(Invalid::NoPassword.into());
-        }
         let id = AccountId::of(&username);
-        if editing != Some(&id) && self.get(&id).is_some() {
-            return Err(Invalid::Taken(username).into());
-        }
         let name = draft.name.trim();
         let account = Account {
             name: if name.is_empty() {
@@ -152,15 +245,17 @@ impl Accounts {
             username,
             password: draft.password,
             server: server_name(draft.server),
-            script: draft.script,
+        };
+        let setups = match editing.filter(|editing| **editing != id) {
+            Some(old) => setups::renamed(&self.setups, old, &account.username),
+            None => self.setups.clone(),
         };
         let mut list = self.list.clone();
         match editing.and_then(|editing| list.iter().position(|account| &account.id() == editing)) {
             Some(index) => list[index] = account,
             None => list.push(account),
         }
-        write(&self.path, &list)?;
-        self.list = list;
+        self.commit(list, setups)?;
         Ok(id)
     }
 
@@ -174,13 +269,8 @@ impl Accounts {
             if let Some(server) = &server {
                 account.server = server.clone();
             }
-            if let Some(script) = &change.script {
-                account.script = script.clone();
-            }
         }
-        write(&self.path, &list)?;
-        self.list = list;
-        Ok(())
+        self.commit(list, self.setups.clone())
     }
 
     pub(crate) fn remove(&mut self, id: &AccountId) -> io::Result<()> {
@@ -190,10 +280,32 @@ impl Accounts {
             .filter(|account| &account.id() != id)
             .cloned()
             .collect();
-        write(&self.path, &list)?;
-        self.list = list;
-        Ok(())
+        self.commit(list, setups::forgotten(&self.setups, id))
     }
+}
+
+fn legacy_scripts(bytes: &[u8]) -> Vec<(String, PathBuf)> {
+    #[derive(Deserialize)]
+    struct Legacy {
+        accounts: Vec<LegacyAccount>,
+    }
+    #[derive(Deserialize)]
+    struct LegacyAccount {
+        username: String,
+        #[serde(default)]
+        script: serde_json::Value,
+    }
+    serde_json::from_slice::<Legacy>(bytes)
+        .map(|file| {
+            file.accounts
+                .into_iter()
+                .filter_map(|account| {
+                    let script = account.script.as_str()?;
+                    Some((account.username, PathBuf::from(script)))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn server_name(server: Option<String>) -> Option<String> {
@@ -202,9 +314,10 @@ fn server_name(server: Option<String>) -> Option<String> {
         .filter(|server| !server.is_empty())
 }
 
-fn write(path: &Path, accounts: &[Account]) -> io::Result<()> {
+fn write(path: &Path, accounts: &[Account], setups: &[Setup]) -> io::Result<()> {
     let mut bytes = serde_json::to_vec_pretty(&File {
         accounts: accounts.to_vec(),
+        setups: Some(setups.to_vec()),
     })
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
@@ -255,7 +368,6 @@ mod tests {
                     username: " player1 ".into(),
                     password: " pass word ".into(),
                     server: Some(" Twilly ".into()),
-                    script: Some("/scripts/farm.ts".into()),
                 },
             )
             .unwrap();
@@ -269,14 +381,12 @@ mod tests {
                     username: "player1".into(),
                     password: " pass word ".into(),
                     server: Some("Twilly".into()),
-                    script: Some("/scripts/farm.ts".into()),
                 },
                 Account {
                     name: "player2".into(),
                     username: "player2".into(),
                     password: "secret".into(),
                     server: None,
-                    script: None,
                 },
             ]
         );
@@ -298,7 +408,7 @@ mod tests {
                 .save(None, draft("PLAYER1"))
                 .unwrap_err()
                 .to_string(),
-            "PLAYER1 is already an account."
+            "You've already added PLAYER1. Edit that account instead."
         );
         assert!(matches!(
             accounts.save(Some(&second), draft("player1")),
@@ -314,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn a_change_applies_only_to_the_chosen_accounts_and_only_the_fields_it_sets() {
+    fn a_change_applies_only_to_the_chosen_accounts() {
         let path = temporary_path();
         let mut accounts = Accounts::open(path.clone()).unwrap();
         let first = accounts.save(None, draft("player1")).unwrap();
@@ -325,7 +435,6 @@ mod tests {
                 &HashSet::from([first.clone(), second]),
                 Change {
                     server: Some(Some(" Twig ".into())),
-                    script: Some(Some("/scripts/farm.ts".into())),
                 },
             )
             .unwrap();
@@ -334,7 +443,6 @@ mod tests {
                 &HashSet::from([first]),
                 Change {
                     server: Some(Some(" ".into())),
-                    script: None,
                 },
             )
             .unwrap();
@@ -342,16 +450,9 @@ mod tests {
             .unwrap()
             .list()
             .iter()
-            .map(|account| (account.server.clone(), account.script.clone()))
+            .map(|account| account.server.clone())
             .collect();
-        assert_eq!(
-            saved,
-            [
-                (None, Some("/scripts/farm.ts".into())),
-                (Some("Twig".into()), Some("/scripts/farm.ts".into())),
-                (None, None),
-            ]
-        );
+        assert_eq!(saved, [None, Some("Twig".into()), None]);
         fs::remove_file(path).unwrap();
     }
 
@@ -373,6 +474,136 @@ mod tests {
         ));
         assert!(accounts.list().is_empty());
         assert!(!path.exists());
+    }
+
+    fn setup(name: &str, members: &[(&str, Option<&str>)]) -> Setup {
+        Setup {
+            name: name.into(),
+            script: Some("/scripts/daily.ts".into()),
+            server: None,
+            members: members
+                .iter()
+                .map(|(username, script)| crate::setups::Member {
+                    username: (*username).into(),
+                    script: script.map(Into::into),
+                })
+                .collect(),
+        }
+    }
+
+    fn add_setup(accounts: &mut Accounts, setup: Setup) {
+        let name = accounts.create_setup(setup.script, setup.members).unwrap();
+        accounts.rename_setup(&name, &setup.name).unwrap();
+    }
+
+    #[test]
+    fn scripts_saved_on_accounts_become_a_setup_that_outlives_the_old_fields() {
+        let path = temporary_path();
+        fs::write(
+            &path,
+            r#"{ "accounts": [
+                { "name": "Main", "username": "main", "password": "x", "script": "/scripts/farm.ts" },
+                { "name": "Alt", "username": "alt", "password": "y" },
+                { "name": "Odd", "username": "odd", "password": "z", "script": 123 }
+            ] }"#,
+        )
+        .unwrap();
+        let mut accounts = Accounts::open(path.clone()).unwrap();
+        let first = setup("My scripts", &[("main", None)]);
+        let first = Setup {
+            script: Some("/scripts/farm.ts".into()),
+            ..first
+        };
+        assert_eq!(accounts.setups(), std::slice::from_ref(&first));
+        accounts.save(None, draft("alt2")).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            saved["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|account| account.get("script").is_none())
+        );
+        assert_eq!(Accounts::open(path.clone()).unwrap().setups(), [first]);
+        accounts.remove_setup("My scripts").unwrap();
+        assert!(Accounts::open(path.clone()).unwrap().setups().is_empty());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn renaming_or_removing_an_account_updates_its_setups_in_the_same_save() {
+        let path = temporary_path();
+        let mut accounts = Accounts::open(path.clone()).unwrap();
+        let main = accounts.save(None, draft("main")).unwrap();
+        let alt = accounts.save(None, draft("alt1")).unwrap();
+        add_setup(
+            &mut accounts,
+            setup("Dailies", &[("main", None), ("alt1", None)]),
+        );
+        add_setup(&mut accounts, setup("Bosses", &[("Alt1", Some("/b.ts"))]));
+        accounts.save(Some(&alt), draft("alt-one")).unwrap();
+        accounts.remove(&main).unwrap();
+        let reopened = Accounts::open(path.clone()).unwrap();
+        assert_eq!(
+            reopened.setups(),
+            [
+                setup("Dailies", &[("alt-one", None)]),
+                setup("Bosses", &[("alt-one", Some("/b.ts"))]),
+            ]
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn setups_are_created_renamed_edited_duplicated_and_removed() {
+        let path = temporary_path();
+        let mut accounts = Accounts::open(path.clone()).unwrap();
+        accounts.save(None, draft("main")).unwrap();
+        assert_eq!(
+            accounts.create_setup(None, Vec::new()).unwrap(),
+            "New setup"
+        );
+        assert_eq!(
+            accounts.create_setup(None, Vec::new()).unwrap(),
+            "New setup 2"
+        );
+        assert!(matches!(
+            accounts.rename_setup("New setup", " "),
+            Err(SetupError::Invalid(crate::setups::Invalid::NoName))
+        ));
+        assert_eq!(
+            accounts.rename_setup("New setup", " Dailies ").unwrap(),
+            "Dailies"
+        );
+        accounts
+            .edit_setup("Dailies", |setup| {
+                setup.add(["main".to_owned()]);
+                setup.server = Some("Twig".into());
+            })
+            .unwrap();
+        assert_eq!(
+            accounts.duplicate_setup("Dailies").unwrap().as_deref(),
+            Some("Dailies copy")
+        );
+        accounts.remove_setup("Dailies").unwrap();
+        let reopened = Accounts::open(path.clone()).unwrap();
+        let names: Vec<_> = reopened
+            .setups()
+            .iter()
+            .map(|setup| setup.name.clone())
+            .collect();
+        assert_eq!(names, ["New setup 2", "Dailies copy"]);
+        let copy = reopened.setup("Dailies copy").unwrap();
+        assert_eq!(
+            copy.members,
+            [Member {
+                username: "main".into(),
+                script: None,
+            }]
+        );
+        assert_eq!(copy.server.as_deref(), Some("Twig"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
