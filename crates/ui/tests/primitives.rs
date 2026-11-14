@@ -74,6 +74,137 @@ fn select_treats_a_selection_past_its_options_as_none(cx: &mut TestAppContext) {
     assert_eq!(rooms(Some(3), "tab enter enter", cx), Some(0));
 }
 
+struct LongSelect {
+    focus: FocusHandle,
+    selected: usize,
+}
+
+impl Render for LongSelect {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let options = (0..40usize).map(|index| {
+            let option = mira_ui::primitives::SelectOption::new(format!("Profile {index}"));
+            if index == 39 {
+                option.start_slot(div().debug_selector(|| "last".into()).child("•"))
+            } else {
+                option
+            }
+        });
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(Select::new(
+                "profile",
+                "Profile",
+                options.collect::<Vec<_>>(),
+                Some(self.selected),
+            ))
+    }
+}
+
+fn last_option_after(
+    selected: usize,
+    keys: &[&'static str],
+    window: gpui::Size<gpui::Pixels>,
+    cx: &mut TestAppContext,
+) -> gpui::Bounds<gpui::Pixels> {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        LongSelect { focus, selected }
+    });
+    cx.simulate_resize(window);
+    cx.run_until_parked();
+    for key in keys {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    cx.debug_bounds("last").unwrap()
+}
+
+#[gpui::test]
+fn a_long_select_scrolls_to_the_option_picked_from_the_keyboard(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    let last = last_option_after(0, &["tab", "enter", "end"], size(px(400.0), px(600.0)), cx);
+    assert!(last.bottom() <= px(600.0), "{last:?}");
+}
+
+#[gpui::test]
+fn a_long_select_opens_scrolled_to_its_selected_option(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    let last = last_option_after(39, &["tab", "enter"], size(px(400.0), px(600.0)), cx);
+    assert!(last.bottom() <= px(600.0), "{last:?}");
+}
+
+#[gpui::test]
+fn a_long_select_fits_a_window_shorter_than_its_menu(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    let last = last_option_after(0, &["tab", "enter", "end"], size(px(340.0), px(240.0)), cx);
+    assert!(
+        last.top() >= px(0.0) && last.bottom() <= px(240.0),
+        "{last:?}"
+    );
+}
+
+struct Sources {
+    focus: FocusHandle,
+}
+
+impl Render for Sources {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("sources")
+                    .trigger(Button::new("sources", "Sources"))
+                    .items(|_, _| {
+                        (0..30usize)
+                            .map(|index| {
+                                let item = MenuItem::submenu(
+                                    format!("~/scripts/folder-{index}"),
+                                    vec![MenuItem::action("Show in Finder", |_, _| {})],
+                                );
+                                if index == 29 {
+                                    item.start_slot(div().debug_selector(|| "last".into()))
+                                } else {
+                                    item
+                                }
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_long_menu_with_submenus_scrolls_inside_the_window(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Sources { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(360.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter", "end"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let last = cx.debug_bounds("last").unwrap();
+    assert!(
+        last.top() >= px(0.0) && last.bottom() <= px(360.0),
+        "{last:?}"
+    );
+}
+
 struct Confirm {
     focus: FocusHandle,
     pressed: Rc<Cell<Option<&'static str>>>,
