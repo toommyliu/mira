@@ -3,4 +3,6 @@ disallowed-methods = [
   { path = "gpui::InteractiveElement::on_drop", reason = "reorder with mira_ui::primitives::Sortable" },
   { path = "gpui::InteractiveElement::drag_over", reason = "reorder with mira_ui::primitives::Sortable" },
   { path = "gpui::InteractiveElement::on_drag_move", reason = "reorder with mira_ui::primitives::Sortable" },
+  { path = "gpui::Entity::update_in", reason = "runs in whichever window last rendered the entity; use cx.update(|window, cx| entity.update(cx, ...))" },
+  { path = "gpui::WeakEntity::update_in", reason = "runs in whichever window last rendered the entity; use cx.update(|window, cx| entity.update(cx, ...))" },
 ]
