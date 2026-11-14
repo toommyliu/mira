@@ -903,6 +903,7 @@ impl Editor {
 
     fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let entries: Rc<[usize]> = self.entries(cx).into();
+        let listed = !entries.is_empty();
         let rows: Rc<[ProfileRow]> = entries
             .iter()
             .map(|index| {
@@ -989,6 +990,9 @@ impl Editor {
                 .ok();
         });
         let issues = combat_profiles::issues(cx).len();
+        let query = self.search.read(cx).text().trim();
+        let no_match = (!listed && !query.is_empty())
+            .then(|| format!("No profiles match \u{201c}{query}\u{201d}."));
         v_flex()
             .flex_none()
             .w(SIDEBAR_WIDTH)
@@ -1015,6 +1019,14 @@ impl Editor {
                     }))
                     .child(self.search.clone()),
             )
+            .children(no_match.map(|text| {
+                div()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .text_small()
+                    .text_color(theme.text_secondary)
+                    .child(text)
+            }))
             .child(
                 div()
                     .relative()
@@ -1920,6 +1932,15 @@ mod tests {
         snapshot("profiles-empty", |editor, window, cx| {
             editor.drafts.clear();
             editor.select(None, window, cx);
+        });
+    }
+
+    #[test]
+    fn snapshot_no_match() {
+        snapshot("profiles-no-match", |editor, _, cx| {
+            editor
+                .search
+                .update(cx, |input, cx| input.set_text("void", cx));
         });
     }
 
