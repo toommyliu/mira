@@ -5,8 +5,8 @@ use gpui::{
     Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
-    components::Chips,
+    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
+    components::{Chips, Empty},
     h_flex,
     primitives::{Align, Input, InputEvent, Select, Switch},
     theme::TEXT_BODY,
@@ -529,12 +529,10 @@ impl Render for Follower {
         );
         let body = match self.automation().cloned() {
             Some(automation) => self.body(&theme, &automation, window, cx),
-            None => div()
-                .py(px(24.0))
-                .text_center()
-                .text_small()
-                .text_color(theme.text_tertiary)
-                .child("No tabs open"),
+            None => v_flex().flex_1().child(Empty::new(
+                "No tabs open",
+                "Open a tab to follow a player with it.",
+            )),
         };
         div()
             .flex()
