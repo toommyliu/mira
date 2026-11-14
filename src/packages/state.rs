@@ -327,11 +327,16 @@ mod tests {
             .unwrap();
         let (staged, _) = stage_files(&store, &[("scripts/a.ts", "a")]);
         let gone = super::store::Receipt {
+            repository: 8,
             repo: "gone".into(),
             ..receipt(files)
         };
         store.publish(staged, "o-gone", &gone).unwrap();
         let fake = Fake::start();
+        fake.route(
+            "/repositories/7",
+            Reply::json(r#"{"id":7,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#),
+        );
         let newer = "c".repeat(40);
         fake.route(
             "/repos/o/r/branches/main",
@@ -371,7 +376,9 @@ mod tests {
         packages.read_with(cx, |packages, _| {
             assert_eq!(
                 packages.status("o-gone"),
-                Some(&Status::Failed("o/gone has no main branch.".into()))
+                Some(&Status::Failed(
+                    "Couldn't find o/gone. If it's private, add a GitHub token in Settings.".into()
+                ))
             );
         });
         fs::remove_dir_all(root).unwrap();

@@ -90,8 +90,28 @@ pub(crate) async fn install(
 }
 
 pub(crate) async fn check(github: &GitHub, receipt: &Receipt) -> Result<Option<Head>, String> {
-    let head = head(github, &Source::of(receipt)).await?;
-    Ok((head.tree != receipt.tree).then_some(head))
+    Ok(latest(github, receipt).await?.map(|(_, head)| head))
+}
+
+async fn latest(github: &GitHub, receipt: &Receipt) -> Result<Option<(Source, Head)>, String> {
+    let repository = github
+        .repository_by_id(receipt.repository)
+        .await
+        .map_err(|error| {
+            explain(
+                error,
+                github,
+                &format!("{}/{}", receipt.owner, receipt.repo),
+            )
+        })?;
+    let source = Source {
+        owner: repository.owner,
+        repo: repository.name,
+        branch: receipt.branch.clone(),
+        path: receipt.path.clone(),
+    };
+    let head = head(github, &source).await?;
+    Ok((head.tree != receipt.tree).then_some((source, head)))
 }
 
 pub(crate) async fn update(
@@ -103,10 +123,10 @@ pub(crate) async fn update(
     let package = store.package(dir);
     let receipt = Receipt::read(&package)?
         .ok_or("This package wasn't installed from GitHub, so Mira can't update it.")?;
-    let Some(head) = check(github, &receipt).await? else {
+    let Some((source, head)) = latest(github, &receipt).await? else {
         return Ok(Updated::Current);
     };
-    let (staged, files) = fetch(github, store, &Source::of(&receipt), &head)
+    let (staged, files) = fetch(github, store, &source, &head)
         .await
         .map_err(|failure| failure.to_string())?;
     if !overwrite_edits {
@@ -117,6 +137,8 @@ pub(crate) async fn update(
         }
     }
     let next = Receipt {
+        owner: source.owner,
+        repo: source.repo,
         commit: head.commit,
         tree: head.tree,
         files,
@@ -136,15 +158,6 @@ struct Source {
 }
 
 impl Source {
-    fn of(receipt: &Receipt) -> Self {
-        Self {
-            owner: receipt.owner.clone(),
-            repo: receipt.repo.clone(),
-            branch: receipt.branch.clone(),
-            path: receipt.path.clone(),
-        }
-    }
-
     fn label(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
     }
@@ -314,12 +327,10 @@ mod tests {
             let (bin, trash) = Bin::new(&root);
             let store = Store::new(root.join("packages"), trash);
             let fake = Fake::start();
-            fake.route(
-                "/repos/o/r",
-                Reply::json(
-                    r#"{"id":42,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#,
-                ),
-            );
+            let repository =
+                r#"{"id":42,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#;
+            fake.route("/repos/o/r", Reply::json(repository));
+            fake.route("/repositories/42", Reply::json(repository));
             Self {
                 root,
                 fake,
@@ -332,31 +343,36 @@ mod tests {
             GitHub::at(&self.fake.url(), token.map(Into::into)).unwrap()
         }
 
-        fn serve(
+        fn serve(&self, release: (&str, &str), manifest: Option<&str>, files: &[(&str, &str)]) {
+            self.serve_at("r", release, manifest, files);
+        }
+
+        fn serve_at(
             &self,
+            repo: &str,
             (commit, tree): (&str, &str),
             manifest: Option<&str>,
             files: &[(&str, &str)],
         ) {
             self.fake.route(
-                "/repos/o/r/branches/main",
+                &format!("/repos/o/{repo}/branches/main"),
                 Reply::json(format!(
                     r#"{{"commit":{{"sha":"{commit}","commit":{{"tree":{{"sha":"{commit}"}}}}}}}}"#
                 )),
             );
             self.fake.route(
-                &format!("/repos/o/r/contents/pkgs?ref={commit}"),
+                &format!("/repos/o/{repo}/contents/pkgs?ref={commit}"),
                 Reply::json(format!(
                     r#"[{{"name":"dailies","type":"dir","sha":"{tree}"}}]"#
                 )),
             );
             if let Some(manifest) = manifest {
                 self.fake.route(
-                    &format!("/repos/o/r/contents/pkgs/dailies/package.json?ref={commit}"),
+                    &format!("/repos/o/{repo}/contents/pkgs/dailies/package.json?ref={commit}"),
                     Reply::bytes(manifest.as_bytes().to_vec()),
                 );
             }
-            let top = format!("o-r-{}", &commit[..7]);
+            let top = format!("o-{repo}-{}", &commit[..7]);
             let names: Vec<String> = files
                 .iter()
                 .map(|(path, _)| format!("{top}/pkgs/dailies/{path}"))
@@ -370,7 +386,7 @@ mod tests {
             let zip = self.root.join(format!("{commit}.zip"));
             write_zip(&zip, &items);
             self.fake.route(
-                &format!("/repos/o/r/zipball/{commit}"),
+                &format!("/repos/o/{repo}/zipball/{commit}"),
                 Reply::bytes(fs::read(&zip).unwrap()),
             );
         }
@@ -522,6 +538,53 @@ mod tests {
             install(&world.github(None), &world.store, &branch).await,
             Err(Failure::Other("o/r has no gone branch.".into()))
         );
+    }
+
+    #[tokio::test]
+    async fn updates_follow_the_installed_repository_not_its_old_name() {
+        let world = World::new();
+        world.serve(
+            FIRST,
+            Some(MANIFEST),
+            &[("package.json", MANIFEST), ("scripts/spin.ts", "spin")],
+        );
+        let github = world.github(None);
+        let dir = install(&github, &world.store, &dailies()).await.unwrap();
+
+        world.fake.route(
+            "/repositories/42",
+            Reply::json(
+                r#"{"id":42,"name":"renamed","owner":{"login":"o"},"default_branch":"main"}"#,
+            ),
+        );
+        world.serve_at(
+            "renamed",
+            SECOND,
+            Some(MANIFEST),
+            &[("package.json", MANIFEST), ("scripts/spin.ts", "spin v2")],
+        );
+        world.serve(
+            (
+                "3333333333333333333333333333333333333333",
+                "cccccccccccccccccccccccccccccccccccccccc",
+            ),
+            Some(MANIFEST),
+            &[
+                ("package.json", MANIFEST),
+                ("scripts/spin.ts", "someone else's script"),
+            ],
+        );
+        assert_eq!(
+            update(&github, &world.store, &dir, false).await,
+            Ok(Updated::Replaced)
+        );
+        let installed = world.store.package(&dir);
+        assert_eq!(
+            fs::read_to_string(installed.join("scripts/spin.ts")).unwrap(),
+            "spin v2"
+        );
+        let receipt = Receipt::read(&installed).unwrap().unwrap();
+        assert_eq!((receipt.repository, receipt.repo.as_str()), (42, "renamed"));
     }
 
     #[tokio::test]

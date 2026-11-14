@@ -187,6 +187,14 @@ impl GitHub {
         owner: &str,
         repo: &str,
     ) -> Result<Repository, GitHubError> {
+        self.repository_at(&["repos", owner, repo]).await
+    }
+
+    pub(crate) async fn repository_by_id(&self, id: u64) -> Result<Repository, GitHubError> {
+        self.repository_at(&["repositories", &id.to_string()]).await
+    }
+
+    async fn repository_at(&self, segments: &[&str]) -> Result<Repository, GitHubError> {
         #[derive(Deserialize)]
         struct Owner {
             login: String,
@@ -198,7 +206,7 @@ impl GitHub {
             owner: Owner,
             default_branch: String,
         }
-        let payload: Payload = self.json(&["repos", owner, repo], None).await?;
+        let payload: Payload = self.json(segments, None).await?;
         Ok(Repository {
             id: payload.id,
             owner: payload.owner.login,
