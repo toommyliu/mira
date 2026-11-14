@@ -51,7 +51,7 @@ pub use icon::{Icon, icon, small_icon};
 pub use input::{Input, InputEvent, Numeric};
 pub use kbd::Kbd;
 pub use list::{List, ListItem, VirtualList};
-pub use menu::{Align, DropdownMenu, MenuItem};
+pub use menu::{Align, DropdownMenu, MenuItem, MenuList};
 pub use menubar::Menubar;
 pub use popover::{Popover, PopoverClose};
 pub use progress::Progress;
