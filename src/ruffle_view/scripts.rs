@@ -3,36 +3,42 @@ use std::{
     fs, io, iter,
     path::{Path, PathBuf},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use gpui::{
-    App, AppContext as _, Context, Entity, Focusable as _, FontWeight, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, PathPromptOptions, Pixels, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, actions,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle,
+    Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, PathPromptOptions, Pixels, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TextRun, TitlebarOptions,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, Theme, Tone, h_flex,
+    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone, h_flex,
     primitives::{
-        Activity, Alert, Badge, Button, Checkbox, CheckedState, Dialog, Dot, DropdownMenu, Field,
-        Icon, Input, InputEvent, List, ListItem, MenuItem, Popover, Radio, RadioGroup, Select,
-        StatusDot, Switch, ToggleGroup, ToggleItem, VirtualList,
+        Alert, Align, Badge, Button, Checkbox, CheckedState, Dot, DropdownMenu, Icon, Input,
+        InputEvent, List, ListItem, MenuItem, Popover, Radio, RadioGroup, Scrollbar, Select,
+        Switch, ToggleGroup, ToggleItem, VirtualList,
         button::{Size, Variant},
     },
-    theme::{CONTROL_MD, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
+    theme::{LINE_BODY, LINE_SMALL, ROW, TEXT_BODY, TEXT_SMALL},
+    v_flex,
 };
 
 use super::{
-    Client,
+    Changed, Client, RuffleView,
     account::file_name,
-    client::Tab,
+    client::CloseSession,
+    form::{LABEL_WIDTH, note, row, row_label, switch_row},
     script_form::{
         Draft, FieldDraft, Queued, ROOMS, SPECIFIC_ROOM, TabState, drafts, error, room_choice,
         room_note, starting, values,
     },
+    shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    account_settings::{self, RoomNumber, Rooms, Scripts},
+    account_settings::{self, RoomNumber, Rooms, Scripts as ScriptOptions},
     accounts::AccountId,
     script_inputs,
     scripting::{
@@ -43,10 +49,22 @@ use crate::{
 
 actions!(mira, [OpenScripts]);
 
-const PANE_HEIGHT: Pixels = px(332.0);
-const LIBRARY_WIDTH: Pixels = px(300.0);
+const WIDTH: f32 = 720.0;
+const HEIGHT: f32 = 500.0;
+const MIN_WIDTH: f32 = 600.0;
+const MIN_HEIGHT: f32 = 360.0;
+const PADDING: Pixels = px(16.0);
+const GAP: Pixels = px(20.0);
+const LIST_WIDTH: Pixels = px(290.0);
 const SEARCH_WIDTH: Pixels = px(260.0);
 const PANES_WIDTH: Pixels = px(180.0);
+const RUN_WIDTH: Pixels = px(80.0);
+const QUEUE_RUN_WIDTH: Pixels = px(104.0);
+const FILTER_WIDTH: Pixels = px(300.0);
+const FILTER_HEIGHT: Pixels = px(280.0);
+const FILTER_PATH_WIDTH: Pixels = px(220.0);
+const RING_ROOM: Pixels = px(6.0);
+const PATIENCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -112,6 +130,7 @@ impl Library {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
+    DefaultFolder,
     Source(usize),
     Script(Entry),
 }
@@ -132,9 +151,16 @@ fn library_rows(library: &Library, query: &str, scope: Scope) -> Vec<Row> {
             .cloned()
             .map(Row::Script)
     };
+    let headed = |heading: Row, source: Option<usize>| -> Vec<Row> {
+        let rows: Vec<Row> = scripts(source).collect();
+        if rows.is_empty() {
+            return rows;
+        }
+        iter::once(heading).chain(rows).collect()
+    };
     match scope {
-        Scope::BuiltIn => return scripts(None).collect(),
-        Scope::Source(index) => return scripts(Some(index)).collect(),
+        Scope::BuiltIn => return headed(Row::DefaultFolder, None),
+        Scope::Source(index) => return headed(Row::Source(index), Some(index)),
         Scope::All => {}
     }
     let mut rows: Vec<Row> = scripts(None).collect();
@@ -313,13 +339,63 @@ enum Pane {
     Queue,
 }
 
-pub(super) struct Picker {
-    client: WeakEntity<Client>,
+struct Open(WindowHandle<ScriptsWindow>);
+
+impl gpui::Global for Open {}
+
+pub(crate) fn open(
+    client: Entity<Client>,
+    folder: PathBuf,
+    types: PathBuf,
+    target: Target,
+    cx: &mut App,
+) {
+    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
+        && handle
+            .update(cx, |scripts, window, cx| {
+                window.activate_window();
+                scripts.retarget(target, cx);
+                scripts.reopen(window, cx);
+            })
+            .is_ok()
+    {
+        return;
+    }
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(WIDTH), px(HEIGHT)),
+            cx,
+        ))),
+        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Scripts".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
+        }),
+        app_owns_titlebar_drag: true,
+        is_minimizable: false,
+        ..Default::default()
+    };
+    match cx.open_window(options, |window, cx| {
+        let scripts = cx.new(|cx| ScriptsWindow::new(client, folder, types, target, window, cx));
+        let search = scripts.read(cx).search.focus_handle(cx);
+        window.focus(&search, cx);
+        scripts
+    }) {
+        Ok(handle) => cx.set_global(Open(handle)),
+        Err(error) => tracing::error!(%error, "couldn't open scripts"),
+    }
+}
+
+pub(super) struct ScriptsWindow {
+    client: Entity<Client>,
+    focus: FocusHandle,
+    tab: Target,
+    shown: Option<ShownTab>,
     folder: PathBuf,
     packages: PathBuf,
     types: PathBuf,
-    open: bool,
-    tab: usize,
     library: Option<Library>,
     scanning: Option<Task<()>>,
     search: Entity<Input>,
@@ -334,7 +410,11 @@ pub(super) struct Picker {
     forms: HashMap<PathBuf, Form>,
     generation: u64,
     loading: Option<(PathBuf, Task<()>)>,
-    tabs: HashMap<usize, TabState>,
+    waiting: Option<(PathBuf, Instant, Task<()>)>,
+    displayed: Option<Entry>,
+    detail_scroll: ScrollHandle,
+    tabs: HashMap<EntityId, TabState>,
+    _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -357,12 +437,12 @@ enum FormState {
     },
 }
 
-impl Picker {
-    pub(super) fn new(
-        client: &Entity<Client>,
+impl ScriptsWindow {
+    fn new(
+        client: Entity<Client>,
         folder: PathBuf,
         types: PathBuf,
-        tab: usize,
+        tab: Target,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -373,7 +453,7 @@ impl Picker {
         });
         let room = cx.new(|cx| Input::new("Room number", cx).max_length(5));
         let subscriptions = [
-            cx.observe(client, |_, _, cx| cx.notify()),
+            cx.observe(&client, |this, _, cx| this.show(cx)),
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Changed => {
                     this.pane = Pane::Library;
@@ -400,13 +480,14 @@ impl Picker {
                 this.show_room_error(cx);
             }),
         ];
-        Self {
-            client: client.downgrade(),
+        let mut scripts = Self {
+            client,
+            focus: cx.focus_handle(),
+            tab,
+            shown: None,
             packages: folder.with_file_name("packages"),
             folder,
             types,
-            open: false,
-            tab,
             library: None,
             scanning: None,
             search,
@@ -421,29 +502,91 @@ impl Picker {
             forms: HashMap::new(),
             generation: 0,
             loading: None,
+            waiting: None,
+            displayed: None,
+            detail_scroll: ScrollHandle::new(),
             tabs: HashMap::new(),
+            _view_changes: None,
             _subscriptions: subscriptions,
+        };
+        scripts.show(cx);
+        scripts.rescan(cx);
+        scripts
+    }
+
+    fn retarget(&mut self, tab: Target, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.show(cx);
+    }
+
+    fn show(&mut self, cx: &mut Context<Self>) {
+        let switched = shown_tab::show(
+            &mut self.shown,
+            &mut self.tab,
+            &self.client,
+            |this: &mut Self, cx| this.show(cx),
+            |_, _| Vec::new(),
+            cx,
+        );
+        if switched {
+            self.switched(cx);
         }
     }
 
-    pub(super) fn show(&mut self, tab: usize, account: Option<&AccountId>, cx: &mut Context<Self>) {
-        self.open = true;
-        self.tab = tab;
-        self.pane = Pane::Library;
+    fn switched(&mut self, cx: &mut Context<Self>) {
+        self._view_changes = self
+            .view()
+            .map(|view| cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()));
         self.queued = 0;
         self.chosen = None;
-        self.generation += 1;
-        self.search.update(cx, |search, cx| search.set_text("", cx));
-        let number = match account.map(|account| account_settings::get(account, cx).scripts.rooms) {
+        self.room_pending = false;
+        self.room_error = false;
+        let number = match self.options(cx).map(|options| options.rooms) {
             Some(Rooms::Specific { number }) => number.get().to_string(),
             _ => String::new(),
         };
-        self.room_pending = false;
-        self.room_error = false;
         self.room.update(cx, |input, cx| input.set_text(number, cx));
-        self.selected = 0;
+        self.show_room_error(cx);
+        self.select_last_run(cx);
+    }
+
+    fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generation += 1;
         self.rescan(cx);
-        cx.notify();
+        window.focus(&self.search.focus_handle(cx), cx);
+    }
+
+    fn view(&self) -> Option<Entity<RuffleView>> {
+        self.shown.as_ref()?.view.upgrade()
+    }
+
+    fn tab_id(&self) -> Option<EntityId> {
+        self.shown.as_ref().map(|shown| shown.id)
+    }
+
+    fn running(&self, cx: &App) -> bool {
+        self.view()
+            .is_some_and(|view| view.read(cx).script.running())
+    }
+
+    fn account(&self, cx: &App) -> Option<AccountId> {
+        self.view()?.read(cx).settings_account.clone()
+    }
+
+    fn status(&self, theme: &Theme, cx: &App) -> (SharedString, Hsla) {
+        if self.shown.is_none() {
+            return ("No tabs open".into(), theme.text_tertiary);
+        }
+        let Some(view) = self.view() else {
+            return ("Nothing running".into(), theme.text_tertiary);
+        };
+        let script = &view.read(cx).script;
+        match script.status() {
+            Some(text) if script.running() => (text.into(), theme.accent_text),
+            Some(text) if script.failed() => (text.into(), theme.danger_text),
+            Some(text) => (text.into(), theme.text_tertiary),
+            None => ("Nothing running".into(), theme.text_tertiary),
+        }
     }
 
     fn show_room_error(&mut self, cx: &mut Context<Self>) {
@@ -453,13 +596,13 @@ impl Picker {
         cx.notify();
     }
 
-    fn scripts(&self, cx: &App) -> Option<Scripts> {
-        let account = self.tab(cx)?.account?;
+    fn options(&self, cx: &App) -> Option<ScriptOptions> {
+        let account = self.account(cx)?;
         Some(account_settings::get(&account, cx).scripts)
     }
 
-    fn change_scripts(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Scripts)) {
-        if let Some(account) = self.tab(cx).and_then(|tab| tab.account) {
+    fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
+        if let Some(account) = self.account(cx) {
             account_settings::change(&account, cx, |settings| edit(&mut settings.scripts));
         }
         cx.notify();
@@ -469,7 +612,7 @@ impl Picker {
         if self.room_pending {
             return SPECIFIC_ROOM;
         }
-        room_choice(self.scripts(cx).unwrap_or_default().rooms)
+        room_choice(self.options(cx).unwrap_or_default().rooms)
     }
 
     fn choose_room(&mut self, choice: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -485,7 +628,7 @@ impl Picker {
             }
         };
         self.room_pending = false;
-        self.change_scripts(cx, |scripts| scripts.rooms = rooms);
+        self.change_options(cx, |options| options.rooms = rooms);
         self.show_room_error(cx);
     }
 
@@ -495,12 +638,7 @@ impl Picker {
             return;
         };
         self.room_pending = false;
-        self.change_scripts(cx, |scripts| scripts.rooms = Rooms::Specific { number });
-    }
-
-    fn close(&mut self, cx: &mut Context<Self>) {
-        self.open = false;
-        cx.notify();
+        self.change_options(cx, |options| options.rooms = Rooms::Specific { number });
     }
 
     fn rescan(&mut self, cx: &mut Context<Self>) {
@@ -531,7 +669,9 @@ impl Picker {
     }
 
     fn select_last_run(&mut self, cx: &App) {
-        let last = self.tab(cx).and_then(|tab| tab.script);
+        let last = self
+            .view()
+            .and_then(|view| view.read(cx).script.entry().cloned());
         if let Some(index) = self
             .rows(cx)
             .iter()
@@ -539,15 +679,6 @@ impl Picker {
         {
             self.selected = index;
         }
-    }
-
-    fn tab(&self, cx: &App) -> Option<Tab> {
-        self.client
-            .upgrade()?
-            .read(cx)
-            .tabs(cx)
-            .into_iter()
-            .find(|tab| tab.number == self.tab)
     }
 
     fn rows(&self, cx: &App) -> Rc<[Row]> {
@@ -584,24 +715,19 @@ impl Picker {
     }
 
     fn run_selected(&mut self, cx: &mut Context<Self>) {
-        if self.tab(cx).is_none_or(|tab| tab.running) || self.room_pending {
+        if self.running(cx) || self.room_pending {
             return;
         }
-        let Some((launch, _)) = self.launch(cx) else {
+        let (Some(view), Some((launch, _))) = (self.view(), self.launch(cx)) else {
             return;
         };
-        let tab = self.tab;
-        let _ = self
-            .client
-            .update(cx, |client, cx| client.start_script_in(tab, launch, cx));
-        self.close(cx);
+        view.update(cx, |view, cx| view.start_script(launch, cx));
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        let tab = self.tab;
-        let _ = self
-            .client
-            .update(cx, |client, cx| client.stop_script_in(tab, cx));
+        if let Some(view) = self.view() {
+            view.update(cx, |view, cx| view.cancel_script(cx));
+        }
     }
 
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -706,6 +832,87 @@ impl Picker {
         .detach();
     }
 
+    fn filter(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<DropdownMenu> {
+        if self.library.as_ref()?.sources.is_empty() {
+            return None;
+        }
+        let this = cx.entity().downgrade();
+        Some(
+            DropdownMenu::new("filter")
+                .trigger(
+                    Button::new("filter", "Filter")
+                        .font_weight(FontWeight::NORMAL)
+                        .pressed(self.filter.is_some())
+                        .end_slot(
+                            div()
+                                .text_color(theme.text_tertiary)
+                                .child(Icon::ChevronDown),
+                        ),
+                )
+                .align(Align::End)
+                .width(FILTER_WIDTH)
+                .max_height(FILTER_HEIGHT)
+                .items(move |window, cx| {
+                    this.upgrade()
+                        .map(|scripts| scripts.read(cx).filter_items(&this, window))
+                        .unwrap_or_default()
+                }),
+        )
+    }
+
+    fn filter_items(&self, this: &WeakEntity<Self>, window: &Window) -> Vec<MenuItem> {
+        let Some(library) = &self.library else {
+            return Vec::new();
+        };
+        let choose = |label: SharedString, filter: Option<PathBuf>| {
+            let this = this.clone();
+            let checked = self.filter == filter;
+            MenuItem::radio(label, checked, move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.set_filter(filter.clone(), cx));
+            })
+        };
+        let source = |label: SharedString, root: &Path, count: SharedString| {
+            choose(label, Some(root.to_owned()))
+                .description(fit_path_to(&home_relative(root), FILTER_PATH_WIDTH, window))
+                .end_slot(count)
+        };
+        let built_in = library
+            .entries
+            .iter()
+            .filter(|entry| entry.source.is_none())
+            .count();
+        let mut items = vec![
+            choose("All sources".into(), None)
+                .end_slot(SharedString::from(library.entries.len().to_string())),
+            MenuItem::separator(),
+            MenuItem::header("Folders"),
+            source(
+                "Default folder".into(),
+                &self.folder,
+                built_in.to_string().into(),
+            ),
+        ];
+        let mut packages = Vec::new();
+        for added in &library.sources {
+            let count: SharedString = if added.readable {
+                added.scripts.to_string().into()
+            } else {
+                "Can't read".into()
+            };
+            let item = source(added.name.clone(), &added.root, count);
+            match added.kind {
+                SourceKind::Folder => items.push(item),
+                SourceKind::Package { .. } => packages.push(item),
+            }
+        }
+        if !packages.is_empty() {
+            items.push(MenuItem::separator());
+            items.push(MenuItem::header("Packages"));
+            items.extend(packages);
+        }
+        items
+    }
+
     fn sources(&self, cx: &mut Context<Self>) -> DropdownMenu {
         let this = cx.entity().downgrade();
         let unreadable = self
@@ -722,7 +929,7 @@ impl Picker {
             )
             .items(move |_, cx| {
                 this.upgrade()
-                    .map(|picker| picker.read(cx).source_items(&this))
+                    .map(|scripts| scripts.read(cx).source_items(&this))
                     .unwrap_or_default()
             })
     }
@@ -857,7 +1064,35 @@ impl Picker {
                 });
             }
         });
+        if !self.forms.contains_key(&path) {
+            let wake = cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(PATIENCE).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            });
+            self.waiting = Some((path.clone(), Instant::now(), wake));
+        }
         self.loading = Some((path, task));
+    }
+
+    fn detail_entry(&mut self, target: Option<Entry>) -> Option<Entry> {
+        let target = target?;
+        if self.forms.contains_key(&target.path) {
+            if self.displayed.as_ref().map(|shown| &shown.path) != Some(&target.path) {
+                self.detail_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+                self.displayed = Some(target.clone());
+            }
+            return Some(target);
+        }
+        let patient = self
+            .waiting
+            .as_ref()
+            .is_some_and(|(path, since, _)| *path == target.path && since.elapsed() < PATIENCE);
+        match &self.displayed {
+            Some(previous) if patient && self.forms.contains_key(&previous.path) => {
+                Some(previous.clone())
+            }
+            _ => Some(target),
+        }
     }
 
     fn loaded(
@@ -1011,33 +1246,40 @@ impl Picker {
         Some((launch, queued))
     }
 
+    fn tab_state(&self) -> Option<&TabState> {
+        self.tabs.get(&self.tab_id()?)
+    }
+
+    fn tab_state_mut(&mut self) -> Option<&mut TabState> {
+        let id = self.tab_id()?;
+        Some(self.tabs.entry(id).or_default())
+    }
+
     fn queue(&self) -> &[Queued] {
-        self.tabs
-            .get(&self.tab)
+        self.tab_state()
             .map_or(&[][..], |state| state.queue.as_slice())
     }
 
     fn queue_running(&self) -> bool {
-        self.tabs
-            .get(&self.tab)
-            .is_some_and(|state| state.queue_running)
-    }
-
-    fn tab_state(&mut self) -> &mut TabState {
-        self.tabs.entry(self.tab).or_default()
+        self.tab_state().is_some_and(|state| state.queue_running)
     }
 
     fn add_to_queue(&mut self, cx: &mut Context<Self>) {
         let Some((_, queued)) = self.launch(cx) else {
             return;
         };
-        self.tab_state().queue.push(queued);
+        if let Some(state) = self.tab_state_mut() {
+            state.queue.push(queued);
+        }
         cx.notify();
     }
 
     fn move_queued(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         let running = self.queue_running();
-        let queue = &mut self.tab_state().queue;
+        let Some(state) = self.tab_state_mut() else {
+            return;
+        };
+        let queue = &mut state.queue;
         if from >= queue.len() || to >= queue.len() || (running && (from == 0 || to == 0)) {
             return;
         }
@@ -1049,7 +1291,9 @@ impl Picker {
 
     fn remove_queued(&mut self, cx: &mut Context<Self>) {
         let index = self.queued;
-        let state = self.tab_state();
+        let Some(state) = self.tab_state_mut() else {
+            return;
+        };
         if index >= state.queue.len() {
             return;
         }
@@ -1061,7 +1305,9 @@ impl Picker {
     }
 
     fn clear_queue(&mut self, cx: &mut Context<Self>) {
-        let state = self.tab_state();
+        let Some(state) = self.tab_state_mut() else {
+            return;
+        };
         state.queue.clear();
         state.queue_running = false;
         self.queued = 0;
@@ -1069,118 +1315,128 @@ impl Picker {
     }
 
     fn toggle_queue(&mut self, cx: &mut Context<Self>) {
-        let state = self.tab_state();
-        state.queue_running = !state.queue_running && !state.queue.is_empty();
+        if let Some(state) = self.tab_state_mut() {
+            state.queue_running = !state.queue_running && !state.queue.is_empty();
+        }
         cx.notify();
     }
 
-    fn options(&self, cx: &mut Context<Self>) -> Popover {
+    fn options_popover(&self, cx: &mut Context<Self>) -> Popover {
         let this = cx.entity().downgrade();
         Popover::new("options")
             .trigger(Button::new("options", "Options").end_slot(Icon::ChevronDown))
             .content(move |_, _, cx| {
-                let Some(picker) = this.upgrade() else {
+                let Some(scripts) = this.upgrade() else {
                     return div().into_any_element();
                 };
-                let picker = picker.read(cx);
-                let scripts = picker.scripts(cx);
-                let editable = scripts.is_some();
-                let scripts = scripts.unwrap_or_default();
-                let room = picker.room_choice(cx);
-                let room_error = picker.room_error;
-                let note = room_note(picker.room.read(cx).text());
-                let room_input = picker.room.clone();
+                let scripts = scripts.read(cx);
+                let options = scripts.options(cx);
+                let editable = options.is_some();
+                let options = options.unwrap_or_default();
+                let room = scripts.room_choice(cx);
+                let room_error = scripts.room_error;
+                let room_hint = room_note(scripts.room.read(cx).text());
+                let room_input = scripts.room.clone();
                 let choose_room = this.clone();
-                let toggle = |set: fn(&mut Scripts, bool)| {
+                let toggle = |set: fn(&mut ScriptOptions, bool)| {
                     let this = this.clone();
                     move |on, _: &mut Window, cx: &mut App| {
                         let _ = this.update(cx, |this, cx| {
-                            this.change_scripts(cx, |scripts| set(scripts, on));
+                            this.change_options(cx, |options| set(options, on));
                         });
                     }
                 };
                 let theme = cx.theme().clone();
-                let (Ok(hint) | Err(hint)) = note;
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(14.0))
-                    .when(!editable, |options| {
-                        options.child(muted(&theme, "Log in to change script settings."))
+                let (Ok(hint) | Err(hint)) = room_hint;
+                let radios = ROOMS
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, label)| {
+                        let radio = Radio::new(label);
+                        let radio = if editable { radio } else { radio.disabled() };
+                        match index {
+                            SPECIFIC_ROOM if room == SPECIFIC_ROOM => radio
+                                .description(hint)
+                                .invalid(room_error)
+                                .accessory(div().w(px(80.0)).child(room_input.clone())),
+                            SPECIFIC_ROOM => radio.description(hint),
+                            _ => radio,
+                        }
                     })
-                    .child(option_row(
-                        &theme,
-                        "Safe start and stop",
-                        "Best effort attempt to start or stop the script at your house.",
-                        Switch::new("safe-start", "Safe start and stop", scripts.safe_start_stop)
-                            .hide_label()
-                            .disabled(!editable)
-                            .on_toggle(toggle(|scripts, on| scripts.safe_start_stop = on)),
-                    ))
-                    .child(option_row(
-                        &theme,
-                        "Restart after reconnecting",
-                        "Restart the active script when the same account reconnects.",
-                        Switch::new(
-                            "restart",
-                            "Restart after reconnecting",
-                            scripts.restart_after_reconnect,
-                        )
-                        .hide_label()
-                        .disabled(!editable)
-                        .on_toggle(toggle(|scripts, on| scripts.restart_after_reconnect = on)),
-                    ))
-                    .child(div().h(px(1.0)).bg(theme.hairline))
+                    .collect();
+                v_flex()
+                    .gap(px(8.0))
+                    .when(!editable, |options| {
+                        options.child(note("Log in to change script settings.", true, &theme))
+                    })
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .child(option_text(
-                                &theme,
-                                "Rooms",
-                                "Choose which rooms scripts join.",
-                            ))
-                            .child(
-                                RadioGroup::new(
-                                    "rooms",
-                                    "Rooms",
-                                    ROOMS
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(|(index, label)| {
-                                            let radio = Radio::new(label);
-                                            let radio =
-                                                if editable { radio } else { radio.disabled() };
-                                            match index {
-                                                SPECIFIC_ROOM if room == SPECIFIC_ROOM => radio
-                                                    .description(hint)
-                                                    .invalid(room_error)
-                                                    .accessory(
-                                                        div().w(px(80.0)).child(room_input.clone()),
-                                                    ),
-                                                SPECIFIC_ROOM => radio.description(hint),
-                                                _ => radio,
-                                            }
-                                        })
-                                        .collect(),
-                                    Some(room),
+                        v_flex()
+                            .gap(px(4.0))
+                            .child(switch_row(
+                                "Safe start and stop",
+                                editable,
+                                Switch::new(
+                                    "safe-start",
+                                    "Safe start and stop",
+                                    options.safe_start_stop,
                                 )
-                                .on_select(
+                                .on_toggle(toggle(|options, on| options.safe_start_stop = on)),
+                            ))
+                            .child(note(
+                                "Best effort attempt to start or stop the script at your house.",
+                                editable,
+                                &theme,
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .gap(px(4.0))
+                            .child(switch_row(
+                                "Restart after reconnecting",
+                                editable,
+                                Switch::new(
+                                    "restart",
+                                    "Restart after reconnecting",
+                                    options.restart_after_reconnect,
+                                )
+                                .on_toggle(toggle(
+                                    |options, on| options.restart_after_reconnect = on,
+                                )),
+                            ))
+                            .child(note(
+                                "Restart the active script when the same account reconnects.",
+                                editable,
+                                &theme,
+                            )),
+                    )
+                    .child(div().h(px(1.0)).my(px(4.0)).bg(theme.hairline))
+                    .child(
+                        h_flex()
+                            .items_start()
+                            .gap(px(12.0))
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .w(px(64.0))
+                                    .h(ROW)
+                                    .child(row_label("Rooms", editable)),
+                            )
+                            .child(div().flex_1().min_w_0().pt(px(4.0)).child(
+                                RadioGroup::new("rooms", "Rooms", radios, Some(room)).on_select(
                                     move |room, window, cx| {
                                         let _ = choose_room.update(cx, |this, cx| {
                                             this.choose_room(room, window, cx)
                                         });
                                     },
                                 ),
-                            ),
+                            )),
                     )
                     .into_any_element()
             })
-            .width(px(400.0))
+            .width(px(376.0))
     }
 
-    fn inputs(&self, theme: &Theme, path: &Path, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn inputs(&self, theme: &Theme, path: &Path, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = self.forms.get(path) else {
             return muted(theme, "Reading inputs…").into_any_element();
         };
@@ -1221,9 +1477,7 @@ impl Picker {
         let stale = drafts.iter().any(|draft| draft.stale.is_some()).then(|| {
             let this = this.clone();
             let path = path.to_owned();
-            div()
-                .flex()
-                .items_center()
+            h_flex()
                 .justify_between()
                 .gap(px(12.0))
                 .child(muted(
@@ -1253,83 +1507,92 @@ impl Picker {
                                 this.update(cx, |this, cx| this.set_draft(&path, index, draft, cx));
                         }
                     };
-                    let problem = error(field, draft);
+                    let label = SharedString::from(field.label.clone());
                     let control = match (&field.kind, &draft.draft, &texts[index]) {
-                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
-                            let switch = Switch::new(("input", index), field.label.clone(), *on)
-                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx));
-                            let switch = match &field.description {
-                                Some(description) => switch.description(description.clone()),
-                                None => switch,
-                            };
-                            return div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(switch)
-                                .when_some(problem, |slot, problem| {
-                                    slot.child(error_text(theme, problem))
-                                })
-                                .into_any_element();
-                        }
-                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => Select::new(
-                            ("input", index),
-                            field.label.clone(),
-                            options.iter().cloned().map(SharedString::from),
-                            *chosen,
-                        )
-                        .placeholder("Choose…")
-                        .width(px(200.0))
-                        .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
-                        .into_any_element(),
+                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => switch_row(
+                            label.clone(),
+                            true,
+                            Switch::new(("input", index), label, *on)
+                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx)),
+                        ),
+                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => row(
+                            label.clone(),
+                            true,
+                            Select::new(
+                                ("input", index),
+                                label,
+                                options.iter().cloned().map(SharedString::from),
+                                *chosen,
+                            )
+                            .placeholder("Choose…")
+                            .full_width()
+                            .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx)),
+                        ),
                         (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
                             let set = Rc::new(set);
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.0))
-                                .children(options.iter().enumerate().map(|(option, label)| {
-                                    let set = set.clone();
-                                    let chosen = chosen.clone();
-                                    let state = if chosen[option] {
-                                        CheckedState::Checked
-                                    } else {
-                                        CheckedState::Unchecked
-                                    };
-                                    Checkbox::new(
-                                        SharedString::from(format!("input-{index}-{option}")),
-                                        label.clone(),
-                                        state,
-                                    )
-                                    .on_toggle(
-                                        move |on, _, cx| {
-                                            let mut chosen = chosen.clone();
-                                            chosen[option] = on;
-                                            set(Draft::Choices(chosen), cx);
-                                        },
-                                    )
-                                }))
-                                .into_any_element()
+                            h_flex()
+                                .items_start()
+                                .gap(px(12.0))
+                                .child(
+                                    h_flex()
+                                        .flex_none()
+                                        .w(LABEL_WIDTH)
+                                        .h(ROW)
+                                        .child(row_label(label, true)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap(px(6.0))
+                                        .py(px(4.0))
+                                        .children(options.iter().enumerate().map(
+                                            |(option, name)| {
+                                                let set = set.clone();
+                                                let chosen = chosen.clone();
+                                                let state = if chosen[option] {
+                                                    CheckedState::Checked
+                                                } else {
+                                                    CheckedState::Unchecked
+                                                };
+                                                Checkbox::new(
+                                                    SharedString::from(format!(
+                                                        "input-{index}-{option}"
+                                                    )),
+                                                    name.clone(),
+                                                    state,
+                                                )
+                                                .on_toggle(move |on, _, cx| {
+                                                    let mut chosen = chosen.clone();
+                                                    chosen[option] = on;
+                                                    set(Draft::Choices(chosen), cx);
+                                                })
+                                            },
+                                        )),
+                                )
                         }
-                        (kind, _, Some(input)) => div()
-                            .when(matches!(kind, Kind::Number { .. }), |slot| {
-                                slot.w(px(120.0))
-                            })
-                            .child(input.clone())
-                            .into_any_element(),
-                        _ => div().into_any_element(),
+                        (kind, _, Some(input)) => row(
+                            label,
+                            true,
+                            div()
+                                .when(matches!(kind, Kind::Number { .. }), |slot| slot.w(px(80.0)))
+                                .child(input.clone()),
+                        ),
+                        _ => div(),
                     };
-                    Field::new(field.label.clone(), control)
-                        .when_some(field.description.clone(), |field, description| {
-                            field.description(description)
-                        })
-                        .error(problem)
-                        .into_any_element()
+                    v_flex().gap(px(4.0)).child(control).map(|column| {
+                        match (error(field, draft), &field.description) {
+                            (Some(problem), _) => column
+                                .child(note(problem, true, theme).text_color(theme.danger_text)),
+                            (None, Some(description)) => {
+                                column.child(note(description.clone(), true, theme))
+                            }
+                            (None, None) => column,
+                        }
+                    })
                 });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
+        v_flex()
+            .gap(px(8.0))
             .children(unreadable)
             .children(stale)
             .children(fields)
@@ -1340,121 +1603,83 @@ impl Picker {
         &self,
         theme: &Theme,
         entry: Option<&Entry>,
-        can_queue: bool,
+        width: Pixels,
+        window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> AnyElement {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
-        let inputs = self.inputs(theme, &entry.path, cx);
-        div()
-            .flex()
-            .flex_col()
+        let path = fit_path_to(&home_relative(&entry.path), width, window);
+        v_flex()
             .gap(px(14.0))
-            .child(heading(
-                theme,
-                entry.name.clone(),
-                entry.path.display().to_string().into(),
-                Button::new("queue", "Add to queue")
-                    .size(Size::Small)
-                    .disabled(!can_queue)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
-            ))
-            .child(inputs)
+            .child(heading(theme, entry.name.clone(), path, None))
+            .child(self.inputs(theme, &entry.path, cx))
             .into_any_element()
     }
 
-    fn queued_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn queued_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let queue = self.queue();
         let Some(queued) = queue.get(self.queued) else {
             return div().into_any_element();
         };
         let index = self.queued;
-        let running = self.queue_running();
-        let current = running && index == 0;
+        let current = self.queue_running() && index == 0;
         let position: SharedString = if current {
             "Running now".into()
         } else {
-            format!("{} of {}", index + 1, queue.len()).into()
+            format!("{} of {} in the queue", index + 1, queue.len()).into()
         };
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .gap(px(14.0))
             .child(heading(
                 theme,
                 queued.name.clone(),
                 position,
-                Button::new("queued-remove", "Remove")
-                    .size(Size::Small)
-                    .disabled(current)
-                    .on_click(cx.listener(|this, _, _, cx| this.remove_queued(cx))),
+                Some(
+                    Button::new("queued-remove", "Remove")
+                        .size(Size::Small)
+                        .variant(Variant::Ghost)
+                        .disabled(current)
+                        .on_click(cx.listener(|this, _, _, cx| this.remove_queued(cx)))
+                        .into_any_element(),
+                ),
             ))
             .child(if queued.rows.is_empty() {
                 muted(theme, "This script has no inputs.").into_any_element()
             } else {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
+                v_flex()
+                    .gap(px(8.0))
                     .children(queued.rows.iter().map(|(label, value)| {
-                        div()
-                            .flex()
-                            .gap(px(12.0))
-                            .text_size(TEXT_BODY)
-                            .line_height(LINE_BODY)
-                            .child(
-                                div()
-                                    .w(px(140.0))
-                                    .flex_none()
-                                    .truncate()
-                                    .text_color(theme.text_secondary)
-                                    .child(label.clone()),
-                            )
-                            .child(div().flex_1().min_w_0().child(value.clone()))
+                        row(label.clone(), true, div().truncate().child(value.clone()))
                     }))
                     .into_any_element()
             })
             .into_any_element()
     }
 
-    fn queue_list(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn queue_list(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let queue = self.queue();
         if queue.is_empty() {
-            return div()
-                .h(PANE_HEIGHT)
-                .p(px(12.0))
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
-                .text_color(theme.text_secondary)
+            return empty_frame(theme)
                 .child("Nothing queued. Pick a script in Library and choose Add to queue.")
                 .into_any_element();
         }
         let running = self.queue_running();
-        let rows: Rc<[(SharedString, SharedString)]> = queue
-            .iter()
-            .map(|queued| (queued.name.clone(), queued.summary.clone()))
-            .collect();
+        let accent = theme.accent_text;
+        let names: Rc<[SharedString]> = queue.iter().map(|queued| queued.name.clone()).collect();
         let this = cx.entity().downgrade();
         let that = this.clone();
-        List::new("queue", "Queue", rows.len(), move |index| {
-            let (name, detail) = &rows[index];
-            let mut item = ListItem::new(name.clone());
-            if !detail.is_empty() {
-                item = item.description(detail.clone());
-            }
+        let list = List::new("queue", "Queue", names.len(), move |index| {
+            let item = ListItem::new(names[index].clone());
             if running && index == 0 {
-                item = item.end_slot(
-                    h_flex()
-                        .gap(px(6.0))
-                        .child(StatusDot::new("queue-running", Activity::Running))
-                        .child("Running"),
-                );
+                item.end_slot(div().text_color(accent).child("Running"))
+            } else {
+                item
             }
-            item
         })
         .selected(Some(self.queued))
-        .height(PANE_HEIGHT)
+        .fill()
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| {
                 this.queued = index;
@@ -1464,32 +1689,12 @@ impl Picker {
         .on_reorder(move |from, to, _, cx| {
             let _ = that.update(cx, |this, cx| this.move_queued(from, to, cx));
         })
-        .pin_first(usize::from(running))
-        .into_any_element()
+        .pin_first(usize::from(running));
+        v_flex().size_full().child(list).into_any_element()
     }
 
-    fn library(&self, theme: &Theme, rows: Rc<[Row]>, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let scope = self.scope();
-        let filtered = self
-            .library
-            .as_ref()
-            .is_some_and(|library| !library.sources.is_empty());
-        let height = if filtered {
-            PANE_HEIGHT - CONTROL_MD - px(8.0)
-        } else {
-            PANE_HEIGHT
-        };
-        let note = || {
-            div()
-                .h(height)
-                .p(px(12.0))
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
-                .text_color(theme.text_secondary)
-        };
+    fn library(&self, theme: &Theme, rows: Rc<[Row]>, cx: &mut Context<Self>) -> AnyElement {
+        let note = || empty_frame(theme);
         let Some(library) = &self.library else {
             return note().into_any_element();
         };
@@ -1539,11 +1744,21 @@ impl Picker {
             note().child(text).into_any_element()
         } else {
             let sources: Rc<[Source]> = library.sources.clone().into();
+            let built_in: SharedString = library
+                .entries
+                .iter()
+                .filter(|entry| entry.source.is_none())
+                .count()
+                .to_string()
+                .into();
             let count = rows.len();
             let this = cx.entity().downgrade();
             let that = this.clone();
             VirtualList::new("scripts", "Scripts", count, move |index| {
                 match &rows[index] {
+                    Row::DefaultFolder => {
+                        ListItem::header("Default folder").end_slot(built_in.clone())
+                    }
                     Row::Source(source) => {
                         let source = &sources[*source];
                         ListItem::header(source.name.clone()).end_slot(source_meta(source))
@@ -1555,7 +1770,7 @@ impl Picker {
                 }
             })
             .selected(Some(self.selected.min(count - 1)))
-            .height(height)
+            .fill()
             .on_select(move |index, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.selected = index;
@@ -1572,35 +1787,7 @@ impl Picker {
             })
             .into_any_element()
         };
-        if !filtered {
-            return list;
-        }
-        let mut options: Vec<SharedString> = vec!["All sources".into(), "My scripts".into()];
-        let mut filters = vec![None, Some(self.folder.clone())];
-        for source in &library.sources {
-            options.push(source.name.clone());
-            filters.push(Some(source.root.clone()));
-        }
-        let chosen = match scope {
-            Scope::All => 0,
-            Scope::BuiltIn => 1,
-            Scope::Source(index) => index + 2,
-        };
-        let this = cx.entity().downgrade();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .child(
-                Select::new("filter", "Show", options, Some(chosen))
-                    .width(LIBRARY_WIDTH)
-                    .on_select(move |index, _, cx| {
-                        let filter = filters[index].clone();
-                        let _ = this.update(cx, |this, cx| this.set_filter(filter, cx));
-                    }),
-            )
-            .child(list)
-            .into_any_element()
+        v_flex().size_full().child(list).into_any_element()
     }
 }
 
@@ -1623,42 +1810,91 @@ fn source_meta(source: &Source) -> SharedString {
     }
 }
 
-impl Render for Picker {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
+    if fits(path) {
+        return path.to_owned().into();
+    }
+    let segments: Vec<&str> = path.split('/').collect();
+    let head = match segments.as_slice() {
+        ["~" | "", _, ..] => 2,
+        _ => 1,
+    };
+    if segments.len() <= head + 1 {
+        return path.to_owned().into();
+    }
+    let start = segments[..head].join("/");
+    let last = segments.len() - 1;
+    let cut = |kept: usize| format!("{start}/…/{}", segments[segments.len() - kept..].join("/"));
+    if !fits(&cut(1)) {
+        return format!("…/{}", segments[last]).into();
+    }
+    let mut kept = 1;
+    while kept + 1 < segments.len() - head && fits(&cut(kept + 1)) {
+        kept += 1;
+    }
+    cut(kept).into()
+}
+
+fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedString {
+    let font = window.text_style().font();
+    fit_path(path, |text| {
+        let run = TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window
+            .text_system()
+            .shape_line(text.to_owned().into(), TEXT_SMALL, &[run], None)
+            .width
+            <= width
+    })
+}
+
+impl Render for ScriptsWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let tab = self.tab(cx);
+        let has_tab = self.shown.is_some();
         let rows = self.rows(cx);
         let chosen = self.target(cx);
-        if self.open
-            && let Some(entry) = &chosen
-        {
+        if let Some(entry) = &chosen {
             self.load_form(&entry.path, cx);
         }
+        let chosen = self.detail_entry(chosen);
         self.queued = self.queued.min(self.queue().len().saturating_sub(1));
         let valid = chosen
             .as_ref()
             .is_some_and(|entry| self.launch_values(&entry.path, cx).is_some());
-        let running = tab.as_ref().is_some_and(|tab| tab.running);
+        let running = self.running(cx);
         let queued = self.queue().len();
         let queue_running = self.queue_running();
         let room_ready = !self.room_pending;
-        let status: SharedString = tab
-            .as_ref()
-            .filter(|tab| tab.running)
-            .and_then(|tab| tab.status.clone())
-            .unwrap_or_else(|| "Nothing running".into());
-        let search = div()
-            .w(SEARCH_WIDTH)
-            .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                let by = match event.keystroke.key.as_str() {
-                    "up" => -1,
-                    "down" => 1,
-                    _ => return,
-                };
-                this.step(by, cx);
-                cx.stop_propagation();
-            }))
-            .child(self.search.clone());
+        let (status, status_color) = self.status(&theme, cx);
+        let header = shown_tab::header(
+            "Scripts",
+            &self.client,
+            self.shown.as_ref(),
+            self.tab,
+            Self::retarget,
+            window,
+            cx,
+        )
+        .child(
+            div()
+                .id("script-status")
+                .role(gpui::Role::Status)
+                .aria_label(status.clone())
+                .flex_none()
+                .max_w(px(360.0))
+                .pr(PADDING)
+                .truncate()
+                .text_size(TEXT_SMALL)
+                .text_color(status_color)
+                .child(status),
+        );
         let this = cx.entity().downgrade();
         let panes = ToggleGroup::new(
             "pane",
@@ -1685,82 +1921,154 @@ impl Render for Picker {
             };
             let _ = this.update(cx, |this, cx| this.set_pane(pane, cx));
         });
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
+        let library = self.pane == Pane::Library;
+        let search = div()
+            .w(SEARCH_WIDTH)
+            .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                let by = match event.keystroke.key.as_str() {
+                    "up" => -1,
+                    "down" => 1,
+                    _ => return,
+                };
+                this.step(by, cx);
+                cx.stop_propagation();
+            }))
+            .child(self.search.clone());
+        let toolbar = h_flex()
+            .flex_none()
             .gap(px(12.0))
+            .px(PADDING)
+            .pt(px(14.0))
             .child(div().w(PANES_WIDTH).child(panes))
-            .when(self.pane == Pane::Library, |header| header.child(search));
+            .child(div().flex_1())
+            .when(library, |toolbar| {
+                toolbar.child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .children(self.filter(&theme, cx))
+                        .child(search),
+                )
+            });
+        let detail_width = window.viewport_size().width - PADDING * 2.0 - LIST_WIDTH - GAP;
         let (list, detail) = match self.pane {
             Pane::Library => (
                 self.library(&theme, rows, cx),
-                self.script_detail(&theme, chosen.as_ref(), tab.is_some() && valid, cx),
+                self.script_detail(&theme, chosen.as_ref(), detail_width, window, cx),
             ),
             Pane::Queue => (self.queue_list(&theme, cx), self.queued_detail(&theme, cx)),
         };
-        let body = div()
-            .flex()
-            .gap(px(20.0))
-            .child(div().flex_none().w(LIBRARY_WIDTH).child(list))
+        let body = h_flex()
+            .flex_1()
+            .min_h_0()
+            .items_start()
+            .gap(GAP)
+            .p(PADDING)
+            .child(v_flex().flex_none().w(LIST_WIDTH).h_full().child(list))
             .child(
                 div()
-                    .id("detail")
+                    .relative()
                     .flex_1()
                     .min_w_0()
-                    .h(PANE_HEIGHT)
-                    .overflow_y_scroll()
-                    .child(detail),
+                    .h_full()
+                    .ml(-RING_ROOM)
+                    .mr(-Scrollbar::GUTTER)
+                    .child(
+                        div()
+                            .id("detail")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.detail_scroll)
+                            .pl(RING_ROOM)
+                            .pr(Scrollbar::GUTTER)
+                            .pb(RING_ROOM)
+                            .child(detail),
+                    )
+                    .child(Scrollbar::new(
+                        "detail-scrollbar",
+                        self.detail_scroll.clone(),
+                    )),
             );
-        let close = cx.listener(|this, _: &(), _, cx| this.close(cx));
-        let dialog = Dialog::new("scripts", self.open, "Scripts")
-            .width(px(660.0))
-            .description(status)
-            .header_end_slot(header)
-            .body(body);
-        let dialog = match self.pane {
-            Pane::Library => dialog
-                .footer_start_slot(
-                    h_flex()
-                        .gap(px(6.0))
-                        .child(self.options(cx))
-                        .child(self.sources(cx))
-                        .child(
-                            Button::new("choose-file", "Choose file…")
-                                .variant(Variant::Ghost)
-                                .disabled(tab.is_none() || running)
-                                .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
-                        ),
+        let footer = h_flex()
+            .flex_none()
+            .gap(px(6.0))
+            .px(PADDING)
+            .py(px(10.0))
+            .border_t_1()
+            .border_color(theme.hairline)
+            .child(self.options_popover(cx));
+        let footer = match self.pane {
+            Pane::Library => footer
+                .child(self.sources(cx))
+                .child(
+                    Button::new("choose-file", "Choose file…")
+                        .variant(Variant::Ghost)
+                        .disabled(!has_tab || running)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
                 )
-                .action(if running {
+                .child(div().flex_1())
+                .child(
+                    Button::new("queue", "Add to queue")
+                        .end_slot(key_hint("⌘⏎"))
+                        .disabled(!has_tab || !valid)
+                        .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
+                )
+                .child(div().flex_none().w(RUN_WIDTH).child(if running {
                     Button::new("stop", "Stop")
                         .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                 } else {
                     Button::new("run", "Run")
+                        .end_slot(key_hint("⏎"))
                         .variant(Variant::Primary)
-                        .disabled(tab.is_none() || chosen.is_none() || !valid || !room_ready)
+                        .disabled(!has_tab || !valid || !room_ready)
                         .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
-                }),
-            Pane::Queue => dialog
-                .footer_start_slot(
-                    h_flex().gap(px(6.0)).child(self.options(cx)).child(
-                        Button::new("queue-clear", "Clear queue")
-                            .variant(Variant::Ghost)
-                            .disabled(queued == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.clear_queue(cx))),
-                    ),
+                })),
+            Pane::Queue => footer
+                .child(
+                    Button::new("queue-clear", "Clear queue")
+                        .variant(Variant::Ghost)
+                        .disabled(queued == 0)
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_queue(cx))),
                 )
-                .action(if queue_running {
-                    Button::new("queue-stop", "Stop queue")
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
-                } else {
-                    Button::new("queue-start", "Start queue")
-                        .variant(Variant::Primary)
-                        .disabled(tab.is_none() || queued == 0 || !room_ready)
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
-                }),
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .flex_none()
+                        .w(QUEUE_RUN_WIDTH)
+                        .child(if queue_running {
+                            Button::new("queue-stop", "Stop queue")
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
+                        } else {
+                            Button::new("queue-start", "Start queue")
+                                .variant(Variant::Primary)
+                                .disabled(!has_tab || queued == 0 || !room_ready)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
+                        }),
+                ),
         };
-        dialog.on_close(move |window, cx| close(&(), window, cx))
+        v_flex()
+            .size_full()
+            .bg(theme.base)
+            .text_size(TEXT_BODY)
+            .text_color(theme.text)
+            .key_context(FOCUS_SCOPE)
+            .id("scripts")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let keystroke = &event.keystroke;
+                if this.pane == Pane::Library
+                    && keystroke.key == "enter"
+                    && keystroke.modifiers.platform
+                {
+                    this.add_to_queue(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(mira_ui::nav::pointer_probe())
+            .child(header)
+            .child(toolbar)
+            .child(body)
+            .child(footer)
     }
 }
 
@@ -1768,79 +2076,49 @@ fn heading(
     theme: &Theme,
     name: SharedString,
     detail: SharedString,
-    action: impl IntoElement,
+    action: Option<AnyElement>,
 ) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .min_w_0()
+    h_flex()
+        .items_start()
+        .gap(px(8.0))
         .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
+            v_flex()
+                .flex_1()
+                .min_w_0()
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
                         .truncate()
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(name),
                 )
-                .child(action),
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(TEXT_SMALL)
+                        .line_height(LINE_SMALL)
+                        .text_color(theme.text_tertiary)
+                        .child(detail),
+                ),
         )
-        .child(
-            div()
-                .truncate()
-                .text_ellipsis_start()
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
-                .text_color(theme.text_secondary)
-                .child(detail),
-        )
+        .children(action)
 }
 
-fn option_text(theme: &Theme, label: &'static str, description: &'static str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .child(
-            div()
-                .text_size(TEXT_BODY)
-                .line_height(LINE_BODY)
-                .child(label),
-        )
-        .child(
-            div()
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
-                .text_color(theme.text_tertiary)
-                .child(description),
-        )
-}
-
-fn option_row(
-    theme: &Theme,
-    label: &'static str,
-    description: &'static str,
-    control: impl IntoElement,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .items_start()
-        .gap(px(16.0))
-        .child(option_text(theme, label, description))
-        .child(div().flex_none().pt(px(1.0)).child(control))
-}
-
-fn error_text(theme: &Theme, text: SharedString) -> impl IntoElement {
-    div()
+fn empty_frame(theme: &Theme) -> gpui::Div {
+    v_flex()
+        .size_full()
+        .gap(px(10.0))
+        .p(px(12.0))
+        .rounded(theme.radius.panel)
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.hairline)
         .text_size(TEXT_SMALL)
         .line_height(LINE_SMALL)
-        .text_color(theme.danger_text)
-        .child(text)
+        .text_color(theme.text_secondary)
+}
+
+fn key_hint(keys: &'static str) -> impl IntoElement {
+    div().text_size(TEXT_SMALL).opacity(0.55).child(keys)
 }
 
 fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
@@ -1973,6 +2251,7 @@ mod tests {
             library_rows(&library, query, scope)
                 .iter()
                 .map(|row| match row {
+                    Row::DefaultFolder => "[Default folder]".to_owned(),
                     Row::Source(index) => format!("[{}]", library.sources[*index].name),
                     Row::Script(entry) => entry.name.to_string(),
                 })
@@ -1995,9 +2274,39 @@ mod tests {
         assert_eq!(names("dailies"), ["[dailies]", "spin.ts"]);
         assert_eq!(names("weekly"), ["[community]", "daily.ts"]);
         assert!(names("zzz").is_empty());
-        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "hunt.ts"]);
-        assert_eq!(names_in("", Scope::Source(0)), ["daily.ts", "dage.ts"]);
-        assert_eq!(names_in("daily", Scope::Source(0)), ["daily.ts"]);
+        assert_eq!(
+            names_in("", Scope::BuiltIn),
+            ["[Default folder]", "daily.ts", "hunt.ts"]
+        );
+        assert_eq!(
+            names_in("", Scope::Source(0)),
+            ["[community]", "daily.ts", "dage.ts"]
+        );
+        assert_eq!(
+            names_in("daily", Scope::Source(0)),
+            ["[community]", "daily.ts"]
+        );
         assert!(names_in("hunt", Scope::Source(1)).is_empty());
+    }
+
+    #[test]
+    fn long_paths_drop_whole_folders_from_the_middle() {
+        let fits = |limit: usize| move |text: &str| text.chars().count() <= limit;
+        let path = "~/Documents/Mira/packages/story-scripts/scripts/merge/yulgar-merge.ts";
+        assert_eq!(fit_path(path, fits(100)), path);
+        assert_eq!(
+            fit_path(path, fits(50)),
+            "~/Documents/…/scripts/merge/yulgar-merge.ts"
+        );
+        assert_eq!(fit_path(path, fits(30)), "~/Documents/…/yulgar-merge.ts");
+        assert_eq!(fit_path(path, fits(20)), "…/yulgar-merge.ts");
+        assert_eq!(
+            fit_path("/Volumes/aqw/community/bosses/dage.ts", fits(30)),
+            "/Volumes/…/bosses/dage.ts"
+        );
+        assert_eq!(
+            fit_path("~/Documents/dage.ts", fits(5)),
+            "~/Documents/dage.ts"
+        );
     }
 }

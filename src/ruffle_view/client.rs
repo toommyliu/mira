@@ -11,10 +11,8 @@ use gpui::{
 };
 
 use super::{
-    Changed, Details, Glance, Identified, RuffleView, Summary, Target,
-    manager::OpenAccounts,
-    script::CloseTab,
-    scripts::{OpenScripts, Picker},
+    Changed, Details, Glance, Identified, RuffleView, Summary, Target, manager::OpenAccounts,
+    script::CloseTab, scripts::OpenScripts,
 };
 use mira_ui::{
     ActiveTheme as _, Theme, Tone,
@@ -32,7 +30,6 @@ use crate::{
     army::Armies,
     ruffle::{Inbox, Msg, extras},
     script_inputs,
-    scripting::Launch,
 };
 
 actions!(
@@ -110,7 +107,6 @@ pub struct Client {
     tab_scroll: ScrollHandle,
     shortcut_hints: bool,
     shortcut_hint_delay: Option<Task<()>>,
-    scripts: Option<Entity<Picker>>,
     _activation: Subscription,
 }
 
@@ -123,14 +119,6 @@ struct Session {
     _changes: Subscription,
     _identified: Subscription,
     _close: Subscription,
-}
-
-pub(super) struct Tab {
-    pub(super) number: usize,
-    pub(super) running: bool,
-    pub(super) status: Option<SharedString>,
-    pub(super) script: Option<PathBuf>,
-    pub(super) account: Option<AccountId>,
 }
 
 impl Session {
@@ -243,7 +231,6 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
-            scripts: None,
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if !window.is_window_active() {
                     this.hide_shortcut_hints(cx);
@@ -271,7 +258,6 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
-            scripts: None,
             _activation: Subscription::new(|| {}),
         })
     }
@@ -442,59 +428,6 @@ impl Client {
             .iter()
             .map(|session| session.view.clone())
             .collect()
-    }
-
-    pub(super) fn tabs(&self, cx: &App) -> Vec<Tab> {
-        self.sessions
-            .iter()
-            .map(|session| {
-                let view = session.view.read(cx);
-                let script = &view.script;
-                Tab {
-                    number: session.number,
-                    running: script.running(),
-                    status: script.status().map(Into::into),
-                    script: script.entry().cloned(),
-                    account: view.settings_account.clone(),
-                }
-            })
-            .collect()
-    }
-
-    pub(crate) fn open_scripts(
-        &mut self,
-        folder: PathBuf,
-        types: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(session) = self.sessions.get(self.active) else {
-            return;
-        };
-        let tab = session.number;
-        let account = session.view.read(cx).settings_account.clone();
-        let client = cx.entity();
-        let picker = self
-            .scripts
-            .get_or_insert_with(|| {
-                cx.new(|cx| Picker::new(&client, folder, types, tab, window, cx))
-            })
-            .clone();
-        picker.update(cx, |picker, cx| picker.show(tab, account.as_ref(), cx));
-    }
-
-    pub(super) fn start_script_in(&mut self, tab: usize, script: Launch, cx: &mut Context<Self>) {
-        if let Some(session) = self.sessions.iter().find(|session| session.number == tab) {
-            session
-                .view
-                .update(cx, |view, cx| view.start_script(script, cx));
-        }
-    }
-
-    pub(super) fn stop_script_in(&mut self, tab: usize, cx: &mut Context<Self>) {
-        if let Some(session) = self.sessions.iter().find(|session| session.number == tab) {
-            session.view.update(cx, |view, cx| view.cancel_script(cx));
-        }
     }
 
     pub(crate) fn show_account(
@@ -1062,7 +995,6 @@ impl Render for Client {
                     this.select(index, window, cx)
                 }
             }))
-            .children(self.scripts.clone())
             .when(self.sidebar == Sidebar::Full, |root| {
                 root.child(self.sidebar(window, cx))
             })

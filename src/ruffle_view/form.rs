@@ -63,15 +63,15 @@ pub(super) fn section(
         .child(note(subtitle, true, theme))
 }
 
-pub(super) fn row_label(label: &'static str, enabled: bool) -> Div {
+pub(super) fn row_label(label: impl Into<SharedString>, enabled: bool) -> Div {
     div()
         .min_w_0()
         .truncate()
         .when(!enabled, |label| label.opacity(DISABLED_OPACITY))
-        .child(label)
+        .child(label.into())
 }
 
-pub(super) fn row(label: &'static str, enabled: bool, control: impl IntoElement) -> Div {
+pub(super) fn row(label: impl Into<SharedString>, enabled: bool, control: impl IntoElement) -> Div {
     h_flex()
         .gap(px(12.0))
         .min_h(ROW)
@@ -79,7 +79,7 @@ pub(super) fn row(label: &'static str, enabled: bool, control: impl IntoElement)
         .child(div().flex_1().min_w_0().child(control))
 }
 
-pub(super) fn switch_row(label: &'static str, enabled: bool, switch: Switch) -> Div {
+pub(super) fn switch_row(label: impl Into<SharedString>, enabled: bool, switch: Switch) -> Div {
     h_flex()
         .justify_between()
         .gap(px(12.0))

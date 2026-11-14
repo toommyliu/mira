@@ -62,7 +62,7 @@ pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
-pub(crate) use scripts::OpenScripts;
+pub(crate) use scripts::{OpenScripts, open as open_scripts};
 pub(crate) use shown_tab::Target;
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);

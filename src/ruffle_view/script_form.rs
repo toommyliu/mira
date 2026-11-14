@@ -180,7 +180,6 @@ pub(super) struct Queued {
     pub(super) name: SharedString,
     #[expect(dead_code, reason = "the queue runner starts queued launches")]
     pub(super) launch: Launch,
-    pub(super) summary: SharedString,
     pub(super) rows: Vec<(SharedString, SharedString)>,
 }
 
@@ -200,26 +199,7 @@ impl Queued {
                 Some((field.label.clone().into(), shown(field, value)))
             })
             .collect();
-        let summary = definition
-            .map(Definition::fields)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|field| match (&field.kind, values.get(&field.key)?) {
-                (Kind::Boolean { .. }, Json::Bool(true)) => Some(field.label.clone()),
-                (Kind::Boolean { .. }, _) => None,
-                (_, Json::String(text)) if text.trim().is_empty() => None,
-                (_, Json::Array(items)) if items.is_empty() => None,
-                (_, value) => Some(shown(field, value).trim().to_owned()),
-            })
-            .collect::<Vec<_>>()
-            .join(" · ")
-            .into();
-        Self {
-            name,
-            launch,
-            summary,
-            rows,
-        }
+        Self { name, launch, rows }
     }
 }
 
@@ -410,7 +390,6 @@ mod tests {
             Some(&definition),
             &values,
         );
-        assert_eq!(queued.summary, "Frogzard · 12 · 0.5 · Potions · All");
         assert_eq!(
             queued.rows,
             [

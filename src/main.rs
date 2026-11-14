@@ -107,13 +107,12 @@ fn main() -> anyhow::Result<()> {
                 cx.quit();
                 return;
             };
+            let scripts_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
+                let client = scripts_client.clone();
                 let (folder, types) = (scripts.clone(), types.clone());
                 cx.defer(move |cx| {
-                    let _ = main.update(cx, |client, window, cx| {
-                        window.activate_window();
-                        client.open_scripts(folder, types, window, cx);
-                    });
+                    ruffle_view::open_scripts(client, folder, types, ruffle_view::Target::Selected, cx)
                 });
             });
             let environment_client = client.clone();
