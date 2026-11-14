@@ -7,7 +7,7 @@ use std::{
 
 use gpui::{App, Global};
 
-use crate::scripting::{Launch, Supplied, Values};
+use crate::scripting::{Supplied, Values};
 
 pub(crate) struct Store {
     path: PathBuf,
@@ -106,10 +106,16 @@ pub(crate) fn saved(script: &Path, cx: &App) -> Supplied {
     cx.global::<Store>().saved(script)
 }
 
-pub(crate) fn launch(script: PathBuf, cx: &App) -> Launch {
-    Launch {
-        inputs: saved(&script, cx),
-        entry: script,
+pub(crate) fn values(script: &Path, cx: &App) -> anyhow::Result<Values> {
+    match saved(script, cx) {
+        Supplied::Values(values) => Ok(values),
+        Supplied::StoreUnreadable => Err(anyhow::anyhow!(
+            "couldn't queue {}: saved script inputs couldn't be read. Open Scripts to recover them.",
+            script.file_name().map_or_else(
+                || script.display().to_string(),
+                |name| name.display().to_string()
+            )
+        )),
     }
 }
 

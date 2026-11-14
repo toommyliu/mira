@@ -5,11 +5,11 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 
 import { call } from "./call.ts";
-import { exited, exiting, failed, stopping } from "./run.ts";
+import { exited, exiting, failed, stopping, type ExitRequest } from "./run.ts";
 
 type Settle = {
   (outcome: "completed" | "stopped"): void;
-  (outcome: "exited", closeTab: boolean): void;
+  (outcome: "exited", request: ExitRequest): void;
   (outcome: "failed", message: string, stack?: string): void;
 };
 
@@ -45,7 +45,7 @@ export function start(exported: unknown, settle: Settle): () => void {
     stopping.abort();
     if (Exit.isSuccess(exit)) {
       const request = exiting.request;
-      return request === undefined ? settle("completed") : settle("exited", request.closeTab);
+      return request === undefined ? settle("completed") : settle("exited", request);
     }
     if (Cause.hasInterruptsOnly(exit.cause)) return settle("stopped");
     const error = Cause.squash(exit.cause);

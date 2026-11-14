@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs, io, iter,
     path::{Path, PathBuf},
     rc::Rc,
@@ -7,12 +7,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle,
-    Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, PathPromptOptions, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TextRun, TitlebarOptions,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _,
+    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
+    PathPromptOptions, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, TextRun, TitlebarOptions, WeakEntity, Window, WindowBounds,
+    WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone, h_flex,
@@ -32,9 +31,11 @@ use super::{
     client::CloseSession,
     form::{LABEL_WIDTH, note, row, row_label, switch_row},
     package_dialogs::{PackageDialogs, PackageEvent},
+    queue::{self, EntryId, Queue},
+    script::failure,
     script_form::{
-        Draft, FieldDraft, Queued, ROOMS, SPECIFIC_ROOM, TabState, drafts, error, room_choice,
-        room_note, starting, values,
+        Draft, FieldDraft, ROOMS, SPECIFIC_ROOM, drafts, error, room_choice, room_note, rows,
+        starting, values,
     },
     shown_tab::{self, ShownTab, Target},
 };
@@ -43,7 +44,7 @@ use crate::{
     accounts::AccountId,
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
-    scripting::{self, Definition, ExtractError, Kind, Launch, Supplied, Values},
+    scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
     settings,
 };
 
@@ -414,16 +415,21 @@ pub(super) struct ScriptsWindow {
     pane: Pane,
     queued: usize,
     chosen: Option<PathBuf>,
-    forms: HashMap<PathBuf, Form>,
+    forms: HashMap<FormKey, Form>,
     generation: u64,
-    loading: Option<(PathBuf, Task<()>)>,
+    loading: HashMap<FormKey, Task<()>>,
     waiting: Option<(PathBuf, Instant, Task<()>)>,
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
-    tabs: HashMap<EntityId, TabState>,
     package_dialogs: Entity<PackageDialogs>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 5],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum FormKey {
+    Script(PathBuf),
+    Entry(EntryId),
 }
 
 struct Form {
@@ -519,11 +525,10 @@ impl ScriptsWindow {
             chosen: None,
             forms: HashMap::new(),
             generation: 0,
-            loading: None,
+            loading: HashMap::new(),
             waiting: None,
             displayed: None,
             detail_scroll: ScrollHandle::new(),
-            tabs: HashMap::new(),
             package_dialogs,
             _view_changes: None,
             _subscriptions: subscriptions,
@@ -577,10 +582,6 @@ impl ScriptsWindow {
 
     fn view(&self) -> Option<Entity<RuffleView>> {
         self.shown.as_ref()?.view.upgrade()
-    }
-
-    fn tab_id(&self) -> Option<EntityId> {
-        self.shown.as_ref().map(|shown| shown.id)
     }
 
     fn running(&self, cx: &App) -> bool {
@@ -743,15 +744,19 @@ impl ScriptsWindow {
         if self.running(cx) || self.room_pending {
             return;
         }
-        let (Some(view), Some((launch, _))) = (self.view(), self.launch(cx)) else {
+        let (Some(view), Some((entry, values))) = (self.view(), self.launch(cx)) else {
             return;
+        };
+        let launch = Launch {
+            entry,
+            inputs: Supplied::Values(values),
         };
         view.update(cx, |view, cx| view.start_script(launch, cx));
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.view() {
-            view.update(cx, |view, cx| view.cancel_script(cx));
+            view.update(cx, |view, cx| view.stop_script(cx));
         }
     }
 
@@ -1142,15 +1147,12 @@ impl ScriptsWindow {
         }
     }
 
-    fn load_form(&mut self, path: &Path, cx: &mut Context<Self>) {
+    fn load_form(&mut self, key: FormKey, path: &Path, cx: &mut Context<Self>) {
         let current = self
             .forms
-            .get(path)
+            .get(&key)
             .is_some_and(|form| form.generation == self.generation);
-        let pending = self
-            .loading
-            .as_ref()
-            .is_some_and(|(loading, _)| loading == path);
+        let pending = self.loading.contains_key(&key);
         if current || pending {
             return;
         }
@@ -1168,32 +1170,36 @@ impl ScriptsWindow {
                 ExtractError::Inputs(message) => ("This script's inputs are invalid", message),
             })
         });
-        let path = path.to_owned();
         let generation = self.generation;
         let task = cx.spawn({
-            let path = path.clone();
+            let key = key.clone();
             async move |this, cx| {
                 let read = read.await;
                 let _ = this.update(cx, |this, cx| {
-                    this.loading = None;
-                    this.loaded(path, generation, read, cx);
+                    this.loading.remove(&key);
+                    this.loaded(key, generation, read, cx);
                     cx.notify();
                 });
             }
         });
-        if !self.forms.contains_key(&path) {
+        if let FormKey::Script(path) = &key
+            && !self.forms.contains_key(&key)
+        {
             let wake = cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(PATIENCE).await;
                 let _ = this.update(cx, |_, cx| cx.notify());
             });
             self.waiting = Some((path.clone(), Instant::now(), wake));
         }
-        self.loading = Some((path, task));
+        self.loading.insert(key, task);
     }
 
     fn detail_entry(&mut self, target: Option<Entry>) -> Option<Entry> {
         let target = target?;
-        if self.forms.contains_key(&target.path) {
+        if self
+            .forms
+            .contains_key(&FormKey::Script(target.path.clone()))
+        {
             if self.displayed.as_ref().map(|shown| &shown.path) != Some(&target.path) {
                 self.detail_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 self.displayed = Some(target.clone());
@@ -1205,7 +1211,12 @@ impl ScriptsWindow {
             .as_ref()
             .is_some_and(|(path, since, _)| *path == target.path && since.elapsed() < PATIENCE);
         match &self.displayed {
-            Some(previous) if patient && self.forms.contains_key(&previous.path) => {
+            Some(previous)
+                if patient
+                    && self
+                        .forms
+                        .contains_key(&FormKey::Script(previous.path.clone())) =>
+            {
                 Some(previous.clone())
             }
             _ => Some(target),
@@ -1214,12 +1225,12 @@ impl ScriptsWindow {
 
     fn loaded(
         &mut self,
-        path: PathBuf,
+        key: FormKey,
         generation: u64,
         read: Result<Option<Definition>, (&'static str, String)>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(form) = self.forms.get_mut(&path)
+        if let Some(form) = self.forms.get_mut(&key)
             && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
             && definition == read
         {
@@ -1233,9 +1244,12 @@ impl ScriptsWindow {
             },
             Ok(None) => FormState::Plain,
             Ok(Some(definition)) => {
-                let saved = match script_inputs::saved(&path, cx) {
-                    Supplied::Values(values) => values,
-                    Supplied::StoreUnreadable => Values::new(),
+                let saved = match &key {
+                    FormKey::Script(path) => match script_inputs::saved(path, cx) {
+                        Supplied::Values(values) => values,
+                        Supplied::StoreUnreadable => Values::new(),
+                    },
+                    FormKey::Entry(id) => self.entry_values(*id, cx).unwrap_or_default(),
                 };
                 let drafts = drafts(&definition, &saved);
                 let mut texts = Vec::new();
@@ -1254,13 +1268,13 @@ impl ScriptsWindow {
                         input.set_invalid(invalid, cx);
                         input
                     });
-                    let path = path.clone();
+                    let key = key.clone();
                     changes.push(cx.subscribe(
                         &input,
                         move |this, input, event: &InputEvent, cx| {
                             if matches!(event, InputEvent::Changed) {
                                 let text = input.read(cx).text().to_owned().into();
-                                this.set_draft(&path, index, Draft::Text(text), cx);
+                                this.set_draft(&key, index, Draft::Text(text), cx);
                             }
                         },
                     ));
@@ -1274,10 +1288,22 @@ impl ScriptsWindow {
                 }
             }
         };
-        self.forms.insert(path, Form { generation, state });
+        let checked = match (&key, &state) {
+            (
+                FormKey::Entry(_),
+                FormState::Fields {
+                    definition, drafts, ..
+                },
+            ) => Some(values(definition, drafts)),
+            _ => None,
+        };
+        self.forms.insert(key.clone(), Form { generation, state });
+        if let Some(edited) = checked {
+            self.store_entry(&key, edited, cx);
+        }
     }
 
-    fn set_draft(&mut self, path: &Path, index: usize, draft: Draft, cx: &mut Context<Self>) {
+    fn set_draft(&mut self, key: &FormKey, index: usize, draft: Draft, cx: &mut Context<Self>) {
         let Some(Form {
             state:
                 FormState::Fields {
@@ -1287,7 +1313,7 @@ impl ScriptsWindow {
                     ..
                 },
             ..
-        }) = self.forms.get_mut(path)
+        }) = self.forms.get_mut(key)
         else {
             return;
         };
@@ -1300,10 +1326,26 @@ impl ScriptsWindow {
             let invalid = error(field, slot).is_some();
             input.update(cx, |input, cx| input.set_invalid(invalid, cx));
         }
+        let edited = values(definition, drafts);
+        self.store_entry(key, edited, cx);
         cx.notify();
     }
 
-    fn reset_form(&mut self, path: &Path, cx: &mut Context<Self>) {
+    fn store_entry(&mut self, key: &FormKey, edited: Option<Values>, cx: &mut Context<Self>) {
+        if let FormKey::Entry(id) = key {
+            let id = *id;
+            self.edit_queue(cx, |queue| queue.set_values(id, edited));
+        }
+    }
+
+    fn entry_values(&self, id: EntryId, cx: &App) -> Option<Values> {
+        let view = self.view()?;
+        let queue = &view.read(cx).queue;
+        let entry = queue.entries().iter().find(|entry| entry.id == id)?;
+        entry.values.clone()
+    }
+
+    fn reset_form(&mut self, key: &FormKey, cx: &mut Context<Self>) {
         let Some(Form {
             state:
                 FormState::Fields {
@@ -1313,11 +1355,12 @@ impl ScriptsWindow {
                     ..
                 },
             ..
-        }) = self.forms.get_mut(path)
+        }) = self.forms.get_mut(key)
         else {
             return;
         };
-        for ((field, draft), input) in definition.fields().iter().zip(drafts).zip(texts) {
+        for ((field, draft), input) in definition.fields().iter().zip(drafts.iter_mut()).zip(texts)
+        {
             *draft = FieldDraft {
                 draft: starting(field),
                 stale: None,
@@ -1331,11 +1374,13 @@ impl ScriptsWindow {
                 });
             }
         }
+        let edited = values(definition, drafts);
+        self.store_entry(key, edited, cx);
         cx.notify();
     }
 
     fn launch_values(&self, path: &Path, cx: &App) -> Option<(Option<&Definition>, Values)> {
-        match &self.forms.get(path)?.state {
+        match &self.forms.get(&FormKey::Script(path.to_owned()))?.state {
             FormState::Broken { .. } => None,
             FormState::Plain => Some((None, Values::new())),
             FormState::Fields {
@@ -1349,91 +1394,77 @@ impl ScriptsWindow {
         }
     }
 
-    fn launch(&mut self, cx: &mut Context<Self>) -> Option<(Launch, Queued)> {
+    fn launch(&mut self, cx: &mut Context<Self>) -> Option<(PathBuf, Values)> {
         let entry = self.target(cx)?;
         let (definition, values) = self.launch_values(&entry.path, cx)?;
-        let launch = Launch {
-            entry: entry.path.clone(),
-            inputs: Supplied::Values(values.clone()),
-        };
-        let queued = Queued::new(entry.name, launch.clone(), definition, &values);
         if definition.is_some() {
-            script_inputs::save(&entry.path, values, cx);
+            script_inputs::save(&entry.path, values.clone(), cx);
         }
-        Some((launch, queued))
+        Some((entry.path, values))
     }
 
-    fn tab_state(&self) -> Option<&TabState> {
-        self.tabs.get(&self.tab_id()?)
+    fn entry_ready(&self, id: EntryId) -> bool {
+        match self.forms.get(&FormKey::Entry(id)).map(|form| &form.state) {
+            Some(FormState::Plain) => true,
+            Some(FormState::Fields {
+                definition, drafts, ..
+            }) => values(definition, drafts).is_some(),
+            Some(FormState::Broken { .. }) | None => false,
+        }
     }
 
-    fn tab_state_mut(&mut self) -> Option<&mut TabState> {
-        let id = self.tab_id()?;
-        Some(self.tabs.entry(id).or_default())
+    fn queue(&self, cx: &App) -> (Vec<queue::Entry>, bool) {
+        self.view().map_or_else(Default::default, |view| {
+            let queue = &view.read(cx).queue;
+            (queue.entries().to_vec(), queue.playing())
+        })
     }
 
-    fn queue(&self) -> &[Queued] {
-        self.tab_state()
-            .map_or(&[][..], |state| state.queue.as_slice())
+    fn queued_id(&self, index: usize, cx: &App) -> Option<EntryId> {
+        let view = self.view()?;
+        let entry = view.read(cx).queue.entries().get(index)?;
+        Some(entry.id)
     }
 
-    fn queue_running(&self) -> bool {
-        self.tab_state().is_some_and(|state| state.queue_running)
+    fn edit_queue(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Queue)) {
+        if let Some(view) = self.view() {
+            view.update(cx, |view, cx| view.edit_queue(cx, edit));
+        }
+        cx.notify();
     }
 
     fn add_to_queue(&mut self, cx: &mut Context<Self>) {
-        let Some((_, queued)) = self.launch(cx) else {
+        let Some((script, values)) = self.launch(cx) else {
             return;
         };
-        if let Some(state) = self.tab_state_mut() {
-            state.queue.push(queued);
-        }
-        cx.notify();
+        self.edit_queue(cx, |queue| {
+            queue.add(script, values);
+        });
     }
 
     fn move_queued(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
-        let running = self.queue_running();
-        let Some(state) = self.tab_state_mut() else {
+        let Some(id) = self.queued_id(from, cx) else {
             return;
         };
-        let queue = &mut state.queue;
-        if from >= queue.len() || to >= queue.len() || (running && (from == 0 || to == 0)) {
-            return;
+        self.edit_queue(cx, |queue| queue.move_entry(id, to));
+        if let Some(index) = self.queue(cx).0.iter().position(|entry| entry.id == id) {
+            self.queued = index;
         }
-        let moved = queue.remove(from);
-        queue.insert(to, moved);
-        self.queued = to;
-        cx.notify();
     }
 
     fn remove_queued(&mut self, cx: &mut Context<Self>) {
-        let index = self.queued;
-        let Some(state) = self.tab_state_mut() else {
-            return;
-        };
-        if index >= state.queue.len() {
-            return;
+        if let Some(id) = self.queued_id(self.queued, cx) {
+            self.edit_queue(cx, |queue| queue.remove(id));
         }
-        state.queue.remove(index);
-        state.queue_running &= !state.queue.is_empty();
-        let remaining = state.queue.len();
-        self.queued = index.min(remaining.saturating_sub(1));
-        cx.notify();
     }
 
-    fn clear_queue(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.tab_state_mut() else {
-            return;
-        };
-        state.queue.clear();
-        state.queue_running = false;
-        self.queued = 0;
-        cx.notify();
-    }
-
-    fn toggle_queue(&mut self, cx: &mut Context<Self>) {
-        if let Some(state) = self.tab_state_mut() {
-            state.queue_running = !state.queue_running && !state.queue.is_empty();
+    fn act_on_tab(
+        &mut self,
+        cx: &mut Context<Self>,
+        act: fn(&mut RuffleView, &mut Context<RuffleView>),
+    ) {
+        if let Some(view) = self.view() {
+            view.update(cx, act);
         }
         cx.notify();
     }
@@ -1553,8 +1584,8 @@ impl ScriptsWindow {
             .width(px(376.0))
     }
 
-    fn inputs(&self, theme: &Theme, path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        let Some(form) = self.forms.get(path) else {
+    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &mut Context<Self>) -> AnyElement {
+        let Some(form) = self.forms.get(key) else {
             return muted(theme, "Reading inputs…").into_any_element();
         };
         let (definition, drafts, texts) = match &form.state {
@@ -1574,7 +1605,8 @@ impl ScriptsWindow {
             } => (definition, drafts, texts),
         };
         let this = cx.entity().downgrade();
-        let unreadable = script_inputs::unreadable(cx).then(|| {
+        let saved = matches!(key, FormKey::Script(_));
+        let unreadable = (saved && script_inputs::unreadable(cx)).then(|| {
             let this = this.clone();
             Alert::new(
                 "inputs-unreadable",
@@ -1593,19 +1625,23 @@ impl ScriptsWindow {
         });
         let stale = drafts.iter().any(|draft| draft.stale.is_some()).then(|| {
             let this = this.clone();
-            let path = path.to_owned();
+            let key = key.clone();
             h_flex()
                 .justify_between()
                 .gap(px(12.0))
                 .child(muted(
                     theme,
-                    "Some saved values don't fit this script anymore.",
+                    if saved {
+                        "Some saved values don't fit this script anymore."
+                    } else {
+                        "Some queued values don't fit this script anymore."
+                    },
                 ))
                 .child(
                     Button::new("inputs-reset", "Reset")
                         .size(Size::Small)
                         .on_click(move |_, _, cx| {
-                            let _ = this.update(cx, |this, cx| this.reset_form(&path, cx));
+                            let _ = this.update(cx, |this, cx| this.reset_form(&key, cx));
                         }),
                 )
         });
@@ -1618,10 +1654,10 @@ impl ScriptsWindow {
                 .map(|(index, (field, draft))| {
                     let set = {
                         let this = this.clone();
-                        let path = path.to_owned();
+                        let key = key.clone();
                         move |draft: Draft, cx: &mut App| {
                             let _ =
-                                this.update(cx, |this, cx| this.set_draft(&path, index, draft, cx));
+                                this.update(cx, |this, cx| this.set_draft(&key, index, draft, cx));
                         }
                     };
                     let label = SharedString::from(field.label.clone());
@@ -1731,68 +1767,134 @@ impl ScriptsWindow {
         v_flex()
             .gap(px(14.0))
             .child(heading(theme, entry.name.clone(), path, None))
-            .child(self.inputs(theme, &entry.path, cx))
+            .child(self.inputs(theme, &FormKey::Script(entry.path.clone()), cx))
             .into_any_element()
     }
 
-    fn queued_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let queue = self.queue();
+    fn queued_detail(
+        &self,
+        theme: &Theme,
+        queue: &[queue::Entry],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(queued) = queue.get(self.queued) else {
             return div().into_any_element();
         };
-        let index = self.queued;
-        let current = self.queue_running() && index == 0;
-        let position: SharedString = if current {
-            "Running now".into()
-        } else {
-            format!("{} of {} in the queue", index + 1, queue.len()).into()
+        let position: SharedString = match &queued.state {
+            queue::State::Waiting => format!(
+                "{} of {} waiting",
+                queue[..self.queued]
+                    .iter()
+                    .filter(|entry| entry.waiting())
+                    .count()
+                    + 1,
+                queue.iter().filter(|entry| entry.waiting()).count()
+            )
+            .into(),
+            queue::State::Running { .. } => "Running now".into(),
+            queue::State::Ended { outcome, took } => {
+                format!("{} after {}", ended(outcome), duration(*took)).into()
+            }
+        };
+        let failed = match &queued.state {
+            queue::State::Ended { outcome, .. } => failure(outcome),
+            _ => None,
+        };
+        let key = FormKey::Entry(queued.id);
+        let body = match self.forms.get(&key).map(|form| &form.state) {
+            _ if queued.waiting() => self.inputs(theme, &key, cx),
+            None => muted(theme, "Reading inputs…").into_any_element(),
+            Some(FormState::Broken { title, message }) => {
+                Alert::new("queued-broken", Tone::Danger, *title)
+                    .body(message.clone())
+                    .into_any_element()
+            }
+            Some(FormState::Plain) => muted(theme, "This script has no inputs.").into_any_element(),
+            Some(FormState::Fields { definition, .. }) => {
+                let rows = queued
+                    .values
+                    .as_ref()
+                    .map(|values| rows(definition, values))
+                    .unwrap_or_default();
+                v_flex()
+                    .gap(px(8.0))
+                    .children(
+                        rows.into_iter()
+                            .map(|(label, value)| row(label, true, div().truncate().child(value))),
+                    )
+                    .into_any_element()
+            }
         };
         v_flex()
             .gap(px(14.0))
             .child(heading(
                 theme,
-                queued.name.clone(),
+                file_name(&queued.script).into(),
                 position,
                 Some(
                     Button::new("queued-remove", "Remove")
                         .size(Size::Small)
                         .variant(Variant::Ghost)
-                        .disabled(current)
+                        .disabled(queued.running())
                         .on_click(cx.listener(|this, _, _, cx| this.remove_queued(cx)))
                         .into_any_element(),
                 ),
             ))
-            .child(if queued.rows.is_empty() {
-                muted(theme, "This script has no inputs.").into_any_element()
-            } else {
-                v_flex()
-                    .gap(px(8.0))
-                    .children(queued.rows.iter().map(|(label, value)| {
-                        row(label.clone(), true, div().truncate().child(value.clone()))
-                    }))
-                    .into_any_element()
+            .when_some(failed, |detail, message| {
+                detail.child(Alert::new("queued-failed", Tone::Danger, "Failed").body(message))
             })
+            .child(body)
             .into_any_element()
     }
 
-    fn queue_list(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let queue = self.queue();
+    fn queue_list(
+        &self,
+        theme: &Theme,
+        queue: &[queue::Entry],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if queue.is_empty() {
             return empty_frame(theme)
                 .child("Nothing queued. Pick a script in Library and choose Add to queue.")
                 .into_any_element();
         }
-        let running = self.queue_running();
-        let accent = theme.accent_text;
-        let names: Rc<[SharedString]> = queue.iter().map(|queued| queued.name.clone()).collect();
+        let rows: Rc<[QueueRow]> = queue
+            .iter()
+            .map(|queued| {
+                let form = self
+                    .forms
+                    .get(&FormKey::Entry(queued.id))
+                    .map(|form| &form.state);
+                let meta = match &queued.state {
+                    queue::State::Waiting => match form {
+                        Some(FormState::Broken { .. }) => Some("Can't start".into()),
+                        Some(FormState::Fields {
+                            definition, drafts, ..
+                        }) if values(definition, drafts).is_none() => Some("Needs inputs".into()),
+                        _ => None,
+                    }
+                    .map(|meta| (meta, theme.text_tertiary)),
+                    queue::State::Running { .. } => Some(("Running".into(), theme.accent_text)),
+                    queue::State::Ended { outcome, took } => Some((
+                        format!("{} · {}", ended(outcome), duration(*took)).into(),
+                        theme.text_tertiary,
+                    )),
+                };
+                QueueRow {
+                    name: file_name(&queued.script).into(),
+                    meta,
+                }
+            })
+            .collect();
+        let pinned = queue.iter().filter(|entry| !entry.waiting()).count();
         let this = cx.entity().downgrade();
         let that = this.clone();
-        let list = List::new("queue", "Queue", names.len(), move |index| {
-            let item = ListItem::new(names[index].clone());
-            if running && index == 0 {
-                item.end_slot(div().text_color(accent).child("Running"))
-            } else {
-                item
+        let list = List::new("queue", "Queue", rows.len(), move |index| {
+            let QueueRow { name, meta } = &rows[index];
+            let item = ListItem::new(name.clone());
+            match meta {
+                Some((meta, color)) => item.end_slot(div().text_color(*color).child(meta.clone())),
+                None => item,
             }
         })
         .selected(Some(self.queued))
@@ -1806,7 +1908,7 @@ impl ScriptsWindow {
         .on_reorder(move |from, to, _, cx| {
             let _ = that.update(cx, |this, cx| this.move_queued(from, to, cx));
         })
-        .pin_first(usize::from(running));
+        .pin_first(pinned);
         v_flex().size_full().child(list).into_any_element()
     }
 
@@ -1984,16 +2086,42 @@ impl Render for ScriptsWindow {
         let rows = self.rows(cx);
         let chosen = self.target(cx);
         if let Some(entry) = &chosen {
-            self.load_form(&entry.path, cx);
+            self.load_form(FormKey::Script(entry.path.clone()), &entry.path, cx);
         }
         let chosen = self.detail_entry(chosen);
-        self.queued = self.queued.min(self.queue().len().saturating_sub(1));
+        let (queue, playing) = self.queue(cx);
+        let queued: HashSet<EntryId> = self
+            .client
+            .read(cx)
+            .views()
+            .iter()
+            .flat_map(|view| view.read(cx).queue.entries().iter().map(|entry| entry.id))
+            .collect();
+        self.forms.retain(|key, _| match key {
+            FormKey::Script(_) => true,
+            FormKey::Entry(id) => queued.contains(id),
+        });
+        if self.pane == Pane::Queue {
+            for entry in &queue {
+                self.load_form(FormKey::Entry(entry.id), &entry.script, cx);
+            }
+        }
+        self.queued = self.queued.min(queue.len().saturating_sub(1));
         let valid = chosen
             .as_ref()
             .is_some_and(|entry| self.launch_values(&entry.path, cx).is_some());
         let running = self.running(cx);
-        let queued = self.queue().len();
-        let queue_running = self.queue_running();
+        let unfinished = queue
+            .iter()
+            .filter(|entry| !matches!(entry.state, queue::State::Ended { .. }))
+            .count();
+        let waiting = queue.iter().any(queue::Entry::waiting);
+        let startable = queue
+            .iter()
+            .filter(|entry| entry.waiting())
+            .all(|entry| self.entry_ready(entry.id));
+        let finished = queue.len() > unfinished;
+        let skippable = queue.iter().any(queue::Entry::running);
         let room_ready = !self.room_pending;
         let (status, status_color) = self.status(&theme, cx);
         let header = shown_tab::header(
@@ -2024,10 +2152,10 @@ impl Render for ScriptsWindow {
             "Show",
             [
                 ToggleItem::new("Library"),
-                if queued == 0 {
+                if unfinished == 0 {
                     ToggleItem::new("Queue")
                 } else {
-                    ToggleItem::new("Queue").end_slot(Badge::new(queued.to_string()))
+                    ToggleItem::new("Queue").end_slot(Badge::new(unfinished.to_string()))
                 },
             ],
             match self.pane {
@@ -2078,7 +2206,10 @@ impl Render for ScriptsWindow {
                 self.library(&theme, rows, cx),
                 self.script_detail(&theme, chosen.as_ref(), detail_width, window, cx),
             ),
-            Pane::Queue => (self.queue_list(&theme, cx), self.queued_detail(&theme, cx)),
+            Pane::Queue => (
+                self.queue_list(&theme, &queue, cx),
+                self.queued_detail(&theme, &queue, cx),
+            ),
         };
         let body = h_flex()
             .flex_1()
@@ -2149,22 +2280,40 @@ impl Render for ScriptsWindow {
                 .child(
                     Button::new("queue-clear", "Clear queue")
                         .variant(Variant::Ghost)
-                        .disabled(queued == 0)
-                        .on_click(cx.listener(|this, _, _, cx| this.clear_queue(cx))),
+                        .disabled(queue.len() == usize::from(skippable))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit_queue(cx, Queue::clear);
+                        })),
+                )
+                .child(
+                    Button::new("queue-clear-finished", "Clear finished")
+                        .variant(Variant::Ghost)
+                        .disabled(!finished)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.edit_queue(cx, Queue::clear_finished);
+                        })),
                 )
                 .child(div().flex_1())
+                .when(playing && skippable, |footer| {
+                    footer.child(Button::new("queue-skip", "Skip").on_click(
+                        cx.listener(|this, _, _, cx| this.act_on_tab(cx, RuffleView::skip_script)),
+                    ))
+                })
                 .child(
                     div()
                         .flex_none()
                         .w(QUEUE_RUN_WIDTH)
-                        .child(if queue_running {
-                            Button::new("queue-stop", "Stop queue")
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
+                        .child(if playing || skippable {
+                            Button::new("queue-stop", "Stop queue").on_click(cx.listener(
+                                |this, _, _, cx| this.act_on_tab(cx, RuffleView::stop_script),
+                            ))
                         } else {
                             Button::new("queue-start", "Start queue")
                                 .variant(Variant::Primary)
-                                .disabled(!has_tab || queued == 0 || !room_ready)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_queue(cx)))
+                                .disabled(!has_tab || !waiting || !startable || !room_ready)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.edit_queue(cx, Queue::play)),
+                                )
                         }),
                 ),
         };
@@ -2252,6 +2401,29 @@ fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
         .line_height(LINE_BODY)
         .text_color(theme.text_tertiary)
         .child(text)
+}
+
+struct QueueRow {
+    name: SharedString,
+    meta: Option<(SharedString, Hsla)>,
+}
+
+fn ended(outcome: &Outcome) -> &'static str {
+    match outcome {
+        Outcome::Completed => "Finished",
+        Outcome::Failed { .. } | Outcome::Killed(_) => "Failed",
+        Outcome::Stopped => "Stopped",
+        Outcome::Exited { .. } => "Exited",
+    }
+}
+
+fn duration(took: std::time::Duration) -> String {
+    let seconds = took.as_secs();
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription};
 
-use super::{RuffleView, ScriptPhase, ScriptState, script_dialog::ScriptDialogs};
+use super::{RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs};
 use crate::{
     ruffle::Msg,
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
@@ -66,14 +66,8 @@ impl Script {
 
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
-            Phase::Finished(Outcome::Failed { message, .. }) => Some(message.clone()),
-            Phase::Finished(Outcome::Killed(Limit::Turn)) => {
-                Some("Stopped for running too long without waiting".into())
-            }
-            Phase::Finished(Outcome::Killed(Limit::Memory)) => {
-                Some("Stopped for using too much memory".into())
-            }
-            _ => None,
+            Phase::Finished(outcome) => failure(outcome),
+            Phase::Running { .. } => None,
         }
     }
 
@@ -134,6 +128,15 @@ impl Script {
     }
 }
 
+pub(super) fn failure(outcome: &Outcome) -> Option<String> {
+    match outcome {
+        Outcome::Failed { message, .. } => Some(message.clone()),
+        Outcome::Killed(Limit::Turn) => Some("Stopped for running too long without waiting".into()),
+        Outcome::Killed(Limit::Memory) => Some("Stopped for using too much memory".into()),
+        Outcome::Completed | Outcome::Stopped | Outcome::Exited { .. } => None,
+    }
+}
+
 impl RuffleView {
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
         if let Some(loaded) = &self.script.loaded {
@@ -191,10 +194,17 @@ impl RuffleView {
             }
             Err(error) => {
                 tracing::warn!(target: "mira::script", "{} failed: {error}", launch.entry.display());
-                Phase::Finished(Outcome::Failed {
+                let outcome = Outcome::Failed {
                     message: error.to_string(),
                     stack: None,
-                })
+                };
+                self.script.loaded = Some(Loaded {
+                    launch,
+                    name,
+                    phase: Phase::Finished(outcome.clone()),
+                });
+                self.script_ended(outcome, cx);
+                return;
             }
         };
         self.script.loaded = Some(Loaded {
@@ -232,7 +242,14 @@ impl RuffleView {
     }
 
     fn script_ended(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
-        let close_tab = outcome == Outcome::Exited { close_tab: true };
+        let close_tab = matches!(
+            outcome,
+            Outcome::Exited {
+                close_tab: true,
+                ..
+            }
+        );
+        self.queue.ended(&outcome, Instant::now());
         if let Some(loaded) = &mut self.script.loaded {
             loaded.phase = Phase::Finished(outcome);
         }
@@ -247,7 +264,34 @@ impl RuffleView {
         self.changed(cx);
     }
 
+    pub(super) fn script_status(&self) -> Option<String> {
+        let status = self.script.status()?;
+        let Some(index) = self
+            .queue
+            .entries()
+            .iter()
+            .position(|entry| entry.running())
+            .filter(|_| self.script.running())
+        else {
+            return Some(status);
+        };
+        let total = self.queue.entries().len();
+        Some(format!("{status} ({} of {total})", index + 1))
+    }
+
+    pub(super) fn edit_queue(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Queue)) {
+        edit(&mut self.queue);
+        self.run_queued(cx);
+        self.changed(cx);
+    }
+
     pub(super) fn stop_script(&mut self, cx: &mut Context<Self>) {
+        self.queue.pause();
+        self.skip_script(cx);
+        self.changed(cx);
+    }
+
+    pub(super) fn skip_script(&mut self, cx: &mut Context<Self>) {
         if let Some(Loaded {
             phase: Phase::Running { run, stopping },
             ..

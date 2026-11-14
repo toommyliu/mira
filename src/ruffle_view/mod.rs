@@ -16,6 +16,7 @@ mod packet_log;
 mod packets;
 mod profile_form;
 mod profiles;
+mod queue;
 mod script;
 mod script_dialog;
 mod script_form;
@@ -100,6 +101,7 @@ pub struct RuffleView {
     bar: game_bar::BarState,
     bar_inset: Pixels,
     script: script::Script,
+    queue: queue::Queue,
     account: Option<account::Link>,
     status: Option<crate::automation::sign_in::Status>,
     _subscriptions: [Subscription; 4],
@@ -411,6 +413,7 @@ impl RuffleView {
                 bar: game_bar::BarState::new(window, cx),
                 bar_inset: Pixels::ZERO,
                 script: script::Script::default(),
+                queue: queue::Queue::default(),
                 account: None,
                 status: None,
                 _subscriptions: subscriptions,

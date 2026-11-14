@@ -39,7 +39,7 @@ use mira_ui::{
 
 use crate::{
     accounts::{Account, AccountId, Accounts, Change, Draft, Invalid, SaveError, SetupError},
-    net,
+    net, script_inputs,
     setups::{Member, Setup},
 };
 
@@ -197,6 +197,9 @@ impl Servers {
 }
 
 type PickServer = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
+
+const INPUTS_UNREADABLE: &str =
+    "Saved script inputs couldn't be read. Open Scripts to recover them, then start again.";
 
 fn server_items(
     first: &'static str,
@@ -679,6 +682,11 @@ impl Manager {
         self.recent.retain(|recent| recent != &script);
         self.recent.insert(0, script.clone());
         crate::settings::show_recent_script(&script, cx);
+        if script_inputs::unreadable(cx) {
+            self.notice = Some(INPUTS_UNREADABLE.into());
+            cx.notify();
+            return;
+        }
         self.act(targets, cx, |client, account, window, cx| {
             client.run_script(account, script.clone(), true, None, window, cx)
         });
@@ -947,6 +955,8 @@ impl Manager {
             .collect();
         let logins: Vec<Account> = plan.login.iter().filter_map(&named).collect();
         let server = setup.server.clone();
+        let unreadable = !runs.is_empty() && script_inputs::unreadable(cx);
+        let runs = if unreadable { Vec::new() } else { runs };
         let done = self.window.update(cx, |client, window, cx| {
             for (account, script, replace) in &runs {
                 client.run_script(
@@ -962,11 +972,15 @@ impl Manager {
                 client.launch(account, server.clone(), window, cx);
             }
         });
-        let skipped: Vec<String> = plan
-            .unscripted
-            .iter()
-            .filter_map(&named)
-            .map(|account| format!("{} has no script in this setup.", account.name))
+        let skipped: Vec<String> = unreadable
+            .then(|| INPUTS_UNREADABLE.to_owned())
+            .into_iter()
+            .chain(
+                plan.unscripted
+                    .iter()
+                    .filter_map(&named)
+                    .map(|account| format!("{} has no script in this setup.", account.name)),
+            )
             .collect();
         self.notice = match done {
             Err(_) => Some("The game window is closed.".into()),

@@ -33,6 +33,7 @@ pub(crate) enum Outcome {
     },
     Stopped,
     Exited {
+        logout: bool,
         close_tab: bool,
     },
     Killed(Limit),
@@ -511,9 +512,19 @@ fn settle_function<'js>(
             let outcome = match kind.as_str() {
                 "completed" => Outcome::Completed,
                 "stopped" => Outcome::Stopped,
-                "exited" => Outcome::Exited {
-                    close_tab: detail.0.and_then(|detail| detail.as_bool()) == Some(true),
-                },
+                "exited" => {
+                    let request = detail.0.and_then(|detail| detail.into_object());
+                    let flag = |key: &str| {
+                        request
+                            .as_ref()
+                            .and_then(|request| request.get::<_, bool>(key).ok())
+                            .unwrap_or(false)
+                    };
+                    Outcome::Exited {
+                        logout: flag("logout"),
+                        close_tab: flag("closeTab"),
+                    }
+                }
                 _ => {
                     let message = detail
                         .0
