@@ -1633,6 +1633,7 @@ mod tests {
             shop_warning(&grabber, cx),
             Some(("shop 1234".into(), false))
         );
+        press(cx, "shift-tab");
         press(cx, "space");
         assert_eq!(shop_warning(&grabber, cx), Some(("shop 1234".into(), true)));
         press(cx, "tab");

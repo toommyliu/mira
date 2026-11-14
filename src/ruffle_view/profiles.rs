@@ -1799,7 +1799,7 @@ impl Render for Editor {
                 Dialog::new("unsaved-profiles", self.closing, "Save your changes?")
                     .alert()
                     .description(format!("Unsaved: {}.", unsaved.join(", ")))
-                    .action(
+                    .footer_start_slot(
                         Button::new("discard-profiles", "Don't save")
                             .on_click(cx.listener(|_, _, window, _| window.remove_window())),
                     )
@@ -1920,6 +1920,18 @@ mod tests {
         snapshot("profiles-empty", |editor, window, cx| {
             editor.drafts.clear();
             editor.select(None, window, cx);
+        });
+    }
+
+    #[test]
+    fn snapshot_unsaved() {
+        snapshot("profiles-unsaved", |editor, window, cx| {
+            editor.select_named("Ultra speaker", window, cx);
+            editor.form_mut().unwrap().steps[1].pause = "500".into();
+            assert!(!editor.may_close(cx));
+            window.defer(cx, |window, cx| {
+                window.dispatch_keystroke(gpui::Keystroke::parse("f19").unwrap(), cx);
+            });
         });
     }
 

@@ -41,7 +41,6 @@ pub(super) struct ScriptDialogs {
 const MAX_LABEL: usize = 24;
 const MAX_TITLE: usize = 60;
 const WIDTH: Pixels = px(420.0);
-const WINDOW_MARGIN: Pixels = px(16.0);
 const STOP_INSET: Pixels = px(10.0);
 
 #[derive(Debug, PartialEq)]
@@ -362,12 +361,10 @@ impl Render for ScriptDialogs {
                     .variant(Variant::Primary)
                     .on_click(answer(true)),
             );
-        let width = WIDTH.min(window.viewport_size().width - WINDOW_MARGIN * 2.0);
         let this = cx.weak_entity();
         let dialog = Dialog::new("script-dialog", self.waiting(), title)
             .alert()
-            .fit_window()
-            .width(width)
+            .width(WIDTH)
             .body(body)
             .footer_start_slot(stop)
             .when_some(cancel, Dialog::action)
