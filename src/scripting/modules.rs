@@ -187,9 +187,7 @@ impl Modules {
 fn package(name: &str) -> std::result::Result<String, String> {
     match name {
         "mira" => return Ok(format!("{INTERNAL}mira/index.js")),
-        "mira/autorelogin" | "mira/http" | "mira/schema" => {
-            return Ok(format!("{INTERNAL}{name}.js"));
-        }
+        "mira/http" | "mira/schema" => return Ok(format!("{INTERNAL}{name}.js")),
         _ => {}
     }
     let path = match name.strip_prefix("effect") {
@@ -199,7 +197,7 @@ fn package(name: &str) -> std::result::Result<String, String> {
         }
         _ => {
             return Err(format!(
-                "{name} can't be imported; scripts can import mira, mira/autorelogin, mira/http, mira/schema, effect, effect/<Module> and their own files"
+                "{name} can't be imported; scripts can import mira, mira/http, mira/schema, effect, effect/<Module> and their own files"
             ));
         }
     };

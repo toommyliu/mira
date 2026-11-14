@@ -1,5 +1,4 @@
-import { Auth, Player, Settings } from "mira";
-import * as AutoRelogin from "mira/autorelogin";
+import { Auth, AutoRelogin, Player, Settings } from "mira";
 
 export default function* () {
   const server = yield* Auth.getServer();

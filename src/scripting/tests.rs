@@ -1637,8 +1637,7 @@ export default function* () {
 fn automation_requests_reach_the_player_typed() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { Settings } from "mira";
-import * as AutoRelogin from "mira/autorelogin";
+        r#"import { AutoRelogin, Settings } from "mira";
 
 export default function* () {
   yield* AutoRelogin.get();
