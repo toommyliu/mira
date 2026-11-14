@@ -157,11 +157,13 @@ impl Render for BoostPicker {
             Dialog::new("boosts", true, "Add boosts you own")
                 .width(gpui::px(420.0))
                 .body(mira_ui::v_flex().children((0..20usize).map(|index| {
-                    Checkbox::new(
-                        ("boost", index),
-                        format!("Boost {index}"),
-                        CheckedState::Unchecked,
-                    )
+                    div()
+                        .when(index == 12, |row| row.debug_selector(|| "twelfth".into()))
+                        .child(Checkbox::new(
+                            ("boost", index),
+                            format!("Boost {index}"),
+                            CheckedState::Unchecked,
+                        ))
                 })))
                 .action(
                     div()
@@ -182,6 +184,27 @@ fn dialog_keeps_its_actions_inside_a_window_smaller_than_it(cx: &mut TestAppCont
     let add = cx.debug_bounds("add").unwrap();
     assert!(add.left() >= px(0.0) && add.right() <= px(340.0), "{add:?}");
     assert!(add.top() >= px(0.0) && add.bottom() <= px(280.0), "{add:?}");
+}
+
+#[gpui::test]
+fn tabbing_through_a_long_dialog_scrolls_the_focused_control_into_view(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        BoostPicker
+    });
+    cx.simulate_resize(size(px(340.0), px(280.0)));
+    cx.run_until_parked();
+    for _ in 0..12 {
+        press(cx, "tab");
+    }
+    let twelfth = cx.debug_bounds("twelfth").unwrap();
+    let add = cx.debug_bounds("add").unwrap();
+    assert!(
+        twelfth.top() >= px(0.0) && twelfth.bottom() <= add.top(),
+        "{twelfth:?}"
+    );
 }
 
 struct AddAccount {
