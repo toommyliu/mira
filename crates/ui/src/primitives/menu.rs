@@ -1,16 +1,22 @@
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    time::Instant,
+};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
-    FontWeight, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseDownEvent,
-    ParentElement, Pixels, Point, RenderOnce, Role, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Toggled, Window, anchored, canvas, deferred, div,
-    point, prelude::FluentBuilder as _, px,
+    FontWeight, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
+    Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, anchored, canvas,
+    deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
-    Button, Icon,
+    Button, Icon, Scrollbar,
     button::{KeyHandler, PressHandler},
+    small_icon,
 };
 use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
@@ -62,6 +68,8 @@ pub struct MenuItem {
     disabled: bool,
     danger: bool,
     keep_open: bool,
+    pinned: bool,
+    dismiss: Option<(SharedString, Handler)>,
 }
 
 impl MenuItem {
@@ -80,6 +88,8 @@ impl MenuItem {
             disabled: false,
             danger: false,
             keep_open: false,
+            pinned: false,
+            dismiss: None,
         }
     }
 
@@ -167,6 +177,20 @@ impl MenuItem {
         self
     }
 
+    pub fn pinned(mut self) -> Self {
+        self.pinned = true;
+        self
+    }
+
+    pub fn dismiss(
+        mut self,
+        label: impl Into<SharedString>,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.dismiss = Some((label.into(), Rc::new(f)));
+        self
+    }
+
     fn navigable(&self) -> bool {
         match self.kind {
             Kind::Action(_) | Kind::Submenu(_) => !self.disabled,
@@ -186,6 +210,7 @@ pub(crate) struct Meta {
     key: Option<SharedString>,
     navigable: bool,
     on_select: Option<Handler>,
+    dismiss: Option<Handler>,
     keep_open: bool,
     submenu: Option<Rc<[Meta]>>,
 }
@@ -201,6 +226,7 @@ fn metas(items: &[MenuItem]) -> Rc<[Meta]> {
                 Kind::Action(handler) if !item.disabled => Some(handler.clone()),
                 _ => None,
             },
+            dismiss: item.dismiss.as_ref().map(|(_, handler)| handler.clone()),
             keep_open: item.keep_open,
             submenu: match &item.kind {
                 Kind::Submenu(items) => Some(metas(items)),
@@ -311,6 +337,8 @@ pub(crate) struct MenuState {
     return_focus: Option<FocusHandle>,
     focus: FocusHandle,
     submenu_bounds: Rc<Cell<Bounds<Pixels>>>,
+    submenu_rows: RefCell<HashMap<usize, Bounds<Pixels>>>,
+    rest_scroll: ScrollHandle,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_height: Rc<Cell<Pixels>>,
     pub(crate) item_offset: Cell<Option<Point<Pixels>>>,
@@ -329,6 +357,8 @@ impl MenuState {
             return_focus: None,
             focus: cx.focus_handle(),
             submenu_bounds: Rc::default(),
+            submenu_rows: RefCell::default(),
+            rest_scroll: ScrollHandle::new(),
             trigger_bounds: Rc::default(),
             panel_height: Rc::default(),
             item_offset: Cell::new(None),
@@ -340,9 +370,12 @@ impl MenuState {
 
     fn aiming_at_submenu(&self, from: Point<Pixels>, at: Point<Pixels>) -> bool {
         let panel = self.submenu_bounds.get();
-        self.submenu.is_some()
-            && panel.size.height > Pixels::ZERO
-            && heading_toward(from, at, (panel.origin, panel.bottom_left()))
+        let edge = if panel.left() >= from.x {
+            (panel.origin, panel.bottom_left())
+        } else {
+            (panel.top_right(), panel.bottom_right())
+        };
+        self.submenu.is_some() && panel.size.height > Pixels::ZERO && heading_toward(from, at, edge)
     }
 
     pub fn is_open(&self) -> bool {
@@ -620,6 +653,11 @@ fn key_down(
     }
     match key {
         "escape" => close(state, true, window, cx),
+        "backspace" | "delete" => {
+            if let Some(dismiss) = highlighted.and_then(|index| metas[index].dismiss.clone()) {
+                dismiss(window, cx);
+            }
+        }
         "enter" | "space" => {
             if let Some(index) = highlighted {
                 activate(metas, index, state, true, window, cx);
@@ -726,10 +764,16 @@ fn switch_mark(on: bool, theme: &Theme) -> Div {
 
 type Cursor = (Option<usize>, Option<(usize, Option<usize>)>);
 
+struct OpenSubmenu {
+    index: usize,
+    highlighted: Option<usize>,
+    row: Bounds<Pixels>,
+}
+
 fn rows(
     items: Vec<MenuItem>,
     metas: &Rc<[Meta]>,
-    (highlighted, submenu): Cursor,
+    ((highlighted, submenu), submenu_row): (Cursor, Option<Bounds<Pixels>>),
     nested: bool,
     kind: PopupKind,
     state: &Entity<MenuState>,
@@ -757,6 +801,7 @@ fn rows(
                 mark,
                 disabled,
                 danger,
+                dismiss,
                 ..
             } = item;
             match item_kind {
@@ -885,18 +930,66 @@ fn rows(
                         .when(mark == Mark::Switch, |row| {
                             row.child(switch_mark(checked == Some(true), theme))
                         })
+                        .when_some(dismiss, |row, (label, dismiss)| {
+                            row.child(
+                                div()
+                                    .id(("dismiss", index))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(18.0))
+                                    .rounded(theme.radius.item)
+                                    .when(lit, |button| {
+                                        button
+                                            .role(Role::Button)
+                                            .aria_label(label)
+                                            .text_color(theme.text_secondary)
+                                            .hover(|button| button.bg(theme.fill_hover))
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                cx.stop_propagation();
+                                                dismiss(window, cx);
+                                            })
+                                            .child(small_icon(Icon::X, theme.text_secondary))
+                                    }),
+                            )
+                        })
                         .when_some(sub, |row, sub| {
                             let sub_metas = metas[index].submenu.clone().unwrap_or_default();
+                            let measured = state.clone();
                             row.relative()
+                                .child(
+                                    canvas(
+                                        move |area, window, cx| {
+                                            let previous = measured
+                                                .read(cx)
+                                                .submenu_rows
+                                                .borrow_mut()
+                                                .insert(index, area);
+                                            if previous != Some(area) {
+                                                window.refresh();
+                                            }
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .inset_0(),
+                                )
                                 .child(trailing(Icon::ChevronRight.into_any_element()))
-                                .when(open, |row| {
+                                .when_some(submenu_row.filter(|_| open), |row, target| {
                                     let sub_highlight = submenu.and_then(|(_, h)| h);
                                     row.child(submenu_panel(
-                                        index,
+                                        OpenSubmenu {
+                                            index,
+                                            highlighted: sub_highlight,
+                                            row: target,
+                                        },
                                         &label,
                                         sub,
                                         &sub_metas,
-                                        sub_highlight,
                                         state,
                                         theme,
                                     ))
@@ -910,46 +1003,51 @@ fn rows(
 }
 
 fn submenu_panel(
-    index: usize,
+    OpenSubmenu {
+        index,
+        highlighted,
+        row,
+    }: OpenSubmenu,
     label: &SharedString,
     items: Vec<MenuItem>,
     metas: &Rc<[Meta]>,
-    highlighted: Option<usize>,
     state: &Entity<MenuState>,
     theme: &Theme,
 ) -> impl IntoElement {
-    div()
-        .absolute()
-        .top(-PANEL_INSET - BORDER)
-        .right(-(PANEL_INSET + BORDER - SUBMENU_OVERLAP))
-        .child(
-            anchored()
-                .snap_to_window_with_margin(WINDOW_MARGIN)
-                .child(motion::fade(
-                    ("submenu", index),
-                    panel_shell(("submenu-panel", index), Some(MENU_MAX_HEIGHT), theme)
-                        .role(Role::Menu)
-                        .aria_label(label.clone())
-                        .child({
-                            let state = state.clone();
-                            canvas(
-                                move |area, _, cx| state.read(cx).submenu_bounds.set(area),
-                                |_, _, _, _| {},
-                            )
-                            .absolute()
-                            .inset_0()
-                        })
-                        .children(rows(
-                            items,
-                            metas,
-                            (highlighted, None),
-                            true,
-                            PopupKind::Menu,
-                            state,
-                            theme,
-                        )),
-                )),
-        )
+    deferred(
+        anchored()
+            .attach(row, Anchor::TopRight)
+            .offset(point(
+                PANEL_INSET + BORDER - SUBMENU_OVERLAP,
+                -(PANEL_INSET + BORDER),
+            ))
+            .snap_to_window_with_margin(WINDOW_MARGIN)
+            .child(motion::fade(
+                ("submenu", index),
+                panel_shell(("submenu-panel", index), Some(MENU_MAX_HEIGHT), theme)
+                    .role(Role::Menu)
+                    .aria_label(label.clone())
+                    .child({
+                        let state = state.clone();
+                        canvas(
+                            move |area, _, cx| state.read(cx).submenu_bounds.set(area),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0()
+                    })
+                    .children(rows(
+                        items,
+                        metas,
+                        ((highlighted, None), None),
+                        true,
+                        PopupKind::Menu,
+                        state,
+                        theme,
+                    )),
+            )),
+    )
+    .with_priority(super::layer::POPUP)
 }
 
 fn row(index: usize, nested: bool, metas: &Rc<[Meta]>, state: &Entity<MenuState>) -> Stateful<Div> {
@@ -1022,44 +1120,193 @@ pub(crate) fn popup(
     let metas = metas(&items);
     let menu = state.read(cx);
     let (highlighted, submenu) = current(&metas, menu);
+    let submenu_row =
+        submenu.and_then(|(parent, _)| menu.submenu_rows.borrow().get(&parent).copied());
     let focus = menu.focus.clone();
     let keys_state = state.clone();
     let keys_metas = metas.clone();
     let next_state = state.clone();
     let prev_state = state.clone();
     let scrolls = metas.iter().all(|meta| meta.submenu.is_none());
+    let rest_scroll = menu.rest_scroll.clone();
+    let count = items.iter().take_while(|item| item.pinned).count();
+    let mut pinned = rows(
+        items,
+        &metas,
+        ((highlighted, submenu), submenu_row),
+        false,
+        kind,
+        state,
+        theme,
+    );
+    let rest = pinned.split_off(count);
+    let split = scrolls && count > 0;
     let panel = motion::arrive(
         (id.clone(), "popup"),
-        panel_shell((id.clone(), "panel"), scrolls.then_some(max_height), theme)
-            .role(match kind {
-                PopupKind::Menu => Role::Menu,
-                PopupKind::ListBox => Role::ListBox,
-            })
-            .aria_label(label)
-            .track_focus(&focus)
-            .on_key_down(move |event, window, cx| {
-                key_down(&keys_metas, kind, &keys_state, event, window, cx)
-            })
-            .on_action(move |_: &FocusNext, window, cx| {
-                close(&next_state, true, window, cx);
-                cx.propagate();
-            })
-            .on_action(move |_: &FocusPrevious, window, cx| {
-                close(&prev_state, true, window, cx);
-                cx.propagate();
-            })
-            .children(rows(
-                items,
-                &metas,
-                (highlighted, submenu),
-                false,
-                kind,
-                state,
-                theme,
-            )),
+        panel_shell(
+            (id.clone(), "panel"),
+            (scrolls && !split).then_some(max_height),
+            theme,
+        )
+        .role(match kind {
+            PopupKind::Menu => Role::Menu,
+            PopupKind::ListBox => Role::ListBox,
+        })
+        .aria_label(label)
+        .track_focus(&focus)
+        .on_key_down(move |event, window, cx| {
+            key_down(&keys_metas, kind, &keys_state, event, window, cx)
+        })
+        .on_action(move |_: &FocusNext, window, cx| {
+            close(&next_state, true, window, cx);
+            cx.propagate();
+        })
+        .on_action(move |_: &FocusPrevious, window, cx| {
+            close(&prev_state, true, window, cx);
+            cx.propagate();
+        })
+        .children(pinned)
+        .map(|panel| {
+            if split {
+                panel.child(scrolling(
+                    ElementId::from((id.clone(), "rest")),
+                    max_height,
+                    false,
+                    rest,
+                    &rest_scroll,
+                ))
+            } else {
+                panel.children(rest)
+            }
+        }),
         from,
     );
     fading(panel, shown)
+}
+
+fn scrolling(
+    id: ElementId,
+    height: Pixels,
+    fixed: bool,
+    rows: Vec<AnyElement>,
+    handle: &ScrollHandle,
+) -> Div {
+    let overflows = handle.max_offset().y > Pixels::ZERO;
+    let measured = handle.clone();
+    div()
+        .relative()
+        .child(
+            div()
+                .id(id.clone())
+                .flex()
+                .flex_col()
+                .max_h(height)
+                .when(fixed, |rest| rest.h(height))
+                .when(overflows, |rest| rest.pr(Scrollbar::GUTTER))
+                .overflow_y_scroll()
+                .track_scroll(handle)
+                .children(rows),
+        )
+        .child(
+            canvas(
+                move |_, window, _| {
+                    if (measured.max_offset().y > Pixels::ZERO) != overflows {
+                        window.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_0(),
+        )
+        .child(Scrollbar::new((id, "scrollbar"), handle.clone()))
+}
+
+#[derive(IntoElement)]
+pub struct MenuList {
+    id: ElementId,
+    label: SharedString,
+    items: Vec<MenuItem>,
+    height: Pixels,
+}
+
+impl MenuList {
+    pub fn new(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        items: Vec<MenuItem>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            items,
+            height: MENU_MAX_HEIGHT,
+        }
+    }
+
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = height;
+        self
+    }
+}
+
+impl RenderOnce for MenuList {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = state(&self.id, false, window, cx);
+        let theme = cx.theme().clone();
+        let metas = metas(&self.items);
+        let (highlighted, _) = current(&metas, state.read(cx));
+        let focus = state.read(cx).focus.clone();
+        let rest_scroll = state.read(cx).rest_scroll.clone();
+        let keys_state = state.clone();
+        let keys_metas = metas.clone();
+        let leave_state = state.clone();
+        let count = self.items.iter().take_while(|item| item.pinned).count();
+        let mut pinned = rows(
+            self.items,
+            &metas,
+            ((highlighted, None), None),
+            false,
+            PopupKind::Menu,
+            &state,
+            &theme,
+        );
+        let rest = pinned.split_off(count);
+        div()
+            .id(self.id.clone())
+            .role(Role::Menu)
+            .aria_label(self.label)
+            .track_focus(&focus.tab_stop(true))
+            .on_key_down(move |event, window, cx| {
+                key_down(&keys_metas, PopupKind::Menu, &keys_state, event, window, cx)
+            })
+            .on_hover(move |hovered, _, cx| {
+                if !hovered {
+                    leave_state.update(cx, |menu, cx| {
+                        menu.highlighted = None;
+                        cx.notify();
+                    });
+                }
+            })
+            .flex()
+            .flex_col()
+            .p(PANEL_INSET)
+            .rounded(theme.radius.panel)
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.hairline)
+            .text_size(TEXT_BODY)
+            .line_height(LINE_BODY)
+            .text_color(theme.text)
+            .children(pinned)
+            .child(scrolling(
+                ElementId::from((self.id, "rest")),
+                self.height,
+                true,
+                rest,
+                &rest_scroll,
+            ))
+    }
 }
 
 pub(crate) fn trigger_handlers(
