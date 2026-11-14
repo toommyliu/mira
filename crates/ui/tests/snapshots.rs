@@ -6,8 +6,9 @@ use mira_ui::{
     ActiveTheme as _, Tone,
     components::StatusLabel,
     primitives::{
-        Activity, Alert, Badge, Button, Dialog, Dot, DropdownMenu, Icon, List, ListItem, MenuItem,
-        Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs, ToggleGroup, ToggleItem,
+        Activity, Alert, Badge, Button, Checkbox, CheckedState, Dialog, Dot, DropdownMenu, Icon,
+        List, ListItem, MenuItem, Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs,
+        ToggleGroup, ToggleItem,
         button::{Joined, Size, Variant},
     },
     snapshot,
@@ -171,6 +172,35 @@ fn snapshot_dialog() {
             )
             .action(Button::new("cancel", "Cancel"))
             .action(Button::new("save", "Save").variant(Variant::Primary))
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_dialog_small_window() {
+    scene("dialog-small-window", 340.0, 280.0, |_, _| {
+        Dialog::new("boosts", true, "Add boosts you own")
+            .alert()
+            .description("Adding one from your bank moves it to your inventory.")
+            .body(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .children((0..12usize).map(|index| {
+                        Checkbox::new(
+                            ("boost", index),
+                            format!("Class Experience Boost {}", index + 1),
+                            if index < 3 {
+                                CheckedState::Checked
+                            } else {
+                                CheckedState::Unchecked
+                            },
+                        )
+                    })),
+            )
+            .action(Button::new("cancel", "Cancel"))
+            .action(Button::new("add", "Add 3 boosts").variant(Variant::Primary))
             .into_any_element()
     });
 }

@@ -2,18 +2,21 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, ElementId, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div,
+    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div,
     prelude::FluentBuilder as _, px,
 };
 
-use super::{Button, Icon, button::Size};
+use super::{Button, Icon, Scrollbar, button::Size};
 use crate::{
     ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, h_flex,
     motion::{self, From},
     nav,
-    theme::{LINE_BODY, LINE_TITLE, TEXT_BODY, TEXT_TITLE},
+    theme::{LINE_BODY, LINE_TITLE, RING_ROOM, TEXT_BODY, TEXT_TITLE},
 };
+
+const PADDING: Pixels = px(16.0);
+const WINDOW_MARGIN: Pixels = px(16.0);
 
 type CloseHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -22,6 +25,7 @@ pub(crate) struct DialogState {
     closed_at: Option<std::time::Instant>,
     return_focus: Option<FocusHandle>,
     focus: FocusHandle,
+    scroll: ScrollHandle,
 }
 
 impl DialogState {
@@ -31,6 +35,7 @@ impl DialogState {
             closed_at: None,
             return_focus: None,
             focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
         }
     }
 }
@@ -40,7 +45,6 @@ pub struct Dialog {
     id: ElementId,
     open: bool,
     alert: bool,
-    fit_window: bool,
     title: SharedString,
     width: Pixels,
     description: Option<SharedString>,
@@ -57,7 +61,6 @@ impl Dialog {
             id: id.into(),
             open,
             alert: false,
-            fit_window: false,
             title: title.into(),
             width: px(420.0),
             description: None,
@@ -71,11 +74,6 @@ impl Dialog {
 
     pub fn alert(mut self) -> Self {
         self.alert = true;
-        self
-    }
-
-    pub fn fit_window(mut self) -> Self {
-        self.fit_window = true;
         self
     }
 
@@ -120,9 +118,9 @@ impl RenderOnce for Dialog {
         let state = window.use_keyed_state((self.id.clone(), "dialog"), cx, |_, cx| {
             DialogState::new(cx)
         });
-        let (was_open, focus) = {
+        let (was_open, focus, scroll) = {
             let state = state.read(cx);
-            (state.was_open, state.focus.clone())
+            (state.was_open, state.focus.clone(), state.scroll.clone())
         };
         if self.open != was_open {
             let opening = self.open;
@@ -170,6 +168,9 @@ impl RenderOnce for Dialog {
         let next_focus = focus.clone();
         let prev_focus = focus.clone();
         let viewport = window.viewport_size();
+        if self.open {
+            nav::set_scroll_root(&scroll, window, cx);
+        }
         deferred(
             anchored().position(gpui::point(px(0.0), px(0.0))).child(
                 div().opacity(shown).child(motion::fade(
@@ -223,10 +224,9 @@ impl RenderOnce for Dialog {
                                 .flex_col()
                                 .gap(px(12.0))
                                 .w(self.width)
-                                .when(self.fit_window, |panel| {
-                                    panel.max_h(viewport.height - px(32.0))
-                                })
-                                .p(px(16.0))
+                                .max_w(viewport.width - WINDOW_MARGIN * 2.0)
+                                .max_h(viewport.height - WINDOW_MARGIN * 2.0)
+                                .p(PADDING)
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.overlay)
                                 .text_color(theme.text)
@@ -236,6 +236,7 @@ impl RenderOnce for Dialog {
                                 .child(
                                     div()
                                         .flex()
+                                        .flex_none()
                                         .flex_col()
                                         .gap(px(2.0))
                                         .child(
@@ -282,12 +283,40 @@ impl RenderOnce for Dialog {
                                             )
                                         }),
                                 )
-                                .children(self.body)
+                                .when(!self.body.is_empty(), |panel| {
+                                    panel.child(
+                                        div()
+                                            .relative()
+                                            .flex()
+                                            .flex_col()
+                                            .min_h_0()
+                                            .mx(-PADDING)
+                                            .my(-RING_ROOM)
+                                            .child(
+                                                div()
+                                                    .id((self.id.clone(), "body"))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(12.0))
+                                                    .min_h_0()
+                                                    .px(PADDING)
+                                                    .py(RING_ROOM)
+                                                    .overflow_y_scroll()
+                                                    .track_scroll(&scroll)
+                                                    .children(self.body),
+                                            )
+                                            .child(Scrollbar::new(
+                                                (self.id.clone(), "scrollbar"),
+                                                scroll,
+                                            )),
+                                    )
+                                })
                                 .when(
                                     !self.actions.is_empty() || self.footer_start.is_some(),
                                     |panel| {
                                         panel.child(
                                             h_flex()
+                                                .flex_none()
                                                 .flex_wrap()
                                                 .justify_end()
                                                 .gap(px(6.0))

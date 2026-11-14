@@ -22,7 +22,7 @@ use mira_ui::{
         Switch, ToggleGroup, ToggleItem, VirtualList,
         button::{Size, Variant},
     },
-    theme::{LINE_BODY, LINE_SMALL, ROW, TEXT_BODY, TEXT_SMALL},
+    theme::{LINE_BODY, LINE_SMALL, RING_ROOM, ROW, TEXT_BODY, TEXT_SMALL},
     v_flex,
 };
 
@@ -63,7 +63,6 @@ const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const FILTER_WIDTH: Pixels = px(300.0);
 const FILTER_HEIGHT: Pixels = px(280.0);
 const FILTER_PATH_WIDTH: Pixels = px(220.0);
-const RING_ROOM: Pixels = px(6.0);
 const PATIENCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]

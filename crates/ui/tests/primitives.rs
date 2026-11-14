@@ -7,7 +7,7 @@ use gpui::{
 };
 use mira_ui::{
     FOCUS_SCOPE,
-    primitives::{Button, Dialog, DropdownMenu, Icon, MenuItem, Select},
+    primitives::{Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, MenuItem, Select},
 };
 
 struct Rooms {
@@ -112,6 +112,41 @@ fn dialog_moves_tab_between_its_controls_without_a_focus_scope(cx: &mut TestAppC
     press(cx, "tab");
     press(cx, "enter");
     assert_eq!(pressed.get(), Some("leave"));
+}
+
+struct BoostPicker;
+
+impl Render for BoostPicker {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            Dialog::new("boosts", true, "Add boosts you own")
+                .width(gpui::px(420.0))
+                .body(mira_ui::v_flex().children((0..20usize).map(|index| {
+                    Checkbox::new(
+                        ("boost", index),
+                        format!("Boost {index}"),
+                        CheckedState::Unchecked,
+                    )
+                })))
+                .action(
+                    div()
+                        .debug_selector(|| "add".into())
+                        .child(Button::new("add", "Add")),
+                ),
+        )
+    }
+}
+
+#[gpui::test]
+fn dialog_keeps_its_actions_inside_a_window_smaller_than_it(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| BoostPicker);
+    cx.simulate_resize(size(px(340.0), px(280.0)));
+    cx.run_until_parked();
+    let add = cx.debug_bounds("add").unwrap();
+    assert!(add.left() >= px(0.0) && add.right() <= px(340.0), "{add:?}");
+    assert!(add.top() >= px(0.0) && add.bottom() <= px(280.0), "{add:?}");
 }
 
 struct SearchAndOptions {

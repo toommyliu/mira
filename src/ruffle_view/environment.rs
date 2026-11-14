@@ -13,7 +13,7 @@ use mira_ui::{
         Button, Checkbox, CheckedState, Dialog, Icon, Input, InputEvent, Switch,
         button::{Size, Variant},
     },
-    theme::{DISABLED_OPACITY, ROW, TEXT_BODY, tabular},
+    theme::{DISABLED_OPACITY, RING_ROOM, ROW, TEXT_BODY, tabular},
     v_flex,
 };
 
@@ -1236,6 +1236,8 @@ fn pick_list(id: &'static str, rows: Div) -> Stateful<Div> {
     div()
         .id(id)
         .max_h(px(320.0))
+        .m(-RING_ROOM)
+        .p(RING_ROOM)
         .overflow_y_scroll()
         .child(rows)
 }
@@ -1635,5 +1637,55 @@ mod tests {
                 ItemQuery::Name("Cape".into()),
             ]
         );
+    }
+    fn snapshot_boosts(name: &str, width: f32, height: f32) {
+        let folder = std::env::temp_dir().join(format!("mira-environment-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let size = gpui::size(px(width), px(height));
+        for written in mira_ui::snapshot(name, size, move |window, cx| {
+            window.defer(cx, |window, cx| {
+                window.dispatch_keystroke(gpui::Keystroke::parse("f19").unwrap(), cx);
+            });
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&folder, cx);
+                let mut environment = Environment::new(client, Target::Selected, window, cx);
+                environment.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                let found: Vec<Owned> = [
+                    ("Class Experience Boost! (20 min)", Boost::ClassPoints, true),
+                    (
+                        "Class Experience Boost! (60 min)",
+                        Boost::ClassPoints,
+                        false,
+                    ),
+                    ("Gold Boost! (20 min)", Boost::Gold, false),
+                    ("Gold Boost! (1 hr)", Boost::Gold, true),
+                    ("Reputation Boost! (20 min)", Boost::Rep, false),
+                    ("Reputation Boost! (1 hr)", Boost::Rep, true),
+                    ("Experience Boost! (20 min)", Boost::Xp, false),
+                    ("Experience Boost! (1 hr)", Boost::Xp, false),
+                ]
+                .into_iter()
+                .map(|(name, kind, banked)| Owned {
+                    name: name.into(),
+                    kind,
+                    quantity: 3,
+                    banked,
+                })
+                .collect();
+                environment.fetch = Fetch::Picking {
+                    picked: vec![false; found.len()],
+                    found,
+                };
+                environment
+            })
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_found_boosts() {
+        snapshot_boosts("environment-boosts-min", MIN_WIDTH, MIN_HEIGHT);
+        snapshot_boosts("environment-boosts", WIDTH, HEIGHT);
     }
 }
