@@ -151,11 +151,10 @@ fn execute(
     log: Log,
     link: Link,
 ) -> Outcome {
-    let root = match launch.entry.parent().map(std::fs::canonicalize) {
-        Some(Ok(root)) => root,
-        _ => return failed(format!("{} doesn't exist", launch.entry.display())),
+    let modules = match Modules::for_entry(&launch.entry) {
+        Ok(modules) => modules,
+        Err(message) => return failed(message),
     };
-    let modules = Modules::new(root);
     let entry = match modules.entry(&launch.entry) {
         Ok(entry) => entry,
         Err(message) => return failed(message),

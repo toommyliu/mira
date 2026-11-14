@@ -10,6 +10,7 @@ mod launches;
 mod loader_grabber;
 mod manager;
 mod menu;
+mod package_dialogs;
 mod packet_lines;
 mod packet_log;
 mod packets;
