@@ -5,7 +5,6 @@ use super::{DecodeError, Value, arg, decode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Event {
-    AdHidden { ad: String, by: String },
     Connection { status: String },
     Debug { message: String },
     ExtensionResponse { packet: String },
@@ -17,10 +16,6 @@ pub(crate) enum Event {
 impl Event {
     pub(crate) fn parse(name: &str, args: &[Value]) -> Result<Option<Self>, DecodeError> {
         Ok(Some(match name {
-            "onAdHidden" => Self::AdHidden {
-                ad: decode("onAdHidden", arg(args, 0))?,
-                by: decode("onAdHidden", arg(args, 1))?,
-            },
             "onConnection" => Self::Connection {
                 status: decode("onConnection", arg(args, 0))?,
             },

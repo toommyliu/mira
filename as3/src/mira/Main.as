@@ -146,11 +146,6 @@ package mira {
 			this.external.call("onDebug", message);
 		}
 
-		[BridgeEvent("onAdHidden")]
-		public function emitAdHidden(ad:String, by:String):void {
-			this.external.call("onAdHidden", ad, by);
-		}
-
 		[BridgeEvent("onExtensionResponse")]
 		public function emitExtensionResponse(packet:String):void {
 			this.external.call("onExtensionResponse", packet);

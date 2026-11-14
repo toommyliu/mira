@@ -7,7 +7,7 @@ use tokio::{
 };
 
 use crate::{
-    bridge::{CallError, Event, Loader, Subscription, settings},
+    bridge::{CallError, Loader, settings},
     domain::auth,
 };
 
@@ -260,18 +260,6 @@ fn apply_frame_rate(loader: &impl Loader, requested: &mut Option<u32>) {
     match settings::set_frame_rate(loader, whole(fps)) {
         Ok(()) => *requested = None,
         Err(error) => tracing::debug!(%error, "couldn't apply the frame rate"),
-    }
-}
-
-pub(crate) fn wants(event: &Event) -> bool {
-    matches!(event, Event::AdHidden { .. })
-}
-
-pub(crate) async fn log_hidden_ads(events: Subscription) {
-    loop {
-        if let Ok(Event::AdHidden { ad, by }) = events.next().await {
-            tracing::info!(ad, by, "ad hidden");
-        }
     }
 }
 
