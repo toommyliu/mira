@@ -10,6 +10,7 @@ mod environment;
 mod events;
 mod feeds;
 mod house;
+mod http;
 mod inputs;
 mod inventory;
 mod limits;

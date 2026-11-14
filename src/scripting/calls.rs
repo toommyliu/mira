@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{
     army, auth, automation, bank, combat, drops, environment, events,
     feeds::{self, Feeds},
-    house, inventory, packets, player, players, quests,
+    house, http, inventory, packets, player, players, quests,
     runtime::Command,
     shops, world,
 };
@@ -52,6 +52,7 @@ pub(crate) enum Request {
     Packets(packets::Request),
     Events(events::Request),
     Feeds(feeds::Request),
+    Http(http::Request),
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -112,6 +113,7 @@ struct RunCalls {
 pub(crate) struct RunState {
     feeds: Feeds,
     army: army::Membership,
+    http: http::Client,
 }
 
 impl Calls {
@@ -202,6 +204,7 @@ async fn serve(
             events::serve(bridge, |wants| bridge.subscribe(wants), feeds, request)
         }
         Request::Feeds(request) => feeds::serve(feeds, request).await,
+        Request::Http(request) => Ok(http::serve(&state.http, request).await),
         Request::Player(request) => {
             player::serve(bridge, |wants| bridge.subscribe(wants), request).await
         }

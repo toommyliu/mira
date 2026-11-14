@@ -20,6 +20,7 @@ use super::{
     events::Request as EV,
     feeds::{FeedId, Request as F},
     house::Request as H,
+    http::{Method as HM, Request as HR},
     inventory::{Request as I, TempRequest as T},
     packets::Request as PK,
     player::Request as P,
@@ -1696,6 +1697,111 @@ export default function* () {
                 auto_zone: Some(true),
             }),
         ]
+    );
+}
+
+#[test]
+fn http_requests_reach_the_player_typed_and_fail_with_tagged_errors() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import * as Effect from "effect/Effect";
+import * as Http from "mira/http";
+
+export default function* () {
+  const response = yield* Http.request("https://example.com/item", { method: "POST", json: { a: 1 }, timeout: "5 seconds" });
+  const item = yield* Http.json(response);
+  console.log(`${response.ok} ${response.headers["x-a"]} ${JSON.stringify(item)}`);
+  for (const path of ["missing", "html"]) {
+    const error = yield* Http.request(`https://example.com/${path}`).pipe(Effect.flatMap(Http.json), Effect.flip);
+    console.log(`${error._tag} ${error.reason} ${error.response.status}`);
+  }
+  const error = yield* Http.request("https://example.com/down", { headers: { "Content-Type": "text/plain" }, body: "x" }).pipe(Effect.flip);
+  console.log(`${error._tag} ${error.reason} ${error.url} ${error.message}`);
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  for (const options of [{ json: 1n }, { json: cyclic }, { timeout: -1 }]) {
+    const invalid = yield* Http.request("https://example.com/invalid", options).pipe(Effect.flip);
+    console.log(`${invalid._tag} ${invalid.reason}`);
+  }
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| {
+            let Request::Http(request) = request else {
+                return None;
+            };
+            let (status, text) = match request.url.rsplit('/').next().unwrap() {
+                "item" => (200, r#"{"id":7}"#),
+                "missing" => (404, ""),
+                "html" => (200, "<html>"),
+                _ => {
+                    return Some(Ok(
+                        json!({ "ok": false, "reason": "network", "message": "connection refused" }),
+                    ));
+                }
+            };
+            Some(Ok(json!({
+                "ok": true,
+                "status": status,
+                "url": request.url,
+                "headers": { "x-a": "b" },
+                "text": text,
+            })))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            r#"true b {"id":7}"#,
+            "ResponseError status 404",
+            "ResponseError invalidJson 200",
+            "RequestError network https://example.com/down connection refused",
+            "RequestError invalidRequest",
+            "RequestError invalidRequest",
+            "RequestError invalidRequest",
+        ]
+    );
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let get = |path: &str| HR {
+        url: format!("https://example.com/{path}"),
+        method: HM::Get,
+        headers: Default::default(),
+        body: None,
+        timeout_ms: None,
+    };
+    assert_eq!(
+        requests,
+        [
+            HR {
+                method: HM::Post,
+                headers: [("content-type".into(), "application/json".into())].into(),
+                body: Some(r#"{"a":1}"#.into()),
+                timeout_ms: Some(5000),
+                ..get("item")
+            },
+            get("missing"),
+            get("html"),
+            HR {
+                headers: [("Content-Type".into(), "text/plain".into())].into(),
+                body: Some("x".into()),
+                ..get("down")
+            },
+        ]
+        .map(Request::Http)
     );
 }
 
