@@ -256,16 +256,16 @@ impl RuffleView {
                         Output::Identity(identity) => {
                             if this
                                 .update(cx, |this: &mut Self, cx| {
-                                    let unlinked = this.account.is_none();
-                                    if let Some(identity) = &identity {
-                                        this.use_account_settings(
-                                            AccountId::of(&identity.name),
-                                            cx,
-                                        );
-                                        if unlinked {
-                                            cx.emit(Identified(identity.name.clone()));
+                                    let unlinked = match &identity {
+                                        Some(identity) => {
+                                            this.use_account_settings(
+                                                AccountId::of(&identity.name),
+                                                cx,
+                                            );
+                                            this.identify(&identity.name, cx)
                                         }
-                                    }
+                                        None => this.account.is_none(),
+                                    };
                                     this.bar.identified(identity);
                                     if unlinked {
                                         this.changed(cx);

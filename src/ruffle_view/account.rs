@@ -5,7 +5,7 @@ use mira_ui::Tone;
 
 use super::{Loading, RuffleView};
 use crate::{
-    accounts::Account,
+    accounts::{Account, AccountId},
     automation::{auto_relogin::Phase, sign_in::Status},
     scripting::Launch,
 };
@@ -23,8 +23,23 @@ pub(crate) struct Identified(pub(crate) String);
 impl EventEmitter<Identified> for RuffleView {}
 
 pub(super) struct Link {
+    name: String,
     username: String,
     queued: Option<Launch>,
+}
+
+impl Link {
+    fn new(account: &Account, queued: Option<Launch>) -> Self {
+        Self {
+            name: account.name.clone(),
+            username: account.username.clone(),
+            queued,
+        }
+    }
+
+    fn id(&self) -> AccountId {
+        AccountId::of(&self.username)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,10 +123,7 @@ impl RuffleView {
         script: Option<Launch>,
         cx: &mut Context<Self>,
     ) {
-        self.account = Some(Link {
-            username: account.username.clone(),
-            queued: script,
-        });
+        self.account = Some(Link::new(account, script));
         self.use_account_settings(account.id(), cx);
         self.status = None;
         self.session
@@ -120,11 +132,18 @@ impl RuffleView {
     }
 
     pub(super) fn adopt(&mut self, account: &Account, cx: &mut Context<Self>) {
-        self.account = Some(Link {
-            username: account.username.clone(),
-            queued: None,
-        });
+        self.account = Some(Link::new(account, None));
         self.changed(cx);
+    }
+
+    pub(super) fn identify(&mut self, player: &str, cx: &mut Context<Self>) -> bool {
+        let id = AccountId::of(player);
+        if self.account.as_ref().is_some_and(|link| link.id() == id) {
+            return false;
+        }
+        self.account = None;
+        cx.emit(Identified(player.to_owned()));
+        true
     }
 
     pub(super) fn signed_in(&mut self, status: Status, cx: &mut Context<Self>) {
@@ -325,6 +344,14 @@ impl RuffleView {
 
     pub(super) fn username(&self) -> Option<&str> {
         self.account.as_ref().map(|link| link.username.as_str())
+    }
+
+    pub(super) fn account_name(&self) -> Option<&str> {
+        self.account.as_ref().map(|link| link.name.as_str())
+    }
+
+    pub(super) fn account_id(&self) -> Option<AccountId> {
+        self.account.as_ref().map(Link::id)
     }
 
     pub(super) fn signed_out(&self) -> bool {
