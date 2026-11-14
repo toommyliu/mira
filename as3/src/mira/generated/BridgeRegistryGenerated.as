@@ -60,6 +60,7 @@ package mira.generated
       external.externalize("extras.setBankSearchEnabled", Extras.setBankSearchEnabled);
       external.externalize("extras.setChatRecallEnabled", Extras.setChatRecallEnabled);
       external.externalize("extras.setCopyMenusEnabled", Extras.setCopyMenusEnabled);
+      external.externalize("extras.setPercentagesEnabled", Extras.setPercentagesEnabled);
       external.externalize("flash.callGameFunction", Main.callGameFunction);
       external.externalize("flash.callGameFunction0", Main.callGameFunction0);
       external.externalize("flash.getArrayObject", Main.getArrayObject);

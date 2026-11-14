@@ -15,5 +15,10 @@ package mira.ui {
     public static function setBankSearchEnabled(enabled:Boolean):void {
       BankSearch.setEnabled(enabled);
     }
+
+    [BridgeExport]
+    public static function setPercentagesEnabled(enabled:Boolean):void {
+      Percentages.setEnabled(enabled);
+    }
   }
 }
