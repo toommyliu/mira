@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import * as Http from "mira/http";
+import * as S from "mira/schema";
 
-const Echo = Schema.Struct({
-  json: Schema.Struct({ hello: Schema.String }),
-  headers: Schema.Record(Schema.String, Schema.String),
+const Echo = S.object({
+  json: S.object({ hello: S.string() }),
+  headers: S.record(S.string()),
 });
 
 export default function* () {
@@ -15,7 +15,7 @@ export default function* () {
     method: "POST",
     headers: { "X-Mira": "test" },
     json: { hello: "world" },
-  }).pipe(Effect.flatMap(Http.json), Effect.flatMap(Schema.decodeUnknownEffect(Echo)));
+  }).pipe(Effect.flatMap(Http.json), Effect.flatMap(Echo.parse));
   console.log(`echoed ${echo.json.hello}, user agent ${echo.headers["User-Agent"]}`);
 
   const missing = yield* Http.request("https://httpbin.org/status/404").pipe(

@@ -119,16 +119,20 @@ export const request = (
   );
 
 /**
- * Parses a 2xx response as JSON. Decode the result yourself, for example with `Schema.decodeUnknownEffect`.
+ * Parses a 2xx response as JSON. Check its shape yourself, for example with `mira/schema`.
  *
  * @example
  * ```ts
  * import * as Effect from "effect/Effect";
  * import * as Http from "mira/http";
+ * import * as S from "mira/schema";
+ *
+ * const Release = S.object({ tag_name: S.string() });
  *
  * export default function* () {
  *   const release = yield* Http.request("https://api.github.com/repos/o/r/releases/latest").pipe(
  *     Effect.flatMap(Http.json),
+ *     Effect.flatMap(Release.parse),
  *   );
  * }
  * ```

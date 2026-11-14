@@ -16,6 +16,7 @@ const miraModules = [
   { specifier: "mira", source: "mira", out: "mira/index" },
   { specifier: "mira/autorelogin", source: "autorelogin", out: "mira/autorelogin" },
   { specifier: "mira/http", source: "http", out: "mira/http" },
+  { specifier: "mira/schema", source: "schema", out: "mira/schema" },
 ] as const;
 
 async function effectModules(): Promise<string[]> {

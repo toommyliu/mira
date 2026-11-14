@@ -1806,6 +1806,44 @@ export default function* () {
 }
 
 #[test]
+fn schemas_parse_values_and_fail_with_every_problem() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import * as Effect from "effect/Effect";
+import * as S from "mira/schema";
+
+const Farm = S.object({
+  map: S.string().min(1),
+  kills: S.number().int().min(1).default(10),
+  mode: S.literal("solo", "party"),
+  drops: S.array(S.string()).optional(),
+});
+
+export default function* () {
+  const farm = yield* Farm.parse({ map: "battleunderb", mode: "solo", extra: true });
+  console.log(JSON.stringify(farm));
+  console.log(`${Farm.is(farm)} ${Farm.is({ map: "" })}`);
+  const error = yield* Farm.parse({ map: "", kills: 2.5, mode: "raid", drops: ["Bone", 3] }).pipe(Effect.flip);
+  console.log(`${error._tag} ${JSON.stringify(error.issues.map((issue) => issue.path))}`);
+  yield* S.object({ quests: S.array(S.object({ id: S.number() })) }).parse({ quests: [{ id: "7" }] });
+}
+"#,
+    )]);
+    assert_eq!(
+        finished.logs,
+        [
+            r#"{"map":"battleunderb","kills":10,"mode":"solo"}"#,
+            "true false",
+            r#"ParseError [["map"],["kills"],["mode"],["drops",1]]"#,
+        ]
+    );
+    assert_eq!(
+        failure(&finished.outcome).0,
+        r#"quests[0].id: Expected number, got "7""#
+    );
+}
+
+#[test]
 fn environment_requests_reach_the_player_typed() {
     use crate::{automation::quests::Registered, domain::inventory::ItemQuery};
 
