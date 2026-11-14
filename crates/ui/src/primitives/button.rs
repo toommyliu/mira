@@ -15,7 +15,9 @@ use gpui::{
 use super::{Icon, Spinner, icon, tooltip};
 use crate::{
     ActiveTheme as _, PointerCursor as _, h_flex, nav,
-    theme::{CONTROL_MD, CONTROL_SM, CONTROL_XS, LINE_BODY, TEXT_BODY, TEXT_SMALL},
+    theme::{
+        CONTROL_MD, CONTROL_SM, CONTROL_XS, DISABLED_OPACITY, LINE_BODY, TEXT_BODY, TEXT_SMALL,
+    },
 };
 
 pub type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -24,12 +26,29 @@ pub(crate) const FACE_GROUP: &str = "face";
 
 const MIN_PRESS: Duration = Duration::from_millis(120);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Joined {
+    Next,
+    Previous,
+}
+
 pub(crate) struct Face {
     pub radius: Pixels,
+    pub joined: Option<Joined>,
+    pub divider: Option<Hsla>,
     pub bg: Hsla,
     pub border: Option<Hsla>,
     pub states: Option<(Hsla, Hsla)>,
     pub edge: Vec<BoxShadow>,
+}
+
+fn corners(element: Div, radius: Pixels, joined: Option<Joined>) -> Div {
+    let element = element.rounded(radius);
+    match joined {
+        Some(Joined::Next) => element.rounded_r(px(0.0)),
+        Some(Joined::Previous) => element.rounded_l(px(0.0)),
+        None => element,
+    }
 }
 
 impl Face {
@@ -49,14 +68,16 @@ impl Face {
         }
         let pressed =
             move |style: StyleRefinement, active: Hsla| style.bg(active).shadow(Vec::new());
-        let face = div()
+        let face = corners(div(), self.radius, self.joined)
             .id("face")
             .absolute()
             .inset_0()
-            .rounded(self.radius)
             .bg(self.bg)
             .when_some(self.border, |face, border| {
                 face.border_1().border_color(border)
+            })
+            .when_some(self.divider, |face, divider| {
+                face.border_l_1().border_color(divider)
             })
             .shadow(self.edge);
         match self.states {
@@ -143,6 +164,7 @@ pub struct Button {
     attachments: Vec<AnyElement>,
     role: Role,
     value: Option<SharedString>,
+    joined: Option<Joined>,
     style: StyleRefinement,
 }
 
@@ -169,6 +191,7 @@ impl Button {
             attachments: Vec::new(),
             role: Role::Button,
             value: None,
+            joined: None,
             style: StyleRefinement::default(),
         }
     }
@@ -203,6 +226,11 @@ impl Button {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn joined(mut self, joined: Joined) -> Self {
+        self.joined = Some(joined);
         self
     }
 
@@ -339,12 +367,16 @@ impl RenderOnce for Button {
                 None,
             ),
         };
-        let fg = if self.disabled {
-            theme.text_disabled
-        } else {
-            fg
+        let divider = fg.opacity(0.2);
+        let fg = match (self.disabled, self.joined) {
+            (false, _) => fg,
+            (true, None) => theme.text_disabled,
+            (true, Some(_)) => fg.opacity(DISABLED_OPACITY),
         };
-        let bg = if self.disabled && matches!(self.variant, Variant::Primary | Variant::Danger) {
+        let bg = if self.disabled
+            && self.joined.is_none()
+            && matches!(self.variant, Variant::Primary | Variant::Danger)
+        {
             theme.fill
         } else {
             bg
@@ -393,6 +425,10 @@ impl RenderOnce for Button {
             .relative()
             .flex_none()
             .justify_center()
+            .when(
+                self.joined == Some(Joined::Previous) && border.is_some(),
+                |button| button.ml(px(-1.0)),
+            )
             .h(height)
             .map(|button| {
                 if icon_only {
@@ -412,11 +448,14 @@ impl RenderOnce for Button {
             .child(
                 Face {
                     radius: theme.radius.control,
+                    joined: self.joined,
+                    divider: (self.joined == Some(Joined::Previous) && border.is_none())
+                        .then_some(divider),
                     bg,
-                    border: border.filter(|_| !self.disabled),
+                    border: border.filter(|_| !self.disabled || self.joined.is_some()),
                     states: (!inert).then_some((hover, active)),
                     edge: if matches!(self.variant, Variant::Ghost | Variant::Outline)
-                        || self.disabled
+                        || (self.disabled && self.joined.is_none())
                     {
                         Vec::new()
                     } else {
@@ -462,7 +501,15 @@ impl RenderOnce for Button {
                 )
             })
             .when(ring, |button| {
-                button.child(theme.focus_ring(theme.radius.control))
+                button.child(match self.joined {
+                    None => theme.focus_ring(theme.radius.control),
+                    Some(joined) => corners(div(), theme.radius.control, Some(joined))
+                        .absolute()
+                        .inset_0()
+                        .border_2()
+                        .border_color(theme.focus)
+                        .child(nav::reveal_probe()),
+                })
             });
         button.style().refine(&self.style);
         match tip {

@@ -8,7 +8,7 @@ use mira_ui::{
     primitives::{
         Activity, Alert, Badge, Button, Dialog, Dot, DropdownMenu, Icon, List, ListItem, MenuItem,
         Menubar, Popover, Select, SelectOption, Switch, Tab, Tabs, ToggleGroup, ToggleItem,
-        button::{Size, Variant},
+        button::{Joined, Size, Variant},
     },
     snapshot,
     theme::{SYSTEM_SANS, TEXT_BODY},
@@ -45,7 +45,7 @@ fn scene(
 
 #[test]
 fn snapshot_controls() {
-    scene("controls", 620.0, 300.0, |_, _| {
+    scene("controls", 620.0, 340.0, |_, _| {
         div()
             .flex()
             .flex_col()
@@ -66,6 +66,50 @@ fn snapshot_controls() {
                     .child(Button::new("queue", "Add to queue"))
                     .child(Button::new("options", "Options").variant(Variant::Ghost))
                     .child(Button::new("trash", "Move to Trash").variant(Variant::Danger)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .child(
+                                Button::new("load", "Load")
+                                    .variant(Variant::Primary)
+                                    .joined(Joined::Next),
+                            )
+                            .child(
+                                Button::icon("load-more", Icon::ChevronDown, "Other loads")
+                                    .variant(Variant::Primary)
+                                    .joined(Joined::Previous),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .child(
+                                Button::new("load-off", "Load")
+                                    .variant(Variant::Primary)
+                                    .disabled(true)
+                                    .joined(Joined::Next),
+                            )
+                            .child(
+                                Button::icon("load-off-more", Icon::ChevronDown, "Other loads")
+                                    .variant(Variant::Primary)
+                                    .joined(Joined::Previous),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .child(Button::new("export", "Export").joined(Joined::Next))
+                            .child(
+                                Button::icon("export-more", Icon::ChevronDown, "Export options")
+                                    .variant(Variant::Secondary)
+                                    .joined(Joined::Previous),
+                            ),
+                    ),
             )
             .child(
                 div()
