@@ -56,6 +56,7 @@ pub struct MenuItem {
     description: Option<SharedString>,
     children: Vec<AnyElement>,
     shortcut: Option<SharedString>,
+    key: Option<SharedString>,
     checked: Option<bool>,
     mark: Mark,
     disabled: bool,
@@ -73,6 +74,7 @@ impl MenuItem {
             description: None,
             children: Vec::new(),
             shortcut: None,
+            key: None,
             checked: None,
             mark: Mark::Check,
             disabled: false,
@@ -140,6 +142,11 @@ impl MenuItem {
         self
     }
 
+    pub fn key(mut self, key: impl Into<SharedString>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
         self
@@ -176,6 +183,7 @@ impl ParentElement for MenuItem {
 
 pub(crate) struct Meta {
     label: SharedString,
+    key: Option<SharedString>,
     navigable: bool,
     on_select: Option<Handler>,
     keep_open: bool,
@@ -187,6 +195,7 @@ fn metas(items: &[MenuItem]) -> Rc<[Meta]> {
         .iter()
         .map(|item| Meta {
             label: item.label.clone(),
+            key: item.key.clone(),
             navigable: item.navigable(),
             on_select: match &item.kind {
                 Kind::Action(handler) if !item.disabled => Some(handler.clone()),
@@ -549,6 +558,16 @@ fn typeahead(key: &str, metas: &[Meta], current: Option<usize>) -> Option<usize>
     )
 }
 
+fn keyed(event: &KeyDownEvent, metas: &[Meta]) -> Option<usize> {
+    if event.keystroke.modifiers.modified() {
+        return None;
+    }
+    let key = event.keystroke.key.as_str();
+    metas
+        .iter()
+        .position(|meta| meta.navigable && meta.key.as_deref() == Some(key))
+}
+
 fn key_down(
     metas: &Rc<[Meta]>,
     kind: PopupKind,
@@ -582,6 +601,11 @@ fn key_down(
             cx.stop_propagation();
             return;
         }
+        if let Some(index) = keyed(event, sub) {
+            activate(sub, index, state, true, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         let next = Step::from_key(event, Axis::Vertical)
             .and_then(|step| nav::step(sub_highlight, sub.len(), step, true, |i| sub[i].navigable))
             .or_else(|| typeahead(key, sub, sub_highlight));
@@ -609,6 +633,9 @@ fn key_down(
                 (None, PopupKind::ListBox) => {}
                 (None, PopupKind::Menu) => return,
             }
+        }
+        _ if let Some(index) = keyed(event, metas) => {
+            activate(metas, index, state, true, window, cx);
         }
         _ => {
             let next = Step::from_key(event, Axis::Vertical)
@@ -725,6 +752,7 @@ fn rows(
                 description,
                 children,
                 shortcut,
+                key,
                 checked,
                 mark,
                 disabled,
@@ -814,7 +842,9 @@ fn rows(
                         })
                         .aria_position_in_set(position)
                         .aria_size_of_set(count)
-                        .when_some(shortcut.clone(), |row, keys| row.aria_keyshortcuts(keys))
+                        .when_some(shortcut.clone().or(key), |row, keys| {
+                            row.aria_keyshortcuts(keys)
+                        })
                         .when_some(checked, |row, on| match kind {
                             PopupKind::ListBox => row.aria_selected(on),
                             PopupKind::Menu => {

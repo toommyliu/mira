@@ -7,7 +7,7 @@ use gpui::{
 };
 use mira_ui::{
     FOCUS_SCOPE,
-    primitives::{Button, Dialog, Icon, Select},
+    primitives::{Button, Dialog, DropdownMenu, Icon, MenuItem, Select},
 };
 
 struct Rooms {
@@ -1148,6 +1148,58 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
     press(cx, "down");
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1", "rename 2"]);
+}
+
+struct Skills {
+    focus: FocusHandle,
+    chosen: Rc<Cell<Option<usize>>>,
+}
+
+impl Render for Skills {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let chosen = self.chosen.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("add")
+                    .trigger(Button::new("add-trigger", "Add"))
+                    .items(move |_, _| {
+                        (0..3)
+                            .map(|slot| {
+                                let chosen = chosen.clone();
+                                MenuItem::action(format!("Skill {slot}"), move |_, _| {
+                                    chosen.set(Some(slot))
+                                })
+                                .key(slot.to_string())
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn an_open_menu_chooses_the_item_whose_key_is_pressed(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let chosen = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Skills {
+            focus,
+            chosen: chosen.clone(),
+        }
+    });
+    cx.run_until_parked();
+    press(cx, "2");
+    assert_eq!(chosen.get(), None);
+    press(cx, "tab");
+    press(cx, "enter");
+    press(cx, "2");
+    assert_eq!(chosen.get(), Some(2));
 }
 
 struct NoTabs(FocusHandle);
