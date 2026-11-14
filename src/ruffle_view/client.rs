@@ -36,7 +36,9 @@ use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
     ruffle::{Inbox, Msg, extras},
-    script_inputs, settings,
+    script_inputs,
+    scripting::Values,
+    settings,
 };
 
 actions!(
@@ -407,10 +409,17 @@ impl Client {
                 if self.launches.remove(&id) {
                     cx.notify();
                 }
-                let launch = script_inputs::launch(script, cx);
-                self.sessions[index]
-                    .view
-                    .update(cx, |view, cx| view.queue_script(launch, replace, cx));
+                let values = match script_inputs::values(&script, cx) {
+                    Ok(values) => values,
+                    Err(error) => {
+                        self.unopened.insert(id, format!("{error:#}").into());
+                        cx.notify();
+                        return;
+                    }
+                };
+                self.sessions[index].view.update(cx, |view, cx| {
+                    view.queue_script(script, values, replace, cx);
+                });
             }
             _ => self.wait_to_launch(
                 Launch {
@@ -500,11 +509,17 @@ impl Client {
         };
         match self.session_of(&id, cx) {
             Some(index) => {
-                let launch = script.map(|script| script_inputs::launch(script, cx));
+                let queued = match queued_script(script, cx) {
+                    Ok(queued) => queued,
+                    Err(error) => {
+                        self.unopened.insert(id, format!("{error:#}").into());
+                        None
+                    }
+                };
                 self.sessions[index].view.update(cx, |view, cx| {
                     view.sign_in_again(&account, cx);
-                    if let Some(launch) = launch {
-                        view.queue_script(launch, replace, cx);
+                    if let Some((script, values)) = queued {
+                        view.queue_script(script, values, replace, cx);
                     }
                 });
             }
@@ -523,10 +538,14 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        let launch = script.map(|script| script_inputs::launch(script, cx));
+        let queued = queued_script(script, cx);
         let view = self.open_session(Some(account), window, cx)?;
-        view.update(cx, |view, cx| view.sign_in(account, launch, cx));
-        Ok(())
+        let (queued, unqueued) = match queued {
+            Ok(queued) => (queued, None),
+            Err(error) => (None, Some(error)),
+        };
+        view.update(cx, |view, cx| view.sign_in(account, queued, cx));
+        unqueued.map_or(Ok(()), Err)
     }
 
     pub(crate) fn restart_script(&mut self, account: &AccountId, cx: &mut Context<Self>) {
@@ -544,7 +563,7 @@ impl Client {
         if let Some(index) = self.session_of(account, cx) {
             self.sessions[index]
                 .view
-                .update(cx, |view, cx| view.cancel_script(cx));
+                .update(cx, |view, cx| view.stop_script(cx));
         }
     }
 
@@ -1205,6 +1224,12 @@ impl Focusable for Client {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus.clone()
     }
+}
+
+fn queued_script(script: Option<PathBuf>, cx: &App) -> anyhow::Result<Option<(PathBuf, Values)>> {
+    script
+        .map(|script| script_inputs::values(&script, cx).map(|values| (script, values)))
+        .transpose()
 }
 
 #[cfg(test)]

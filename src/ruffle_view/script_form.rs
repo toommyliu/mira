@@ -3,7 +3,7 @@ use serde_json::Value as Json;
 
 use crate::{
     account_settings::{RoomNumber, Rooms},
-    scripting::{Definition, Field, Kind, Launch, Values, check_number, number},
+    scripting::{Definition, Field, Kind, Values, check_number, number},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,37 +176,23 @@ pub(super) fn shown(field: &Field, value: &Json) -> SharedString {
     }
 }
 
-pub(super) struct Queued {
-    pub(super) name: SharedString,
-    #[expect(dead_code, reason = "the queue runner starts queued launches")]
-    pub(super) launch: Launch,
-    pub(super) rows: Vec<(SharedString, SharedString)>,
+fn shown_values<'a>(
+    definition: &'a Definition,
+    values: &'a Values,
+) -> impl Iterator<Item = (&'a Field, Json)> {
+    definition.fields().iter().filter_map(|field| {
+        let value = values
+            .get(&field.key)
+            .cloned()
+            .or_else(|| field.initial())?;
+        Some((field, value))
+    })
 }
 
-impl Queued {
-    pub(super) fn new(
-        name: SharedString,
-        launch: Launch,
-        definition: Option<&Definition>,
-        values: &Values,
-    ) -> Self {
-        let rows: Vec<(SharedString, SharedString)> = definition
-            .map(Definition::fields)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|field| {
-                let value = values.get(&field.key)?;
-                Some((field.label.clone().into(), shown(field, value)))
-            })
-            .collect();
-        Self { name, launch, rows }
-    }
-}
-
-#[derive(Default)]
-pub(super) struct TabState {
-    pub(super) queue: Vec<Queued>,
-    pub(super) queue_running: bool,
+pub(super) fn rows(definition: &Definition, values: &Values) -> Vec<(SharedString, SharedString)> {
+    shown_values(definition, values)
+        .map(|(field, value)| (field.label.clone().into(), shown(field, &value)))
+        .collect()
 }
 
 pub(super) const ROOMS: [&str; 3] = ["Public rooms", "Random private room", "Specific room"];
@@ -371,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn a_queued_script_keeps_a_readable_copy_of_its_values() {
+    fn a_queued_script_shows_a_readable_copy_of_its_values() {
         let definition = definition();
         let values = saved(json!({
             "monster": "Frogzard",
@@ -381,17 +367,8 @@ mod tests {
             "day": "All",
             "buy": [],
         }));
-        let queued = Queued::new(
-            "hunt.ts".into(),
-            Launch {
-                entry: "hunt.ts".into(),
-                inputs: crate::scripting::Supplied::Values(values.clone()),
-            },
-            Some(&definition),
-            &values,
-        );
         assert_eq!(
-            queued.rows,
+            rows(&definition, &values),
             [
                 ("Monster", "Frogzard"),
                 ("Kills", "12"),
