@@ -30,6 +30,7 @@ pub(crate) enum SettingsRequest {
         #[serde(default, deserialize_with = "present")]
         custom_guild: Option<Option<String>>,
         anti_counter: Option<bool>,
+        anti_afk: Option<bool>,
         auto_zone: Option<bool>,
     },
 }
@@ -100,6 +101,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
             custom_name,
             custom_guild,
             anti_counter,
+            anti_afk,
             auto_zone,
         } => {
             let settings = automation.update_game_settings(|settings| {
@@ -118,6 +120,7 @@ pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) 
                 apply(&mut settings.custom_name, custom_name);
                 apply(&mut settings.custom_guild, custom_guild);
                 apply(&mut settings.anti_counter, anti_counter);
+                apply(&mut settings.anti_afk, anti_afk);
                 apply(&mut settings.auto_zone, auto_zone);
             });
             let frame_rate = match frame_rate {
@@ -203,6 +206,7 @@ mod tests {
             "op": "update",
             "hidePlayers": true,
             "autoZone": true,
+            "antiAfk": true,
             "rendering": "interface-only",
             "walkSpeed": 500,
             "frameRate": 500,
@@ -226,6 +230,7 @@ mod tests {
                 "customName": "player1",
                 "customGuild": null,
                 "antiCounter": true,
+                "antiAfk": true,
                 "autoZone": true,
             }))
         );

@@ -1484,7 +1484,7 @@ export default function* () {
   yield* AutoRelogin.get();
   yield* AutoRelogin.update({ enabled: true, server: null, delaySeconds: 10 });
   yield* Settings.get();
-  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null, antiCounter: false, autoZone: true });
+  yield* Settings.update({ hidePlayers: true, walkSpeed: 12, customGuild: null, antiCounter: false, antiAfk: true, autoZone: true });
 }
 "#,
     )]);
@@ -1533,6 +1533,7 @@ export default function* () {
                 custom_name: None,
                 custom_guild: Some(None),
                 anti_counter: Some(false),
+                anti_afk: Some(true),
                 auto_zone: Some(true),
             }),
         ]

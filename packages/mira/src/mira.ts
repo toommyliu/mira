@@ -708,6 +708,8 @@ export type GameSettings = {
    * `Combat.attack`, `useSkill` and `kill` skip a countering monster, and auto attack waits it out.
    */
   readonly antiCounter: boolean;
+  /** Clears AFK 1 to 1.5 seconds after the server marks you AFK, so you stay active while idle. */
+  readonly antiAfk: boolean;
   /**
    * Walks to the safe side when a boss calls a zone in ledgermayne, moreskulls, ultradage,
    * darkcarnax, astralshrine, queeniona and magnumopus. Does nothing in other maps.
