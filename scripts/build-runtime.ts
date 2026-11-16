@@ -66,14 +66,33 @@ async function emitMiraDeclarations(): Promise<string> {
   return outdir;
 }
 
-function editorConfig(effectNames: readonly string[]): string {
+// TypeScript never auto-imports from a node_modules folder outside the script's ancestors, so
+// declarations live there and each public specifier maps to a stub that re-exports one of them.
+function publicModules(effectNames: readonly string[]): { specifier: string; types: string }[] {
+  return [
+    ...miraModules.map((module) => ({
+      specifier: module.specifier,
+      types: `node_modules/mira/${module.source}.d.ts`,
+    })),
+    { specifier: "effect", types: "node_modules/effect/index.d.ts" },
+    ...effectNames.map((name) => ({
+      specifier: `effect/${name}`,
+      types: `node_modules/effect/${name}.d.ts`,
+    })),
+  ];
+}
+
+function reexport(stub: string, types: string): string {
+  const path = relative(dirname(stub), types).replace(/\.d\.ts$/, ".ts");
+  return `export * from ${JSON.stringify(path.startsWith(".") ? path : `./${path}`)};\n`;
+}
+
+function editorConfig(specifiers: readonly string[]): string {
   const paths: Record<string, string[]> = {};
-  for (const module of miraModules) {
-    paths[module.specifier] = [`./mira/${module.source}.d.ts`];
-  }
-  paths["effect"] = ["./effect/index.d.ts"];
-  for (const name of effectNames) paths[`effect/${name}`] = [`./effect/${name}.d.ts`];
+  for (const specifier of specifiers) paths[specifier] = [`./${specifier}.d.ts`];
   const config = {
+    files: ["./globals.d.ts"],
+    include: ["${configDir}/**/*"],
     compilerOptions: {
       target: "es2023",
       lib: ["es2023"],
@@ -85,8 +104,7 @@ function editorConfig(effectNames: readonly string[]): string {
       allowJs: true,
       noEmit: true,
       skipLibCheck: true,
-      typeRoots: ["./ambient"],
-      types: ["mira-globals"],
+      types: [],
       paths,
     },
   };
@@ -103,15 +121,21 @@ async function buildTypes(outdir: string, effectNames: readonly string[]): Promi
           declarations,
           miraModules.map((module) => `${module.source}.d.ts`),
         )
-      ).map((file) => ({ from: join(declarations, file), to: join("mira", file) })),
+      ).map((file) => ({
+        from: join(declarations, file),
+        to: join("node_modules", "mira", file),
+      })),
       ...(
         await declarationClosure(join(effect, "dist"), [
           "index.d.ts",
           ...effectNames.map((name) => `${name}.d.ts`),
         ])
-      ).map((file) => ({ from: join(effect, "dist", file), to: join("effect", file) })),
-      { from: join(effect, "LICENSE"), to: join("effect", "LICENSE") },
-      { from: join(runtime, "globals.d.ts"), to: join("ambient", "mira-globals", "index.d.ts") },
+      ).map((file) => ({
+        from: join(effect, "dist", file),
+        to: join("node_modules", "effect", file),
+      })),
+      { from: join(effect, "LICENSE"), to: join("node_modules", "effect", "LICENSE") },
+      { from: join(runtime, "globals.d.ts"), to: "globals.d.ts" },
     ];
     for (const { from, to } of sources) {
       await mkdir(dirname(join(outdir, to)), { recursive: true });
@@ -120,7 +144,16 @@ async function buildTypes(outdir: string, effectNames: readonly string[]): Promi
   } finally {
     await rm(declarations, { recursive: true, force: true });
   }
-  await writeFile(join(outdir, "tsconfig.json"), editorConfig(effectNames));
+  const modules = publicModules(effectNames);
+  for (const { specifier, types } of modules) {
+    const stub = `${specifier}.d.ts`;
+    await mkdir(dirname(join(outdir, stub)), { recursive: true });
+    await writeFile(join(outdir, stub), reexport(stub, types));
+  }
+  await writeFile(
+    join(outdir, "tsconfig.json"),
+    editorConfig(modules.map((module) => module.specifier)),
+  );
 }
 
 async function version(dir: string, files: readonly string[]): Promise<string> {
