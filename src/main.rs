@@ -18,6 +18,8 @@ mod script_inputs;
 mod scripting;
 mod settings;
 mod setups;
+#[cfg(any(test, feature = "storyboard"))]
+mod storyboard;
 
 use std::{iter, path::PathBuf};
 
@@ -28,7 +30,10 @@ use gpui::{
 
 actions!(mira, [Quit]);
 
+#[cfg_attr(feature = "storyboard", allow(unreachable_code))]
 fn main() -> anyhow::Result<()> {
+    #[cfg(feature = "storyboard")]
+    return storyboard::run();
     let logging = logging::init();
     let data = dirs::data_dir()
         .ok_or_else(|| anyhow::anyhow!("No application data directory"))?
