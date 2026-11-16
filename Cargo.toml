@@ -60,6 +60,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+[features]
+storyboard = []
+
 [lints]
 workspace = true
 
