@@ -1240,8 +1240,8 @@ export type LoopTauntTarget = {
   readonly players: readonly number[];
   /**
    * `"focus"` casts each time the target's Focus wears off. `{ includes }` casts each time a combat
-   * or server message with that text appears, ignoring case and extra spaces. Matches heard before
-   * a cast share it.
+   * or server message with that text appears, ignoring case and extra spaces. A match within a
+   * second of the last counted one is a copy of the same message and casts nothing.
    */
   readonly on: "focus" | { readonly includes: string };
   /**

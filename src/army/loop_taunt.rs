@@ -9,6 +9,7 @@ use crate::domain::rotation::normalized;
 const OFFER_TIMEOUT: Duration = Duration::from_secs(3);
 const FOCUS_GRACE: Duration = Duration::from_secs(3);
 const FOCUS_SLACK: Duration = Duration::from_secs(1);
+const MESSAGE_COPIES: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Assignment {
@@ -90,8 +91,8 @@ enum Trigger {
     },
     Message {
         text: String,
-        heard: Vec<u32>,
-        answered: u32,
+        pending: bool,
+        counted_at: Option<Instant>,
     },
 }
 
@@ -140,8 +141,8 @@ impl Orchestrator {
                     },
                     On::Message(text) => Trigger::Message {
                         text: normalized(&text),
-                        heard: vec![0; size],
-                        answered: 0,
+                        pending: false,
+                        counted_at: None,
                     },
                 };
                 Target {
@@ -189,12 +190,14 @@ impl Orchestrator {
                 && target.lives[player] == target.life
                 && let Trigger::Message {
                     text: wanted,
-                    heard,
-                    ..
+                    pending,
+                    counted_at,
                 } = &mut target.trigger
                 && text.contains(wanted.as_str())
+                && counted_at.is_none_or(|at| now >= at + MESSAGE_COPIES)
             {
-                heard[player] += 1;
+                *pending = true;
+                *counted_at = Some(now);
             }
         }
         self.settle(now);
@@ -253,7 +256,6 @@ impl Orchestrator {
     pub(crate) fn leave(&mut self, player: usize, now: Instant) {
         self.here[player] = false;
         for target in &mut self.targets {
-            target.trigger.forget(player);
             if let Some(position) = target.holding()
                 && target.players[position] == player
             {
@@ -428,9 +430,7 @@ impl Trigger {
     fn armed(&self) -> bool {
         match self {
             Trigger::Focus { up, .. } => !up,
-            Trigger::Message {
-                heard, answered, ..
-            } => heard.iter().max().is_some_and(|most| most > answered),
+            Trigger::Message { pending, .. } => *pending,
         }
     }
 
@@ -477,21 +477,8 @@ impl Trigger {
     }
 
     fn absorb(&mut self) {
-        if let Trigger::Message {
-            heard, answered, ..
-        } = self
-        {
-            *answered = heard.iter().copied().max().unwrap_or(0);
-        }
-    }
-
-    fn forget(&mut self, player: usize) {
-        if let Trigger::Message {
-            heard, answered, ..
-        } = self
-        {
-            heard[player] = 0;
-            *answered = (*answered).min(heard.iter().copied().max().unwrap_or(0));
+        if let Trigger::Message { pending, .. } = self {
+            *pending = false;
         }
     }
 
@@ -743,23 +730,31 @@ mod tests {
         taunt.heard(0, None, "the boss prepares a heavy attack!", now);
         assert_eq!(offered(&taunt, 3), [0]);
         land(&mut taunt, 0, now);
-        taunt.heard(1, None, "The boss prepares a heavy attack!", now);
+        let late = now + MESSAGE_COPIES - Duration::from_millis(1);
+        taunt.heard(1, None, "The boss prepares a heavy attack!", late);
         assert_eq!(
             offered(&taunt, 3),
             NOBODY,
             "player 2 heard the message late"
         );
-        taunt.heard(0, None, "The boss prepares a heavy attack!", now);
+        let next = now + MESSAGE_COPIES;
+        taunt.heard(0, None, "The boss prepares a heavy attack!", next);
         assert_eq!(offered(&taunt, 3), [1]);
-        land(&mut taunt, 1, now);
-        taunt.leave(0, now);
-        assert_eq!(offered(&taunt, 3), NOBODY);
-        taunt.heard(1, None, "The boss prepares a heavy attack!", now);
+        land(&mut taunt, 1, next);
+        taunt.leave(0, next);
+        taunt.heard(1, None, "The boss prepares a heavy attack!", next);
         assert_eq!(
             offered(&taunt, 3),
-            [1],
-            "player 2 heard one message fewer than player 1, who left, and their next one still counts"
+            NOBODY,
+            "player 2's copy of a message that player 1 answered before leaving"
         );
+        taunt.heard(
+            1,
+            None,
+            "The boss prepares a heavy attack!",
+            next + MESSAGE_COPIES,
+        );
+        assert_eq!(offered(&taunt, 3), [1]);
     }
 
     #[test]
