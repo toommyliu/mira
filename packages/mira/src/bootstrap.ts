@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 
 import { call } from "./call.ts";
+import { drive, type Yielded } from "./drive.ts";
 import { exited, exiting, failed, stopping, type ExitRequest } from "./run.ts";
 
 type Settle = {
@@ -18,7 +19,8 @@ const GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
 const program = (exported: unknown): Effect.Effect<unknown, unknown> | undefined => {
   if (Effect.isEffect(exported)) return exported as Effect.Effect<unknown, unknown>;
   if (exported instanceof GeneratorFunction) {
-    return Effect.gen(exported as () => Generator<Effect.Effect<unknown, unknown>, unknown>);
+    const body = exported as () => Generator<Yielded, unknown, unknown>;
+    return Effect.suspend(() => drive(body()));
   }
   return undefined;
 };
