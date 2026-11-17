@@ -183,7 +183,15 @@ pub(crate) async fn join(
     if here.is_some_and(|here| here.eq_ignore_ascii_case(name)) && in_room(loader, room)? {
         return match cell {
             Some(cell) => jump(loader, cell, Some(pad)).await,
-            None => Ok(true),
+            None => {
+                let Some(here) = bridge::player::get_cell(loader)? else {
+                    return Ok(false);
+                };
+                arrive(loader, JUMP_TIMEOUT, || {
+                    Ok(bridge::world::is_cell_ready(loader, &here, None)?.then_some(true))
+                })
+                .await
+            }
         };
     }
     let cell = cell.unwrap_or(DEFAULT_CELL);
@@ -537,6 +545,7 @@ mod tests {
         cell: String,
         pad: String,
         loading: u32,
+        cell_busy: bool,
         art: u32,
         transfer_lock: u32,
         joins: Vec<Vec<Value>>,
@@ -554,6 +563,7 @@ mod tests {
             cell: cell.into(),
             pad: "Spawn".into(),
             loading: 0,
+            cell_busy: false,
             art: 0,
             transfer_lock: 0,
             joins: Vec::new(),
@@ -660,6 +670,7 @@ mod tests {
                 },
                 "world.isCellReady" => Value::Bool(
                     place.loading == 0
+                        && !place.cell_busy
                         && place.cell.eq_ignore_ascii_case(&text(&args[0]))
                         && (args[1] == Value::Null || place.pad == text(&args[1])),
                 ),
@@ -914,6 +925,14 @@ mod tests {
                 "{target}"
             );
             assert!(place.borrow().joins.is_empty(), "{target}");
+            assert!(place.borrow().jumps.is_empty(), "{target}");
+
+            place.borrow_mut().cell_busy = true;
+            assert_eq!(
+                join(&loader, &subscribe, target, None, None).await,
+                Ok(false),
+                "{target}"
+            );
             assert!(place.borrow().jumps.is_empty(), "{target}");
         }
     }
