@@ -3939,6 +3939,7 @@ dependencies = [
  "async-task",
  "block2 0.6.2",
  "chrono",
+ "cpal",
  "dirs",
  "encoding_rs",
  "getrandom 0.2.17",
