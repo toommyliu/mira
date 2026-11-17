@@ -7,6 +7,7 @@
     "check:bridge": "node scripts/gen-bridge.ts --check",
     "icons": "node scripts/sync-icons.ts",
     "build:runtime": "node scripts/build-runtime.ts --outdir target/mira-runtime",
+    "docs": "pnpm --filter @mira/docs dev",
     "test": "node --test scripts/*.test.ts",
     "typecheck": "effect-tsgo tsrs --noEmit && pnpm -r typecheck",
     "lint": "oxlint scripts && pnpm -r lint",
