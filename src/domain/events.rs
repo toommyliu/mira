@@ -108,6 +108,7 @@ pub(crate) enum GameEvent {
         #[serde(rename = "self")]
         is_self: bool,
         duration: Option<f64>,
+        icon: Option<String>,
     },
     AuraRemoved {
         name: String,
@@ -357,6 +358,7 @@ impl Kind {
                                     target_id,
                                     is_self,
                                     duration: aura.duration,
+                                    icon: aura.icon.clone(),
                                 }
                             } else {
                                 GameEvent::AuraRemoved {
@@ -699,30 +701,54 @@ mod tests {
     #[test]
     fn auras_report_their_target_and_whether_it_is_you() {
         let packet = json!({ "type": "json", "dataObj": { "cmd": "ct", "a": [
-            { "cmd": "aura+", "cInf": "p:28552", "tInf": "m:1", "auras": [{ "nam": "Censure", "dur": 10, "isNew": true }] },
+            { "cmd": "aura+", "cInf": "p:28552", "tInf": "m:1", "auras": [{ "nam": "Focus", "dur": 10, "icon": "iwd1,ied1", "isNew": true }] },
             { "cmd": "aura+", "cInf": "p:28552", "tInf": "p:28552", "auras": [{ "nam": "Royal Resolve", "dur": 6 }] },
-            { "cmd": "aura+", "cInf": "p:28554", "tInf": "p:28554", "auras": [{ "nam": "Shield" }] },
+            { "cmd": "aura+", "cInf": "p:28554", "tInf": "p:28554", "auras": [{ "nam": "Shield", "icon": "" }] },
             { "cmd": "aura-", "tInf": "p:28552", "aura": { "nam": "Stacks Consumed" } },
             { "cmd": "aura++", "tInf": "m:2", "auras": [{ "nam": "Counter Attack", "dur": 5 }] },
             { "cmd": "aura--", "tInf": "m:2", "aura": { "nam": "Counter Attack" } },
             { "cmd": "aura--", "tInf": "p:28552", "aura": { "nam": "Fury", "stk": 2 } },
             null,
         ] } });
-        let added = |name: &str, target_type, target_id, is_self, duration| GameEvent::AuraAdded {
-            name: name.into(),
-            target_type,
-            target_id,
-            is_self,
-            duration,
+        let added = |name: &str, target_type, target_id, is_self, duration, icon: Option<&str>| {
+            GameEvent::AuraAdded {
+                name: name.into(),
+                target_type,
+                target_id,
+                is_self,
+                duration,
+                icon: icon.map(Into::into),
+            }
         };
         assert!(wanted(Kind::AuraAdded, packet.clone()));
         assert_eq!(
             read(Kind::AuraAdded, packet.clone()),
             [
-                added("Censure", TargetType::Monster, 1, false, Some(10.0)),
-                added("Royal Resolve", TargetType::Player, 28552, true, Some(6.0)),
-                added("Shield", TargetType::Player, 28554, false, None),
-                added("Counter Attack", TargetType::Monster, 2, false, Some(5.0)),
+                added(
+                    "Focus",
+                    TargetType::Monster,
+                    1,
+                    false,
+                    Some(10.0),
+                    Some("iwd1,ied1")
+                ),
+                added(
+                    "Royal Resolve",
+                    TargetType::Player,
+                    28552,
+                    true,
+                    Some(6.0),
+                    None
+                ),
+                added("Shield", TargetType::Player, 28554, false, None, None),
+                added(
+                    "Counter Attack",
+                    TargetType::Monster,
+                    2,
+                    false,
+                    Some(5.0),
+                    None
+                ),
             ]
         );
         assert_eq!(
