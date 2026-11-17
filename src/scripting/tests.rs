@@ -27,6 +27,7 @@ use super::{
     players::Request as PL,
     quests::Request as Q,
     runtime::{Dialogs, Player},
+    script::Request as SC,
     shops::Request as S,
     world::Request as W,
 };
@@ -1953,6 +1954,43 @@ export default function* () {
 }
 
 #[test]
+fn a_beep_reaches_the_player_with_how_many_times_to_chime() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Script } from "mira";
+
+export default function* () {
+  yield* Script.beep();
+  yield* Script.beep(3);
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let finished = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    let requests: Vec<Request> = player
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::Call(_, request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [1, 3].map(|times| Request::Script(SC::Beep {
+            times: times.try_into().unwrap()
+        }))
+    );
+}
+
+#[test]
 fn schemas_parse_values_and_fail_with_every_problem() {
     let finished = run(&[(
         "main.ts",
@@ -2341,8 +2379,16 @@ fn fractional_item_ids_and_counts_never_reach_the_player() {
             "id.ts",
             "import { House } from \"mira\";\nexport default function* () { yield* House.getItem({ itemId: 3.5 }); }\n",
         ),
+        (
+            "beep.ts",
+            "import { Script } from \"mira\";\nexport default function* () { yield* Script.beep(1.5); }\n",
+        ),
+        (
+            "silent.ts",
+            "import { Script } from \"mira\";\nexport default function* () { yield* Script.beep(0); }\n",
+        ),
     ]);
-    for entry in ["count.ts", "id.ts"] {
+    for entry in ["count.ts", "id.ts", "beep.ts", "silent.ts"] {
         let player = FakePlayer::default();
         let finished = start(
             &folder,
