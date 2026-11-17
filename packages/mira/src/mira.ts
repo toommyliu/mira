@@ -1100,6 +1100,7 @@ export type GameEvent =
       readonly self: boolean;
       /** Seconds. */
       readonly duration: number | null;
+      readonly icon: string | null;
     }
   | {
       readonly type: "auraRemoved";
