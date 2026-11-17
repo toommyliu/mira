@@ -14,6 +14,7 @@ mod http;
 mod inputs;
 mod inventory;
 mod limits;
+mod loop_taunt;
 mod modules;
 mod packets;
 mod player;

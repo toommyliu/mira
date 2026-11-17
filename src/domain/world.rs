@@ -17,7 +17,7 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const DROPS_TIMEOUT: Duration = Duration::from_secs(5);
 const MOVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum MonsterQuery {
     Name(String),
