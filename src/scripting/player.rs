@@ -7,6 +7,7 @@ use crate::{
     domain::{
         self, auras,
         player::{Arrival, Boost},
+        rooms::{self, Rooms},
     },
 };
 
@@ -117,14 +118,22 @@ impl Request {
 pub(super) async fn serve(
     loader: &impl Loader,
     subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
+    rooms: Rooms,
     request: Request,
 ) -> Reply {
     use bridge::player;
     Ok(match request {
         Request::Ready => json!(domain::ready(loader)?),
-        Request::JoinMap { map, cell, pad } => json!(
-            domain::player::join(loader, &subscribe, &map, cell.as_deref(), pad.as_deref()).await?
-        ),
+        Request::JoinMap { map, cell, pad } => {
+            if !domain::wait_until_ready(loader).await? {
+                return Ok(json!(false));
+            }
+            let map = rooms::destination(loader, &map, rooms)?;
+            json!(
+                domain::player::join(loader, &subscribe, &map, cell.as_deref(), pad.as_deref())
+                    .await?
+            )
+        }
         Request::JumpToCell { cell, pad } => {
             json!(domain::player::jump(loader, &cell, pad.as_deref()).await?)
         }
@@ -190,7 +199,13 @@ mod tests {
 
     async fn ask(loader: &FakeLoader, request: Request) -> Reply {
         let events = Events::default();
-        serve(loader, |wants| events.subscribe(wants), request).await
+        serve(
+            loader,
+            |wants| events.subscribe(wants),
+            Rooms::Public,
+            request,
+        )
+        .await
     }
 
     fn object(fields: &[(&str, Value)]) -> Value {
@@ -593,7 +608,7 @@ mod tests {
                         }
                         replies
                     };
-                    let answer = serve(&loader, subscribe, wear()).await;
+                    let answer = serve(&loader, subscribe, Rooms::Public, wear()).await;
                     assert_eq!(answer, Ok(json!(expected)), "{stale} {replies:?}");
                 }
             })

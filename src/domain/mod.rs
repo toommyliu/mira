@@ -14,6 +14,8 @@ pub(crate) mod player;
 pub(crate) mod players;
 pub(crate) mod profiles;
 pub(crate) mod quests;
+pub(crate) mod retreat;
+pub(crate) mod rooms;
 pub(crate) mod rotation;
 pub(crate) mod shops;
 pub(crate) mod taunt;

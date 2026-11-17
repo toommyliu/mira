@@ -35,21 +35,25 @@ export function start(exported: unknown, settle: Settle): () => void {
     Effect.raceFirst(root, Effect.raceFirst(Deferred.await(failed), Deferred.await(exited))),
   );
   const fiber = Effect.runFork(
-    Effect.flatMap(Effect.exit(ended), (result) => {
-      const request = exiting.request;
-      if (request === undefined) return result;
-      if (!request.logout) return Effect.void;
-      const logout = call<void>({ domain: "auth", op: "logout" });
-      return request.closeTab ? Effect.andThen(logout, Effect.sleep("1 second")) : logout;
-    }),
+    Effect.uninterruptibleMask((restore) =>
+      Effect.flatMap(Effect.exit(restore(ended)), (result) => {
+        const request = exiting.request;
+        if (request === undefined) return result;
+        if (!request.logout) return Effect.void;
+        const logout = call<void>({ domain: "auth", op: "logout" });
+        return request.closeTab ? Effect.andThen(logout, Effect.sleep("1 second")) : logout;
+      }),
+    ),
   );
   fiber.addObserver((exit) => {
     stopping.abort();
+    const request = exiting.request;
     if (Exit.isSuccess(exit)) {
-      const request = exiting.request;
       return request === undefined ? settle("completed") : settle("exited", request);
     }
-    if (Cause.hasInterruptsOnly(exit.cause)) return settle("stopped");
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      return request === undefined ? settle("stopped") : settle("exited", request);
+    }
     const error = Cause.squash(exit.cause);
     if (error instanceof Error) return settle("failed", error.message, error.stack);
     settle("failed", String(error), Cause.pretty(exit.cause));

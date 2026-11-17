@@ -154,9 +154,22 @@ impl RuffleView {
     }
 
     pub(super) fn signed_in(&mut self, status: Status, cx: &mut Context<Self>) {
+        let lost = matches!(status, Status::Offline);
         self.status = Some(status);
+        if lost {
+            self.connection_lost(cx);
+        }
+        self.resume_script(cx);
         self.run_queued(cx);
         self.changed(cx);
+    }
+
+    pub(super) fn linked_account(&self) -> Option<AccountId> {
+        self.account.as_ref().map(Link::id)
+    }
+
+    pub(super) fn online(&self) -> bool {
+        matches!(self.status, Some(Status::Online(_)))
     }
 
     pub(super) fn queue_script(
@@ -178,11 +191,15 @@ impl RuffleView {
     }
 
     pub(super) fn run_queued(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.status, Some(Status::Online(_))) || self.script.running() {
+        self.run_next(false, cx);
+    }
+
+    pub(super) fn run_next(&mut self, continuing: bool, cx: &mut Context<Self>) {
+        if !self.online() || self.script.running() {
             return;
         }
         if let Some(launch) = self.queue.start_next(Instant::now()) {
-            self.start_script(launch, cx);
+            self.begin_script(launch, !continuing, cx);
         }
     }
 

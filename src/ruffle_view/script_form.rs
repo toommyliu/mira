@@ -2,7 +2,7 @@ use gpui::SharedString;
 use serde_json::Value as Json;
 
 use crate::{
-    account_settings::{RoomNumber, Rooms},
+    domain::rooms::Rooms,
     scripting::{Definition, Field, Kind, Values, check_number, number},
 };
 
@@ -195,26 +195,12 @@ pub(super) fn rows(definition: &Definition, values: &Values) -> Vec<(SharedStrin
         .collect()
 }
 
-pub(super) const ROOMS: [&str; 3] = ["Public rooms", "Random private room", "Specific room"];
-pub(super) const SPECIFIC_ROOM: usize = 2;
+pub(super) const ROOM_NOTE: &str = "1,001 to 99,999. Leave empty for a random room on each join.";
 
-pub(super) fn room_choice(rooms: Rooms) -> usize {
+pub(super) fn room_text(rooms: Rooms) -> String {
     match rooms {
-        Rooms::Public => 0,
-        Rooms::RandomPrivate => 1,
-        Rooms::Specific { .. } => SPECIFIC_ROOM,
-    }
-}
-
-pub(super) fn room_note(input: &str) -> Result<&'static str, &'static str> {
-    const RANGE: &str = "Enter a room number from 1 to 99,999.";
-    if input.trim().is_empty() {
-        return Ok(RANGE);
-    }
-    match RoomNumber::parse(input) {
-        Some(room) if room.is_private() => Ok("This number selects a private room."),
-        Some(_) => Ok("This number selects a public room."),
-        None => Err(RANGE),
+        Rooms::Private { room: Some(room) } => room.get().to_string(),
+        Rooms::Public | Rooms::Private { room: None } => String::new(),
     }
 }
 
