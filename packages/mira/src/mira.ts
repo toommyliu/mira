@@ -538,6 +538,7 @@ export type ItemCount = {
 /** `choice` rewards need `rewardItemId` when completing. `random` gives one of its group. */
 export type QuestRewardKind = "guaranteed" | "choice" | "roll" | "random";
 export type QuestReward = ItemCount & {
+  readonly maxStack: number;
   readonly kind: QuestRewardKind;
   /** Percent. */
   readonly dropChance: number;

@@ -38,6 +38,7 @@ pub(crate) enum RewardKind {
 pub(crate) struct QuestReward {
     #[serde(flatten)]
     pub(super) item: ItemCount,
+    max_stack: i32,
     pub(super) kind: RewardKind,
     pub(super) drop_chance: f64,
 }
@@ -81,6 +82,7 @@ fn reward_from(value: Value) -> Option<QuestReward> {
     let row = row(value)?;
     Some(QuestReward {
         item: item_count(&row)?,
+        max_stack: row.integer("maxStack").unwrap_or(1),
         kind: match row.text("kind").as_str() {
             "choice" => RewardKind::Choice,
             "roll" => RewardKind::Roll,
@@ -436,6 +438,7 @@ mod tests {
                         ("itemId", Value::Number(45230.0)),
                         ("name", text("Shadowscythe Templar")),
                         ("quantity", Value::Number(1.0)),
+                        ("maxStack", Value::Number(1.0)),
                         ("kind", text("choice")),
                         ("dropChance", Value::Number(100.0)),
                     ]),
@@ -443,6 +446,7 @@ mod tests {
                         ("itemId", Value::Number(9.0)),
                         ("name", text("Gem")),
                         ("quantity", Value::Number(2.0)),
+                        ("maxStack", Value::Number(300.0)),
                         ("kind", text("random")),
                         ("dropChance", Value::Number(25.0)),
                     ]),
@@ -455,9 +459,9 @@ mod tests {
                     "requirements": [{ "itemId": 45277, "name": "Arcane Energy", "quantity": 6 }],
                     "rewards": [
                         { "itemId": 45230, "name": "Shadowscythe Templar", "quantity": 1,
-                          "kind": "choice", "dropChance": 100.0 },
+                          "maxStack": 1, "kind": "choice", "dropChance": 100.0 },
                         { "itemId": 9, "name": "Gem", "quantity": 2,
-                          "kind": "random", "dropChance": 25.0 }
+                          "maxStack": 300, "kind": "random", "dropChance": 25.0 }
                     ] })
         );
     }
