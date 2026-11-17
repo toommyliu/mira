@@ -81,6 +81,7 @@ pub(super) async fn join(
     timeout: Option<Duration>,
 ) -> Result<Taunting, CallError> {
     check(&plan, member.size())?;
+    member.sync("loopTaunt", timeout).await?;
     let events = subscribe(watched);
     let targets: Vec<&Target> = plan.iter().flatten().collect();
     let sighted = targets

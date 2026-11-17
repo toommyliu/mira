@@ -253,6 +253,7 @@ impl Orchestrator {
     pub(crate) fn leave(&mut self, player: usize, now: Instant) {
         self.here[player] = false;
         for target in &mut self.targets {
+            target.trigger.forget(player);
             if let Some(position) = target.holding()
                 && target.players[position] == player
             {
@@ -481,6 +482,16 @@ impl Trigger {
         } = self
         {
             *answered = heard.iter().copied().max().unwrap_or(0);
+        }
+    }
+
+    fn forget(&mut self, player: usize) {
+        if let Trigger::Message {
+            heard, answered, ..
+        } = self
+        {
+            heard[player] = 0;
+            *answered = (*answered).min(heard.iter().copied().max().unwrap_or(0));
         }
     }
 
@@ -740,6 +751,15 @@ mod tests {
         );
         taunt.heard(0, None, "The boss prepares a heavy attack!", now);
         assert_eq!(offered(&taunt, 3), [1]);
+        land(&mut taunt, 1, now);
+        taunt.leave(0, now);
+        assert_eq!(offered(&taunt, 3), NOBODY);
+        taunt.heard(1, None, "The boss prepares a heavy attack!", now);
+        assert_eq!(
+            offered(&taunt, 3),
+            [1],
+            "player 2 heard one message fewer than player 1, who left, and their next one still counts"
+        );
     }
 
     #[test]

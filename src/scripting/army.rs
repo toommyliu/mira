@@ -311,21 +311,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(folder);
     }
 
-    #[tokio::test]
-    async fn a_player_that_changes_maps_while_deciding_to_skip_does_not_cast() {
+    fn armies(players: &str) -> (Armies, std::path::PathBuf) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let folder =
             std::env::temp_dir().join(format!("mira-army-taunt-{:x}", u64::from_ne_bytes(random)));
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("solo.yaml"), "players: [player1]\nroom: 7\n").unwrap();
-        let armies = Armies::new(folder.clone());
-        let membership = Membership::default();
-        let events = Events::default();
+        std::fs::write(
+            folder.join("army.yaml"),
+            format!("players: [{players}]\nroom: 7\n"),
+        )
+        .unwrap();
+        (Armies::new(folder.clone()), folder)
+    }
+
+    fn facing_the_boss(username: &'static str) -> FakeLoader {
         let row = |fields: serde_json::Value| crate::domain::testing::value(fields);
-        let loader = FakeLoader::new(move |callback, _| {
+        FakeLoader::new(move |callback, _| {
             Ok(match callback {
-                "flash.getGameObjectS" => LoaderValue::from("\"player1\"".to_owned()),
+                "flash.getGameObjectS" => LoaderValue::from(format!("\"{username}\"")),
                 "auth.isLoggedIn" => LoaderValue::Bool(true),
                 "flash.isNull" => LoaderValue::Bool(false),
                 "player.getCell" => LoaderValue::String("r1".into()),
@@ -338,7 +342,29 @@ mod tests {
                 "combat.getSkillCooldownRemaining" => LoaderValue::Number(0.0),
                 _ => LoaderValue::Null,
             })
-        });
+        })
+    }
+
+    fn server(packet: serde_json::Value) -> Event {
+        Event::ExtensionResponse {
+            packet: json!({ "type": "json", "dataObj": packet }).to_string(),
+        }
+    }
+
+    fn taunt_the_boss(on: serde_json::Value) -> Request {
+        let plan = json!([[{ "target": "Boss", "players": [1, 2], "on": on, "skips": true }]]);
+        Request::LoopTaunt {
+            plan: serde_json::from_value(plan).unwrap(),
+            timeout_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_player_that_changes_maps_while_deciding_to_skip_does_not_cast() {
+        let (armies, folder) = armies("player1");
+        let membership = Membership::default();
+        let events = Events::default();
+        let loader = facing_the_boss("player1");
         let serve = |request| {
             serve(
                 &armies,
@@ -350,7 +376,7 @@ mod tests {
             )
         };
         serve(Request::Start {
-            name: "solo".into(),
+            name: "army".into(),
             timeout_ms: None,
         })
         .await
@@ -363,10 +389,9 @@ mod tests {
         .await
         .unwrap();
         let offer = serve(Request::TauntTurn { answered: None }).await.unwrap();
-        events.publish(&Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": { "cmd": "moveToArea", "strMapName": "battleon" } })
-                .to_string(),
-        });
+        events.publish(&server(
+            json!({ "cmd": "moveToArea", "strMapName": "battleon" }),
+        ));
         let answered = json!({ "lease": offer["lease"], "cast": true });
         assert_eq!(
             serve(Request::TauntTurn {
@@ -376,6 +401,78 @@ mod tests {
             Ok(Value::Null)
         );
         assert_eq!(loader.count("combat.castConsumableOnMonster"), 0);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_boss_that_respawns_before_everyone_starts_is_on_the_same_life_for_all() {
+        let (armies, folder) = armies("player1, player2");
+        let players = [
+            (
+                Membership::default(),
+                Events::default(),
+                facing_the_boss("player1"),
+            ),
+            (
+                Membership::default(),
+                Events::default(),
+                facing_the_boss("player2"),
+            ),
+        ];
+        let serve = |player: usize, request| {
+            let (membership, events, loader) = &players[player];
+            serve(
+                &armies,
+                loader,
+                |wants| events.subscribe(wants),
+                RunId(1),
+                membership,
+                request,
+            )
+        };
+        let start = |player| {
+            serve(
+                player,
+                Request::Start {
+                    name: "army".into(),
+                    timeout_ms: None,
+                },
+            )
+        };
+        let (first, second) = tokio::join!(start(0), start(1));
+        first.unwrap();
+        second.unwrap();
+        let on = json!({ "type": "message", "includes": "prepares" });
+        let mut early = std::pin::pin!(serve(0, taunt_the_boss(on.clone())));
+        assert!(
+            tokio::time::timeout(Duration::ZERO, &mut early)
+                .await
+                .is_err()
+        );
+        players[0].1.publish(&server(
+            json!({ "cmd": "ct", "m": { "7": { "intState": 0 } } }),
+        ));
+        players[0].1.publish(&Event::ExtensionResponse {
+            packet: json!({ "type": "str", "dataObj": ["respawnMon", "-1", "7"] }).to_string(),
+        });
+        let (early, late) = tokio::join!(early, serve(1, taunt_the_boss(on)));
+        early.unwrap();
+        late.unwrap();
+        let waiting = Duration::from_secs(10);
+        let turn = || Request::TauntTurn { answered: None };
+        assert!(
+            tokio::time::timeout(waiting, serve(0, turn()))
+                .await
+                .is_err()
+        );
+        serve(0, Request::TauntLeave).await.unwrap();
+        let message = json!({ "cmd": "umsg", "s": "The boss prepares a heavy attack!" });
+        players[1].1.publish(&server(message));
+        let offer = tokio::time::timeout(waiting, serve(1, turn())).await;
+        assert!(
+            matches!(offer, Ok(Ok(Value::Object(_)))),
+            "player 2 heard the message, so it is their turn: {offer:?}"
+        );
         let _ = std::fs::remove_dir_all(folder);
     }
 }
