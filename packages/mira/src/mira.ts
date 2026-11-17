@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
+import { drive } from "./drive.ts";
 import { inputs } from "./inputs.ts";
 import { exited, exiting, failed, stopping } from "./run.ts";
 import { ask, call } from "./call.ts";
@@ -938,7 +939,7 @@ const skipLost = <A>({ next }: Subscription<A | Lost>): Subscription<A> => ({
 
 const run = (
   result: Effect.Effect<unknown, unknown> | HandlerGenerator,
-): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : Effect.gen(() => result));
+): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : drive(result));
 
 const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
   Effect.onExit(effect, (exit) =>

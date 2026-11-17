@@ -123,17 +123,14 @@ export const request = (
  *
  * @example
  * ```ts
- * import * as Effect from "effect/Effect";
  * import * as Http from "mira/http";
  * import * as S from "mira/schema";
  *
  * const Release = S.object({ tag_name: S.string() });
  *
  * export default function* () {
- *   const release = yield* Http.request("https://api.github.com/repos/o/r/releases/latest").pipe(
- *     Effect.flatMap(Http.json),
- *     Effect.flatMap(Release.parse),
- *   );
+ *   const response = yield* Http.request("https://api.github.com/repos/o/r/releases/latest");
+ *   const release = yield* Release.parse(yield* Http.json(response));
  * }
  * ```
  */

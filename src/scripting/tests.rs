@@ -673,12 +673,21 @@ export default function* () {
 }
 
 #[test]
-fn stopping_runs_effect_finalizers() {
+fn stopping_runs_finalizers_then_finally_blocks() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Effect } from "effect";
+import { Script } from "mira";
+
 export default function* () {
-  yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => console.log("cleaned up"))));
+  try {
+    yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => console.log("cleaned up"))));
+  } catch {
+    console.log("caught");
+  } finally {
+    yield* Script.sleep("1 millis");
+    console.log(`finally, aborted ${Script.signal.aborted}`);
+  }
 }
 "#,
     )]);
@@ -689,22 +698,24 @@ export default function* () {
         Some(Duration::from_millis(200)),
     );
     assert_eq!(finished.outcome, Outcome::Stopped);
-    assert_eq!(finished.logs, ["cleaned up"]);
+    assert_eq!(finished.logs, ["cleaned up", "finally, aborted true"]);
 }
 
 #[test]
 fn exiting_runs_cleanup_and_cannot_be_caught() {
     let finished = run(&[(
         "main.ts",
-        r#"import { Effect } from "effect";
-import { Script } from "mira";
+        r#"import { Script } from "mira";
 
 export default function* () {
-  yield* Script.exit().pipe(
-    Effect.catchCause(() => Effect.sync(() => console.log("caught"))),
-    Effect.ensuring(Effect.sync(() => console.log(`cleanup, aborted ${Script.signal.aborted}`))),
-  );
-  console.log("after exit");
+  try {
+    yield* Script.exit();
+    console.log("after exit");
+  } catch {
+    console.log("caught");
+  } finally {
+    console.log(`cleanup, aborted ${Script.signal.aborted}`);
+  }
 }
 "#,
     )]);
@@ -1392,14 +1403,26 @@ export default function* () {
 }
 
 #[test]
-fn a_failed_loader_call_ends_the_script_with_its_message() {
+fn a_failed_loader_call_skips_catch_runs_every_finally_and_ends_the_script() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Player } from "mira";
 
 export default function* () {
   console.log(String(yield* Player.jumpToCell("r2")));
-  yield* Player.getHp();
+  try {
+    try {
+      yield* Player.getHp();
+    } catch {
+      console.log("caught");
+    } finally {
+      console.log("finally");
+      yield* Player.getMp();
+      console.log("after the failed cleanup call");
+    }
+  } finally {
+    console.log("outer finally");
+  }
 }
 "#,
     )]);
@@ -1419,11 +1442,11 @@ export default function* () {
         }),
     )
     .finish();
-    assert_eq!(finished.logs, ["false"]);
+    assert_eq!(finished.logs, ["false", "finally", "outer finally"]);
     let (message, stack) = failure(&finished.outcome);
     assert_eq!(message, "player.getHp threw: boom");
     let main = fs::canonicalize(folder.0.join("main.ts")).unwrap();
-    assert_eq!(stack, format!("    at default ({}:5:17)", main.display()));
+    assert_eq!(stack, format!("    at default ({}:7:21)", main.display()));
 }
 
 #[test]
@@ -1813,24 +1836,39 @@ export default function* () {
 fn http_requests_reach_the_player_typed_and_fail_with_tagged_errors() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import * as Effect from "effect/Effect";
-import * as Http from "mira/http";
+        r#"import * as Http from "mira/http";
+
+function* fetchJson(url: string) {
+  return yield* Http.json(yield* Http.request(url));
+}
 
 export default function* () {
   const response = yield* Http.request("https://example.com/item", { method: "POST", json: { a: 1 }, timeout: "5 seconds" });
   const item = yield* Http.json(response);
   console.log(`${response.ok} ${response.headers["x-a"]} ${JSON.stringify(item)}`);
   for (const path of ["missing", "html"]) {
-    const error = yield* Http.request(`https://example.com/${path}`).pipe(Effect.flatMap(Http.json), Effect.flip);
-    console.log(`${error._tag} ${error.reason} ${error.response.status}`);
+    try {
+      yield* fetchJson(`https://example.com/${path}`);
+    } catch (error) {
+      if (!(error instanceof Http.ResponseError)) throw error;
+      console.log(`${error._tag} ${error.reason} ${error.response.status}`);
+    }
   }
-  const error = yield* Http.request("https://example.com/down", { headers: { "Content-Type": "text/plain" }, body: "x" }).pipe(Effect.flip);
-  console.log(`${error._tag} ${error.reason} ${error.url} ${error.message}`);
+  try {
+    yield* Http.request("https://example.com/down", { headers: { "Content-Type": "text/plain" }, body: "x" });
+  } catch (error) {
+    if (!(error instanceof Http.RequestError)) throw error;
+    console.log(`${error._tag} ${error.reason} ${error.url} ${error.message}`);
+  }
   const cyclic: { self?: unknown } = {};
   cyclic.self = cyclic;
   for (const options of [{ json: 1n }, { json: cyclic }, { timeout: -1 }]) {
-    const invalid = yield* Http.request("https://example.com/invalid", options).pipe(Effect.flip);
-    console.log(`${invalid._tag} ${invalid.reason}`);
+    try {
+      yield* Http.request("https://example.com/invalid", options);
+    } catch (error) {
+      if (!(error instanceof Http.RequestError)) throw error;
+      console.log(`${error._tag} ${error.reason}`);
+    }
   }
 }
 "#,
@@ -1918,8 +1956,7 @@ export default function* () {
 fn schemas_parse_values_and_fail_with_every_problem() {
     let finished = run(&[(
         "main.ts",
-        r#"import * as Effect from "effect/Effect";
-import * as S from "mira/schema";
+        r#"import * as S from "mira/schema";
 
 const Farm = S.object({
   map: S.string().min(1),
@@ -1932,8 +1969,12 @@ export default function* () {
   const farm = yield* Farm.parse({ map: "battleunderb", mode: "solo", extra: true });
   console.log(JSON.stringify(farm));
   console.log(`${Farm.is(farm)} ${Farm.is({ map: "" })}`);
-  const error = yield* Farm.parse({ map: "", kills: 2.5, mode: "raid", drops: ["Bone", 3] }).pipe(Effect.flip);
-  console.log(`${error._tag} ${JSON.stringify(error.issues.map((issue) => issue.path))}`);
+  try {
+    yield* Farm.parse({ map: "", kills: 2.5, mode: "raid", drops: ["Bone", 3] });
+  } catch (error) {
+    if (!(error instanceof S.ParseError)) throw error;
+    console.log(`${error._tag} ${JSON.stringify(error.issues.map((issue) => issue.path))}`);
+  }
   yield* S.object({ quests: S.array(S.object({ id: S.number() })) }).parse({ quests: [{ id: "7" }] });
 }
 "#,
