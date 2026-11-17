@@ -178,12 +178,15 @@ pub(crate) async fn join(
     }
     let map = map.trim();
     let (name, room) = split_room(map);
-    let cell = cell.unwrap_or(DEFAULT_CELL);
     let pad = pad.unwrap_or(DEFAULT_PAD);
     let here = bridge::player::get_map(loader)?;
     if here.is_some_and(|here| here.eq_ignore_ascii_case(name)) && in_room(loader, room)? {
-        return jump(loader, cell, Some(pad)).await;
+        return match cell {
+            Some(cell) => jump(loader, cell, Some(pad)).await,
+            None => Ok(true),
+        };
     }
+    let cell = cell.unwrap_or(DEFAULT_CELL);
     if !ready_to_transfer(loader).await? {
         return Ok(false);
     }
@@ -887,7 +890,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn joining_the_current_map_or_room_jumps() {
+    async fn joining_the_current_map_or_room_jumps_only_to_a_named_cell() {
         for target in ["Battleon", "battleon-1"] {
             let (loader, place) = traveller(in_map("battleon", "Enter"));
             let events = Events::default();
@@ -903,6 +906,15 @@ mod tests {
                 [vec!["r2".into(), "Spawn".into()]],
                 "{target}"
             );
+
+            let (loader, place) = traveller(in_map("battleon", "r5"));
+            assert_eq!(
+                join(&loader, &subscribe, target, None, None).await,
+                Ok(true),
+                "{target}"
+            );
+            assert!(place.borrow().joins.is_empty(), "{target}");
+            assert!(place.borrow().jumps.is_empty(), "{target}");
         }
     }
 
