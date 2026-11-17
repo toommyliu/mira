@@ -66,6 +66,10 @@ impl Aura {
         self.stack
     }
 
+    pub(crate) fn icon(&self) -> Option<&str> {
+        self.icon.as_deref()
+    }
+
     pub(crate) fn number(&self) -> Option<f64> {
         match &self.value {
             Some(AuraValue::Number(number)) => Some(*number),

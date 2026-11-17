@@ -134,7 +134,7 @@ pub(crate) fn fight_any(
     Ok(())
 }
 
-fn targeting(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
+pub(super) fn targeting(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
     Ok(matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == id))
 }
 
@@ -151,7 +151,7 @@ fn attack_any(loader: &impl Loader, counter_attacks: &CounterAttacks) -> Result<
     }
 }
 
-fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
+pub(super) fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError> {
     bridge::combat::attack_monster(loader, selector("monsterMapId", Value::Number(id)))
 }
 

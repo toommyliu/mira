@@ -192,7 +192,17 @@ async fn serve(
 ) -> Reply {
     let feeds = &state.feeds;
     match request {
-        Request::Army(request) => army::serve(armies, bridge, run, &state.army, request).await,
+        Request::Army(request) => {
+            army::serve(
+                armies,
+                bridge,
+                |wants| bridge.subscribe(wants),
+                run,
+                &state.army,
+                request,
+            )
+            .await
+        }
         Request::Auth(request) => auth::serve(bridge, logins, request).await,
         Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
         Request::Settings(request) => automation::serve_settings(automation, request),

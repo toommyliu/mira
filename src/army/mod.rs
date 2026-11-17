@@ -1,4 +1,5 @@
 mod config;
+mod loop_taunt;
 
 use std::{
     cell::{Cell, RefCell},
@@ -9,12 +10,13 @@ use std::{
 };
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::{sync::watch, time::Instant};
 
 use crate::scripting::RunId;
 use config::Config;
 pub(crate) use config::Gear;
+pub(crate) use loop_taunt::{Answer, Assignment, Lease, Offer, On, Orchestrator, Seen, Sighting};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -136,6 +138,7 @@ struct Active {
     latest: Option<Step>,
     previous: Option<(u64, Vec<Value>)>,
     rotations: HashMap<String, Rotation>,
+    taunts: HashMap<u64, Orchestrator>,
 }
 
 struct Rotation {
@@ -166,6 +169,7 @@ enum Kind {
     Sync,
     Gather,
     Until,
+    LoopTaunt,
 }
 
 enum Arrival {
@@ -193,6 +197,9 @@ enum EndCause<'a> {
         label: &'a str,
         expected: Vec<usize>,
         got: Vec<usize>,
+    },
+    Planned {
+        player: usize,
     },
 }
 
@@ -329,6 +336,14 @@ impl Army {
         ArmyError(message)
     }
 
+    fn end_with(&self, cause: EndCause<'_>) -> ArmyError {
+        let state = self.lock();
+        if let State::Ended(message, _) = &*state {
+            return ArmyError(message.clone());
+        }
+        self.end_locked(state, cause)
+    }
+
     fn describe(&self, cause: EndCause<'_>) -> String {
         let player =
             |index: usize| format!("player {} ({})", index + 1, self.0.config.players[index]);
@@ -377,6 +392,11 @@ impl Army {
                     numbers(expected)
                 )
             }
+            EndCause::Planned { player: index } => format!(
+                "{} started a different loop taunt than {}",
+                player(index),
+                player(0)
+            ),
         };
         format!("The {} army ended because {reason}.", self.0.name)
     }
@@ -496,7 +516,7 @@ impl Step {
     }
 
     fn values(&self) -> Vec<Value> {
-        if self.kind != Kind::Gather {
+        if !matches!(self.kind, Kind::Gather | Kind::LoopTaunt) {
             return Vec::new();
         }
         self.arrivals
@@ -515,6 +535,7 @@ impl Kind {
             Kind::Sync => "sync",
             Kind::Gather => "gather",
             Kind::Until => "until",
+            Kind::LoopTaunt => "loopTaunt",
         }
     }
 }
@@ -606,6 +627,10 @@ impl Member {
             room: shared.config.room,
             players: shared.config.players.clone(),
         }
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.army.0.config.players.len()
     }
 
     pub(crate) fn gear(&self, set: &str) -> Result<Gear, ArmyError> {
@@ -733,6 +758,39 @@ impl Member {
         drop(state);
         self.army.notify();
         Ok(true)
+    }
+
+    pub(crate) async fn loop_taunt(
+        &self,
+        plan: Value,
+        sighting: Value,
+        timeout: Option<Duration>,
+        start: impl FnOnce(Vec<Value>) -> Result<Orchestrator, ArmyError>,
+    ) -> Result<Taunter, ArmyError> {
+        let entry = json!({ "plan": plan, "sighting": sighting });
+        let index = self.arrive("loopTaunt", Kind::LoopTaunt, Arrival::Gathered(entry))?;
+        let (plans, sightings): (Vec<Value>, Vec<Value>) = self
+            .wait(index, timeout)
+            .await?
+            .into_iter()
+            .map(|mut entry| (entry["plan"].take(), entry["sighting"].take()))
+            .unzip();
+        if let Some(player) = plans.iter().position(|other| *other != plans[0]) {
+            return Err(self.army.end_with(EndCause::Planned { player }));
+        }
+        let orchestrator = start(sightings)?;
+        match &mut *self.army.lock() {
+            State::Active(active) => {
+                active.taunts.entry(index).or_insert(orchestrator);
+            }
+            State::Ended(message, _) => return Err(ArmyError(message.clone())),
+            State::Forming(_) => unreachable!("members only exist once the army has formed"),
+        }
+        Ok(Taunter {
+            army: self.army.clone(),
+            player: self.player,
+            run: index,
+        })
     }
 
     pub(crate) async fn turn(&self, label: &str, acted: Option<bool>) -> Result<(), ArmyError> {
@@ -905,6 +963,61 @@ impl Drop for LeavingRotation<'_> {
         if self.armed {
             self.member.leave_rotation(self.label);
         }
+    }
+}
+
+pub(crate) struct Taunter {
+    army: Army,
+    player: usize,
+    run: u64,
+}
+
+impl Taunter {
+    pub(crate) fn player(&self) -> usize {
+        self.player
+    }
+
+    pub(crate) fn with<T>(&self, act: impl FnOnce(&mut Orchestrator) -> T) -> Result<T, ArmyError> {
+        let mut state = self.army.lock();
+        let active = match &mut *state {
+            State::Active(active) => active,
+            State::Ended(message, _) => return Err(ArmyError(message.clone())),
+            State::Forming(_) => unreachable!("members only exist once the army has formed"),
+        };
+        let orchestrator = active
+            .taunts
+            .get_mut(&self.run)
+            .expect("a loop taunt lasts until its last player leaves");
+        let before = orchestrator.schedule();
+        let result = act(orchestrator);
+        let changed = orchestrator.schedule() != before;
+        drop(state);
+        if changed {
+            self.army.notify();
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn changes(&self) -> watch::Receiver<()> {
+        self.army.0.changed.subscribe()
+    }
+}
+
+impl Drop for Taunter {
+    fn drop(&mut self) {
+        let mut state = self.army.lock();
+        let State::Active(active) = &mut *state else {
+            return;
+        };
+        let Some(orchestrator) = active.taunts.get_mut(&self.run) else {
+            return;
+        };
+        orchestrator.leave(self.player, Instant::now());
+        if orchestrator.deserted() {
+            active.taunts.remove(&self.run);
+        }
+        drop(state);
+        self.army.notify();
     }
 }
 
@@ -1273,6 +1386,69 @@ mod tests {
         assert_eq!(
             members[0].gear("farm").map(drop),
             Err(ArmyError("the duo army has no set \"farm\"".into()))
+        );
+    }
+
+    fn taunt(sightings: Vec<Value>) -> Result<Orchestrator, ArmyError> {
+        assert_eq!(sightings, [json!("first"), json!("second")]);
+        let sighted = vec![Sighting {
+            alive: true,
+            focus: false,
+        }];
+        let boss = Assignment {
+            group: 0,
+            mon_map_id: 7,
+            players: vec![1, 0],
+            on: On::Focus,
+        };
+        Ok(Orchestrator::new(
+            vec![boss],
+            &vec![sighted; sightings.len()],
+            Instant::now(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_loop_taunt_is_shared_by_every_player_until_they_leave() {
+        let folder = Folder::new(&[("duo.yaml", DUO)]);
+        let members = form(&folder.armies(), "duo", &["player1", "player2"]).await;
+        let mut taunters = join_all(vec![
+            members[1].loop_taunt(json!("plan"), json!("second"), None, taunt),
+            members[0].loop_taunt(json!("plan"), json!("first"), None, taunt),
+        ])
+        .await
+        .into_iter()
+        .map(|taunter| taunter.map_err(drop).unwrap());
+        let (second, first) = (taunters.next().unwrap(), taunters.next().unwrap());
+        let offered = |taunter: &Taunter, player| taunter.with(|taunt| taunt.offer(player));
+        let lease = offered(&first, 1).unwrap().unwrap().lease;
+        assert_eq!(
+            offered(&second, 1).unwrap().map(|offer| offer.lease),
+            Some(lease)
+        );
+        drop(second);
+        assert!(
+            offered(&first, 0).unwrap().is_some(),
+            "player 2 left its turn to player 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn players_that_loop_taunt_different_plans_end_the_army() {
+        let folder = Folder::new(&[("duo.yaml", DUO)]);
+        let members = form(&folder.armies(), "duo", &["player1", "player2"]).await;
+        let message = "The duo army ended because player 2 (player2) started a different loop taunt than player 1 (player1).";
+        let results = join_all(vec![
+            members[0].loop_taunt(json!("left boss"), json!("first"), None, taunt),
+            members[1].loop_taunt(json!("right boss"), json!("second"), None, taunt),
+        ])
+        .await;
+        for result in results {
+            assert_eq!(result.err(), Some(ArmyError(message.into())));
+        }
+        assert_eq!(
+            members[0].sync("later", None).await,
+            Err(ArmyError(message.into()))
         );
     }
 

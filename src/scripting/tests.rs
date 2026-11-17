@@ -2920,6 +2920,114 @@ export default function* () {
 }
 
 #[test]
+fn loop_taunt_sends_the_plan_asks_skip_when_on_each_turn_and_leaves_on_stop() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::army::Request as AY;
+    let player = FakePlayer::default();
+    let checks = Arc::new(AtomicUsize::new(0));
+    let hp = checks.clone();
+    let release = |held: &mut Vec<Call>, wanted: fn(&Request) -> bool| {
+        let position = held.iter().position(|call| wanted(&call.request))?;
+        held.remove(position).reply.send(Ok(json!(null)));
+        Some(())
+    };
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Army, Player } from "mira";
+
+export default function* () {
+  yield* Army.start("ultras");
+  const taunt = yield* Army.loopTaunt(
+    [
+      [{ target: "Left Boss", players: [1], on: "focus" }],
+      [
+        {
+          target: { monMapId: 3 },
+          players: [2, 1],
+          on: { includes: "prepares" },
+          skipWhen: function* () {
+            return (yield* Player.getHp()) < 50;
+          },
+        },
+      ],
+    ],
+    { timeout: "5 seconds" },
+  );
+  yield* Army.sync("done");
+  yield* taunt.stop;
+  console.log("done");
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
+        player.answering(move |request, held| {
+            let last_turn =
+                |request: &Request| matches!(request, Request::Army(AY::TauntTurn { .. }));
+            let sync = |request: &Request| matches!(request, Request::Army(AY::Sync { .. }));
+            Some(Ok(match request {
+                Request::Army(AY::Start { .. }) => army_info(),
+                Request::Army(AY::LoopTaunt { .. } | AY::TauntLeave) => json!(null),
+                Request::Army(AY::TauntTurn { answered }) => {
+                    match serde_json::to_value(answered.map(|answered| answered.cast)).unwrap() {
+                        serde_json::Value::Null => json!({ "lease": 4, "assignment": 1 }),
+                        serde_json::Value::Bool(false) => json!({ "lease": 5, "assignment": 1 }),
+                        _ => {
+                            let _ = release(held, sync);
+                            return None;
+                        }
+                    }
+                }
+                Request::Army(AY::Sync { .. })
+                    if held.iter().any(|call| last_turn(&call.request)) =>
+                {
+                    json!(null)
+                }
+                Request::Army(AY::Sync { .. }) => return None,
+                Request::Player(P::Hp) => json!(if hp.fetch_add(1, Ordering::SeqCst) == 0 {
+                    10
+                } else {
+                    90
+                }),
+                other => panic!("unexpected {other:?}"),
+            }))
+        }),
+    )
+    .finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, ["done"]);
+    assert_eq!(checks.load(Ordering::SeqCst), 2);
+    let requests = army_requests(player.seen());
+    let Some(AY::LoopTaunt { plan, timeout_ms }) = requests.get(1) else {
+        panic!("{requests:?}");
+    };
+    assert_eq!(*timeout_ms, Some(5000));
+    assert_eq!(
+        serde_json::to_value(plan).unwrap(),
+        json!([
+            [{ "target": "Left Boss", "players": [1], "on": { "type": "focus" }, "skips": false }],
+            [{
+                "target": { "monMapId": 3.0 },
+                "players": [2, 1],
+                "on": { "type": "message", "includes": "prepares" },
+                "skips": true,
+            }],
+        ])
+    );
+    let answers: Vec<_> = requests
+        .iter()
+        .filter_map(|request| match request {
+            AY::TauntTurn { answered } => Some(answered.map(|answered| answered.cast)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, [None, Some(false), Some(true)]);
+    assert_eq!(requests.last(), Some(&AY::TauntLeave));
+}
+
+#[test]
 fn until_skips_the_work_when_the_army_is_already_done() {
     use super::army::Request as AY;
     let player = FakePlayer::default();

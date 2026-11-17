@@ -191,19 +191,23 @@ impl Subscription {
     }
 
     pub(crate) async fn drain(&self) -> Drained {
-        poll_fn(|cx| {
-            let mut state = self.0.state.borrow_mut();
-            let lagged = std::mem::take(&mut state.lagged);
-            if lagged || !state.events.is_empty() {
-                return Poll::Ready(Drained {
-                    events: state.events.drain(..).collect(),
-                    lagged,
-                });
+        poll_fn(|cx| match self.try_drain() {
+            Some(drained) => Poll::Ready(drained),
+            None => {
+                self.0.state.borrow_mut().waker = Some(cx.waker().clone());
+                Poll::Pending
             }
-            state.waker = Some(cx.waker().clone());
-            Poll::Pending
         })
         .await
+    }
+
+    pub(crate) fn try_drain(&self) -> Option<Drained> {
+        let mut state = self.0.state.borrow_mut();
+        let lagged = std::mem::take(&mut state.lagged);
+        (lagged || !state.events.is_empty()).then(|| Drained {
+            events: state.events.drain(..).collect(),
+            lagged,
+        })
     }
 
     pub(crate) fn clear(&self) {
