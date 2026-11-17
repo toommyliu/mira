@@ -1,5 +1,7 @@
 use tokio::sync::watch;
 
+use crate::domain::rooms::Rooms;
+
 use super::{auto_attack, auto_relogin, boosts, drops, follower, game_settings, quests, spammer};
 
 #[derive(Clone, Default)]
@@ -17,6 +19,7 @@ pub(crate) struct Automation {
     capture: watch::Sender<bool>,
     spammer: watch::Sender<spammer::Settings>,
     spammer_status: watch::Sender<spammer::Status>,
+    rooms: watch::Sender<Rooms>,
 }
 
 impl Automation {
@@ -152,6 +155,14 @@ impl Automation {
 
     pub(crate) fn update_boosts(&self, change: impl FnOnce(&mut boosts::State)) -> boosts::State {
         update(&self.boosts, change)
+    }
+
+    pub(crate) fn rooms(&self) -> Rooms {
+        *self.rooms.borrow()
+    }
+
+    pub(crate) fn set_rooms(&self, rooms: Rooms) {
+        update(&self.rooms, |current| *current = rooms);
     }
 
     pub(crate) fn capturing(&self) -> bool {

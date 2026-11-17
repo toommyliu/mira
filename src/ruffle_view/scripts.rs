@@ -17,8 +17,8 @@ use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone, h_flex,
     primitives::{
         Alert, Align, Badge, Button, Checkbox, CheckedState, Dot, DropdownMenu, Icon, Input,
-        InputEvent, List, ListItem, MenuItem, Popover, Radio, RadioGroup, Scrollbar, Select,
-        Switch, Toaster, ToggleGroup, ToggleItem, VirtualList,
+        InputEvent, List, ListItem, MenuItem, Popover, Scrollbar, Select, Switch, Toaster,
+        ToggleGroup, ToggleItem, VirtualList,
         button::{Size, Variant},
     },
     theme::{LINE_BODY, LINE_SMALL, RING_ROOM, ROW, TEXT_BODY, TEXT_SMALL},
@@ -33,15 +33,13 @@ use super::{
     package_dialogs::{PackageDialogs, PackageEvent},
     queue::{self, EntryId, Queue},
     script::failure,
-    script_form::{
-        Draft, FieldDraft, ROOMS, SPECIFIC_ROOM, drafts, error, room_choice, room_note, rows,
-        starting, values,
-    },
+    script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    account_settings::{self, RoomNumber, Rooms, Scripts as ScriptOptions},
+    account_settings::{self, Scripts as ScriptOptions},
     accounts::AccountId,
+    domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
     scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
@@ -408,8 +406,6 @@ pub(super) struct ScriptsWindow {
     scanning: Option<Task<()>>,
     search: Entity<Input>,
     room: Entity<Input>,
-    room_pending: bool,
-    room_error: bool,
     selected: usize,
     filter: Option<PathBuf>,
     pane: Pane,
@@ -423,7 +419,7 @@ pub(super) struct ScriptsWindow {
     detail_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
     _view_changes: Option<Subscription>,
-    _subscriptions: [Subscription; 5],
+    _subscriptions: [Subscription; 6],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -465,7 +461,7 @@ impl ScriptsWindow {
                 .placeholder("Search")
                 .search()
         });
-        let room = cx.new(|cx| Input::new("Room number", cx).max_length(5));
+        let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
         let package_dialogs = cx.new(PackageDialogs::new);
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
@@ -488,20 +484,29 @@ impl ScriptsWindow {
                 InputEvent::Submitted => this.run_selected(cx),
             }),
             cx.subscribe_in(&room, window, |this, room, event, window, cx| {
-                let number = room.read(cx).text().to_owned();
+                let text = room.read(cx).text().trim().to_owned();
+                let parsed = PrivateRoom::parse(&text);
+                let valid = text.is_empty() || parsed.is_some();
+                let private = matches!(
+                    this.options(cx).map(|options| options.rooms),
+                    Some(Rooms::Private { .. })
+                );
                 match event {
-                    InputEvent::Submitted if RoomNumber::parse(&number).is_some() => {
-                        window.blur(cx)
+                    InputEvent::Changed if valid && private => {
+                        this.change_options(cx, |options| {
+                            options.rooms = Rooms::Private { room: parsed };
+                        });
                     }
-                    InputEvent::Submitted => this.room_error = true,
-                    InputEvent::Changed => {
-                        this.room_error = room_note(&number).is_err();
-                        if this.room_choice(cx) == SPECIFIC_ROOM {
-                            this.choose_room_number(&number, cx);
-                        }
-                    }
+                    InputEvent::Changed => {}
+                    InputEvent::Submitted if valid => window.blur(cx),
+                    InputEvent::Submitted => {}
                 }
-                this.show_room_error(cx);
+                room.update(cx, |input, cx| {
+                    input.set_invalid(matches!(event, InputEvent::Submitted) && !valid, cx);
+                });
+            }),
+            cx.on_blur(&room.focus_handle(cx), window, |this, _, cx| {
+                this.show_saved_room(cx);
             }),
         ];
         let mut scripts = Self {
@@ -516,8 +521,6 @@ impl ScriptsWindow {
             scanning: None,
             search,
             room,
-            room_pending: false,
-            room_error: false,
             selected: 0,
             filter: None,
             pane: Pane::Library,
@@ -563,14 +566,7 @@ impl ScriptsWindow {
             .map(|view| cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()));
         self.queued = 0;
         self.chosen = None;
-        self.room_pending = false;
-        self.room_error = false;
-        let number = match self.options(cx).map(|options| options.rooms) {
-            Some(Rooms::Specific { number }) => number.get().to_string(),
-            _ => String::new(),
-        };
-        self.room.update(cx, |input, cx| input.set_text(number, cx));
-        self.show_room_error(cx);
+        self.show_saved_room(cx);
         self.select_last_run(cx);
     }
 
@@ -586,7 +582,7 @@ impl ScriptsWindow {
 
     fn running(&self, cx: &App) -> bool {
         self.view()
-            .is_some_and(|view| view.read(cx).script.running())
+            .is_some_and(|view| view.read(cx).script.stoppable())
     }
 
     fn account(&self, cx: &App) -> Option<AccountId> {
@@ -609,10 +605,23 @@ impl ScriptsWindow {
         }
     }
 
-    fn show_room_error(&mut self, cx: &mut Context<Self>) {
-        let invalid = self.room_choice(cx) == SPECIFIC_ROOM && self.room_error;
-        self.room
-            .update(cx, |input, cx| input.set_invalid(invalid, cx));
+    fn set_private_rooms(&mut self, on: bool, cx: &mut Context<Self>) {
+        let rooms = if on {
+            Rooms::Private {
+                room: PrivateRoom::parse(self.room.read(cx).text()),
+            }
+        } else {
+            Rooms::Public
+        };
+        self.change_options(cx, |options| options.rooms = rooms);
+    }
+
+    fn show_saved_room(&mut self, cx: &mut Context<Self>) {
+        let text = room_text(self.options(cx).unwrap_or_default().rooms);
+        self.room.update(cx, |input, cx| {
+            input.set_text(text, cx);
+            input.set_invalid(false, cx);
+        });
         cx.notify();
     }
 
@@ -622,43 +631,10 @@ impl ScriptsWindow {
     }
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
-        if let Some(account) = self.account(cx) {
-            account_settings::change(&account, cx, |settings| edit(&mut settings.scripts));
+        if let Some(view) = self.view() {
+            view.update(cx, |view, cx| view.change_script_options(edit, cx));
         }
         cx.notify();
-    }
-
-    fn room_choice(&self, cx: &App) -> usize {
-        if self.room_pending {
-            return SPECIFIC_ROOM;
-        }
-        room_choice(self.options(cx).unwrap_or_default().rooms)
-    }
-
-    fn choose_room(&mut self, choice: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let rooms = match choice {
-            0 => Rooms::Public,
-            1 => Rooms::RandomPrivate,
-            _ => {
-                let number = self.room.read(cx).text().to_owned();
-                self.room_error = room_note(&number).is_err();
-                self.choose_room_number(&number, cx);
-                window.focus(&self.room.focus_handle(cx), cx);
-                return self.show_room_error(cx);
-            }
-        };
-        self.room_pending = false;
-        self.change_options(cx, |options| options.rooms = rooms);
-        self.show_room_error(cx);
-    }
-
-    fn choose_room_number(&mut self, number: &str, cx: &mut Context<Self>) {
-        let Some(number) = RoomNumber::parse(number) else {
-            self.room_pending = true;
-            return;
-        };
-        self.room_pending = false;
-        self.change_options(cx, |options| options.rooms = Rooms::Specific { number });
     }
 
     fn rescan(&mut self, cx: &mut Context<Self>) {
@@ -741,7 +717,7 @@ impl ScriptsWindow {
     }
 
     fn run_selected(&mut self, cx: &mut Context<Self>) {
-        if self.running(cx) || self.room_pending {
+        if self.running(cx) {
             return;
         }
         let (Some(view), Some((entry, values))) = (self.view(), self.launch(cx)) else {
@@ -1478,108 +1454,7 @@ impl ScriptsWindow {
                     return div().into_any_element();
                 };
                 let scripts = scripts.read(cx);
-                let options = scripts.options(cx);
-                let editable = options.is_some();
-                let options = options.unwrap_or_default();
-                let room = scripts.room_choice(cx);
-                let room_error = scripts.room_error;
-                let room_hint = room_note(scripts.room.read(cx).text());
-                let room_input = scripts.room.clone();
-                let choose_room = this.clone();
-                let toggle = |set: fn(&mut ScriptOptions, bool)| {
-                    let this = this.clone();
-                    move |on, _: &mut Window, cx: &mut App| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.change_options(cx, |options| set(options, on));
-                        });
-                    }
-                };
-                let theme = cx.theme().clone();
-                let (Ok(hint) | Err(hint)) = room_hint;
-                let radios = ROOMS
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, label)| {
-                        let radio = Radio::new(label);
-                        let radio = if editable { radio } else { radio.disabled() };
-                        match index {
-                            SPECIFIC_ROOM if room == SPECIFIC_ROOM => radio
-                                .description(hint)
-                                .invalid(room_error)
-                                .accessory(div().w(px(80.0)).child(room_input.clone())),
-                            SPECIFIC_ROOM => radio.description(hint),
-                            _ => radio,
-                        }
-                    })
-                    .collect();
-                v_flex()
-                    .gap(px(8.0))
-                    .when(!editable, |options| {
-                        options.child(note("Log in to change script settings.", true, &theme))
-                    })
-                    .child(
-                        v_flex()
-                            .gap(px(4.0))
-                            .child(switch_row(
-                                "Safe start and stop",
-                                editable,
-                                Switch::new(
-                                    "safe-start",
-                                    "Safe start and stop",
-                                    options.safe_start_stop,
-                                )
-                                .on_toggle(toggle(|options, on| options.safe_start_stop = on)),
-                            ))
-                            .child(note(
-                                "Best effort attempt to start or stop the script at your house.",
-                                editable,
-                                &theme,
-                            )),
-                    )
-                    .child(
-                        v_flex()
-                            .gap(px(4.0))
-                            .child(switch_row(
-                                "Restart after reconnecting",
-                                editable,
-                                Switch::new(
-                                    "restart",
-                                    "Restart after reconnecting",
-                                    options.restart_after_reconnect,
-                                )
-                                .on_toggle(toggle(
-                                    |options, on| options.restart_after_reconnect = on,
-                                )),
-                            ))
-                            .child(note(
-                                "Restart the active script when the same account reconnects.",
-                                editable,
-                                &theme,
-                            )),
-                    )
-                    .child(div().h(px(1.0)).my(px(4.0)).bg(theme.hairline))
-                    .child(
-                        h_flex()
-                            .items_start()
-                            .gap(px(12.0))
-                            .child(
-                                h_flex()
-                                    .flex_none()
-                                    .w(px(64.0))
-                                    .h(ROW)
-                                    .child(row_label("Rooms", editable)),
-                            )
-                            .child(div().flex_1().min_w_0().pt(px(4.0)).child(
-                                RadioGroup::new("rooms", "Rooms", radios, Some(room)).on_select(
-                                    move |room, window, cx| {
-                                        let _ = choose_room.update(cx, |this, cx| {
-                                            this.choose_room(room, window, cx)
-                                        });
-                                    },
-                                ),
-                            )),
-                    )
-                    .into_any_element()
+                options_panel(this.clone(), scripts.options(cx), scripts.room.clone(), cx)
             })
             .width(px(376.0))
     }
@@ -2122,7 +1997,6 @@ impl Render for ScriptsWindow {
             .all(|entry| self.entry_ready(entry.id));
         let finished = queue.len() > unfinished;
         let skippable = queue.iter().any(queue::Entry::running);
-        let room_ready = !self.room_pending;
         let (status, status_color) = self.status(&theme, cx);
         let header = shown_tab::header(
             "Scripts",
@@ -2273,7 +2147,7 @@ impl Render for ScriptsWindow {
                     Button::new("run", "Run")
                         .end_slot(key_hint("⏎"))
                         .variant(Variant::Primary)
-                        .disabled(!has_tab || !valid || !room_ready)
+                        .disabled(!has_tab || !valid)
                         .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
                 })),
             Pane::Queue => footer
@@ -2310,7 +2184,7 @@ impl Render for ScriptsWindow {
                         } else {
                             Button::new("queue-start", "Start queue")
                                 .variant(Variant::Primary)
-                                .disabled(!has_tab || !waiting || !startable || !room_ready)
+                                .disabled(!has_tab || !waiting || !startable)
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.edit_queue(cx, Queue::play)),
                                 )
@@ -2424,6 +2298,102 @@ fn duration(took: std::time::Duration) -> String {
         60..3600 => format!("{}m", seconds / 60),
         _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
     }
+}
+
+fn options_panel(
+    this: WeakEntity<ScriptsWindow>,
+    options: Option<ScriptOptions>,
+    room_input: Entity<Input>,
+    cx: &App,
+) -> AnyElement {
+    let editable = options.is_some();
+    let options = options.unwrap_or_default();
+    let private = matches!(options.rooms, Rooms::Private { .. });
+    let set_private = {
+        let this = this.clone();
+        move |on, _: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| this.set_private_rooms(on, cx));
+        }
+    };
+    let toggle = |set: fn(&mut ScriptOptions, bool)| {
+        let this = this.clone();
+        move |on, _: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| {
+                this.change_options(cx, |options| set(options, on));
+            });
+        }
+    };
+    let theme = cx.theme().clone();
+    v_flex()
+        .gap(px(8.0))
+        .when(!editable, |options| {
+            options.child(note("Log in to change script settings.", true, &theme))
+        })
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(switch_row(
+                    "Safe start and stop",
+                    editable,
+                    Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
+                        .on_toggle(toggle(|options, on| options.safe_start_stop = on)),
+                ))
+                .child(note(
+                    "Best effort attempt to start or stop the script at your house.",
+                    editable,
+                    &theme,
+                )),
+        )
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(switch_row(
+                    "Restart after reconnecting",
+                    editable,
+                    Switch::new(
+                        "restart",
+                        "Restart after reconnecting",
+                        options.restart_after_reconnect,
+                    )
+                    .on_toggle(toggle(|options, on| options.restart_after_reconnect = on)),
+                ))
+                .child(note(
+                    "Restart the script when the same account reconnects.",
+                    editable,
+                    &theme,
+                )),
+        )
+        .child(div().h(px(1.0)).my(px(4.0)).bg(theme.hairline))
+        .child(
+            v_flex()
+                .gap(px(4.0))
+                .child(switch_row(
+                    "Private rooms",
+                    editable,
+                    Switch::new("private-rooms", "Private rooms", private).on_toggle(set_private),
+                ))
+                .child(note(
+                    "Scripts join private rooms instead of public ones.",
+                    editable,
+                    &theme,
+                )),
+        )
+        .when(editable && private, |options| {
+            options.child(
+                v_flex()
+                    .gap(px(4.0))
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap(px(12.0))
+                            .min_h(ROW)
+                            .child(row_label("Room", true))
+                            .child(div().flex_none().w(px(96.0)).child(room_input)),
+                    )
+                    .child(note(ROOM_NOTE, true, &theme)),
+            )
+        })
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -2725,6 +2695,79 @@ mod tests {
             let library = scan_all(&temp.join("scripts"), &[], &temp.join("packages"));
             scripts.update(cx, |scripts, _| scripts.library = Some(library));
             cx.new(|_| OpenSources(scripts))
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    struct OptionsPanels {
+        scripts: Entity<ScriptsWindow>,
+    }
+
+    impl Render for OptionsPanels {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let this = self.scripts.downgrade();
+            let room = self.scripts.read(cx).room.clone();
+            let panel = |options: Option<ScriptOptions>, cx: &App| {
+                div()
+                    .w(px(376.0))
+                    .p(px(12.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().overlay)
+                    .child(options_panel(this.clone(), options, room.clone(), cx))
+            };
+            let pinned = ScriptOptions {
+                rooms: Rooms::Private {
+                    room: PrivateRoom::parse("4242"),
+                },
+                ..ScriptOptions::default()
+            };
+            let public = ScriptOptions {
+                rooms: Rooms::Public,
+                ..ScriptOptions::default()
+            };
+            h_flex()
+                .size_full()
+                .items_start()
+                .gap(px(16.0))
+                .p(px(16.0))
+                .bg(cx.theme().base)
+                .child(panel(Some(pinned), cx))
+                .child(panel(Some(public), cx))
+                .child(panel(None, cx))
+        }
+    }
+
+    #[test]
+    fn snapshot_options() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-options-{:x}", u64::from_ne_bytes(random)));
+        let size = gpui::size(px(1224.0), px(360.0));
+        for written in mira_ui::snapshot("scripts-options", size, move |window, cx| {
+            let temp = temp.clone();
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            let scripts = cx.new(|cx| {
+                let client = Client::empty_for_tests(&temp, cx);
+                ScriptsWindow::new(
+                    client,
+                    temp.join("scripts"),
+                    temp.join("types"),
+                    Target::Selected,
+                    window,
+                    cx,
+                )
+            });
+            scripts.update(cx, |scripts, cx| {
+                scripts
+                    .room
+                    .update(cx, |room, cx| room.set_text("4242", cx));
+            });
+            cx.new(|_| OptionsPanels { scripts })
         }) {
             assert!(written.exists(), "{} was not written", written.display());
         }
