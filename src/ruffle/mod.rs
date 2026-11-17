@@ -45,7 +45,7 @@ use crate::{
         counter_attack::{self, CounterAttacks},
         grabber, packets, player,
         profiles::Library,
-        rotation,
+        retreat, rotation,
         world::{self, Location},
     },
     scripting::{self, Calls, ToPlayer},
@@ -112,6 +112,7 @@ pub(crate) enum Command {
         waiting: async_channel::Sender<Result<Vec<drops::Waiting>, CallError>>,
     },
     Grabber(grabber::Job),
+    Retreat(async_channel::Sender<Result<bool, CallError>>),
 }
 
 #[derive(Clone)]
@@ -767,6 +768,17 @@ async fn run_command(
         Command::SetSpawnPoint => world::set_spawn_point(&bridge, None, None).await.map(drop),
         Command::Grabber(job) => {
             grabber::run(&bridge, |wants| bridge.subscribe(wants), &cooldown, job).await;
+            Ok(())
+        }
+        Command::Retreat(moved) => {
+            let subscribe = |wants| bridge.subscribe(wants);
+            tokio::select! {
+                biased;
+                () = moved.closed() => {}
+                result = retreat::retreat(&bridge, &subscribe, automation.rooms()) => {
+                    let _ = moved.try_send(result);
+                }
+            }
             Ok(())
         }
     };

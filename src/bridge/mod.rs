@@ -25,6 +25,22 @@ pub(crate) use generated::*;
 pub(crate) use packets::{Format, Interruption, Packet, Packets};
 pub(crate) use ruffle_core::external::Value;
 
+pub(crate) fn from_json(json: serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(flag) => Value::Bool(flag),
+        serde_json::Value::Number(number) => Value::Number(number.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::String(text) => Value::String(text),
+        serde_json::Value::Array(items) => Value::List(items.into_iter().map(from_json).collect()),
+        serde_json::Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, field)| (key, from_json(field)))
+                .collect(),
+        ),
+    }
+}
+
 const MAILBOX_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

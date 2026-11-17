@@ -219,7 +219,13 @@ async fn serve(
         Request::Http(request) => Ok(http::serve(&state.http, request).await),
         Request::Script(request) => Ok(script::serve(request).await),
         Request::Player(request) => {
-            player::serve(bridge, |wants| bridge.subscribe(wants), request).await
+            player::serve(
+                bridge,
+                |wants| bridge.subscribe(wants),
+                automation.rooms(),
+                request,
+            )
+            .await
         }
         Request::Players(request) => players::serve(bridge, request),
         Request::World(request) => {

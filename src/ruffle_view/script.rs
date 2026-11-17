@@ -1,10 +1,12 @@
 use std::{path::PathBuf, time::Instant};
 
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task};
 
 use super::{RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs};
 use crate::{
-    ruffle::Msg,
+    account_settings,
+    accounts::AccountId,
+    ruffle::{Command, Msg},
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
 };
 
@@ -16,6 +18,13 @@ impl EventEmitter<CloseTab> for RuffleView {}
 pub(super) struct Script {
     loaded: Option<Loaded>,
     dialogs: Option<Dialogs>,
+    leaving: Option<Task<()>>,
+    restart: Option<Restart>,
+}
+
+struct Restart {
+    account: AccountId,
+    queued: bool,
 }
 
 struct Loaded {
@@ -31,7 +40,9 @@ struct Dialogs {
 }
 
 enum Phase {
+    Preparing { _moving: Task<()> },
     Running { run: Run, stopping: bool },
+    Interrupted,
     Finished(Outcome),
 }
 
@@ -40,10 +51,21 @@ impl Script {
         matches!(
             self.loaded,
             Some(Loaded {
-                phase: Phase::Running { .. },
+                phase: Phase::Preparing { .. } | Phase::Running { .. },
                 ..
             })
         )
+    }
+
+    pub(super) fn stoppable(&self) -> bool {
+        self.running()
+            || matches!(
+                self.loaded,
+                Some(Loaded {
+                    phase: Phase::Interrupted,
+                    ..
+                })
+            )
     }
 
     pub(super) fn failed(&self) -> bool {
@@ -67,7 +89,7 @@ impl Script {
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
             Phase::Finished(outcome) => failure(outcome),
-            Phase::Running { .. } => None,
+            Phase::Preparing { .. } | Phase::Running { .. } | Phase::Interrupted => None,
         }
     }
 
@@ -83,6 +105,8 @@ impl Script {
         } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         let phase = match phase {
+            Phase::Preparing { .. } => ScriptPhase::Running,
+            Phase::Interrupted => ScriptPhase::Queued,
             Phase::Running {
                 stopping: false, ..
             } if waiting => ScriptPhase::NeedsInput,
@@ -90,6 +114,7 @@ impl Script {
                 stopping: false, ..
             } => ScriptPhase::Running,
             Phase::Running { stopping: true, .. } => ScriptPhase::Stopping,
+            Phase::Finished(_) if self.leaving.is_some() => ScriptPhase::Stopping,
             Phase::Finished(Outcome::Completed | Outcome::Exited { .. }) => ScriptPhase::Finished,
             Phase::Finished(Outcome::Stopped) => ScriptPhase::Stopped,
             Phase::Finished(_) => ScriptPhase::Failed(self.failure().unwrap_or_default().into()),
@@ -105,6 +130,8 @@ impl Script {
         let Loaded { name, phase, .. } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         match phase {
+            Phase::Preparing { .. } => Some(format!("Starting {name}")),
+            Phase::Interrupted => Some(format!("{name} restarts after reconnecting")),
             Phase::Running {
                 stopping: false, ..
             } if waiting => Some(format!("{name} is waiting for you")),
@@ -112,6 +139,7 @@ impl Script {
                 stopping: false, ..
             } => Some(format!("Running {name}")),
             Phase::Running { stopping: true, .. } => Some(format!("Stopping {name}")),
+            Phase::Finished(_) if self.leaving.is_some() => Some(format!("Stopping {name}")),
             Phase::Finished(outcome) => Some(match outcome {
                 Outcome::Completed => format!("{name} finished"),
                 Outcome::Failed { message, .. } => format!("{name} failed: {message}"),
@@ -145,9 +173,53 @@ impl RuffleView {
     }
 
     pub(super) fn start_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
+        self.begin_script(launch, true, cx);
+    }
+
+    pub(super) fn begin_script(&mut self, launch: Launch, fresh: bool, cx: &mut Context<Self>) {
         if self.script.running() {
             return;
         }
+        self.script.leaving = None;
+        self.script.restart = None;
+        if !fresh || !self.safe_start_stop(cx) {
+            return self.run_script(launch, cx);
+        }
+        let name = super::account::file_name(&launch.entry).into();
+        let ready = launch.clone();
+        let moving = self.retreat(cx, move |this, cx| this.run_script(ready, cx));
+        self.script.loaded = Some(Loaded {
+            launch,
+            name,
+            phase: Phase::Preparing { _moving: moving },
+        });
+        self.changed(cx);
+    }
+
+    fn safe_start_stop(&self, cx: &App) -> bool {
+        self.settings_account
+            .as_ref()
+            .map(|account| account_settings::get(account, cx).scripts)
+            .unwrap_or_default()
+            .safe_start_stop
+    }
+
+    fn retreat(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+    ) -> Task<()> {
+        let (moved, arrived) = async_channel::bounded(1);
+        self.session.command(Command::Retreat(moved));
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(error)) = arrived.recv().await {
+                tracing::warn!(%error, "couldn't move somewhere safe");
+            }
+            let _ = this.update(cx, |this, cx| then(this, cx));
+        })
+    }
+
+    fn run_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
         let name: SharedString = super::account::file_name(&launch.entry).into();
         let inbox = self.session.inbox();
         let path = launch.entry.clone();
@@ -249,9 +321,28 @@ impl RuffleView {
                 ..
             }
         );
-        self.queue.ended(&outcome, Instant::now());
+        let ran = matches!(
+            self.script.loaded,
+            Some(Loaded {
+                phase: Phase::Running { .. },
+                ..
+            })
+        );
+        let logout = matches!(outcome, Outcome::Exited { logout: true, .. });
+        let restart = self.script.restart.take().filter(|_| !logout);
+        let interrupted = restart.is_some();
+        if let Some(mut restart) = restart {
+            restart.queued = self.queue.running().is_some();
+            self.script.restart = Some(restart);
+        } else {
+            self.queue.ended(&outcome, Instant::now());
+        }
         if let Some(loaded) = &mut self.script.loaded {
-            loaded.phase = Phase::Finished(outcome);
+            loaded.phase = if interrupted {
+                Phase::Interrupted
+            } else {
+                Phase::Finished(outcome)
+            };
         }
         if let Some(dialogs) = &self.script.dialogs {
             dialogs.view.update(cx, |dialogs, cx| dialogs.end(cx));
@@ -259,7 +350,15 @@ impl RuffleView {
         if close_tab {
             cx.emit(CloseTab);
         } else {
-            self.run_queued(cx);
+            self.resume_script(cx);
+            self.run_next(ran, cx);
+            if ran && !logout && self.online() && !self.script.running() && self.safe_start_stop(cx)
+            {
+                self.script.leaving = Some(self.retreat(cx, |this, cx| {
+                    this.script.leaving = None;
+                    this.changed(cx);
+                }));
+            }
         }
         self.changed(cx);
     }
@@ -292,14 +391,91 @@ impl RuffleView {
     }
 
     pub(super) fn skip_script(&mut self, cx: &mut Context<Self>) {
+        let restart = self.script.restart.take();
         if let Some(Loaded {
-            phase: Phase::Running { run, stopping },
+            phase: phase @ Phase::Interrupted,
             ..
         }) = &mut self.script.loaded
         {
-            run.stop();
-            *stopping = true;
+            *phase = Phase::Finished(Outcome::Stopped);
+            if restart.is_some_and(|restart| restart.queued) {
+                self.queue.ended(&Outcome::Stopped, Instant::now());
+            }
+            self.run_queued(cx);
             self.changed(cx);
+            return;
         }
+        self.end_run(cx);
+    }
+
+    fn end_run(&mut self, cx: &mut Context<Self>) {
+        match &mut self.script.loaded {
+            Some(Loaded {
+                phase: Phase::Running { run, stopping },
+                ..
+            }) => {
+                run.stop();
+                *stopping = true;
+                self.changed(cx);
+            }
+            Some(Loaded {
+                phase: Phase::Preparing { .. },
+                ..
+            }) => self.script_ended(Outcome::Stopped, cx),
+            _ => {}
+        }
+    }
+
+    pub(super) fn connection_lost(&mut self, cx: &mut Context<Self>) {
+        let running = matches!(
+            self.script.loaded,
+            Some(Loaded {
+                phase: Phase::Preparing { .. }
+                    | Phase::Running {
+                        stopping: false,
+                        ..
+                    },
+                ..
+            })
+        );
+        let restarts = self.settings_account.as_ref().is_some_and(|account| {
+            account_settings::get(account, cx)
+                .scripts
+                .restart_after_reconnect
+        });
+        let Some(account) = self.linked_account().filter(|_| running && restarts) else {
+            return;
+        };
+        self.script.restart = Some(Restart {
+            account,
+            queued: false,
+        });
+        self.end_run(cx);
+    }
+
+    pub(super) fn resume_script(&mut self, cx: &mut Context<Self>) {
+        if !self.online() || self.script.running() {
+            return;
+        }
+        let Some(restart) = self.script.restart.take() else {
+            return;
+        };
+        let Some(loaded) = &mut self.script.loaded else {
+            return;
+        };
+        let launch = loaded.launch.clone();
+        loaded.phase = Phase::Finished(Outcome::Stopped);
+        if self.linked_account() != Some(restart.account) {
+            if restart.queued {
+                self.queue.ended(&Outcome::Stopped, Instant::now());
+                self.queue.pause();
+            }
+        } else if restart.queued {
+            self.queue.requeue();
+            self.run_queued(cx);
+        } else {
+            self.start_script(launch, cx);
+        }
+        self.changed(cx);
     }
 }

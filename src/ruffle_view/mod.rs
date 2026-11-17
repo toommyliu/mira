@@ -457,9 +457,9 @@ impl RuffleView {
         if self.settings_account.as_ref() == Some(&account) {
             return;
         }
-        account_settings::get(&account, cx)
-            .options
-            .apply_to(&self.automation);
+        let settings = account_settings::get(&account, cx);
+        settings.options.apply_to(&self.automation);
+        self.automation.set_rooms(settings.scripts.rooms);
         self.settings_account = Some(account);
         cx.notify();
     }
@@ -467,6 +467,18 @@ impl RuffleView {
     fn save_options(&self, edit: impl FnOnce(&mut Options), cx: &mut Context<Self>) {
         if let Some(account) = &self.settings_account {
             account_settings::change(account, cx, |settings| edit(&mut settings.options));
+        }
+    }
+
+    pub(super) fn change_script_options(
+        &self,
+        edit: impl FnOnce(&mut account_settings::Scripts),
+        cx: &mut App,
+    ) {
+        if let Some(account) = &self.settings_account {
+            account_settings::change(account, cx, |settings| edit(&mut settings.scripts));
+            self.automation
+                .set_rooms(account_settings::get(account, cx).scripts.rooms);
         }
     }
 

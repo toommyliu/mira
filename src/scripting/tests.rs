@@ -805,6 +805,95 @@ export default function* () {
 }
 
 #[test]
+fn stopping_during_the_exit_logout_still_reports_the_exit() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Script } from "mira";
+
+export default function* () {
+  yield* Script.exit({ logout: true, closeTab: true });
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let started = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| match request {
+            Request::Auth(A::Logout) => None,
+            _ => Some(Ok(json!(null))),
+        }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while player.held.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the logout was sent");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    started.run.stop();
+    for call in player.held.lock().unwrap().drain(..) {
+        call.reply.send(Ok(json!(null)));
+    }
+    assert_eq!(
+        started.finish().outcome,
+        Outcome::Exited {
+            logout: true,
+            close_tab: true
+        }
+    );
+}
+
+#[test]
+fn stopping_during_exit_cleanup_still_logs_out() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Auth, Script } from "mira";
+
+export default function* () {
+  yield* Effect.forkChild(
+    Effect.andThen(Effect.sleep("10 millis"), Script.exit({ logout: true })),
+  );
+  yield* Effect.never.pipe(Effect.ensuring(Auth.isLoggedIn()));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let started = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|request, _| match request {
+            Request::Auth(A::LoggedIn) => None,
+            _ => Some(Ok(json!(null))),
+        }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while player.held.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "cleanup started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    started.run.stop();
+    for call in player.held.lock().unwrap().drain(..) {
+        call.reply.send(Ok(json!(true)));
+    }
+    assert_eq!(
+        started.finish().outcome,
+        Outcome::Exited {
+            logout: true,
+            close_tab: false
+        }
+    );
+    assert!(
+        player
+            .seen()
+            .iter()
+            .any(|seen| matches!(seen, Seen::Call(_, Request::Auth(A::Logout)))),
+        "logged out"
+    );
+}
+
+#[test]
 fn exiting_wins_over_a_root_the_abort_ends() {
     for resumed in ["Effect.void", r#"Effect.die(new Error("aborted"))"#] {
         let folder = Folder::new(&[(

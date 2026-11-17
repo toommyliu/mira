@@ -130,6 +130,14 @@ impl Queue {
         }
     }
 
+    pub(super) fn requeue(&mut self) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.running()) else {
+            return false;
+        };
+        entry.state = State::Waiting;
+        true
+    }
+
     pub(super) fn move_entry(&mut self, id: EntryId, to: usize) {
         let Some(from) = self.position(id) else {
             return;
@@ -283,6 +291,19 @@ mod tests {
         start(&mut queue);
         queue.ended(&Outcome::Stopped, Instant::now());
         assert_eq!(start(&mut queue).as_deref(), Some("b.ts"));
+    }
+
+    #[test]
+    fn a_requeued_entry_runs_again_before_the_next_one() {
+        let mut queue = queue(&["a.ts", "b.ts"]);
+        start(&mut queue);
+        assert!(queue.requeue());
+        queue.ended(&Outcome::Stopped, Instant::now());
+        assert_eq!(outcomes(&queue), [None, None]);
+        assert_eq!(start(&mut queue).as_deref(), Some("a.ts"));
+        queue.ended(&Outcome::Completed, Instant::now());
+        assert_eq!(start(&mut queue).as_deref(), Some("b.ts"));
+        assert!(!Queue::default().requeue());
     }
 
     #[test]

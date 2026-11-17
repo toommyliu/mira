@@ -660,7 +660,7 @@ struct Bar {
 
 pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
     let script = match view.script.loaded() {
-        Some(name) if view.script.running() => ScriptControl::Stop(name.clone()),
+        Some(name) if view.script.stoppable() => ScriptControl::Stop(name.clone()),
         loaded => ScriptControl::Start(loaded.cloned()),
     };
     let bar = Bar {

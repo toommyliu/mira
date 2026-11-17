@@ -328,7 +328,7 @@ async fn answer(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>) 
     }
 }
 
-async fn ready_to_transfer(loader: &impl Loader) -> Result<bool, CallError> {
+pub(super) async fn ready_to_transfer(loader: &impl Loader) -> Result<bool, CallError> {
     Ok(
         poll(POLL, RESPAWN_TIMEOUT, || Ok(alive(loader)?.then_some(())))
             .await?
@@ -361,7 +361,7 @@ pub(crate) async fn jump(
     Ok(arrived)
 }
 
-fn split_room(map: &str) -> (&str, Option<&str>) {
+pub(super) fn split_room(map: &str) -> (&str, Option<&str>) {
     match map.split_once('-') {
         Some((name, room)) if !name.is_empty() && !room.is_empty() => (name, Some(room)),
         _ => (map, None),

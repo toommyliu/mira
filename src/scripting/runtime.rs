@@ -576,7 +576,11 @@ fn clock_outcome(clock: &Clock) -> Option<Outcome> {
 }
 
 fn finalize(outcome: Outcome, stopping: bool) -> Outcome {
-    if stopping { Outcome::Stopped } else { outcome }
+    match outcome {
+        Outcome::Exited { .. } => outcome,
+        _ if stopping => Outcome::Stopped,
+        _ => outcome,
+    }
 }
 
 fn failed(message: String) -> Outcome {

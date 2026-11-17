@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     accounts::AccountId,
     automation::{auto_relogin, game_settings, settings::Automation},
-    domain::profiles::same_name,
+    domain::{profiles::same_name, rooms::Rooms},
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,57 +35,6 @@ impl Default for Scripts {
             restart_after_reconnect: false,
             rooms: Rooms::default(),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-pub(crate) enum Rooms {
-    Public,
-    #[default]
-    RandomPrivate,
-    Specific {
-        number: RoomNumber,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "u32", into = "u32")]
-pub(crate) struct RoomNumber(u32);
-
-impl RoomNumber {
-    pub(crate) fn parse(input: &str) -> Option<Self> {
-        let input = input.trim();
-        if !input.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        input.parse::<u32>().ok()?.try_into().ok()
-    }
-
-    pub(crate) fn get(self) -> u32 {
-        self.0
-    }
-
-    pub(crate) fn is_private(self) -> bool {
-        self.0 > 1_000
-    }
-}
-
-impl TryFrom<u32> for RoomNumber {
-    type Error = &'static str;
-
-    fn try_from(number: u32) -> Result<Self, Self::Error> {
-        if (1..=99_999).contains(&number) {
-            Ok(Self(number))
-        } else {
-            Err("a room number is from 1 to 99,999")
-        }
-    }
-}
-
-impl From<RoomNumber> for u32 {
-    fn from(room: RoomNumber) -> Self {
-        room.0
     }
 }
 
@@ -239,7 +188,7 @@ pub(crate) fn move_auto_attack_profile(from: &str, to: Option<&str>, cx: &mut Ap
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automation::game_settings::RenderingMode;
+    use crate::{automation::game_settings::RenderingMode, domain::rooms::PrivateRoom};
 
     fn temporary_folder() -> PathBuf {
         let mut random = [0; 8];
@@ -267,12 +216,15 @@ mod tests {
         let bob = AccountId::of("bob");
         assert_eq!(store.get(&alice).scripts, Scripts::default());
         assert!(store.get(&alice).scripts.safe_start_stop);
-        assert_eq!(store.get(&alice).scripts.rooms, Rooms::RandomPrivate);
+        assert_eq!(
+            store.get(&alice).scripts.rooms,
+            Rooms::Private { room: None }
+        );
         store
             .change(&alice, |settings| {
                 settings.scripts.restart_after_reconnect = true;
-                settings.scripts.rooms = Rooms::Specific {
-                    number: RoomNumber::parse("4242").unwrap(),
+                settings.scripts.rooms = Rooms::Private {
+                    room: PrivateRoom::parse("4242"),
                 };
                 settings.options.game.hide_players = true;
                 settings.options.game.rendering.set(RenderingMode::Minimal);
@@ -290,8 +242,8 @@ mod tests {
         assert!(saved.scripts.restart_after_reconnect);
         assert_eq!(
             saved.scripts.rooms,
-            Rooms::Specific {
-                number: RoomNumber::parse("4242").unwrap()
+            Rooms::Private {
+                room: PrivateRoom::parse("4242")
             }
         );
         assert!(saved.options.game.hide_players);
@@ -323,7 +275,7 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         fs::write(
             folder.join("alice.json"),
-            r#"{"scripts": {"rooms": {"kind": "specific", "number": 0}}}"#,
+            r#"{"scripts": {"rooms": {"kind": "private", "room": 1000}}}"#,
         )
         .unwrap();
         fs::write(
@@ -405,17 +357,5 @@ mod tests {
         assert_eq!(profile(&bob).as_deref(), Some("Raid"));
         assert_eq!(profile(&carol), None);
         fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[test]
-    fn a_room_number_is_a_whole_number_from_1_to_99999() {
-        for (input, number) in [("1", 1), (" 42 ", 42), ("1000", 1000), ("99999", 99_999)] {
-            assert_eq!(RoomNumber::parse(input).map(RoomNumber::get), Some(number));
-        }
-        for input in ["", "0", "+5", "12a", "100000", "-1"] {
-            assert_eq!(RoomNumber::parse(input), None, "{input}");
-        }
-        assert!(!RoomNumber::parse("1000").unwrap().is_private());
-        assert!(RoomNumber::parse("1001").unwrap().is_private());
     }
 }
