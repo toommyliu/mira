@@ -178,12 +178,23 @@ pub(crate) async fn join(
     }
     let map = map.trim();
     let (name, room) = split_room(map);
-    let cell = cell.unwrap_or(DEFAULT_CELL);
     let pad = pad.unwrap_or(DEFAULT_PAD);
     let here = bridge::player::get_map(loader)?;
     if here.is_some_and(|here| here.eq_ignore_ascii_case(name)) && in_room(loader, room)? {
-        return jump(loader, cell, Some(pad)).await;
+        return match cell {
+            Some(cell) => jump(loader, cell, Some(pad)).await,
+            None => {
+                let Some(here) = bridge::player::get_cell(loader)? else {
+                    return Ok(false);
+                };
+                arrive(loader, JUMP_TIMEOUT, || {
+                    Ok(bridge::world::is_cell_ready(loader, &here, None)?.then_some(true))
+                })
+                .await
+            }
+        };
     }
+    let cell = cell.unwrap_or(DEFAULT_CELL);
     if !ready_to_transfer(loader).await? {
         return Ok(false);
     }
@@ -534,6 +545,7 @@ mod tests {
         cell: String,
         pad: String,
         loading: u32,
+        cell_busy: bool,
         art: u32,
         transfer_lock: u32,
         joins: Vec<Vec<Value>>,
@@ -551,6 +563,7 @@ mod tests {
             cell: cell.into(),
             pad: "Spawn".into(),
             loading: 0,
+            cell_busy: false,
             art: 0,
             transfer_lock: 0,
             joins: Vec::new(),
@@ -657,6 +670,7 @@ mod tests {
                 },
                 "world.isCellReady" => Value::Bool(
                     place.loading == 0
+                        && !place.cell_busy
                         && place.cell.eq_ignore_ascii_case(&text(&args[0]))
                         && (args[1] == Value::Null || place.pad == text(&args[1])),
                 ),
@@ -887,7 +901,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn joining_the_current_map_or_room_jumps() {
+    async fn joining_the_current_map_or_room_jumps_only_to_a_named_cell() {
         for target in ["Battleon", "battleon-1"] {
             let (loader, place) = traveller(in_map("battleon", "Enter"));
             let events = Events::default();
@@ -903,6 +917,23 @@ mod tests {
                 [vec!["r2".into(), "Spawn".into()]],
                 "{target}"
             );
+
+            let (loader, place) = traveller(in_map("battleon", "r5"));
+            assert_eq!(
+                join(&loader, &subscribe, target, None, None).await,
+                Ok(true),
+                "{target}"
+            );
+            assert!(place.borrow().joins.is_empty(), "{target}");
+            assert!(place.borrow().jumps.is_empty(), "{target}");
+
+            place.borrow_mut().cell_busy = true;
+            assert_eq!(
+                join(&loader, &subscribe, target, None, None).await,
+                Ok(false),
+                "{target}"
+            );
+            assert!(place.borrow().jumps.is_empty(), "{target}");
         }
     }
 

@@ -205,7 +205,10 @@ export const Player = {
   getAuras: () => player<readonly Aura[]>("auras"),
   getAura: (name: string) => player<Aura | null>("aura", { name }),
   hasAura: (name: string) => player<boolean>("hasAura", { name }),
-  /** Waits to respawn and leaves combat before joining another map. */
+  /**
+   * Waits to respawn and leaves combat before joining another map. Already in the map, it moves
+   * only when `cell` is given.
+   */
   joinMap: (map: string, options: CellOptions = {}) =>
     player<boolean>("joinMap", { map, ...options }),
   jumpToCell: (cell: string, options: PadOptions = {}) =>
