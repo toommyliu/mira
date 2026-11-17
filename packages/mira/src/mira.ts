@@ -822,6 +822,8 @@ export const Script = {
   /** The text as entered, or null when cancelled. Interrupting the effect closes the dialog. */
   prompt: (message: string, { title, default: initial, placeholder }: PromptOptions = {}) =>
     ask<string | null>({ op: "prompt", message, title, default: initial, placeholder }),
+  /** Plays Mira's chime `times` times and waits for the last one to finish. Interrupting the effect cuts it off. */
+  beep: (times = 1) => call<null>({ domain: "script", op: "beep", times }).pipe(Effect.asVoid),
   /** The values this run started with. Pass `typeof inputs` to type them; Mira checks the values, not the type. */
   inputs: <D extends Inputs = Inputs>(): InputValues<D> => inputs.values as InputValues<D>,
   sleep: (duration: Duration.Input) => Effect.sleep(duration),

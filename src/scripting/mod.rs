@@ -20,6 +20,7 @@ mod player;
 mod players;
 mod quests;
 mod runtime;
+mod script;
 mod shops;
 mod typings;
 mod world;

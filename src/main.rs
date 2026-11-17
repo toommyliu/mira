@@ -5,6 +5,7 @@ mod account_settings;
 mod accounts;
 mod army;
 mod automation;
+mod beep;
 mod bridge;
 mod combat_profiles;
 mod domain;
