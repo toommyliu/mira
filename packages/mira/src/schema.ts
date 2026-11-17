@@ -1,3 +1,4 @@
+/** @module mira/schema */
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Native from "effect/Schema";
