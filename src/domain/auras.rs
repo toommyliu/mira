@@ -33,6 +33,8 @@ pub(crate) struct AuraEntry {
     pub(crate) duration: Option<f64>,
     #[serde(rename = "stk", default, deserialize_with = "wire::number")]
     pub(crate) stack: Option<f64>,
+    #[serde(default, deserialize_with = "wire::present")]
+    pub(crate) icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

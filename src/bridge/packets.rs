@@ -306,6 +306,10 @@ pub(crate) mod wire {
             _ => String::new(),
         })
     }
+
+    pub(crate) fn present<'de, D: Deserializer<'de>>(input: D) -> Result<Option<String>, D::Error> {
+        Ok(Some(text(input)?).filter(|text| !text.is_empty()))
+    }
 }
 
 #[cfg(test)]
