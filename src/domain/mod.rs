@@ -16,6 +16,7 @@ pub(crate) mod profiles;
 pub(crate) mod quests;
 pub(crate) mod rotation;
 pub(crate) mod shops;
+pub(crate) mod taunt;
 #[cfg(test)]
 pub(crate) mod testing;
 pub(crate) mod world;

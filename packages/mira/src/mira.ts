@@ -1237,6 +1237,30 @@ export type ArmyTurns = {
 
 export type Rotation = { readonly stop: Effect.Effect<void> };
 
+export type LoopTauntTarget = {
+  readonly target: MonsterQuery;
+  /** Army player numbers, in turn order. */
+  readonly players: readonly number[];
+  /**
+   * `"focus"` casts each time the target's Focus wears off. `{ includes }` casts each time a combat
+   * or server message with that text appears, ignoring case and extra spaces. A match within a
+   * second of the last counted one is a copy of the same message and casts nothing.
+   */
+  readonly on: "focus" | { readonly includes: string };
+  /**
+   * Runs on the player whose turn it is, right before the cast. True passes the turn to the next
+   * player, and so does taking longer than 1 second.
+   */
+  readonly skipWhen?: Body<boolean>;
+};
+
+/**
+ * Groups of targets in priority order. Only the first group with a living target taunts, all of its
+ * targets at once. A player can have one target per group, and every target must be a different
+ * monster in the cell.
+ */
+export type LoopTauntPlan = readonly (readonly LoopTauntTarget[])[];
+
 type ArmyStart = {
   (name: string): Effect.Effect<ArmyInfo>;
   (name: string, options: { readonly timeout: Duration.Input }): Effect.Effect<ArmyInfo | null>;
@@ -1360,6 +1384,46 @@ const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<R
     return { stop: Fiber.interrupt(fiber) };
   });
 
+type TauntTurn = { readonly lease: number; readonly assignment: number };
+
+const loopTaunt = (
+  plan: LoopTauntPlan,
+  { timeout }: ArmyStepOptions = {},
+): Effect.Effect<Rotation> =>
+  Effect.gen(function* () {
+    const targets = plan.flat();
+    yield* army<null>("loopTaunt", {
+      plan: plan.map((group) =>
+        group.map(({ target, players, on, skipWhen }) => ({
+          target,
+          players,
+          on: on === "focus" ? { type: "focus" } : { type: "message", includes: on.includes },
+          skips: skipWhen !== undefined,
+        })),
+      ),
+      timeoutMs: millis(timeout),
+    });
+    const taunting = Effect.gen(function* () {
+      let answered: { readonly lease: number; readonly cast: boolean } | null = null;
+      while (true) {
+        const turn: TauntTurn | null = yield* army<TauntTurn | null>("tauntTurn", { answered });
+        if (turn === null) return;
+        const skipWhen: Body<boolean> | undefined = targets[turn.assignment]?.skipWhen;
+        const skip: boolean =
+          skipWhen !== undefined &&
+          Option.getOrElse(
+            yield* perform(skipWhen).pipe(Effect.timeoutOption("1 second")),
+            () => true,
+          );
+        answered = { lease: turn.lease, cast: !skip };
+      }
+    });
+    const fiber = yield* Effect.forkDetach(
+      failingTheScript(Effect.ensuring(taunting, army<null>("tauntLeave"))),
+    );
+    return { stop: Fiber.interrupt(fiber) };
+  });
+
 export const Army = {
   /** Reads `~/Documents/Mira/armies/<name>.yaml` and waits until every player in it has started. */
   start,
@@ -1383,4 +1447,12 @@ export const Army = {
    * script. `turn` returns whether it acted. Players not listed take no turns.
    */
   takeTurns,
+  /**
+   * Keeps targets taunted with Scroll of Enrage, which each listed player needs equipped. Every
+   * player calls it with the same plan, and it starts once they all have. Turns run in the
+   * background until `stop`, the end of the script, or this player leaving the map. A player that
+   * is dead, cooling down, or skipping passes the turn on, and a respawned target starts again
+   * with its first player.
+   */
+  loopTaunt,
 };

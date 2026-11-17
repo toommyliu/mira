@@ -272,7 +272,7 @@ fn vital(current: f64, max: f64, bound: super::profiles::Bound<Amount>) -> bool 
     bound.admits(actual, |_| limit)
 }
 
-fn normalized(text: &str) -> String {
+pub(crate) fn normalized(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
