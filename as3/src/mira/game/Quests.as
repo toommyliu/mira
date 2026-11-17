@@ -60,6 +60,7 @@ package mira.game {
             itemId: item.ItemID,
             name: item.sName,
             quantity: item.iQty,
+            maxStack: item.iStk,
             kind: REWARD_KINDS[index],
             dropChance: chance
           });
