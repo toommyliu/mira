@@ -1,5 +1,6 @@
 mod assets;
 pub mod components;
+pub mod keyboard;
 pub mod motion;
 pub mod nav;
 pub mod primitives;

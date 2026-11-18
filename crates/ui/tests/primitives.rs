@@ -695,11 +695,12 @@ gpui::actions!(test, [CloseWindow]);
 struct Shortcut {
     focus: FocusHandle,
     recorded: Rc<Cell<Option<Keystroke>>>,
+    next: Rc<Cell<Option<Keystroke>>>,
 }
 
 impl Render for Shortcut {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let recorded = self.recorded.clone();
+        let (recorded, next) = (self.recorded.clone(), self.next.clone());
         div()
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
@@ -707,6 +708,10 @@ impl Render for Shortcut {
             .child(
                 mira_ui::components::ShortcutField::new("hotkey", "Hotkey", None)
                     .on_change(move |keystroke, _, _| recorded.set(keystroke)),
+            )
+            .child(
+                mira_ui::components::ShortcutField::new("next-hotkey", "Next hotkey", None)
+                    .on_change(move |keystroke, _, _| next.set(keystroke)),
             )
     }
 }
@@ -724,6 +729,7 @@ fn shortcut_field_records_combinations_the_app_binds(cx: &mut TestAppContext) {
         cx.on_action(move |_: &CloseWindow, _| fired.set(true));
     });
     let recorded = Rc::new(Cell::new(None));
+    let next = Rc::new(Cell::new(None));
     let (view, cx) = cx.add_window_view(|window, cx| {
         let focus = cx.focus_handle();
         window.activate_window();
@@ -731,6 +737,7 @@ fn shortcut_field_records_combinations_the_app_binds(cx: &mut TestAppContext) {
         Shortcut {
             focus,
             recorded: recorded.clone(),
+            next: next.clone(),
         }
     });
     for combination in ["cmd-w", "ctrl-shift-tab"] {
@@ -747,6 +754,30 @@ fn shortcut_field_records_combinations_the_app_binds(cx: &mut TestAppContext) {
             Some(Keystroke::parse(combination).unwrap())
         );
     }
+
+    cx.update(|window, cx| {
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    recorded.set(Some(Keystroke::parse("cmd-w").unwrap()));
+    press(cx, "backspace");
+    assert_eq!(recorded.take(), None);
+    recorded.set(Some(Keystroke::parse("cmd-w").unwrap()));
+    press(cx, "cmd-k");
+    assert_eq!(
+        recorded.take(),
+        Some(Keystroke::parse("cmd-w").unwrap()),
+        "clearing should stop recording"
+    );
+    press(cx, "tab");
+    press(cx, "cmd-j");
+    assert_eq!(
+        next.take(),
+        Some(Keystroke::parse("cmd-j").unwrap()),
+        "tab should reach the next field after clearing"
+    );
 }
 
 #[gpui::test]
@@ -1359,6 +1390,7 @@ struct GameBar {
     chosen: Rc<std::cell::RefCell<Vec<&'static str>>>,
     dismissed: Rc<Cell<usize>>,
     reached: Rc<Cell<usize>>,
+    open: Option<&'static str>,
 }
 
 impl Render for GameBar {
@@ -1371,32 +1403,34 @@ impl Render for GameBar {
         };
         let (new, undo, run) = (pick("new"), pick("undo"), pick("run"));
         let (dismissed, reached) = (self.dismissed.clone(), self.reached.clone());
+        let mut menubar = Menubar::new("bar", "Game")
+            .menu(Button::new("file", "File").w(px(80.0)), move |_, _| {
+                let new = new.clone();
+                vec![MenuItem::action("New", move |window, cx| new(window, cx))]
+            })
+            .menu(Button::new("edit", "Edit").w(px(80.0)), move |_, _| {
+                let undo = undo.clone();
+                vec![MenuItem::action("Undo", move |window, cx| undo(window, cx))]
+            })
+            .button(
+                Button::new("run", "Run")
+                    .w(px(80.0))
+                    .on_click(move |_, window, cx| run(window, cx)),
+            )
+            .on_dismiss(move |_, _, cx| {
+                dismissed.set(dismissed.get() + 1);
+                cx.stop_propagation();
+            });
+        if let Some(entry) = self.open.take() {
+            menubar = menubar.toggle(entry);
+        }
         div()
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .size_full()
             .flex()
             .flex_col()
-            .child(
-                Menubar::new("bar", "Game")
-                    .menu(Button::new("file", "File").w(px(80.0)), move |_, _| {
-                        let new = new.clone();
-                        vec![MenuItem::action("New", move |window, cx| new(window, cx))]
-                    })
-                    .menu(Button::new("edit", "Edit").w(px(80.0)), move |_, _| {
-                        let undo = undo.clone();
-                        vec![MenuItem::action("Undo", move |window, cx| undo(window, cx))]
-                    })
-                    .button(
-                        Button::new("run", "Run")
-                            .w(px(80.0))
-                            .on_click(move |_, window, cx| run(window, cx)),
-                    )
-                    .on_dismiss(move |_, _, cx| {
-                        dismissed.set(dismissed.get() + 1);
-                        cx.stop_propagation();
-                    }),
-            )
+            .child(menubar)
             .child(
                 div()
                     .flex_1()
@@ -1447,6 +1481,14 @@ impl Bar<'_> {
         self.cx.update(|window, _| focus.is_focused(window))
     }
 
+    fn open(&mut self, entry: &'static str) {
+        self.view.update(self.cx, |view, cx| {
+            view.open = Some(entry);
+            cx.notify();
+        });
+        self.cx.run_until_parked();
+    }
+
     fn counts(&self) -> (usize, usize) {
         self.view.read_with(self.cx, |view, _| {
             (view.dismissed.get(), view.reached.get())
@@ -1465,6 +1507,7 @@ fn game_bar(cx: &mut TestAppContext) -> Bar<'_> {
             chosen: Rc::default(),
             dismissed: Rc::default(),
             reached: Rc::default(),
+            open: None,
         }
     });
     cx.run_until_parked();
@@ -1515,6 +1558,26 @@ fn menubar_escape_closes_the_entry_and_returns_focus(cx: &mut TestAppContext) {
 
     bar.keys("tab enter escape right enter enter");
     assert_eq!(bar.chosen(), ["undo"]);
+}
+
+#[gpui::test]
+fn menubar_toggles_a_requested_panel_but_not_a_plain_button(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.open("edit");
+    bar.keys("enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+    assert!(bar.root_focused());
+    bar.keys("enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+
+    bar.open("edit");
+    assert!(!bar.root_focused());
+    bar.open("edit");
+    assert!(bar.root_focused());
+    bar.keys("enter");
+    assert_eq!(bar.chosen(), ["undo"]);
+    bar.open("run");
+    assert!(bar.root_focused());
 }
 
 #[gpui::test]

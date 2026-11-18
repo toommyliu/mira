@@ -46,7 +46,17 @@ use crate::{
     settings,
 };
 
-actions!(mira, [OpenScripts]);
+actions!(mira, [OpenScripts, LoadScript, AddToQueue]);
+
+const CONTEXT: &str = "Scripts";
+
+pub(super) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([gpui::KeyBinding::new(
+        "cmd-enter",
+        AddToQueue,
+        Some(CONTEXT),
+    )]);
+}
 
 const WIDTH: f32 = 720.0;
 const HEIGHT: f32 = 500.0;
@@ -391,6 +401,17 @@ pub(crate) fn open(
     }) {
         Ok(handle) => cx.set_global(Open(handle)),
         Err(error) => tracing::error!(%error, "couldn't open scripts"),
+    }
+}
+
+pub(crate) fn load(client: Entity<Client>, folder: PathBuf, types: PathBuf, cx: &mut App) {
+    open(client, folder, types, Target::Selected, cx);
+    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0) {
+        let _ = handle.update(cx, |scripts, _, cx| {
+            if scripts.shown.is_some() && !scripts.running(cx) {
+                scripts.choose_file(cx);
+            }
+        });
     }
 }
 
@@ -2196,19 +2217,18 @@ impl Render for ScriptsWindow {
             .bg(theme.base)
             .text_size(TEXT_BODY)
             .text_color(theme.text)
-            .key_context(FOCUS_SCOPE)
+            .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("scripts")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                let keystroke = &event.keystroke;
-                if this.pane == Pane::Library
-                    && keystroke.key == "enter"
-                    && keystroke.modifiers.platform
-                {
+            .on_action(cx.listener(|this, _: &AddToQueue, _, cx| {
+                if this.pane == Pane::Library {
                     this.add_to_queue(cx);
-                    cx.stop_propagation();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
+                this.set_pane(Pane::Library, cx);
+                window.focus(&this.search.focus_handle(cx), cx);
             }))
             .child(mira_ui::nav::pointer_probe())
             .child(header)

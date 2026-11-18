@@ -4,7 +4,7 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseDownEvent,
     ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, actions, div,
     prelude::FluentBuilder as _, px,
 };
 
@@ -12,8 +12,8 @@ use mira_ui::{
     ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _, h_flex, motion,
     nav::{self, Axis, Step},
     primitives::{
-        Button, Field, Icon, Input, InputEvent, MenuItem, Menubar, Numeric, PopoverClose,
-        Scrollbar, Select, Spinner, Switch,
+        Button, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric, PopoverClose,
+        Scrollbar, Select, SelectOption, Spinner, Switch,
         button::{Size, Variant},
         icon,
     },
@@ -35,7 +35,21 @@ use crate::{
         world::{Location, PADS},
     },
     ruffle::Command,
+    shortcuts,
 };
+
+actions!(
+    mira,
+    [
+        ToggleScript,
+        ToggleAutoAttack,
+        OpenBank,
+        OpenJump,
+        ToggleOptionsMenu,
+        ToggleMinimalRendering,
+        ToggleInterfaceRendering
+    ]
+);
 
 pub(crate) const BAR_HEIGHT: Pixels = px(38.0);
 
@@ -236,34 +250,78 @@ impl Inputs {
     }
 }
 
-type Toggle = (
-    &'static str,
-    &'static str,
-    fn(&mut GameSettings) -> &mut bool,
-);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GameOption {
+    InfiniteRange,
+    ProvokeCell,
+    EnemyMagnet,
+    HidePlayers,
+    SkipCutscenes,
+    Animations,
+    Collisions,
+    Ads,
+    AntiCounter,
+    AntiAfk,
+    AutoZone,
+}
 
-const TOGGLES: [Toggle; 11] = [
-    ("infinite-range", "Infinite range", |s| {
-        &mut s.infinite_range
-    }),
-    ("provoke-cell", "Provoke cell", |s| &mut s.provoke_cell),
-    ("enemy-magnet", "Enemy magnet", |s| &mut s.enemy_magnet),
-    ("hide-players", "Hide players", |s| &mut s.hide_players),
-    ("skip-cutscenes", "Skip cutscenes", |s| {
-        &mut s.skip_cutscenes
-    }),
-    ("animations", "Animations", |s| &mut s.animations),
-    ("collisions", "Collisions", |s| &mut s.collisions),
-    ("ads", "Ads", |s| &mut s.ads),
-    ("anti-counter", "Anti counter", |s| &mut s.anti_counter),
-    ("anti-afk", "Anti AFK", |s| &mut s.anti_afk),
-    ("auto-zone", "Auto zone", |s| &mut s.auto_zone),
-];
+impl GameOption {
+    const ALL: [GameOption; 11] = [
+        GameOption::InfiniteRange,
+        GameOption::ProvokeCell,
+        GameOption::EnemyMagnet,
+        GameOption::HidePlayers,
+        GameOption::SkipCutscenes,
+        GameOption::Animations,
+        GameOption::Collisions,
+        GameOption::Ads,
+        GameOption::AntiCounter,
+        GameOption::AntiAfk,
+        GameOption::AutoZone,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            GameOption::InfiniteRange => "Infinite range",
+            GameOption::ProvokeCell => "Provoke cell",
+            GameOption::EnemyMagnet => "Enemy magnet",
+            GameOption::HidePlayers => "Hide players",
+            GameOption::SkipCutscenes => "Skip cutscenes",
+            GameOption::Animations => "Animations",
+            GameOption::Collisions => "Collisions",
+            GameOption::Ads => "Ads",
+            GameOption::AntiCounter => "Anti counter",
+            GameOption::AntiAfk => "Anti AFK",
+            GameOption::AutoZone => "Auto zone",
+        }
+    }
+
+    fn field(self, settings: &mut GameSettings) -> &mut bool {
+        match self {
+            GameOption::InfiniteRange => &mut settings.infinite_range,
+            GameOption::ProvokeCell => &mut settings.provoke_cell,
+            GameOption::EnemyMagnet => &mut settings.enemy_magnet,
+            GameOption::HidePlayers => &mut settings.hide_players,
+            GameOption::SkipCutscenes => &mut settings.skip_cutscenes,
+            GameOption::Animations => &mut settings.animations,
+            GameOption::Collisions => &mut settings.collisions,
+            GameOption::Ads => &mut settings.ads,
+            GameOption::AntiCounter => &mut settings.anti_counter,
+            GameOption::AntiAfk => &mut settings.anti_afk,
+            GameOption::AutoZone => &mut settings.auto_zone,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = mira, no_json)]
+pub(crate) struct ToggleOption(pub(crate) GameOption);
 
 pub(super) struct BarState {
     inputs: Inputs,
     location: Option<Location>,
     identity: Option<Identity>,
+    toggle_panel: Option<&'static str>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -288,6 +346,7 @@ impl BarState {
             inputs,
             location: None,
             identity: None,
+            toggle_panel: None,
             _subscriptions: subscriptions,
         }
     }
@@ -330,9 +389,92 @@ struct Relogin {
     inputs: Inputs,
 }
 
+pub(super) fn on_actions<E: gpui::InteractiveElement>(
+    element: E,
+    view: Entity<RuffleView>,
+    client: WeakEntity<super::Client>,
+) -> E {
+    let on = |f: fn(&mut RuffleView, &mut Context<RuffleView>)| {
+        let view = view.clone();
+        move |cx: &mut App| view.update(cx, f)
+    };
+    let (script, attack, bank, jump, options, minimal, interface) = (
+        on(RuffleView::toggle_script),
+        on(RuffleView::toggle_auto_attack),
+        on(RuffleView::open_bank),
+        on(|view, cx| view.toggle_panel("jump", cx)),
+        on(|view, cx| view.toggle_panel("options", cx)),
+        on(|view, cx| view.toggle_rendering(RenderingMode::Minimal, cx)),
+        on(|view, cx| view.toggle_rendering(RenderingMode::InterfaceOnly, cx)),
+    );
+    element
+        .on_action(move |_: &ToggleScript, _, cx| script(cx))
+        .on_action(move |_: &ToggleAutoAttack, _, cx| attack(cx))
+        .on_action(move |_: &OpenBank, _, cx| bank(cx))
+        .on_action(move |_: &OpenJump, _, cx| jump(cx))
+        .on_action(move |_: &ToggleOptionsMenu, _, cx| options(cx))
+        .on_action(move |_: &ToggleMinimalRendering, _, cx| minimal(cx))
+        .on_action(move |_: &ToggleInterfaceRendering, _, cx| interface(cx))
+        .on_action(move |action: &ToggleOption, _, cx| {
+            let option = action.0;
+            let on = |view: &RuffleView| *option.field(&mut view.automation.game_settings());
+            let before = on(view.read(cx));
+            view.update(cx, |view, cx| view.toggle_option(option, cx));
+            let after = on(view.read(cx));
+            if after != before {
+                let state = if after { "On" } else { "Off" };
+                let status = format!("{}: {state}", option.label());
+                let _ = client.update(cx, |client, cx| client.show_status(status, cx));
+            }
+        })
+}
+
 impl RuffleView {
     fn in_game(&self) -> bool {
         self.bar.location.is_some()
+    }
+
+    fn toggle_script(&mut self, cx: &mut Context<Self>) {
+        if self.script.stoppable() {
+            self.stop_script(cx);
+        } else {
+            self.start_loaded_script(cx);
+        }
+    }
+
+    fn toggle_auto_attack(&mut self, cx: &mut Context<Self>) {
+        if self.in_game() {
+            self.change_auto_attack(|settings| settings.enabled = !settings.enabled, cx);
+        }
+    }
+
+    fn open_bank(&mut self, _: &mut Context<Self>) {
+        if self.in_game() {
+            self.session.command(Command::OpenBank);
+        }
+    }
+
+    fn toggle_panel(&mut self, trigger: &'static str, cx: &mut Context<Self>) {
+        self.bar.toggle_panel = Some(trigger);
+        cx.notify();
+    }
+
+    fn toggle_option(&mut self, option: GameOption, cx: &mut Context<Self>) {
+        if self.in_game() {
+            self.change_game_settings(
+                |settings| {
+                    let on = option.field(settings);
+                    *on = !*on;
+                },
+                cx,
+            );
+        }
+    }
+
+    fn toggle_rendering(&mut self, mode: RenderingMode, cx: &mut Context<Self>) {
+        if self.in_game() {
+            self.change_game_settings(|settings| settings.rendering.toggle(mode), cx);
+        }
     }
 
     fn commit(&mut self, setting: Setting, cx: &mut Context<Self>) {
@@ -656,9 +798,10 @@ struct Bar {
     relogin_detail: Option<Detail>,
     attack: bool,
     script: ScriptControl,
+    toggle_panel: Option<&'static str>,
 }
 
-pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
+pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
     let script = match view.script.loaded() {
         Some(name) if view.script.stoppable() => ScriptControl::Stop(name.clone()),
         loaded => ScriptControl::Start(loaded.cloned()),
@@ -670,13 +813,14 @@ pub(super) fn bar(view: &RuffleView, cx: &mut Context<RuffleView>) -> impl IntoE
         relogin_detail: relogin_value(view),
         attack: view.automation.auto_attack().enabled,
         script,
+        toggle_panel: view.bar.toggle_panel.take(),
     };
     menubar(bar, cx.weak_entity(), cx)
 }
 
 fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
     let theme = cx.theme();
-    Menubar::new(("game-bar", this.entity_id()), "Game")
+    let menubar = Menubar::new(("game-bar", this.entity_id()), "Game")
         .flex_none()
         .w_full()
         .h(BAR_HEIGHT)
@@ -686,8 +830,8 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .border_b_1()
         .border_color(theme.border)
         .child(super::client::drag_area().flex_none().w(bar.inset))
-        .menu(trigger("windows", "Windows", None, None, cx), |_, _| {
-            windows_menu()
+        .menu(trigger("windows", "Windows", None, None, cx), |_, cx| {
+            windows_menu(cx)
         })
         .button(
             bar_button("scripts", "Scripts")
@@ -745,11 +889,15 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .child(super::client::bar_separator(cx))
         .button(bar_button("bank", "Bank").disabled(!bar.live).on_click({
             let this = this.clone();
-            move |_, _, cx| update(&this, cx, |view, _| view.session.command(Command::OpenBank))
+            move |_, _, cx| update(&this, cx, RuffleView::open_bank)
         }))
         .on_dismiss(move |event, window, cx| {
             update(&this, cx, |view, cx| view.bar_dismissed(event, window, cx))
-        })
+        });
+    match bar.toggle_panel {
+        Some(trigger) => menubar.toggle(trigger),
+        None => menubar,
+    }
 }
 
 fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button {
@@ -764,32 +912,30 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
     bar_button("script", label.clone())
         .child(verb)
         .tooltip(label)
-        .on_click(move |_, _, cx| {
-            update(&this, cx, |view, cx| match script {
-                ScriptControl::Start(_) => view.start_loaded_script(cx),
-                ScriptControl::Stop(_) => view.stop_script(cx),
-            })
-        })
+        .on_click(move |_, _, cx| update(&this, cx, RuffleView::toggle_script))
 }
 
-fn windows_menu() -> Vec<MenuItem> {
-    vec![
-        MenuItem::action("Combat profiles", |window, cx| {
-            window.dispatch_action(Box::new(super::OpenCombatProfiles), cx)
-        }),
-        MenuItem::action("Environment", |window, cx| {
-            window.dispatch_action(Box::new(super::OpenEnvironment), cx)
-        }),
-        MenuItem::action("Follower", |window, cx| {
-            window.dispatch_action(Box::new(super::OpenFollower), cx)
-        }),
-        MenuItem::action("Loader/grabber", |window, cx| {
-            window.dispatch_action(Box::new(super::OpenLoaderGrabber), cx)
-        }),
-        MenuItem::action("Packets", |window, cx| {
-            window.dispatch_action(Box::new(super::OpenPackets), cx)
-        }),
-    ]
+fn windows_menu(cx: &App) -> Vec<MenuItem> {
+    let windows: [(&str, Box<dyn gpui::Action>); 5] = [
+        ("Combat profiles", Box::new(super::OpenCombatProfiles)),
+        ("Environment", Box::new(super::OpenEnvironment)),
+        ("Follower", Box::new(super::OpenFollower)),
+        ("Loader/grabber", Box::new(super::OpenLoaderGrabber)),
+        ("Packets", Box::new(super::OpenPackets)),
+    ];
+    windows
+        .into_iter()
+        .map(|(label, action)| {
+            let keys = shortcuts::keys_for(action.as_ref(), cx);
+            let item = MenuItem::action(label, move |window, cx| {
+                window.dispatch_action(action.boxed_clone(), cx)
+            });
+            match keys {
+                Some(keys) => item.shortcut(keys),
+                None => item,
+            }
+        })
+        .collect()
 }
 
 fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Vec<MenuItem> {
@@ -799,9 +945,7 @@ fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Ve
         MenuItem::switch(
             "Auto attack",
             attack.enabled,
-            act(this, |view, cx| {
-                view.change_auto_attack(|settings| settings.enabled = !settings.enabled, cx)
-            }),
+            act(this, RuffleView::toggle_auto_attack),
         )
         .disabled(!view.in_game()),
         MenuItem::separator(),
@@ -938,15 +1082,24 @@ fn options_panel(
         inputs,
     } = options;
     let mut settings = automation.game_settings();
-    let switches = TOGGLES.map(|(id, label, setting)| {
+    let switches = GameOption::ALL.map(|option| {
         let this = this.clone();
-        Switch::new(id, label, *setting(&mut settings))
-            .disabled(!live)
-            .on_toggle(move |on, _, cx| {
-                update(&this, cx, |view, cx| {
-                    view.change_game_settings(|settings| *setting(settings) = on, cx)
-                })
+        let switch = Switch::new(
+            SharedString::from(format!("{option:?}")),
+            option.label(),
+            *option.field(&mut settings),
+        )
+        .disabled(!live)
+        .on_toggle(move |on, _, cx| {
+            update(&this, cx, |view, cx| {
+                view.change_game_settings(|settings| *option.field(settings) = on, cx)
             })
+        });
+        h_flex()
+            .justify_between()
+            .gap(px(8.0))
+            .child(switch)
+            .children(shortcuts::keys_for(&ToggleOption(option), cx).map(Kbd::new))
     });
     let mode = settings.rendering.mode();
     let rendering = {
@@ -954,7 +1107,20 @@ fn options_panel(
         Select::new(
             "rendering",
             "Rendering",
-            RenderingMode::ALL.map(RenderingMode::label),
+            RenderingMode::ALL.map(|mode| {
+                let option = SelectOption::new(mode.label());
+                let keys = match mode {
+                    RenderingMode::Full => None,
+                    RenderingMode::InterfaceOnly => {
+                        shortcuts::keys_for(&ToggleInterfaceRendering, cx)
+                    }
+                    RenderingMode::Minimal => shortcuts::keys_for(&ToggleMinimalRendering, cx),
+                };
+                match keys {
+                    Some(keys) => option.end_slot(Kbd::new(keys)),
+                    None => option,
+                }
+            }),
             RenderingMode::ALL.iter().position(|each| *each == mode),
         )
         .width(px(150.0))
@@ -1558,6 +1724,12 @@ mod tests {
     }
 
     fn options_fixture(rendering: RenderingMode, cx: &mut App) -> Scene {
+        crate::settings::init(
+            std::env::temp_dir().join("mira-options-snapshot-settings.json"),
+            |_| {},
+            cx,
+        );
+        shortcuts::apply(cx);
         let automation = Automation::default();
         automation.set_frame_rate(30);
         automation.update_game_settings(|settings| {
@@ -1577,6 +1749,45 @@ mod tests {
         snapshot("game-options-minimal", 520.0, |cx| {
             options_fixture(RenderingMode::Minimal, cx)
         });
+    }
+
+    struct WindowsMenu;
+
+    impl gpui::Render for WindowsMenu {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            div()
+                .size_full()
+                .bg(theme.base)
+                .text_color(theme.text)
+                .font_family(mira_ui::theme::SYSTEM_SANS)
+                .text_body()
+                .child(
+                    Menubar::new("bar", "Game")
+                        .h(BAR_HEIGHT)
+                        .px(px(6.0))
+                        .menu(trigger("windows", "Windows", None, None, cx), |_, cx| {
+                            windows_menu(cx)
+                        })
+                        .default_open(0),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_windows_menu() {
+        let settings = std::env::temp_dir().join("mira-windows-menu-snapshot-settings.json");
+        for path in mira_ui::snapshot(
+            "game-windows-menu",
+            gpui::size(px(320.0), px(220.0)),
+            move |_, cx| {
+                crate::settings::init(settings.clone(), |_| {}, cx);
+                shortcuts::apply(cx);
+                cx.new(|_| WindowsMenu)
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
     }
 
     #[test]
@@ -1635,6 +1846,7 @@ mod tests {
                         relogin_detail,
                         attack,
                         script,
+                        toggle_panel: None,
                     };
                     vec![
                         bar(None, false, ScriptControl::Start(None)),
