@@ -12,22 +12,28 @@ use crate::{
     theme::{CONTROL_MD, TEXT_SMALL},
 };
 
+fn pressed(keystroke: &Keystroke) -> (bool, String) {
+    let pressed = crate::keyboard::pressed(keystroke);
+    (pressed.modifiers.shift, pressed.key)
+}
+
 pub fn format_keystroke(keystroke: &Keystroke) -> SharedString {
     let mut text = String::new();
     let modifiers = keystroke.modifiers;
+    let (shift, key) = pressed(keystroke);
     if modifiers.control {
         text.push('⌃');
     }
     if modifiers.alt {
         text.push('⌥');
     }
-    if modifiers.shift {
+    if shift {
         text.push('⇧');
     }
     if modifiers.platform {
         text.push('⌘');
     }
-    let key = match keystroke.key.as_str() {
+    let key = match key.as_str() {
         "space" => "Space".to_string(),
         "enter" => "↩".to_string(),
         "backspace" => "⌫".to_string(),
@@ -50,6 +56,7 @@ pub fn format_keystroke(keystroke: &Keystroke) -> SharedString {
 
 fn spoken(keystroke: &Keystroke) -> String {
     let modifiers = keystroke.modifiers;
+    let (shift, key) = pressed(keystroke);
     let mut words = Vec::new();
     if modifiers.control {
         words.push("Control".to_string());
@@ -57,13 +64,13 @@ fn spoken(keystroke: &Keystroke) -> String {
     if modifiers.alt {
         words.push("Option".to_string());
     }
-    if modifiers.shift {
+    if shift {
         words.push("Shift".to_string());
     }
     if modifiers.platform {
         words.push("Command".to_string());
     }
-    words.push(keystroke.key.to_uppercase());
+    words.push(key.to_uppercase());
     words.join(" ")
 }
 
@@ -71,6 +78,7 @@ type ShortcutHandler = Rc<dyn Fn(Option<Keystroke>, &mut Window, &mut App)>;
 
 struct Recorder {
     on_change: Option<ShortcutHandler>,
+    done: bool,
     _intercept: Subscription,
 }
 
@@ -83,21 +91,48 @@ fn recorder(
     window.use_keyed_state((id.clone(), "recorder"), cx, move |_, cx| {
         let this: gpui::WeakEntity<Recorder> = cx.weak_entity();
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(recorder) = this.upgrade() else {
+                return;
+            };
             if !focus.is_focused(window) {
                 return;
             }
-            let on_change = this
-                .upgrade()
-                .and_then(|recorder| recorder.read(cx).on_change.clone());
-            if record(&event.keystroke, on_change.as_ref(), window, cx) {
-                cx.stop_propagation();
+            let (on_change, done) = {
+                let recorder = recorder.read(cx);
+                (recorder.on_change.clone(), recorder.done)
+            };
+            let outcome = if done {
+                restart(&event.keystroke)
+            } else {
+                record(&event.keystroke, on_change.as_ref(), window, cx)
+            };
+            match outcome {
+                Outcome::Pass => return,
+                Outcome::Recording => recorder.update(cx, |recorder, _| recorder.done = false),
+                Outcome::Done => recorder.update(cx, |recorder, _| recorder.done = true),
             }
+            window.refresh();
+            cx.stop_propagation();
         });
         Recorder {
             on_change: None,
+            done: false,
             _intercept: intercept,
         }
     })
+}
+
+enum Outcome {
+    Pass,
+    Recording,
+    Done,
+}
+
+fn restart(keystroke: &Keystroke) -> Outcome {
+    match keystroke.key.as_str() {
+        "enter" | "space" if !keystroke.modifiers.modified() => Outcome::Recording,
+        _ => Outcome::Pass,
+    }
 }
 
 fn record(
@@ -105,26 +140,20 @@ fn record(
     on_change: Option<&ShortcutHandler>,
     window: &mut Window,
     cx: &mut App,
-) -> bool {
+) -> Outcome {
     let key = keystroke.key.as_str();
     let modified = keystroke.modifiers.modified();
-    match key {
-        "tab" if !modified || keystroke.modifiers == Modifiers::shift() => return false,
-        "escape" if !modified => window.blur(cx),
-        "backspace" | "delete" if !modified => {
-            if let Some(on_change) = on_change {
-                on_change(None, window, cx);
-            }
-        }
-        _ if modified || key.starts_with('f') && key.len() > 1 => {
-            if let Some(on_change) = on_change {
-                on_change(Some(keystroke.clone()), window, cx);
-            }
-            window.blur(cx);
-        }
-        _ => {}
+    let chosen = match key {
+        "tab" if !modified || keystroke.modifiers == Modifiers::shift() => return Outcome::Pass,
+        "escape" if !modified => return Outcome::Done,
+        "backspace" | "delete" if !modified => None,
+        _ if modified || key.starts_with('f') && key.len() > 1 => Some(keystroke.clone()),
+        _ => return Outcome::Recording,
+    };
+    if let Some(on_change) = on_change {
+        on_change(chosen, window, cx);
     }
-    true
+    Outcome::Done
 }
 
 #[derive(IntoElement)]
@@ -161,11 +190,17 @@ impl ShortcutField {
 impl RenderOnce for ShortcutField {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let recording = focus.is_focused(window);
+        let focused = focus.is_focused(window);
         let theme = cx.theme().clone();
         let on_change = self.on_change.clone();
-        recorder(&self.id, focus.clone(), window, cx)
-            .update(cx, |recorder, _| recorder.on_change = on_change);
+        let recorder = recorder(&self.id, focus.clone(), window, cx);
+        let recording = recorder.update(cx, |recorder, _| {
+            recorder.on_change = on_change;
+            if !focused {
+                recorder.done = false;
+            }
+            focused && !recorder.done
+        });
         let value_text = self
             .value
             .as_ref()
@@ -176,12 +211,16 @@ impl RenderOnce for ShortcutField {
             .aria_label(self.label)
             .aria_value(SharedString::from(value_text))
             .aria_description(
-                "Focus and press a key combination. Backspace clears, Escape cancels.",
+                "Press a key combination while recording. Backspace clears, Escape cancels, and Enter records again.",
             )
             .track_focus(&focus.clone().tab_stop(true))
             .on_click({
                 let focus = focus.clone();
-                move |_, window, cx| window.focus(&focus, cx)
+                move |_, window, cx| {
+                    recorder.update(cx, |recorder, _| recorder.done = false);
+                    window.focus(&focus, cx);
+                    window.refresh();
+                }
             })
             .flex()
             .items_center()
@@ -194,7 +233,7 @@ impl RenderOnce for ShortcutField {
             .bg(theme.fill)
             .border_1()
             .border_color(if recording { theme.focus } else { theme.border })
-            .when(recording, |field| {
+            .when(focused, |field| {
                 field.child(theme.ring_around(theme.focus, theme.radius.control, px(1.0)))
             })
             .pointer_cursor(&theme)

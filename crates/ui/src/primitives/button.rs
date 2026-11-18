@@ -287,6 +287,10 @@ impl Button {
         self
     }
 
+    pub(crate) fn id(&self) -> &ElementId {
+        &self.id
+    }
+
     pub(crate) fn label(&self) -> &SharedString {
         &self.label
     }
