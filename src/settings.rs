@@ -5,14 +5,15 @@ use std::{
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement as _,
-    IntoElement, KeyBinding, Menu, MenuItem, ParentElement as _, Render, SharedString, Styled as _,
-    Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    px, size,
+    IntoElement, KeyBinding, Keystroke, Menu, MenuItem, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme,
-    components::Group,
-    primitives::{Input, InputEvent, Select, Switch},
+    components::{Group, ShortcutField},
+    h_flex,
+    primitives::{Button, Icon, Input, InputEvent, Scrollbar, Select, Switch, button::Size},
     theme::TEXT_BODY,
 };
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     packages,
     ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
+    shortcuts::{self, Category, Overrides, Shortcut, Taken},
 };
 
 actions!(
@@ -82,6 +84,8 @@ struct Settings {
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
     hidden_recent_scripts: Vec<PathBuf>,
+    #[serde(with = "shortcuts")]
+    shortcuts: Overrides,
 }
 
 impl Settings {
@@ -91,6 +95,23 @@ impl Settings {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error),
         }
+    }
+
+    fn open(path: &Path) -> Option<Self> {
+        let settings = match Self::load(path) {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "couldn't read settings");
+                return None;
+            }
+        };
+        let current = serde_json::to_vec_pretty(&settings).ok();
+        if fs::read(path).ok() != current
+            && let Err(error) = settings.save(path)
+        {
+            tracing::warn!(%error, path = %path.display(), "couldn't save settings");
+        }
+        Some(settings)
     }
 
     fn save(&self, path: &Path) -> io::Result<()> {
@@ -108,17 +129,14 @@ struct Store {
 
 impl Global for Store {}
 
-const SETTINGS_HEIGHT: f32 = 385.0;
+const SETTINGS_HEIGHT: f32 = 600.0;
 
 struct Open(WindowHandle<SettingsWindow>);
 
 impl Global for Open {}
 
 pub(crate) fn init(path: PathBuf, on_change: fn(&mut App), cx: &mut App) {
-    let settings = Settings::load(&path).unwrap_or_else(|error| {
-        tracing::warn!(%error, path = %path.display(), "couldn't read settings");
-        Settings::default()
-    });
+    let settings = Settings::open(&path).unwrap_or_default();
     cx.set_global(Store {
         path,
         settings,
@@ -224,6 +242,23 @@ pub(crate) fn set_shop_warning(on: bool, cx: &mut App) {
     change(cx, |settings| settings.skip_shop_warning = !on);
 }
 
+pub(crate) fn shortcuts(cx: &App) -> &Overrides {
+    &cx.global::<Store>().settings.shortcuts
+}
+
+fn set_shortcut(shortcut: Shortcut, keys: Option<Keystroke>, cx: &mut App) -> Result<(), Taken> {
+    let os = cx.platform_info().os;
+    let mut overrides = shortcuts(cx).clone();
+    shortcuts::assign(
+        &mut overrides,
+        shortcut,
+        keys.map(|keys| mira_ui::keyboard::pressed(&keys).unparse(os)),
+        |keys| shortcuts::taken_by_app(keys, cx),
+    )?;
+    change(cx, |settings| settings.shortcuts = overrides);
+    Ok(())
+}
+
 fn choose(appearance: Appearance, cx: &mut App) {
     change(cx, |settings| settings.appearance = appearance);
 }
@@ -275,7 +310,6 @@ fn open(cx: &mut App) {
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_resizable: false,
         is_minimizable: false,
         ..Default::default()
     };
@@ -291,6 +325,8 @@ fn open(cx: &mut App) {
 
 struct SettingsWindow {
     focus: FocusHandle,
+    scroll: ScrollHandle,
+    taken: Option<Shortcut>,
     github_token: Entity<Input>,
     _token_changes: Subscription,
 }
@@ -322,15 +358,62 @@ impl SettingsWindow {
         });
         Self {
             focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
+            taken: None,
             github_token,
             _token_changes: token_changes,
         }
     }
 }
 
+impl SettingsWindow {
+    fn shortcuts(&self, category: Category, cx: &mut Context<Self>) -> Group {
+        let os = cx.platform_info().os;
+        let overrides = shortcuts(cx);
+        Shortcut::ALL
+            .iter()
+            .filter(|shortcut| shortcut.category() == category)
+            .fold(Group::new().title(category.label()), |group, &shortcut| {
+                let keys = shortcut
+                    .keys(overrides)
+                    .and_then(|keys| Keystroke::parse_with_os(keys, os).ok());
+                let this = cx.weak_entity();
+                let record = move |keys: Option<Keystroke>, _: &mut Window, cx: &mut App| {
+                    let taken = set_shortcut(shortcut, keys, cx).is_err();
+                    let _ = this.update(cx, |this, cx| {
+                        this.taken = taken.then_some(shortcut);
+                        cx.notify();
+                    });
+                };
+                let changed = !shortcut.is_default(overrides);
+                let reset = changed.then(|| {
+                    let record = record.clone();
+                    Button::icon(
+                        SharedString::from(format!("{shortcut:?}-reset")),
+                        Icon::RotateCcw,
+                        format!("Reset {}", shortcut.label().to_lowercase()),
+                    )
+                    .size(Size::XSmall)
+                    .on_click(move |_, window, cx| record(shortcut.default_keystroke(), window, cx))
+                });
+                let field = ShortcutField::new(
+                    SharedString::from(format!("{shortcut:?}")),
+                    shortcut.label(),
+                    keys,
+                )
+                .on_change(record);
+                group.row(
+                    shortcut.label(),
+                    (self.taken == Some(shortcut))
+                        .then(|| "Mira already uses that shortcut.".into()),
+                    h_flex().gap(px(4.0)).children(reset).child(field),
+                )
+            })
+    }
+}
+
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let settings = &cx.global::<Store>().settings;
         let appearances = Appearance::ALL
             .map(|appearance| SharedString::from(appearance.label()))
@@ -342,6 +425,13 @@ impl Render for SettingsWindow {
             .map(|start| SharedString::from(start.label()))
             .to_vec();
         let start = Start::ALL.iter().position(|&start| start == settings.start);
+        mira_ui::nav::set_scroll_root(&self.scroll, window, cx);
+        let shortcuts: Vec<_> = Category::ALL
+            .into_iter()
+            .map(|category| self.shortcuts(category, cx))
+            .collect();
+        let theme = cx.theme();
+        let settings = &cx.global::<Store>().settings;
         div()
             .flex()
             .flex_col()
@@ -360,11 +450,21 @@ impl Render for SettingsWindow {
             )
             .child(
                 div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                div()
+                    .id("settings")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
                     .gap(px(16.0))
                     .px(px(16.0))
                     .pt(px(12.0))
+                    .pb(px(16.0))
                     .child(
                         Group::new().title("General").row(
                             "Open at launch",
@@ -411,7 +511,10 @@ impl Render for SettingsWindow {
                             ),
                             div().w(px(200.0)).child(self.github_token.clone()),
                         ),
-                    ),
+                    )
+                    .children(shortcuts),
+                    )
+                    .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
             )
     }
 }
@@ -441,6 +544,7 @@ mod tests {
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
+            shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
@@ -455,30 +559,96 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 
+    #[gpui::test]
+    fn a_recorded_shortcut_is_saved_and_bound_and_a_taken_one_is_not(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "mira-settings-shortcut-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        cx.update(|cx| {
+            init(path.clone(), crate::shortcuts::apply, cx);
+            crate::shortcuts::apply(cx);
+            let keys = |keys: &'static str| Some(Keystroke::parse(keys).unwrap());
+            set_shortcut(Shortcut::Bank, keys("cmd-k"), cx).unwrap();
+            assert_eq!(
+                crate::shortcuts::keys_for(&crate::ruffle_view::OpenBank, cx).as_deref(),
+                Some("⌘K")
+            );
+            assert!(set_shortcut(Shortcut::Jump, keys("cmd-,"), cx).is_err());
+            assert_eq!(Shortcut::Jump.keys(shortcuts(cx)), Some("cmd-j"));
+        });
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["shortcuts"]["bank"], "cmd-k");
+        assert_eq!(saved["shortcuts"]["jump"], "cmd-j");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn opening_writes_the_full_settings_but_never_over_an_unreadable_file() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "mira-settings-open-{:x}.json",
+            u64::from_ne_bytes(random)
+        ));
+        assert_eq!(Settings::open(&path), Some(Settings::default()));
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            written["shortcuts"].as_object().unwrap().len(),
+            Shortcut::ALL.len()
+        );
+        assert_eq!(written["shortcuts"]["jump"], "cmd-j");
+
+        fs::write(&path, r#"{"appearance":"dark"}"#).unwrap();
+        assert!(Settings::open(&path).is_some());
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["appearance"], "dark");
+        assert_eq!(written["shortcuts"]["bank"], "cmd-b");
+
+        fs::write(&path, "{ not json").unwrap();
+        assert_eq!(Settings::open(&path), None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+        fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn snapshot_settings_window() {
-        for written in mira_ui::snapshot(
-            "settings",
-            size(px(480.0), px(SETTINGS_HEIGHT)),
-            |window, cx| {
-                cx.set_global(Store {
-                    path: PathBuf::new(),
-                    settings: Settings::default(),
-                    on_change: |_| {},
-                });
-                packages::init(
-                    std::env::temp_dir().join("mira-settings-snapshot-packages"),
-                    std::env::temp_dir().join("mira-settings-snapshot-token"),
-                    cx,
-                );
-                cx.new(|cx| {
-                    let settings = SettingsWindow::new(cx);
-                    window.focus(&settings.focus, cx);
-                    settings
+        let edited = Settings {
+            shortcuts: Overrides::from([
+                (Shortcut::Bank, Some("cmd-k".into())),
+                (Shortcut::Packets, None),
+            ]),
+            ..Settings::default()
+        };
+        for (name, height, settings, taken) in [
+            ("settings", SETTINGS_HEIGHT, Settings::default(), None),
+            ("settings-shortcuts", 2200.0, edited, Some(Shortcut::Jump)),
+        ] {
+            for written in
+                mira_ui::snapshot(name, size(px(480.0), px(height)), move |window, cx| {
+                    cx.set_global(Store {
+                        path: PathBuf::new(),
+                        settings: settings.clone(),
+                        on_change: |_| {},
+                    });
+                    packages::init(
+                        std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                        std::env::temp_dir().join("mira-settings-snapshot-token"),
+                        cx,
+                    );
+                    cx.new(|cx| {
+                        let mut settings = SettingsWindow::new(cx);
+                        settings.taken = taken;
+                        window.focus(&settings.focus, cx);
+                        settings
+                    })
                 })
-            },
-        ) {
-            assert!(written.exists(), "{} was not written", written.display());
+            {
+                assert!(written.exists(), "{} was not written", written.display());
+            }
         }
     }
 }

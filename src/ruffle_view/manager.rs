@@ -51,8 +51,7 @@ actions!(
         NewSetup,
         StartSetup,
         SelectShown,
-        ClearSelection,
-        FindAccount
+        ClearSelection
     ]
 );
 
@@ -81,7 +80,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-n", NewSetup, Some(CONTEXT)),
         KeyBinding::new("cmd-enter", StartSetup, Some(CONTEXT)),
         KeyBinding::new("cmd-a", SelectShown, Some(CONTEXT)),
-        KeyBinding::new("cmd-f", FindAccount, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
     ]);
 }
@@ -2837,7 +2835,7 @@ impl Render for Manager {
                     .on_action(
                         cx.listener(|this, _: &ClearSelection, _, cx| this.clear_selection(cx)),
                     )
-                    .on_action(cx.listener(|this, _: &FindAccount, window, cx| {
+                    .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
                         this.filter.read(cx).focus_handle(cx).focus(window, cx)
                     }))
             })

@@ -38,6 +38,7 @@ pub struct Menubar {
     label: SharedString,
     slots: Vec<Slot>,
     default_open: Option<usize>,
+    toggle: Option<ElementId>,
     on_dismiss: Option<PressHandler>,
     style: StyleRefinement,
 }
@@ -49,6 +50,7 @@ impl Menubar {
             label: label.into(),
             slots: Vec::new(),
             default_open: None,
+            toggle: None,
             on_dismiss: None,
             style: StyleRefinement::default(),
         }
@@ -96,6 +98,11 @@ impl Menubar {
 
     pub fn default_open(mut self, entry: usize) -> Self {
         self.default_open = Some(entry);
+        self
+    }
+
+    pub fn toggle(mut self, trigger: impl Into<ElementId>) -> Self {
+        self.toggle = Some(trigger.into());
         self
     }
 }
@@ -214,7 +221,11 @@ impl Menubar {
             Slot::Entry(entry) => Some(entry),
             Slot::Element(_) => None,
         });
+        let mut requested = None;
         for (index, entry) in entries.enumerate() {
+            if self.toggle.as_ref() == Some(entry.trigger.id()) {
+                requested = Some(index);
+            }
             bar.states.push(menu::state(
                 &entry_id(index),
                 self.default_open == Some(index),
@@ -231,6 +242,16 @@ impl Menubar {
             });
         }
         let bar = Rc::new(bar);
+        if let Some(entry) = requested
+            && bar.panels[entry]
+            && bar.enabled[entry]
+        {
+            if bar.open_entry(cx) == Some(entry) {
+                menu::close(&bar.states[entry], true, window, cx);
+            } else {
+                bar.show(entry, true, false, window, cx);
+            }
+        }
         let mut index = 0;
         let mut children = Vec::with_capacity(self.slots.len());
         for slot in self.slots {

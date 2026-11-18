@@ -3,6 +3,7 @@ compile_error!("Mira supports macOS only.");
 
 mod account_settings;
 mod accounts;
+mod app_menu;
 mod army;
 mod automation;
 mod beep;
@@ -19,14 +20,15 @@ mod script_inputs;
 mod scripting;
 mod settings;
 mod setups;
+mod shortcuts;
 #[cfg(any(test, feature = "storyboard"))]
 mod storyboard;
 
 use std::{iter, path::PathBuf};
 
 use gpui::{
-    App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
-    WindowBackgroundAppearance, WindowBounds, WindowOptions, actions, point, px, size,
+    AppContext as _, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
+    WindowOptions, actions, point, px, size,
 };
 
 actions!(mira, [Quit]);
@@ -58,11 +60,12 @@ fn main() -> anyhow::Result<()> {
             })
             .detach();
             mira_ui::init(cx);
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            app_menu::init(cx);
             ruffle_view::bind_keys(cx);
             ruffle_view::bind_profile_keys(cx);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            settings::init(data.join("settings.json"), set_menus, cx);
+            settings::init(data.join("settings.json"), settings_changed, cx);
+            shortcuts::apply(cx);
+            cx.on_keyboard_layout_change(settings_changed).detach();
             account_settings::init(data.join("account-settings"), cx);
             combat_profiles::init(data.join("combat-profiles.json"), cx);
             script_inputs::init(data.join("script-inputs.json"), cx);
@@ -79,7 +82,7 @@ fn main() -> anyhow::Result<()> {
                 scripting::link_types(folders.iter().map(PathBuf::as_path), &installed);
             })
             .detach();
-            set_menus(cx);
+            app_menu::set_menus(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
@@ -126,6 +129,13 @@ fn main() -> anyhow::Result<()> {
                 cx.quit();
                 return;
             };
+            let load_client = client.clone();
+            let (load_folder, load_types) = (scripts.clone(), types.clone());
+            cx.on_action(move |_: &ruffle_view::LoadScript, cx| {
+                let client = load_client.clone();
+                let (folder, types) = (load_folder.clone(), load_types.clone());
+                cx.defer(move |cx| ruffle_view::load_script(client, folder, types, cx));
+            });
             let scripts_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
                 let client = scripts_client.clone();
@@ -190,29 +200,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn set_menus(cx: &mut App) {
-    let appearance = settings::appearance_menu(cx);
-    cx.set_menus(vec![
-        Menu {
-            name: "Mira".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Settings…", settings::OpenSettings),
-                MenuItem::action("Accounts", ruffle_view::OpenAccounts),
-                MenuItem::action("Run Script…", ruffle_view::OpenScripts),
-                MenuItem::action("Combat Profiles…", ruffle_view::OpenCombatProfiles),
-                MenuItem::action("Environment…", ruffle_view::OpenEnvironment),
-                MenuItem::action("Follower…", ruffle_view::OpenFollower),
-                MenuItem::action("Loader/Grabber…", ruffle_view::OpenLoaderGrabber),
-                MenuItem::action("Packets…", ruffle_view::OpenPackets),
-                MenuItem::separator(),
-                MenuItem::action("Quit Mira", Quit),
-            ],
-        },
-        Menu {
-            name: "View".into(),
-            disabled: false,
-            items: vec![appearance],
-        },
-    ]);
+fn settings_changed(cx: &mut gpui::App) {
+    shortcuts::apply(cx);
+    app_menu::set_menus(cx);
 }

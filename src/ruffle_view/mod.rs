@@ -59,17 +59,23 @@ use ruffle_core::backend::ui::MouseCursor;
 pub(crate) use account::{
     Changed, Details, Glance, Identified, Login, ScriptPhase, ScriptState, Summary, Updated,
 };
-pub(crate) use client::{Client, CloseSession, bar_title, bind_keys, drag_area, window_bar};
+pub(crate) use client::{
+    Client, CloseSession, NewSession, NextSession, PreviousSession, ToggleGrid, ToggleSidebar,
+    bar_title, bind_keys, drag_area, window_bar,
+};
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
-pub(crate) use game_bar::BAR_HEIGHT;
+pub(crate) use game_bar::{
+    BAR_HEIGHT, GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
+    ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
+};
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
 pub(crate) use manager::{OpenAccounts, open as open_accounts};
 pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
-pub(crate) use scripts::{OpenScripts, open as open_scripts};
+pub(crate) use scripts::{LoadScript, OpenScripts, load as load_script, open as open_scripts};
 pub(crate) use shown_tab::Target;
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
@@ -421,7 +427,7 @@ impl RuffleView {
         }))
     }
 
-    pub(super) fn bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         game_bar::bar(self, cx).into_any_element()
     }
 

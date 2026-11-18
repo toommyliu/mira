@@ -62,6 +62,14 @@ impl Rendering {
         self.mode = self.resume;
     }
 
+    pub(crate) fn toggle(&mut self, mode: RenderingMode) {
+        match mode {
+            _ if self.mode != mode => self.set(mode),
+            RenderingMode::Minimal => self.resume(),
+            RenderingMode::Full | RenderingMode::InterfaceOnly => self.set(RenderingMode::Full),
+        }
+    }
+
     pub(crate) fn minimal(self) -> bool {
         self.mode == RenderingMode::Minimal
     }
@@ -652,6 +660,23 @@ mod tests {
         rendering.set(RenderingMode::Minimal);
         rendering.set(RenderingMode::Full);
         rendering.resume();
+        assert_eq!(rendering.mode(), RenderingMode::Full);
+    }
+
+    #[test]
+    fn toggling_a_mode_off_returns_to_where_it_was_turned_on() {
+        let mut rendering = Rendering::default();
+        rendering.set(RenderingMode::InterfaceOnly);
+        rendering.toggle(RenderingMode::Minimal);
+        assert_eq!(rendering.mode(), RenderingMode::Minimal);
+        rendering.toggle(RenderingMode::Minimal);
+        assert_eq!(rendering.mode(), RenderingMode::InterfaceOnly);
+        rendering.toggle(RenderingMode::InterfaceOnly);
+        assert_eq!(rendering.mode(), RenderingMode::Full);
+        rendering.toggle(RenderingMode::Minimal);
+        rendering.toggle(RenderingMode::InterfaceOnly);
+        assert_eq!(rendering.mode(), RenderingMode::InterfaceOnly);
+        rendering.toggle(RenderingMode::InterfaceOnly);
         assert_eq!(rendering.mode(), RenderingMode::Full);
     }
 

@@ -1405,6 +1405,11 @@ impl Render for Packets {
             .id("packets")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
+                this.page = Page::Log;
+                window.focus(&this.search.focus_handle(cx), cx);
+                cx.notify();
+            }))
             .child(mira_ui::nav::pointer_probe())
             .child(header)
             .child(
@@ -1530,6 +1535,21 @@ mod tests {
             automation.spammer().packets,
             ["%xt%zm%a%{room}%", "%xt%zm%c%{room}%"]
         );
+    }
+
+    #[gpui::test]
+    fn find_shows_the_log_and_types_into_its_search(cx: &mut TestAppContext) {
+        cx.update(crate::app_menu::init);
+        let (packets, _, cx) = open(cx);
+        let (focus, search) = packets.update(cx, |packets, cx| {
+            packets.log = Some(cx.new(|_| PacketLog::default()));
+            (packets.focus.clone(), packets.search.clone())
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        press(cx, "cmd-f");
+        typed(cx, "join");
+        assert!(packets.read_with(cx, |packets, _| packets.page == Page::Log));
+        assert_eq!(text(&search, cx), "join");
     }
 
     #[gpui::test]
