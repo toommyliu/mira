@@ -45,10 +45,10 @@ raw-window-handle = "0.6"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["cookies", "native-tls", "stream"] }
 rquickjs = { version = "0.14", features = ["loader"] }
-ruffle_core = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55", features = ["aac", "audio", "default_compatibility_rules", "default_font", "lzma", "mp3", "nellymoser", "stats"] }
-ruffle_frontend_utils = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55", default-features = false, features = ["cpal", "fs"] }
-ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
-ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
+ruffle_core = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1", features = ["aac", "audio", "default_compatibility_rules", "default_font", "lzma", "mp3", "nellymoser", "stats"] }
+ruffle_frontend_utils = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1", default-features = false, features = ["cpal", "fs"] }
+ruffle_render = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
+ruffle_render_wgpu = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 semver = "1"
@@ -70,14 +70,14 @@ workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 mira-ui = { workspace = true, features = ["test-support"] }
-swf = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
+swf = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
 tokio = { version = "1", features = ["test-util"] }
 
 [patch.crates-io]
-naga = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
-wgpu-core = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
-wgpu-hal = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
-wgpu-types = { git = "https://github.com/toommyliu/ruffle", rev = "fe9ba49dcae51ab8c3855f341d9294f3ed610f55" }
+naga = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
+wgpu-core = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
+wgpu-hal = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
+wgpu-types = { git = "https://github.com/toommyliu/ruffle", rev = "f5fb5b59aef402f06f9fe76017db428c6383f9c1" }
 
 
 [profile.dev]
