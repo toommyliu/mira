@@ -39,10 +39,7 @@ use crate::{
     },
 };
 
-actions!(
-    mira,
-    [OpenCombatProfiles, SaveProfile, NewProfile, FindProfile]
-);
+actions!(mira, [OpenCombatProfiles, SaveProfile, NewProfile]);
 
 const CONTEXT: &str = "CombatProfiles";
 const WIDTH: f32 = 1000.0;
@@ -81,7 +78,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-s", SaveProfile, Some(CONTEXT)),
         KeyBinding::new("cmd-n", NewProfile, Some(CONTEXT)),
-        KeyBinding::new("cmd-f", FindProfile, Some(CONTEXT)),
     ]);
 }
 
@@ -1757,7 +1753,7 @@ impl Render for Editor {
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &SaveProfile, window, cx| this.save(window, cx)))
             .on_action(cx.listener(|this, _: &NewProfile, window, cx| this.new_profile(window, cx)))
-            .on_action(cx.listener(|this, _: &FindProfile, window, cx| {
+            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
                 this.search.read(cx).focus_handle(cx).focus(window, cx)
             }))
             .on_action(cx.listener(|this, _: &CloseSession, window, cx| {
@@ -1963,6 +1959,7 @@ mod tests {
         let path = library_file(name);
         cx.update(|cx| {
             mira_ui::init(cx);
+            crate::app_menu::init(cx);
             bind_keys(cx);
             combat_profiles::init(path, cx);
         });

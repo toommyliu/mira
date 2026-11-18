@@ -19,7 +19,6 @@ use super::{
     launches::{self, Launch, Launches},
     manager::OpenAccounts,
     script::CloseTab,
-    scripts::OpenScripts,
 };
 use mira_ui::{
     ActiveTheme as _, Theme, Tone,
@@ -48,7 +47,8 @@ actions!(
         CloseSession,
         NextSession,
         PreviousSession,
-        ToggleSidebar
+        ToggleSidebar,
+        ToggleGrid
     ]
 );
 
@@ -60,6 +60,8 @@ pub(super) const SIDEBAR_WIDTH: Pixels = px(208.0);
 const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
+const STATUS_LINGER: Duration = Duration::from_millis(1500);
+const STATUS_PADDING: Pixels = px(14.0);
 
 fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
     tabs.iter()
@@ -82,6 +84,7 @@ fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
 pub(crate) fn bind_keys(cx: &mut App) {
     super::script_dialog::bind_keys(cx);
     super::manager::bind_keys(cx);
+    super::scripts::bind_keys(cx);
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-t", NewSession, None),
         gpui::KeyBinding::new("cmd-w", CloseSession, None),
@@ -89,9 +92,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
         gpui::KeyBinding::new("cmd-{", PreviousSession, None),
         gpui::KeyBinding::new("ctrl-tab", NextSession, None),
         gpui::KeyBinding::new("ctrl-shift-tab", PreviousSession, None),
-        gpui::KeyBinding::new("cmd-shift-a", OpenAccounts, None),
-        gpui::KeyBinding::new("cmd-shift-s", OpenScripts, None),
-        gpui::KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
     ]);
     cx.bind_keys(
         [
@@ -118,11 +118,19 @@ pub struct Client {
     tab_scroll: ScrollHandle,
     shortcut_hints: bool,
     shortcut_hint_delay: Option<Task<()>>,
+    status: Option<Status>,
     launches: Launches,
     pacing: bool,
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
     _activation: Subscription,
+}
+
+struct Status {
+    text: SharedString,
+    shown: usize,
+    left: Option<Instant>,
+    _hide: Task<()>,
 }
 
 struct Session {
@@ -250,6 +258,7 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
+            status: None,
             launches: Launches::default(),
             pacing: false,
             unopened: HashMap::new(),
@@ -283,6 +292,7 @@ impl Client {
             tab_scroll: ScrollHandle::new(),
             shortcut_hints: false,
             shortcut_hint_delay: None,
+            status: None,
             launches: Launches::default(),
             pacing: false,
             unopened: HashMap::new(),
@@ -707,6 +717,102 @@ impl Client {
         }
     }
 
+    pub(super) fn show_status(&mut self, text: String, cx: &mut Context<Self>) {
+        let hide = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STATUS_LINGER).await;
+            let _ = this.update(cx, |this: &mut Self, cx| {
+                if let Some(status) = &mut this.status {
+                    status.left = Some(Instant::now());
+                }
+                cx.notify();
+            });
+        });
+        let shown = match &self.status {
+            Some(status) if status.left.is_none() => status.shown,
+            Some(status) => status.shown + 1,
+            None => 0,
+        };
+        self.status = Some(Status {
+            text: text.into(),
+            shown,
+            left: None,
+            _hide: hide,
+        });
+        cx.notify();
+    }
+
+    fn status(&mut self, window: &mut Window, cx: &mut App) -> Option<impl IntoElement + use<>> {
+        let status = self.status.as_ref()?;
+        let opacity = match status.left {
+            None => 1.0,
+            Some(since) => match mira_ui::motion::leaving(since, window, cx) {
+                Some(opacity) => opacity,
+                None => {
+                    self.status = None;
+                    return None;
+                }
+            },
+        };
+        let mut font = window.text_style().font();
+        font.weight = gpui::FontWeight::MEDIUM;
+        let run = gpui::TextRun {
+            len: status.text.len(),
+            font,
+            color: gpui::Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let text = window
+            .text_system()
+            .shape_line(status.text.clone(), TEXT_BODY, &[run], None)
+            .width;
+        let width = mira_ui::motion::glide(
+            ("hotkey-status-width", status.shown),
+            None,
+            f32::from(text.ceil() + STATUS_PADDING * 2.0 + px(4.0)),
+            window,
+            cx,
+        );
+        let theme = cx.theme();
+        let pill = div()
+            .id("hotkey-status")
+            .debug_selector(|| "hotkey-status".into())
+            .role(Role::Status)
+            .aria_label(status.text.clone())
+            .w(px(width))
+            .max_w_full()
+            .px(STATUS_PADDING)
+            .py(px(8.0))
+            .rounded(theme.radius.panel)
+            .bg(theme.overlay)
+            .border_1()
+            .border_color(theme.border)
+            .shadow(theme.floating())
+            .text_size(TEXT_BODY)
+            .line_height(LINE_BODY)
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text)
+            .text_center()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .child(status.text.clone());
+        Some(
+            h_flex()
+                .absolute()
+                .top(super::BAR_HEIGHT + px(12.0))
+                .left_0()
+                .right_0()
+                .justify_center()
+                .px(px(12.0))
+                .opacity(opacity)
+                .child(mira_ui::motion::fade(
+                    ("hotkey-status-shown", status.shown),
+                    pill,
+                )),
+        )
+    }
+
     fn hide_shortcut_hints(&mut self, cx: &mut Context<Self>) {
         self.shortcut_hint_delay = None;
         if std::mem::take(&mut self.shortcut_hints) {
@@ -899,14 +1005,22 @@ impl Client {
             )
     }
 
+    fn toggle_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let next = match self.layout {
+            Layout::Single => Layout::Grid,
+            Layout::Grid => Layout::Single,
+        };
+        self.set_layout(next, window, cx);
+    }
+
     fn grid_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (label, glyph, next) = match self.layout {
-            Layout::Single => ("Grid view", Icon::LayoutGrid, Layout::Grid),
-            Layout::Grid => ("Single view", Icon::Square, Layout::Single),
+        let (label, glyph) = match self.layout {
+            Layout::Single => ("Grid view", Icon::LayoutGrid),
+            Layout::Grid => ("Single view", Icon::Square),
         };
         Button::icon("grid", glyph, label)
             .size(Size::Small)
-            .on_click(cx.listener(move |this, _, window, cx| this.set_layout(next, window, cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_grid(window, cx)))
     }
 
     fn tile(
@@ -1177,6 +1291,13 @@ impl Render for Client {
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleGrid, window, cx| this.toggle_grid(window, cx)))
+            .when_some(
+                self.sessions
+                    .get(self.active)
+                    .map(|session| session.view.clone()),
+                |root, view| super::game_bar::on_actions(root, view, cx.weak_entity()),
+            )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {
                     this.select(index, window, cx)
@@ -1190,6 +1311,7 @@ impl Render for Client {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .relative()
                     .min_w_0()
                     .h_full()
                     .when(self.sidebar == Sidebar::Hidden && !game_bar, |column| {
@@ -1203,7 +1325,8 @@ impl Render for Client {
                                 .border_color(bar_border),
                         )
                     })
-                    .child(body),
+                    .child(body)
+                    .children(self.status(window, cx)),
             )
             .child(self.sidebar_toggle(window, cx))
     }
@@ -1247,6 +1370,77 @@ mod tests {
             fully_visible((0.0, 1000.0), 0.0, &tabs),
             (0..9).collect::<Vec<_>>()
         );
+    }
+
+    struct Shown(Entity<Client>);
+
+    impl Render for Shown {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+
+    fn client_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<Client>, &mut gpui::VisualTestContext) {
+        let folder = std::env::temp_dir().join(format!("mira-client-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(mira_ui::init);
+        let client = cx.update(|cx| {
+            crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+            Client::empty_for_tests(&folder, cx)
+        });
+        let (_, cx) = cx.add_window_view(|_, _| Shown(client.clone()));
+        cx.run_until_parked();
+        (client, cx)
+    }
+
+    #[gpui::test]
+    fn a_status_fits_its_text_replaces_the_last_one_and_clears_itself(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (client, cx) = client_window(cx);
+        let show = |status: &str, cx: &mut gpui::VisualTestContext| {
+            let status = status.to_owned();
+            client.update(cx, |client, cx| client.show_status(status, cx));
+            cx.run_until_parked();
+            cx.debug_bounds("hotkey-status")
+                .map(|bounds| bounds.size.width)
+        };
+        let short = show("Anti AFK: On", cx);
+        cx.executor().advance_clock(STATUS_LINGER / 2);
+        let long = show("Skip cutscenes: Off", cx);
+        assert!(short.is_some());
+        assert!(long > short);
+        cx.executor().advance_clock(STATUS_LINGER * 3 / 4);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("hotkey-status").is_some());
+        cx.executor().advance_clock(STATUS_LINGER / 2);
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("hotkey-status").is_none());
+    }
+
+    #[test]
+    fn snapshot_hotkey_status() {
+        let folder = std::env::temp_dir().join("mira-hotkey-status-snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in mira_ui::snapshot(
+            "hotkey-status",
+            gpui::size(px(640.0), px(200.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, cx| {
+                    client.show_status("Infinite range: On".into(), cx)
+                });
+                cx.new(|_| Shown(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
     }
 
     #[test]

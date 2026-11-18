@@ -1526,6 +1526,9 @@ impl Render for LoaderGrabber {
             .id("loader-grabber")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
+                window.focus(&gpui::Focusable::focus_handle(this.search.read(cx), cx), cx)
+            }))
             .child(mira_ui::nav::pointer_probe())
             .child(header)
             .child(body)
