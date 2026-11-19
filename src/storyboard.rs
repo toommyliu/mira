@@ -49,7 +49,12 @@ fn globals(cx: &mut App) {
     let folder = scratch("globals");
     crate::settings::init(folder.join("settings.json"), |_| {}, cx);
     crate::script_inputs::init(folder.join("script-inputs.json"), cx);
-    crate::packages::init(folder.join("packages"), folder.join("github-token"), cx);
+    crate::packages::init(
+        folder.join("packages"),
+        folder.join("skua"),
+        folder.join("github-token"),
+        cx,
+    );
     cx.set_global(theme);
 }
 

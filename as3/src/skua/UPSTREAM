@@ -1,0 +1,2 @@
+api/ is Skua.AS3/skua/src/skua/api from the skua/vendor/Skua submodule, unchanged. Copy it again whenever the submodule moves.
+Main.as and module/ModalMC.as are Mira's stand-ins for the two things api/ uses outside itself.

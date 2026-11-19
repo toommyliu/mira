@@ -1,27 +1,27 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, path::PathBuf};
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
+    AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     ActiveTheme as _, StyledExt as _, Tone, h_flex,
     primitives::{
-        Alert, Button, Dialog, Input, InputEvent, Toast, ToastId, Toaster,
+        Alert, Button, Dialog, Input, InputEvent,
         button::{Size, Variant},
     },
     v_flex,
 };
 
 use super::form::note;
-use crate::packages::{self, Activity, Edits, Failure, Installed, Recommended, Updated};
+use crate::packages::{self, Activity, Edits, Failure, Recommended, Updated};
 
 const WIDTH: f32 = 440.0;
 const LISTED_EDITS: usize = 8;
 
 pub(super) enum PackageEvent {
-    Installed(String),
+    Installed(PathBuf),
     Changed,
 }
 
@@ -34,54 +34,44 @@ struct Install {
 }
 
 struct Confirm {
-    dir: String,
+    root: PathBuf,
     name: SharedString,
     edits: Edits,
 }
 
 struct Uninstall {
-    dir: String,
+    root: PathBuf,
     name: SharedString,
     error: Option<SharedString>,
 }
 
 #[derive(Clone)]
 pub(super) struct Pending {
-    pub(super) dir: String,
+    pub(super) root: PathBuf,
     pub(super) name: SharedString,
     pub(super) from: SharedString,
     pub(super) to: SharedString,
 }
 
-#[derive(Clone, Copy)]
-enum Progress {
-    Dialog,
-    Toast(ToastId),
-}
-
 pub(super) struct PackageDialogs {
     install: Option<Install>,
-    installing: Option<Progress>,
     confirm: Option<Confirm>,
     uninstall: Option<Uninstall>,
     review: Option<Vec<Pending>>,
-    queue: VecDeque<(String, SharedString)>,
-    toasts: Entity<Toaster>,
+    queue: VecDeque<(PathBuf, SharedString)>,
     _packages: Subscription,
 }
 
 impl EventEmitter<PackageEvent> for PackageDialogs {}
 
 impl PackageDialogs {
-    pub(super) fn new(toasts: Entity<Toaster>, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
         Self {
             install: None,
-            installing: None,
             confirm: None,
             uninstall: None,
             review: None,
             queue: VecDeque::new(),
-            toasts,
             _packages: cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
         }
     }
@@ -118,10 +108,6 @@ impl PackageDialogs {
 
     fn close_install(&mut self, cx: &mut Context<Self>) {
         self.install = None;
-        if let Some(Progress::Dialog) = self.installing {
-            let toast = Toast::new("Installing package…").loading();
-            self.installing = Some(Progress::Toast(Toaster::push(&self.toasts, toast, cx)));
-        }
         cx.notify();
     }
 
@@ -134,57 +120,34 @@ impl PackageDialogs {
             return;
         }
         let branch = install.branch.read(cx).text().to_owned();
-        self.begin_install(cx, |cx| {
-            packages::packages(cx)
-                .update(cx, |packages, cx| packages.install_link(&link, &branch, cx))
-        });
+        let task = packages::packages(cx)
+            .update(cx, |packages, cx| packages.install_link(&link, &branch, cx));
+        self.finish_install(task, cx);
     }
 
     fn install_recommended(&mut self, recommended: Recommended, cx: &mut Context<Self>) {
-        self.begin_install(cx, |cx| {
-            packages::packages(cx)
-                .update(cx, |packages, cx| packages.install(recommended.locator, cx))
-        });
+        let task = packages::packages(cx)
+            .update(cx, |packages, cx| packages.install(recommended.locator, cx));
+        self.finish_install(task, cx);
     }
 
-    fn begin_install(
+    fn finish_install(
         &mut self,
+        task: gpui::Task<Result<PathBuf, Failure>>,
         cx: &mut Context<Self>,
-        start: impl FnOnce(&mut App) -> gpui::Task<Result<Installed, Failure>>,
     ) {
-        if self.installing.is_some() {
-            return;
-        }
-        let task = start(cx);
-        self.installing = Some(Progress::Dialog);
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Some(Progress::Toast(loading)) = this.installing.take() {
-                    let toast = match result {
-                        Ok(Installed { name, .. }) => {
-                            cx.emit(PackageEvent::Changed);
-                            Toast::new(format!("Installed {name}")).tone(Tone::Success)
-                        }
-                        Err(Failure::AlreadyInstalled(_)) => Toast::new("Already installed"),
-                        Err(Failure::Other(message)) => Toast::new("Couldn't install package")
-                            .body(message)
-                            .tone(Tone::Danger),
-                    };
-                    Toaster::replace(&this.toasts, loading, toast, cx);
-                    return;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(root) | Err(Failure::AlreadyInstalled(root)) => {
+                    this.close_install(cx);
+                    cx.emit(PackageEvent::Installed(root));
                 }
-                match result {
-                    Ok(Installed { dir, .. }) | Err(Failure::AlreadyInstalled(dir)) => {
-                        this.close_install(cx);
-                        cx.emit(PackageEvent::Installed(dir));
+                Err(Failure::Other(message)) => {
+                    if let Some(install) = &mut this.install {
+                        install.error = Some(message.into());
                     }
-                    Err(Failure::Other(message)) => {
-                        if let Some(install) = &mut this.install {
-                            install.error = Some(message.into());
-                        }
-                        cx.notify();
-                    }
+                    cx.notify();
                 }
             });
         })
@@ -193,21 +156,21 @@ impl PackageDialogs {
 
     pub(super) fn update(
         &mut self,
-        dir: String,
+        root: PathBuf,
         name: SharedString,
         overwrite_edits: bool,
         cx: &mut Context<Self>,
     ) {
         self.confirm = None;
         let task = packages::packages(cx).update(cx, |packages, cx| {
-            packages.update(dir.clone(), overwrite_edits, cx)
+            packages.update(root.clone(), overwrite_edits, cx)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(Updated::Edited(edits)) => {
-                        this.confirm = Some(Confirm { dir, name, edits });
+                        this.confirm = Some(Confirm { root, name, edits });
                     }
                     Ok(Updated::Replaced) => {
                         cx.emit(PackageEvent::Changed);
@@ -230,15 +193,15 @@ impl PackageDialogs {
         if let Some(review) = self.review.take() {
             self.queue = review
                 .into_iter()
-                .map(|pending| (pending.dir, pending.name))
+                .map(|pending| (pending.root, pending.name))
                 .collect();
             self.advance(cx);
         }
     }
 
     fn advance(&mut self, cx: &mut Context<Self>) {
-        if let Some((dir, name)) = self.queue.pop_front() {
-            self.update(dir, name, false, cx);
+        if let Some((root, name)) = self.queue.pop_front() {
+            self.update(root, name, false, cx);
         }
     }
 
@@ -250,12 +213,12 @@ impl PackageDialogs {
 
     pub(super) fn open_uninstall(
         &mut self,
-        dir: String,
+        root: PathBuf,
         name: SharedString,
         cx: &mut Context<Self>,
     ) {
         self.uninstall = Some(Uninstall {
-            dir,
+            root,
             name,
             error: None,
         });
@@ -272,8 +235,8 @@ impl PackageDialogs {
             return;
         };
         uninstall.error = None;
-        let dir = uninstall.dir.clone();
-        let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(dir, cx));
+        let root = uninstall.root.clone();
+        let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(root, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -436,7 +399,7 @@ impl Render for PackageDialogs {
         let removing = self.uninstall.as_ref().is_some_and(|uninstall| {
             matches!(
                 packages::packages(cx).read(cx).activity(),
-                Some(Activity::Removing(dir)) if *dir == uninstall.dir
+                Some(Activity::Removing(root)) if *root == uninstall.root
             )
         });
         let uninstall_error = self
@@ -486,7 +449,7 @@ impl Render for PackageDialogs {
                     .width(px(WIDTH))
                     .when_some(install, |dialog, body| dialog.body(body))
                     .action(
-                        Button::new("cancel-install", if installing { "Close" } else { "Cancel" })
+                        Button::new("cancel-install", "Cancel")
                             .on_click(cx.listener(|this, _, _, cx| this.close_install(cx))),
                     )
                     .action(
@@ -522,7 +485,7 @@ impl Render for PackageDialogs {
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(confirm) = this.confirm.take() {
-                                    this.update(confirm.dir, confirm.name, true, cx);
+                                    this.update(confirm.root, confirm.name, true, cx);
                                 }
                             })),
                     )
@@ -592,15 +555,10 @@ impl Render for PackageDialogs {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io::Write as _, rc::Rc};
-
     use gpui::size;
 
     use super::*;
-    use crate::packages::{
-        PackagePath,
-        fake::{Fake, Reply},
-    };
+    use crate::packages::PackagePath;
 
     fn dialogs(
         name: &str,
@@ -610,9 +568,14 @@ mod tests {
     ) {
         for written in mira_ui::snapshot(name, size(px(720.0), px(500.0)), move |window, cx| {
             let scratch = std::env::temp_dir().join(format!("mira-{name}"));
-            packages::init(scratch.join("packages"), scratch.join("token"), cx);
+            packages::init(
+                scratch.join("packages"),
+                scratch.join("skua"),
+                scratch.join("token"),
+                cx,
+            );
             cx.new(|cx| {
-                let mut dialogs = PackageDialogs::new(Toaster::new(window, cx), cx);
+                let mut dialogs = PackageDialogs::new(cx);
                 prepare(&mut dialogs, window, cx);
                 dialogs
             })
@@ -676,14 +639,14 @@ mod tests {
             std::fs::write(package.join("package.json"), r#"{"name":"P","mira":{}}"#).unwrap();
             std::fs::write(package.join(crate::packages::RECEIPT), receipt).unwrap();
         }
-        let fake = Fake::start();
+        let fake = crate::packages::fake::Fake::start();
         cx.update(mira_ui::init);
-        let (dialogs, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
-            PackageDialogs::new(Toaster::new(window, cx), cx)
+        let (dialogs, cx) = cx.add_window_view(|_, cx| {
+            packages::init_against(fake.url(), root.join("packages"), root.join("skua"), cx);
+            PackageDialogs::new(cx)
         });
         let pending = |dir: &str| Pending {
-            dir: dir.into(),
+            root: root.join("packages").join(dir),
             name: dir.to_owned().into(),
             from: "1111111".into(),
             to: "3333333".into(),
@@ -696,13 +659,13 @@ mod tests {
         let packages = cx.update(|_, cx| packages::packages(cx));
         packages.read_with(cx, |packages, _| {
             for dir in ["first", "second"] {
+                let status = packages.status(&root.join("packages").join(dir));
                 assert!(
                     matches!(
-                        packages.status(dir),
+                        status,
                         Some(packages::Status::Failed(message)) if message.starts_with("Couldn't find o/r")
                     ),
-                    "{dir}: {:?}",
-                    packages.status(dir)
+                    "{dir}: {status:?}",
                 );
             }
         });
@@ -716,14 +679,14 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("mira-uninstall-{:x}", u64::from_ne_bytes(random)));
         std::fs::create_dir_all(root.join("packages")).unwrap();
-        let fake = Fake::start();
+        let fake = crate::packages::fake::Fake::start();
         cx.update(mira_ui::init);
-        let (dialogs, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
-            PackageDialogs::new(Toaster::new(window, cx), cx)
+        let (dialogs, cx) = cx.add_window_view(|_, cx| {
+            packages::init_against(fake.url(), root.join("packages"), root.join("skua"), cx);
+            PackageDialogs::new(cx)
         });
         dialogs.update(cx, |dialogs, cx| {
-            dialogs.open_uninstall("gone".into(), "Gone".into(), cx);
+            dialogs.open_uninstall(root.join("packages/gone"), "Gone".into(), cx);
             dialogs.confirm_uninstall(cx);
         });
         cx.run_until_parked();
@@ -741,145 +704,11 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn serve_dailies(fake: &Fake) {
-        let commit = "1".repeat(40);
-        let manifest = r#"{"name":"Dailies","mira":{}}"#;
-        fake.route(
-            "/repos/o/r",
-            Reply::json(r#"{"id":1,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#),
-        );
-        fake.route(
-            "/repos/o/r/branches/main",
-            Reply::json(format!(
-                r#"{{"commit":{{"sha":"{commit}","commit":{{"tree":{{"sha":"{commit}"}}}}}}}}"#
-            )),
-        );
-        fake.route(
-            &format!("/repos/o/r/contents/package.json?ref={commit}"),
-            Reply::bytes(manifest.into()),
-        );
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, text) in [
-            ("o-r-1111111/package.json", manifest),
-            ("o-r-1111111/scripts/spin.ts", ""),
-        ] {
-            zip.start_file(name, zip::write::SimpleFileOptions::default())
-                .unwrap();
-            zip.write_all(text.as_bytes()).unwrap();
-        }
-        fake.route(
-            &format!("/repos/o/r/zipball/{commit}"),
-            Reply::bytes(zip.finish().unwrap().into_inner()),
-        );
-    }
-
-    fn start_install(
-        dialogs: &mut PackageDialogs,
-        link: &str,
-        close: bool,
-        window: &mut Window,
-        cx: &mut Context<PackageDialogs>,
-    ) {
-        dialogs.open_install(window, cx);
-        let input = dialogs.install.as_ref().unwrap().link.clone();
-        input.update(cx, |input, cx| input.set_text(link.to_owned(), cx));
-        dialogs.install_link(cx);
-        if close {
-            dialogs.close_install(cx);
-        }
-    }
-
-    fn scratch(label: &str) -> std::path::PathBuf {
-        let mut random = [0; 8];
-        getrandom::getrandom(&mut random).unwrap();
-        std::env::temp_dir().join(format!("mira-{label}-{:x}", u64::from_ne_bytes(random)))
-    }
-
-    struct Host {
-        dialogs: Entity<PackageDialogs>,
-        toasts: Entity<Toaster>,
-    }
-
-    impl Render for Host {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .child(self.dialogs.clone())
-                .child(Toaster::layer(&self.toasts, window, cx))
-        }
-    }
-
-    #[gpui::test]
-    fn install_results_reach_the_user_after_the_dialog_closes(cx: &mut gpui::TestAppContext) {
-        let root = scratch("install");
-        let fake = Fake::start();
-        serve_dailies(&fake);
-        cx.update(mira_ui::init);
-        let (host, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
-            let toasts = Toaster::new(window, cx);
-            Host {
-                dialogs: cx.new(|cx| PackageDialogs::new(toasts.clone(), cx)),
-                toasts,
-            }
-        });
-        let dialogs = host.read_with(cx, |host, _| host.dialogs.clone());
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let _events = cx.update(|_, cx| {
-            let events = events.clone();
-            cx.subscribe(&dialogs, move |_, event: &PackageEvent, _| {
-                events.borrow_mut().push(match event {
-                    PackageEvent::Installed(dir) => format!("show {dir}"),
-                    PackageEvent::Changed => "rescan".to_owned(),
-                });
-            })
-        });
-        let loading = "toast: Installing package…";
-        let install = |link: &str, close: bool, cx: &mut gpui::VisualTestContext| {
-            cx.update(|window, cx| {
-                dialogs.update(cx, |dialogs, cx| {
-                    start_install(dialogs, link, close, window, cx)
-                });
-                window.draw(cx).clear(cx);
-            });
-            assert_eq!(cx.debug_bounds(loading).is_some(), close, "{link}");
-            cx.run_until_parked();
-            cx.update(|window, _| window.refresh());
-            cx.run_until_parked();
-            assert!(cx.debug_bounds(loading).is_none(), "{link}");
-        };
-
-        install("github.com/o/missing", false, cx);
-        dialogs.read_with(cx, |dialogs, _| {
-            let error = dialogs
-                .install
-                .as_ref()
-                .and_then(|install| install.error.clone());
-            assert!(
-                error
-                    .as_ref()
-                    .is_some_and(|error| error.starts_with("Couldn't find o/missing")),
-                "{error:?}"
-            );
-        });
-        assert!(cx.debug_bounds("toast: Couldn't install package").is_none());
-        dialogs.update(cx, |dialogs, cx| dialogs.close_install(cx));
-
-        install("github.com/o/missing", true, cx);
-        assert!(cx.debug_bounds("toast: Couldn't install package").is_some());
-
-        install("github.com/o/r", true, cx);
-        assert!(cx.debug_bounds("toast: Installed Dailies").is_some());
-        assert!(root.join("packages/o-r/scripts/spin.ts").exists());
-        assert_eq!(*events.borrow(), ["rescan"]);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn snapshot_review_updates() {
         dialogs("review-package-updates", |dialogs, _, cx| {
             let pending = |dir: &str, name: &str, from: &str, to: &str| Pending {
-                dir: dir.into(),
+                root: dir.into(),
                 name: name.to_owned().into(),
                 from: from.to_owned().into(),
                 to: to.to_owned().into(),
@@ -913,7 +742,7 @@ mod tests {
         dialogs("confirm-package-update", |dialogs, _, _| {
             let path = |text: &str| PackagePath::parse(text).unwrap();
             dialogs.confirm = Some(Confirm {
-                dir: "toommyliu-mira-dailies".into(),
+                root: "toommyliu-mira-dailies".into(),
                 name: "Dailies".into(),
                 edits: Edits {
                     changed: vec![path("scripts/spin.ts"), path("lib/wheel.ts")],
