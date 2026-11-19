@@ -1,7 +1,8 @@
 use gpui::{
-    App, BoxShadow, Div, Global, Hsla, ParentElement as _, Pixels, Rgba, Styled, WindowAppearance,
-    div, point, px,
+    App, BoxShadow, Div, Global, Hsla, ParentElement as _, Pixels, Rgba, SharedString, Styled,
+    WindowAppearance, div, point, px,
 };
+use serde::{Deserialize, Serialize};
 
 pub const DISABLED_OPACITY: f32 = 0.5;
 pub const UI_FONT: &str = "Inter";
@@ -112,6 +113,61 @@ impl Radii {
             panel: px(10.0) * scale,
             dialog: px(14.0) * scale,
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorToken {
+    Accent,
+    Background,
+    Foreground,
+    Card,
+    Popover,
+    Sidebar,
+    Muted,
+    MutedForeground,
+    Border,
+    Ring,
+    Destructive,
+}
+
+impl ColorToken {
+    pub const SEEDS: [ColorToken; 3] = [
+        ColorToken::Accent,
+        ColorToken::Background,
+        ColorToken::Foreground,
+    ];
+
+    pub const ADVANCED: [ColorToken; 8] = [
+        ColorToken::Card,
+        ColorToken::Popover,
+        ColorToken::Sidebar,
+        ColorToken::Muted,
+        ColorToken::MutedForeground,
+        ColorToken::Border,
+        ColorToken::Ring,
+        ColorToken::Destructive,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorToken::Accent => "Accent",
+            ColorToken::Background => "Background",
+            ColorToken::Foreground => "Foreground",
+            ColorToken::Card => "Card",
+            ColorToken::Popover => "Popover",
+            ColorToken::Sidebar => "Sidebar",
+            ColorToken::Muted => "Muted",
+            ColorToken::MutedForeground => "Muted text",
+            ColorToken::Border => "Border",
+            ColorToken::Ring => "Focus ring",
+            ColorToken::Destructive => "Destructive",
+        }
+    }
+
+    fn is_seed(self) -> bool {
+        Self::SEEDS.contains(&self)
     }
 }
 
@@ -239,6 +295,131 @@ impl Theme {
     pub fn space(&self, units: f32) -> Pixels {
         self.layout.space(units)
     }
+    pub fn customized(dark: bool, colors: &[(ColorToken, Hsla)]) -> Self {
+        let preset = Self::preset(dark);
+        let mut theme = preset.clone();
+        let chosen = |token| {
+            colors
+                .iter()
+                .find(|(chosen, _)| *chosen == token)
+                .map(|&(_, color)| color)
+        };
+        if colors
+            .iter()
+            .any(|(token, _)| matches!(token, ColorToken::Background | ColorToken::Foreground))
+        {
+            theme.derive(
+                &preset,
+                chosen(ColorToken::Background).unwrap_or(preset.background),
+                chosen(ColorToken::Foreground).unwrap_or(preset.foreground),
+            );
+        }
+        let (seeds, advanced): (Vec<_>, Vec<_>) =
+            colors.iter().partition(|(token, _)| token.is_seed());
+        for &(token, color) in seeds.into_iter().chain(advanced) {
+            theme.set_color(token, color);
+        }
+        theme
+    }
+
+    fn derive(&mut self, preset: &Theme, background: Hsla, foreground: Hsla) {
+        let base = lightness(preset.background);
+        let span = lightness(preset.foreground) - base;
+        let (bl, bc, bh) = polar(background);
+        let surface = |role: Hsla| oklch(bl + lightness(role) - base, bc, bh, 1.0);
+        let between = |role: Hsla| {
+            let mixed = perceptual_mix(background, foreground, (lightness(role) - base) / span);
+            if role.a < 1.0 {
+                foreground.opacity(role.a)
+            } else {
+                mixed
+            }
+        };
+        self.background = background;
+        self.card = surface(preset.card);
+        self.popover = surface(preset.popover);
+        self.sidebar = surface(preset.sidebar);
+        self.secondary = surface(preset.secondary);
+        self.muted = self.secondary;
+        self.accent = self.secondary;
+        self.sidebar_accent = self.secondary;
+        self.foreground = foreground;
+        self.card_foreground = foreground;
+        self.popover_foreground = foreground;
+        self.sidebar_foreground = foreground;
+        self.secondary_foreground = between(preset.secondary_foreground);
+        self.accent_foreground = self.secondary_foreground;
+        self.sidebar_accent_foreground = self.secondary_foreground;
+        self.muted_foreground = between(preset.muted_foreground);
+        self.border = between(preset.border);
+        self.input = between(preset.input);
+        self.sidebar_border = self.border;
+        self.ring = between(preset.ring);
+        self.sidebar_ring = self.ring;
+    }
+
+    pub fn color(&self, token: ColorToken) -> Hsla {
+        let role = match token {
+            ColorToken::Accent => self.primary,
+            ColorToken::Background => self.background,
+            ColorToken::Foreground => self.foreground,
+            ColorToken::Card => self.card,
+            ColorToken::Popover => self.popover,
+            ColorToken::Sidebar => self.sidebar,
+            ColorToken::Muted => self.muted,
+            ColorToken::MutedForeground => self.muted_foreground,
+            ColorToken::Border => self.border,
+            ColorToken::Ring => self.ring,
+            ColorToken::Destructive => self.destructive,
+        };
+        if role.a < 1.0 {
+            self.background.blend(role)
+        } else {
+            role
+        }
+    }
+
+    pub fn set_color(&mut self, token: ColorToken, color: Hsla) {
+        match token {
+            ColorToken::Accent => {
+                self.primary = color;
+                self.primary_foreground =
+                    oklch(if is_dark(color) { 0.985 } else { 0.205 }, 0.0, 0.0, 1.0);
+                if !self.dark_mode {
+                    self.sidebar_primary = color;
+                    self.sidebar_primary_foreground = self.primary_foreground;
+                }
+            }
+            ColorToken::Background => self.background = color,
+            ColorToken::Foreground => {
+                self.foreground = color;
+                self.card_foreground = color;
+                self.popover_foreground = color;
+                self.sidebar_foreground = color;
+            }
+            ColorToken::Card => self.card = color,
+            ColorToken::Popover => self.popover = color,
+            ColorToken::Sidebar => self.sidebar = color,
+            ColorToken::Muted => {
+                self.secondary = color;
+                self.muted = color;
+                self.accent = color;
+                self.sidebar_accent = color;
+            }
+            ColorToken::MutedForeground => self.muted_foreground = color,
+            ColorToken::Border => {
+                self.border = color;
+                self.input = color;
+                self.sidebar_border = color;
+            }
+            ColorToken::Ring => {
+                self.ring = color;
+                self.sidebar_ring = color;
+            }
+            ColorToken::Destructive => self.destructive = color,
+        }
+    }
+
     pub fn input_fill(&self) -> Hsla {
         self.input.opacity(if self.dark_mode { 0.3 } else { 0.2 })
     }
@@ -343,6 +524,34 @@ pub fn oklch(l: f32, c: f32, h: f32, alpha: f32) -> Hsla {
     .into()
 }
 
+pub fn is_dark(color: Hsla) -> bool {
+    let rgb = color.to_rgb();
+    let linear = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b) <= 0.179
+}
+
+pub fn to_hex(color: Hsla) -> SharedString {
+    let rgb = color.to_rgb();
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", byte(rgb.r), byte(rgb.g), byte(rgb.b)).into()
+}
+
+pub fn parse_hex(text: &str) -> Option<Hsla> {
+    let digits = text.trim();
+    let digits = digits.strip_prefix('#').unwrap_or(digits);
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    Some(gpui::rgb(value).into())
+}
+
 pub trait PointerCursor: Styled + Sized {
     fn pointer_cursor(self, theme: &Theme) -> Self {
         if theme.pointer_cursor {
@@ -381,25 +590,30 @@ pub fn tabular() -> gpui::FontFeatures {
     gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]))
 }
 
+fn polar(color: Hsla) -> (f32, f32, f32) {
+    let rgb = color.to_rgb();
+    let linear = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (r, g, b) = (linear(rgb.r), linear(rgb.g), linear(rgb.b));
+    let l = (0.41222146 * r + 0.53633255 * g + 0.051445995 * b).cbrt();
+    let m = (0.2119035 * r + 0.6806995 * g + 0.10739696 * b).cbrt();
+    let s = (0.08830246 * r + 0.28171885 * g + 0.6299787 * b).cbrt();
+    let lightness = 0.21045426 * l + 0.7936178 * m - 0.004072047 * s;
+    let a = 1.9779985 * l - 2.4285922 * m + 0.4505937 * s;
+    let b = 0.025904037 * l + 0.78277177 * m - 0.80867577 * s;
+    (lightness, a.hypot(b), b.atan2(a).to_degrees())
+}
+
+fn lightness(color: Hsla) -> f32 {
+    polar(color).0
+}
+
 pub fn perceptual_mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
-    fn polar(color: Hsla) -> (f32, f32, f32) {
-        let rgb = color.to_rgb();
-        let linear = |v: f32| {
-            if v <= 0.04045 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let (r, g, b) = (linear(rgb.r), linear(rgb.g), linear(rgb.b));
-        let l = (0.41222146 * r + 0.53633255 * g + 0.051445995 * b).cbrt();
-        let m = (0.2119035 * r + 0.6806995 * g + 0.10739696 * b).cbrt();
-        let s = (0.08830246 * r + 0.28171885 * g + 0.6299787 * b).cbrt();
-        let lightness = 0.21045426 * l + 0.7936178 * m - 0.004072047 * s;
-        let a = 1.9779985 * l - 2.4285922 * m + 0.4505937 * s;
-        let b = 0.025904037 * l + 0.78277177 * m - 0.80867577 * s;
-        (lightness, a.hypot(b), b.atan2(a).to_degrees())
-    }
     let (l, c, mut h) = polar(from);
     let (l2, c2, mut h2) = polar(to);
     if c < 0.00001 {
@@ -415,4 +629,56 @@ pub fn perceptual_mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
         h + hue * t,
         from.a + (to.a - from.a) * t,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_custom_colors_a_theme_is_its_preset() {
+        for dark in [false, true] {
+            let preset = Theme::preset(dark);
+            let theme = Theme::customized(dark, &[]);
+            for token in ColorToken::SEEDS.into_iter().chain(ColorToken::ADVANCED) {
+                assert_eq!(to_hex(theme.color(token)), to_hex(preset.color(token)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_custom_background_carries_its_tint_and_the_preset_steps_to_every_surface() {
+        let preset = Theme::dark();
+        let navy = parse_hex("#101830").unwrap();
+        let theme = Theme::customized(true, &[(ColorToken::Background, navy)]);
+        let step = |role: Hsla, base: Hsla| lightness(role) - lightness(base);
+        for (role, was) in [
+            (theme.card, preset.card),
+            (theme.popover, preset.popover),
+            (theme.sidebar, preset.sidebar),
+            (theme.muted, preset.muted),
+        ] {
+            assert!((step(role, navy) - step(was, preset.background)).abs() < 0.005);
+            assert!(
+                (polar(role).2 - polar(navy).2).abs() < 2.0,
+                "{role:?} lost the tint"
+            );
+        }
+        assert_eq!(theme.border, preset.foreground.opacity(0.10));
+        let muted = lightness(theme.muted_foreground);
+        assert!(lightness(navy) < muted && muted < lightness(theme.foreground));
+    }
+
+    #[test]
+    fn an_advanced_color_overrides_what_the_seeds_derive() {
+        let card = parse_hex("#202020").unwrap();
+        let theme = Theme::customized(
+            true,
+            &[
+                (ColorToken::Card, card),
+                (ColorToken::Background, parse_hex("#101830").unwrap()),
+            ],
+        );
+        assert_eq!(to_hex(theme.card), "#202020");
+    }
 }
