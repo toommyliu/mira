@@ -19,7 +19,7 @@ use mira_ui::{
         Numeric, Switch, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
     },
-    theme::{SYSTEM_MONO, TEXT_BODY, TEXT_CAPTION},
+    theme::SYSTEM_MONO,
     v_flex,
 };
 
@@ -46,8 +46,6 @@ const WIDTH: f32 = 900.0;
 const HEIGHT: f32 = 640.0;
 const MIN_WIDTH: f32 = 560.0;
 const MIN_HEIGHT: f32 = 420.0;
-const SIDE_PANEL_FROM: Pixels = px(760.0);
-const PANEL_WIDTH: Pixels = px(340.0);
 const DELAY_WIDTH: Pixels = px(104.0);
 const TARGETS: [Target; 2] = [Target::Server, Target::Client];
 const EXAMPLE: &str = "%xt%zm%cmd%{room}%…";
@@ -712,13 +710,8 @@ impl Packets {
             Switch::new("capture", "Capture", capturing)
                 .on_toggle(move |on, _, _| automation.set_capture(on))
         };
-        let toolbar = h_flex()
-            .flex_none()
-            .h(px(40.0))
-            .px(px(12.0))
-            .gap(px(8.0))
-            .border_b_1()
-            .border_color(theme.border)
+        let toolbar = theme
+            .toolbar()
             .child(capture)
             .child(div().flex_1().min_w_0().child(self.search.clone()))
             .child(
@@ -739,7 +732,7 @@ impl Packets {
             )
             .child(self.log_menu(counts, cx));
         let lines = self.lines(theme, empty, capturing, cx);
-        let side = window.viewport_size().width >= SIDE_PANEL_FROM;
+        let side = window.viewport_size().width >= theme.layout.split_packets;
         let panel = self
             .selected
             .and_then(|id| self.packet(id, cx))
@@ -846,6 +839,8 @@ impl Packets {
         side: bool,
         cx: &mut Context<Self>,
     ) -> Div {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let text: SharedString = if packet.text.starts_with('{') {
             serde_json::from_str::<serde_json::Value>(&packet.text)
                 .ok()
@@ -861,15 +856,9 @@ impl Packets {
         let copy = packet.text.to_string();
         let this = cx.weak_entity();
         let menu_packet = packet.clone();
-        let header = h_flex()
-            .flex_none()
-            .h(px(36.0))
-            .pl(px(12.0))
-            .pr(px(6.0))
-            .gap(px(8.0))
-            .border_b_1()
-            .border_color(theme.border)
-            .text_caption(theme.typography)
+        let header = theme
+            .toolbar()
+            .text_caption(typography)
             .child(
                 div()
                     .flex_none()
@@ -919,11 +908,11 @@ impl Packets {
         v_flex()
             .flex_none()
             .min_h_0()
-            .bg(theme.card)
+            .bg(theme.background)
             .border_color(theme.border)
             .map(|panel| {
                 if side {
-                    panel.w(PANEL_WIDTH).border_l_1()
+                    panel.w(theme.layout.inspector).border_l_1()
                 } else {
                     panel.h(relative(0.4)).border_t_1()
                 }
@@ -935,10 +924,10 @@ impl Packets {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .px(px(12.0))
-                    .py(px(8.0))
+                    .px(layout.space(3.0))
+                    .py(layout.space(2.0))
                     .font_family(SYSTEM_MONO)
-                    .text_size(TEXT_CAPTION)
+                    .text_size(typography.secondary)
                     .line_height(px(17.0))
                     .text_color(theme.muted_foreground)
                     .child(text),
@@ -946,18 +935,16 @@ impl Packets {
     }
 
     fn composer_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
         let this = cx.weak_entity();
         let empty = Self::typed(&self.composer, cx).is_empty();
-        v_flex()
-            .flex_none()
-            .gap(px(6.0))
-            .px(px(12.0))
-            .py(px(10.0))
-            .border_t_1()
-            .border_color(theme.border)
+        theme
+            .footer()
+            .flex_col()
+            .items_stretch()
             .child(
                 h_flex()
-                    .gap(px(8.0))
+                    .gap(layout.space(2.0))
                     .child(
                         div()
                             .flex_none()
@@ -1003,6 +990,8 @@ impl Packets {
     }
 
     fn send_page(&mut self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let settings = automation.spammer();
         let (status, status_color) = queue_status(&settings, automation.spammer_status(), theme);
         let switching = automation.clone();
@@ -1033,13 +1022,8 @@ impl Packets {
                     this.revert_delay(cx);
                 }
             }));
-        let bar = h_flex()
-            .flex_none()
-            .h(px(44.0))
-            .px(px(12.0))
-            .gap(px(12.0))
-            .border_b_1()
-            .border_color(theme.border)
+        let bar = theme
+            .toolbar()
             .child(switch)
             .child(
                 div()
@@ -1049,7 +1033,7 @@ impl Packets {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_caption(theme.typography)
+                    .text_caption(typography)
                     .text_color(status_color)
                     .child(status),
             )
@@ -1069,7 +1053,7 @@ impl Packets {
             .child(delay);
         let list = if settings.packets.is_empty() {
             div()
-                .text_caption(theme.typography)
+                .text_caption(typography)
                 .text_color(theme.muted_foreground)
                 .child(
                     "The queue is empty. Add a packet below, or right-click an outbound packet in the log.",
@@ -1084,8 +1068,8 @@ impl Packets {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .p(px(12.0))
-                .gap(px(10.0))
+                .p(layout.space(3.0))
+                .gap(layout.space(2.5))
                 .child(list)
                 .child(self.add_row(theme, cx)),
         )
@@ -1097,6 +1081,7 @@ impl Packets {
         packets: Vec<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let layout = theme.layout;
         let typography = theme.typography;
         let packets: Rc<[String]> = packets.into();
         let (queued, editing) = (self.queued, self.editing);
@@ -1119,13 +1104,13 @@ impl Packets {
                         div()
                             .truncate()
                             .font_family(SYSTEM_MONO)
-                            .text_size(TEXT_CAPTION)
+                            .text_size(typography.secondary)
                             .child(packets[index].clone()),
                     );
                 if editing == Some(index) {
                     item.end_slot(div().text_color(accent).child("Editing"))
                 } else if queued == Some(index) {
-                    item.end_slot(row_actions(&this, index))
+                    item.end_slot(row_actions(layout, &this, index))
                 } else {
                     item
                 }
@@ -1165,6 +1150,7 @@ impl Packets {
     }
 
     fn add_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
         let empty = Self::typed(&self.adding, cx).is_empty();
         let input = div()
             .flex_1()
@@ -1177,7 +1163,7 @@ impl Packets {
             }));
         let buttons = if self.editing.is_some() {
             h_flex()
-                .gap(px(8.0))
+                .gap(layout.space(2.0))
                 .child(
                     Button::new("queue-save", "Save")
                         .variant(Variant::Primary)
@@ -1197,8 +1183,8 @@ impl Packets {
         };
         v_flex()
             .flex_none()
-            .gap(px(6.0))
-            .child(h_flex().gap(px(8.0)).child(input).child(buttons))
+            .gap(layout.space(1.5))
+            .child(h_flex().gap(layout.space(2.0)).child(input).child(buttons))
             .child(note_line(
                 theme,
                 self.add_problem
@@ -1207,12 +1193,12 @@ impl Packets {
     }
 }
 
-fn row_actions(this: &WeakEntity<Packets>, index: usize) -> Div {
+fn row_actions(layout: mira_ui::theme::Layout, this: &WeakEntity<Packets>, index: usize) -> Div {
     let edits = this.clone();
     let removes = this.clone();
     h_flex()
         .my(px(-1.0))
-        .gap(px(2.0))
+        .gap(layout.space(0.5))
         .child(
             Button::new(("edit-queued", index), "Edit")
                 .size(Size::XSmall)
@@ -1232,9 +1218,11 @@ fn row_actions(this: &WeakEntity<Packets>, index: usize) -> Div {
 }
 
 fn note_line(theme: &Theme, status: Option<(SharedString, Hsla)>) -> Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
     h_flex()
-        .gap(px(12.0))
-        .text_caption(theme.typography)
+        .gap(layout.space(3.0))
+        .text_caption(typography)
         .child(
             div()
                 .flex_1()
@@ -1373,6 +1361,7 @@ fn row(line: &Line, times: bool) -> Row {
 impl Render for Packets {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
         let header = shown_tab::header(
             "Packets",
             &self.client,
@@ -1399,9 +1388,7 @@ impl Render for Packets {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(FOCUS_SCOPE)
             .id("packets")
             .track_focus(&self.focus)
@@ -1414,7 +1401,7 @@ impl Render for Packets {
             .child(mira_ui::nav::pointer_probe())
             .child(header)
             .child(
-                div().flex_none().px(px(16.0)).child(
+                div().flex_none().px(layout.space(4.0)).child(
                     Tabs::new("packets-pages", "Pages", labels.len(), move |index| {
                         let (name, count) = labels[index];
                         let tab = Tab::new(name);
@@ -1424,6 +1411,7 @@ impl Render for Packets {
                             tab.end_slot(Badge::new(count.to_string()))
                         }
                     })
+                    .line()
                     .selected(self.page as usize)
                     .on_select({
                         let this = cx.weak_entity();
@@ -1466,6 +1454,40 @@ mod tests {
         });
         cx.run_until_parked();
         (packets, automation, cx)
+    }
+
+    #[test]
+    fn snapshot_selected_packet_beside_and_below_trace() {
+        let dir = std::env::temp_dir().join(format!("mira-packets-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, w, h) in [
+            ("packets-selected-min", MIN_WIDTH, MIN_HEIGHT),
+            ("packets-selected", WIDTH, HEIGHT),
+        ] {
+            for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
+                let client = Client::empty_for_tests(&dir, cx);
+                cx.new(|cx| {
+                    let mut packets = Packets::new(client, shown_tab::Target::Selected, window, cx);
+                    packets.shown = Some(ShownTab::fake("Battleon", Automation::default()));
+                    let mut log = PacketLog::default();
+                    log.extend(
+                        (0..12)
+                            .map(|i| crate::automation::packets::Captured::Packet {
+                                at: std::time::SystemTime::UNIX_EPOCH,
+                                from: crate::bridge::packets::Sender::Server,
+                                text: format!("Room update {i} in Battleon"),
+                            })
+                            .collect(),
+                    );
+                    packets.log = Some(cx.new(|_| log));
+                    packets.selected = Some(2);
+                    packets
+                })
+            }) {
+                assert!(written.exists());
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn press(cx: &mut VisualTestContext, keys: &str) {
