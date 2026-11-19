@@ -38,13 +38,13 @@ impl RenderOnce for Kbd {
                     .h(px(18.0))
                     .when(symbol.is_none(), |cap| cap.px(px(4.0)))
                     .rounded(theme.radius.tag)
-                    .bg(theme.fill_pressed)
+                    .bg(theme.muted)
                     .text_size(TEXT_CAPTION)
                     .line_height(LINE_CAPTION)
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .map(|cap| match symbol {
-                        Some(symbol) => cap.child(small_icon(symbol, theme.text_secondary)),
+                        Some(symbol) => cap.child(small_icon(symbol, theme.muted_foreground)),
                         None => cap.child(key),
                     })
             }))

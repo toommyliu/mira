@@ -252,9 +252,9 @@ mod live {
             let this = cx.weak_entity();
             v_flex()
                 .size_full()
-                .bg(theme.base)
+                .bg(theme.background)
                 .text_size(TEXT_BODY)
-                .text_color(theme.text)
+                .text_color(theme.foreground)
                 .key_context(FOCUS_SCOPE)
                 .track_focus(&self.focus)
                 .child(

@@ -154,7 +154,7 @@ impl RenderOnce for RadioGroup {
                     .py(px(3.0))
                     .text_size(TEXT_BODY)
                     .line_height(LINE_BODY)
-                    .text_color(theme.text)
+                    .text_color(theme.foreground)
                     .when(disabled, |radio| radio.opacity(DISABLED_OPACITY))
                     .when(!disabled, |radio| radio.pointer_cursor(&theme))
                     .child(
@@ -168,21 +168,26 @@ impl RenderOnce for RadioGroup {
                             .rounded_full()
                             .map(|dot| {
                                 if checked {
-                                    dot.bg(theme.inverse)
+                                    dot.bg(theme.primary)
                                 } else {
                                     dot.border_1()
                                         .border_color(theme.border)
-                                        .bg(theme.fill)
+                                        .bg(theme.secondary)
                                         .when(!disabled, |dot| {
                                             dot.group_hover("radio", |style| {
-                                                style.border_color(theme.border_strong)
+                                                style.border_color(theme.input)
                                             })
                                         })
                                 }
                             })
                             .when(checked && ring, |dot| dot.child(theme.focus_ring(px(7.0))))
                             .when(checked, |dot| {
-                                dot.child(div().size(px(6.0)).rounded_full().bg(theme.on_inverse))
+                                dot.child(
+                                    div()
+                                        .size(px(6.0))
+                                        .rounded_full()
+                                        .bg(theme.primary_foreground),
+                                )
                             }),
                     )
                     .child(caption_with(

@@ -348,7 +348,7 @@ impl Follower {
         self.add_monster
             .update(cx, |input, cx| input.set_disabled(!settings.fight, cx));
         let status = if unnamed {
-            Some(("Needs a player name".into(), theme.text_tertiary))
+            Some(("Needs a player name".into(), theme.muted_foreground))
         } else {
             live_status(&settings, automation.follower_status()).map(|(text, tone)| {
                 let (_, _, color) = theme.tone(tone);
@@ -400,14 +400,14 @@ impl Follower {
                 .items_start()
                 .min_h_full()
                 .child(div().flex_1().min_w_0().p(px(16.0)).child(following))
-                .child(div().self_stretch().w(px(1.0)).bg(theme.hairline))
+                .child(div().self_stretch().w(px(1.0)).bg(theme.border))
                 .child(div().flex_1().min_w_0().p(px(16.0)).child(fighting))
         } else {
             v_flex()
                 .gap(px(14.0))
                 .p(px(16.0))
                 .child(following)
-                .child(div().h(px(1.0)).bg(theme.hairline))
+                .child(div().h(px(1.0)).bg(theme.border))
                 .child(fighting)
         }
     }
@@ -538,9 +538,9 @@ impl Render for Follower {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(FOCUS_SCOPE)
             .id("follower")
             .track_focus(&self.focus)

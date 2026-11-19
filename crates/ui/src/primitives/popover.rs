@@ -88,10 +88,10 @@ pub(crate) fn panel(
         })
         .p(px(12.0))
         .rounded(theme.radius.panel)
-        .bg(theme.overlay)
+        .bg(theme.popover)
         .border_1()
         .border_color(theme.border)
-        .shadow(theme.floating())
+        .shadow(theme.popup_shadow())
 }
 
 #[derive(IntoElement)]

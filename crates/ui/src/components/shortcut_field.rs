@@ -230,24 +230,24 @@ impl RenderOnce for ShortcutField {
             .h(CONTROL_MD)
             .px(px(8.0))
             .rounded(theme.radius.control)
-            .bg(theme.fill)
+            .bg(theme.secondary)
             .border_1()
-            .border_color(if recording { theme.focus } else { theme.border })
+            .border_color(if recording { theme.ring } else { theme.border })
             .when(focused, |field| {
-                field.child(theme.ring_around(theme.focus, theme.radius.control, px(1.0)))
+                field.child(theme.ring_around(theme.ring, theme.radius.control, px(1.0)))
             })
             .pointer_cursor(&theme)
             .text_size(TEXT_SMALL)
             .child(match (&self.value, recording) {
                 (_, true) => div()
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .child("Press a shortcut")
                     .into_any_element(),
                 (Some(keystroke), false) => {
                     Kbd::new(format_keystroke(keystroke)).into_any_element()
                 }
                 (None, false) => div()
-                    .text_color(theme.text_tertiary)
+                    .text_color(theme.muted_foreground)
                     .child("Not set")
                     .into_any_element(),
             })
@@ -255,7 +255,7 @@ impl RenderOnce for ShortcutField {
                 field.child(
                     div()
                         .text_size(TEXT_SMALL)
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child("esc"),
                 )
             })

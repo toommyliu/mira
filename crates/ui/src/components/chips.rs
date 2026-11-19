@@ -197,20 +197,25 @@ impl Chip {
         let marked = self.marks.as_ref().is_some_and(|marks| marks.at(index));
         let (fill, edge, text, quiet) = if marked {
             (
-                theme.accent_soft,
-                theme.accent.opacity(0.35),
-                theme.accent_text,
-                theme.accent_text,
+                theme.primary.opacity(0.05),
+                theme.primary.opacity(0.35),
+                theme.foreground,
+                theme.foreground,
             )
         } else if self.quiet {
             (
                 Hsla::transparent_black(),
                 theme.border,
-                theme.text_secondary,
-                theme.text_tertiary,
+                theme.muted_foreground,
+                theme.muted_foreground,
             )
         } else {
-            (theme.fill, theme.hairline, theme.text, theme.text_tertiary)
+            (
+                theme.secondary,
+                theme.border,
+                theme.foreground,
+                theme.muted_foreground,
+            )
         };
         let (focus, selection, editing) = (
             self.focus.clone(),
@@ -240,7 +245,7 @@ impl Chip {
             .bg(fill)
             .border_1()
             .border_color(edge)
-            .text_small()
+            .text_caption(theme.typography)
             .text_color(text)
             .on_click(move |event: &ClickEvent, window, cx| {
                 select(&selection, index, cx);
@@ -274,7 +279,7 @@ impl Chip {
                         .child(icon(marks.icon, if marked { text } else { quiet }).size(px(12.0)))
                         .when_some(toggle, |bell, toggle| {
                             bell.pointer_cursor(theme)
-                                .hover(|style| style.bg(theme.fill_hover))
+                                .hover(|style| style.bg(theme.muted))
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     toggle(index, !marked, window, cx);
@@ -298,7 +303,7 @@ impl Chip {
                         .when_some(self.on_remove.clone(), |button, remove| {
                             button
                                 .pointer_cursor(theme)
-                                .hover(|style| style.bg(theme.fill_hover))
+                                .hover(|style| style.bg(theme.muted))
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     remove(index, window, cx);
@@ -307,7 +312,7 @@ impl Chip {
                 )
             })
             .when(current && self.ring, |chip| {
-                chip.child(theme.ring_around(theme.focus, CONTROL_SM / 2.0, px(1.0)))
+                chip.child(theme.ring_around(theme.ring, CONTROL_SM / 2.0, px(1.0)))
             })
             .into_any_element()
     }

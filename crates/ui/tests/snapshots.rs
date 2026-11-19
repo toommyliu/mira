@@ -12,7 +12,7 @@ use mira_ui::{
         button::{Joined, Size, Variant},
     },
     snapshot,
-    theme::{SYSTEM_SANS, TEXT_BODY},
+    theme::{TEXT_BODY, UI_FONT},
 };
 
 struct Scene(
@@ -41,9 +41,9 @@ impl Render for Scene {
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.1)
             .p(px(16.0))
-            .bg(theme.base)
-            .text_color(theme.text)
-            .font_family(SYSTEM_SANS)
+            .bg(theme.background)
+            .text_color(theme.foreground)
+            .font_family(UI_FONT)
             .text_size(TEXT_BODY)
             .child((self.0)(window, cx))
     }
@@ -508,7 +508,7 @@ fn snapshot_menubar() {
             .menu(
                 trigger("attack", "Auto attack")
                     .child("Auto attack")
-                    .child(div().text_color(theme.text_tertiary).child("Generic")),
+                    .child(div().text_color(theme.muted_foreground).child("Generic")),
                 |_, _| {
                     vec![
                         MenuItem::switch("Auto attack", true, |_, _| {}),
@@ -606,9 +606,9 @@ impl Render for Form {
         div()
             .size_full()
             .p(px(16.0))
-            .bg(theme.base)
-            .text_color(theme.text)
-            .font_family(SYSTEM_SANS)
+            .bg(theme.background)
+            .text_color(theme.foreground)
+            .font_family(UI_FONT)
             .text_size(TEXT_BODY)
             .flex()
             .gap(px(16.0))

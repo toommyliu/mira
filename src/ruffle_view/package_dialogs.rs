@@ -287,8 +287,8 @@ impl Render for PackageDialogs {
         let install = self.install.as_ref().map(|install| {
             let label = |text: &'static str| {
                 div()
-                    .text_small()
-                    .text_color(theme.text_secondary)
+                    .text_caption(theme.typography)
+                    .text_color(theme.muted_foreground)
                     .child(text)
             };
             v_flex()
@@ -368,9 +368,9 @@ impl Render for PackageDialogs {
                 .gap(px(2.0))
                 .children(edit_lines(&confirm.edits).into_iter().map(|line| {
                     div()
-                        .text_small()
+                        .text_caption(theme.typography)
                         .truncate()
-                        .text_color(theme.text_secondary)
+                        .text_color(theme.muted_foreground)
                         .child(line)
                 }))
         });

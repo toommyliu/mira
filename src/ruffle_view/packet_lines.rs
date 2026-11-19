@@ -185,7 +185,7 @@ impl RenderOnce for PacketLines {
                         .line_height(px(17.0))
                         .whitespace_nowrap()
                         .overflow_hidden()
-                        .when(current, |line| line.bg(theme.selected))
+                        .when(current, |line| line.bg(theme.accent))
                         .pointer_cursor(&theme)
                         .when(entry.actions, |line| {
                             line.on_mouse_down(MouseButton::Right, move |_, window, cx| {
@@ -208,7 +208,7 @@ impl RenderOnce for PacketLines {
                             line.child(
                                 div()
                                     .flex_none()
-                                    .text_color(theme.text_tertiary)
+                                    .text_color(theme.muted_foreground)
                                     .child(time),
                             )
                         })
@@ -224,7 +224,7 @@ impl RenderOnce for PacketLines {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(theme.text_secondary)
+                                .text_color(theme.muted_foreground)
                                 .child(entry.text),
                         );
                     if !entry.actions {
@@ -254,7 +254,7 @@ impl RenderOnce for PacketLines {
         div()
             .relative()
             .size_full()
-            .bg(theme.surface)
+            .bg(theme.card)
             .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(lines)
             .child(bar)
@@ -265,7 +265,7 @@ impl RenderOnce for PacketLines {
                         .absolute()
                         .inset_0()
                         .border_2()
-                        .border_color(theme.focus),
+                        .border_color(theme.ring),
                 )
             })
     }
@@ -287,14 +287,14 @@ fn jump(theme: &Theme, unseen: u64, scroll: UniformListScrollHandle) -> AnyEleme
         .gap(px(6.0))
         .h(px(28.0))
         .rounded_full()
-        .bg(theme.overlay)
+        .bg(theme.popover)
         .border_1()
         .border_color(theme.border)
-        .shadow(theme.raised())
-        .text_small()
-        .text_color(theme.text_secondary)
+        .shadow(theme.surface_edge())
+        .text_caption(theme.typography)
+        .text_color(theme.muted_foreground)
         .pointer_cursor(theme)
-        .hover(|style| style.text_color(theme.text))
+        .hover(|style| style.text_color(theme.foreground))
         .on_click(move |_, window, cx| {
             scroll.scroll_to_bottom();
             window.refresh();
@@ -311,7 +311,7 @@ fn jump(theme: &Theme, unseen: u64, scroll: UniformListScrollHandle) -> AnyEleme
             button
                 .pl(px(10.0))
                 .pr(px(12.0))
-                .child(icon(Icon::ArrowDownToLine, theme.text_secondary))
+                .child(icon(Icon::ArrowDownToLine, theme.muted_foreground))
                 .child(label),
         )
         .into_any_element()

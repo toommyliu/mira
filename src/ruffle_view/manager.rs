@@ -229,14 +229,14 @@ fn server_items(
 
 fn server_stats(server: &net::Server, theme: &Theme) -> gpui::Div {
     let (players, color) = if !server.online {
-        (SharedString::from("Offline"), theme.text_tertiary)
+        (SharedString::from("Offline"), theme.muted_foreground)
     } else {
         (
             format!("{}/{}", server.players, server.capacity).into(),
             if server.players >= server.capacity {
-                theme.warning_text
+                theme.foreground
             } else {
-                theme.text_secondary
+                theme.muted_foreground
             },
         )
     };
@@ -252,7 +252,7 @@ fn server_stats(server: &net::Server, theme: &Theme) -> gpui::Div {
                 .w(px(44.0))
                 .flex()
                 .justify_end()
-                .text_color(theme.text_tertiary)
+                .text_color(theme.muted_foreground)
                 .children(server.ping.map(|ping| format!("{} ms", ping.as_millis()))),
         )
 }
@@ -1381,11 +1381,11 @@ fn selection_box(theme: &Theme, checked: bool) -> impl IntoElement {
         .border_1()
         .map(|mark| {
             if checked {
-                mark.border_color(theme.inverse)
-                    .bg(theme.inverse)
-                    .child(small_icon(Icon::Check, theme.on_inverse))
+                mark.border_color(theme.primary)
+                    .bg(theme.primary)
+                    .child(small_icon(Icon::Check, theme.primary_foreground))
             } else {
-                mark.border_color(theme.border).bg(theme.fill)
+                mark.border_color(theme.border).bg(theme.secondary)
             }
         })
 }
@@ -1409,12 +1409,12 @@ fn plan_line(setup: &Setup, id: &AccountId, presence: &Presence) -> Option<Line>
 
 fn color(theme: &Theme, mood: Mood) -> gpui::Hsla {
     match mood {
-        Mood::Quiet => theme.text_tertiary,
-        Mood::Muted => theme.text_secondary,
-        Mood::Plain => theme.text,
-        Mood::Accent => theme.accent_text,
-        Mood::Warning => theme.warning_text,
-        Mood::Danger => theme.danger_text,
+        Mood::Quiet => theme.muted_foreground,
+        Mood::Muted => theme.muted_foreground,
+        Mood::Plain => theme.foreground,
+        Mood::Accent => theme.foreground,
+        Mood::Warning => theme.foreground,
+        Mood::Danger => theme.destructive,
     }
 }
 
@@ -1661,6 +1661,7 @@ impl Manager {
     }
 
     fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let typography = theme.typography;
         let accounts = self.account_list();
         let setups = self
             .accounts
@@ -1687,12 +1688,12 @@ impl Manager {
             View::All => None,
             View::Setup(name) => rows.iter().position(|(setup, _)| &setup.name == name),
         };
-        let tertiary = theme.text_tertiary;
+        let tertiary = theme.muted_foreground;
         let total = accounts.len();
         let all = Tabs::new("all-accounts", "Accounts", 1, move |_| {
             Tab::new("All accounts").end_slot(
                 div()
-                    .text_small()
+                    .text_caption(typography)
                     .text_color(tertiary)
                     .child(total.to_string()),
             )
@@ -1727,7 +1728,12 @@ impl Manager {
             let this = this.clone();
             let name = menu_names[index].clone();
             Tab::new(title.clone())
-                .end_slot(div().text_small().text_color(tertiary).child(count.clone()))
+                .end_slot(
+                    div()
+                        .text_caption(typography)
+                        .text_color(tertiary)
+                        .child(count.clone()),
+                )
                 .menu(move |_, _| setup_menu(&this, &name))
         })
         .vertical()
@@ -1745,11 +1751,11 @@ impl Manager {
             .flex_none()
             .w(SIDEBAR_WIDTH)
             .h_full()
-            .bg(theme.well)
+            .bg(theme.sidebar)
             .border_r_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .pt(px(8.0))
             .child(all)
             .child(
@@ -1760,8 +1766,8 @@ impl Manager {
                     .px(px(14.0))
                     .flex()
                     .items_center()
-                    .text_small()
-                    .text_color(theme.text_tertiary)
+                    .text_caption(typography)
+                    .text_color(theme.muted_foreground)
                     .child("Setups"),
             )
             .child(
@@ -1775,8 +1781,8 @@ impl Manager {
                 sidebar.child(
                     div()
                         .px(px(14.0))
-                        .text_small()
-                        .text_color(theme.text_tertiary)
+                        .text_caption(typography)
+                        .text_color(theme.muted_foreground)
                         .child("None yet."),
                 )
             })
@@ -1792,7 +1798,7 @@ impl Manager {
                                 .flex_1()
                                 .justify_between()
                                 .child("New setup")
-                                .child(div().text_color(theme.text_tertiary).child("⌘N")),
+                                .child(div().text_color(theme.muted_foreground).child("⌘N")),
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.new_setup(window, cx))),
                 ),
@@ -1811,7 +1817,7 @@ impl Manager {
             None => (
                 div()
                     .truncate()
-                    .text_body()
+                    .text_body(theme.typography)
                     .font_weight(FontWeight::MEDIUM)
                     .child("All accounts")
                     .into_any_element(),
@@ -1825,7 +1831,7 @@ impl Manager {
                 vec![
                     Button::new("add-account", "Add account")
                         .size(Size::Small)
-                        .end_slot(div().text_color(theme.text_tertiary).child("⇧⌘N"))
+                        .end_slot(div().text_color(theme.muted_foreground).child("⇧⌘N"))
                         .disabled(self.accounts.is_err())
                         .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx)))
                         .into_any_element(),
@@ -1871,7 +1877,7 @@ impl Manager {
                         div()
                             .id("setup-title")
                             .truncate()
-                            .text_body()
+                            .text_body(theme.typography)
                             .font_weight(FontWeight::MEDIUM)
                             .cursor(gpui::CursorStyle::IBeam)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1889,8 +1895,8 @@ impl Manager {
                     .into_any_element();
                 let summary = match renaming.and_then(|renaming| renaming.error.clone()) {
                     Some(error) => div()
-                        .text_small()
-                        .text_color(theme.danger_text)
+                        .text_caption(theme.typography)
+                        .text_color(theme.destructive)
                         .child(error)
                         .into_any_element(),
                     None => {
@@ -1909,11 +1915,14 @@ impl Manager {
                                     .variant(Variant::Ghost)
                                     .size(Size::XSmall)
                                     .text_size(TEXT_SMALL)
-                                    .text_color(theme.text)
+                                    .text_color(theme.foreground)
                                     .when_some(setup.script.as_deref(), |button, script| {
                                         button.tooltip(home_relative(script))
                                     })
-                                    .end_slot(small_icon(Icon::ChevronDown, theme.text_tertiary)),
+                                    .end_slot(small_icon(
+                                        Icon::ChevronDown,
+                                        theme.muted_foreground,
+                                    )),
                             )
                             .items(move |window, _| {
                                 script_items(
@@ -1951,7 +1960,7 @@ impl Manager {
                                 .variant(Variant::Ghost)
                                 .size(Size::Small)
                                 .text_size(TEXT_BODY)
-                                .end_slot(small_icon(Icon::ChevronDown, theme.text_tertiary)),
+                                .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
                         )
                         .items(move |_, _| {
                             all.iter()
@@ -1985,7 +1994,7 @@ impl Manager {
                 actions.push(
                     Button::new("start-setup", "Start setup")
                         .size(Size::Small)
-                        .end_slot(div().text_color(theme.text_tertiary).child("⌘⏎"))
+                        .end_slot(div().text_color(theme.muted_foreground).child("⌘⏎"))
                         .disabled(setup.members.is_empty())
                         .on_click(cx.listener(|this, _, _, cx| this.start_current(cx)))
                         .into_any_element(),
@@ -2033,8 +2042,8 @@ impl Manager {
                     .variant(Variant::Ghost)
                     .size(Size::XSmall)
                     .text_size(TEXT_SMALL)
-                    .text_color(theme.text)
-                    .end_slot(small_icon(Icon::ChevronDown, theme.text_tertiary)),
+                    .text_color(theme.foreground)
+                    .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
             )
             .items(move |_, _| {
                 server_items(
@@ -2065,7 +2074,7 @@ impl Manager {
             div()
                 .min_w_0()
                 .truncate()
-                .text_small()
+                .text_caption(theme.typography)
                 .text_color(color(theme, line.mood))
                 .child(line.text.clone())
         };
@@ -2077,8 +2086,8 @@ impl Manager {
             div()
                 .id(SharedString::from(format!("fix-{}", account.username)))
                 .flex_none()
-                .text_small()
-                .text_color(theme.text)
+                .text_caption(theme.typography)
+                .text_color(theme.foreground)
                 .underline()
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2104,10 +2113,10 @@ impl Manager {
             .border_1()
             .map(|card| {
                 if checked {
-                    card.border_color(theme.accent)
-                        .bg(theme.accent.opacity(0.08))
+                    card.border_color(theme.primary)
+                        .bg(theme.primary.opacity(0.08))
                 } else {
-                    card.border_color(theme.hairline).bg(theme.surface)
+                    card.border_color(theme.border).bg(theme.card)
                 }
             })
             .role(Role::CheckBox)
@@ -2149,7 +2158,7 @@ impl Manager {
                     .child(
                         div()
                             .flex_none()
-                            .text_small()
+                            .text_caption(theme.typography)
                             .text_color(color(theme, face.state.mood))
                             .child(face.state.text.clone()),
                     ),
@@ -2159,8 +2168,8 @@ impl Manager {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_small()
-                    .text_color(theme.text_secondary)
+                    .text_caption(theme.typography)
+                    .text_color(theme.muted_foreground)
                     .child(who)
             }))
             .children(face.note().map(|note| {
@@ -2186,7 +2195,7 @@ impl Manager {
             }))
             .children((face.lines()..CARD_LINES).map(|_| div().h(LINE_SMALL)))
             .when(focused, |card| {
-                card.child(theme.ring_around(theme.focus, px(8.0), px(1.0)))
+                card.child(theme.ring_around(theme.ring, px(8.0), px(1.0)))
             });
         ContextMenu::new(
             SharedString::from(format!("account-menu-{}", account.username)),
@@ -2226,7 +2235,7 @@ impl Manager {
                 .mx(px(4.0))
                 .w(px(1.0))
                 .h(px(16.0))
-                .bg(theme.hairline)
+                .bg(theme.border)
         };
         let bulk = |id: &'static str,
                     label: &'static str,
@@ -2261,7 +2270,7 @@ impl Manager {
                 .variant(Variant::Ghost)
                 .size(Size::Small)
                 .text_size(TEXT_BODY)
-                .end_slot(small_icon(Icon::ChevronDown, theme.text_tertiary))
+                .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground))
         };
         let targets = selected.clone();
         let setup_controls: Vec<gpui::AnyElement> = match self.view.clone() {
@@ -2343,10 +2352,10 @@ impl Manager {
                     .gap_y(px(2.0))
                     .p(px(4.0))
                     .rounded(theme.radius.panel)
-                    .bg(theme.overlay)
+                    .bg(theme.popover)
                     .border_1()
                     .border_color(theme.border)
-                    .shadow(theme.floating())
+                    .shadow(theme.popup_shadow())
                     .child(
                         h_flex()
                             .gap(px(2.0))
@@ -2400,14 +2409,14 @@ impl Manager {
                 Field::new("Display name", form.name.clone()).end_slot(
                     div()
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child("Optional"),
                 ),
             )
             .children(other.map(|error| {
                 div()
                     .text_size(TEXT_SMALL)
-                    .text_color(theme.danger_text)
+                    .text_color(theme.destructive)
                     .child(error)
             }));
         let body = h_flex().items_start().gap(px(24.0)).child(login).child(
@@ -2463,7 +2472,7 @@ impl Manager {
             .children(bulk.error.clone().map(|error| {
                 div()
                     .text_size(TEXT_SMALL)
-                    .text_color(theme.danger_text)
+                    .text_color(theme.destructive)
                     .child(error)
             }));
         let close = cx.listener(|this, _: &(), _, cx| this.close_bulk(cx));
@@ -2518,7 +2527,7 @@ impl Manager {
                     .items_center()
                     .justify_center()
                     .size(mira_ui::theme::CONTROL_XS)
-                    .child(Spinner::new("refresh-servers").color(cx.theme().text_secondary))
+                    .child(Spinner::new("refresh-servers").color(cx.theme().muted_foreground))
                     .into_any_element(),
                 _ => Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
                     .variant(Variant::Ghost)
@@ -2709,7 +2718,7 @@ impl Render for Manager {
                 .items_center()
                 .justify_center()
                 .px(px(24.0))
-                .text_color(theme.danger_text)
+                .text_color(theme.destructive)
                 .child(format!("Mira couldn't load your accounts: {error}"))
                 .into_any_element(),
             Ok(all) if all.list().is_empty() => self.empty(cx).into_any_element(),
@@ -2746,7 +2755,7 @@ impl Render for Manager {
                         .flex_1()
                         .items_center()
                         .justify_center()
-                        .text_color(theme.text_secondary)
+                        .text_color(theme.muted_foreground)
                         .child(match query.trim() {
                             "" if setup.as_ref().is_some_and(|setup| setup.members.is_empty()) => {
                                 "No accounts in this setup yet. Add some from the Accounts menu."
@@ -2817,9 +2826,9 @@ impl Render for Manager {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("accounts")
             .role(Role::Group)

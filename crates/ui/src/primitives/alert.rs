@@ -75,7 +75,7 @@ impl RenderOnce for Alert {
             .px(px(14.0))
             .rounded(theme.radius.panel)
             .bg(if self.tone == Tone::Neutral {
-                theme.fill
+                theme.secondary
             } else {
                 soft
             })
@@ -106,7 +106,7 @@ impl RenderOnce for Alert {
                                     .line_height(LINE_BODY)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if self.tone == Tone::Neutral {
-                                        theme.text
+                                        theme.foreground
                                     } else {
                                         text
                                     })
@@ -117,7 +117,7 @@ impl RenderOnce for Alert {
                                     div()
                                         .text_size(TEXT_SMALL)
                                         .line_height(LINE_SMALL)
-                                        .text_color(theme.text_secondary)
+                                        .text_color(theme.muted_foreground)
                                         .child(body),
                                 )
                             }),

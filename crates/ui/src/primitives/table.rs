@@ -140,9 +140,9 @@ impl RenderOnce for Table {
             .flex()
             .flex_col()
             .rounded(theme.radius.panel)
-            .bg(theme.surface)
+            .bg(theme.card)
             .border_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .overflow_hidden()
             .text_size(TEXT_BODY)
             .line_height(LINE_BODY)
@@ -153,7 +153,7 @@ impl RenderOnce for Table {
                     .aria_row_index(1)
                     .flex()
                     .border_b_1()
-                    .border_color(theme.hairline)
+                    .border_color(theme.border)
                     .children(columns.iter().enumerate().map(|(index, column)| {
                         let sorted = self.sort.filter(|sort| sort.column == index);
                         let on_sort = self.on_sort.clone();
@@ -172,9 +172,9 @@ impl RenderOnce for Table {
                             .text_size(TEXT_SMALL)
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if sorted.is_some() {
-                                theme.text
+                                theme.foreground
                             } else {
-                                theme.text_tertiary
+                                theme.muted_foreground
                             })
                             .when_some(on_sort, |header, on_sort| {
                                 let focus = header_focus[index].clone();
@@ -183,7 +183,7 @@ impl RenderOnce for Table {
                                     .track_focus(&focus.tab_stop(true))
                                     .relative()
                                     .pointer_cursor(&theme)
-                                    .hover(|style| style.text_color(theme.text))
+                                    .hover(|style| style.text_color(theme.foreground))
                                     .when(ring, |header| header.child(theme.focus_ring(px(4.0))))
                                     .on_click(move |_, window, cx| on_sort(index, window, cx))
                             })
@@ -195,7 +195,7 @@ impl RenderOnce for Table {
                                     } else {
                                         Icon::ChevronDown
                                     },
-                                    theme.text_secondary,
+                                    theme.muted_foreground,
                                 ))
                             })
                     })),
@@ -233,11 +233,9 @@ impl RenderOnce for Table {
                             .flex()
                             .h(ROW)
                             .items_center()
-                            .when(index > 0, |row| {
-                                row.border_t_1().border_color(theme.hairline)
-                            })
-                            .when(current, |row| row.bg(theme.selected))
-                            .when(!current, |row| row.hover(|style| style.bg(theme.fill)))
+                            .when(index > 0, |row| row.border_t_1().border_color(theme.border))
+                            .when(current, |row| row.bg(theme.accent))
+                            .when(!current, |row| row.hover(|style| style.bg(theme.secondary)))
                             .when(current && ring, |row| {
                                 row.child(
                                     div()
@@ -246,7 +244,7 @@ impl RenderOnce for Table {
                                         .top_0()
                                         .bottom_0()
                                         .w(px(2.0))
-                                        .bg(theme.focus),
+                                        .bg(theme.ring),
                                 )
                             })
                             .relative()
@@ -264,9 +262,9 @@ impl RenderOnce for Table {
                                         .aria_label(text.clone())
                                         .aria_column_index(column + 1)
                                         .text_color(if column == 0 {
-                                            theme.text
+                                            theme.foreground
                                         } else {
-                                            theme.text_secondary
+                                            theme.muted_foreground
                                         })
                                         .child(div().truncate().child(text))
                                 },

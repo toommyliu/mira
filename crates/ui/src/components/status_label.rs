@@ -33,9 +33,9 @@ impl RenderOnce for StatusLabel {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let text = match self.activity {
-            Activity::Idle | Activity::Stopped => theme.text_secondary,
-            Activity::Running | Activity::Waiting => theme.text,
-            Activity::Failed => theme.danger_text,
+            Activity::Idle | Activity::Stopped => theme.muted_foreground,
+            Activity::Running | Activity::Waiting => theme.foreground,
+            Activity::Failed => theme.destructive,
         };
         h_flex()
             .id(self.id.clone())
@@ -43,7 +43,7 @@ impl RenderOnce for StatusLabel {
             .aria_label(self.label.clone())
             .flex_none()
             .gap(px(7.0))
-            .text_body()
+            .text_body(theme.typography)
             .text_color(text)
             .child(StatusDot::new((self.id.clone(), "dot"), self.activity))
             .child(div().min_w_0().child(self.label))

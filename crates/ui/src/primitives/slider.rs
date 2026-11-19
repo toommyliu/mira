@@ -208,7 +208,7 @@ impl RenderOnce for Slider {
                                     .h_full()
                                     .w(relative(fraction))
                                     .rounded_full()
-                                    .bg(theme.text_secondary),
+                                    .bg(theme.muted_foreground),
                             ),
                     )
                     .child(
@@ -226,16 +226,12 @@ impl RenderOnce for Slider {
                                     .ml(px(-7.0))
                                     .size(px(14.0))
                                     .rounded_full()
-                                    .bg(theme.knob)
+                                    .bg(theme.background)
                                     .border_1()
-                                    .border_color(theme.border_strong)
-                                    .shadow(theme.raised())
+                                    .border_color(theme.input)
+                                    .shadow(theme.surface_edge())
                                     .when(ring, |thumb| {
-                                        thumb.child(theme.ring_around(
-                                            theme.focus,
-                                            px(7.0),
-                                            px(1.0),
-                                        ))
+                                        thumb.child(theme.ring_around(theme.ring, px(7.0), px(1.0)))
                                     }),
                             ),
                     ),
@@ -245,7 +241,7 @@ impl RenderOnce for Slider {
                     .flex_none()
                     .min_w(px(44.0))
                     .text_size(TEXT_SMALL)
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .font_features(tabular())
                     .child(label),
             )

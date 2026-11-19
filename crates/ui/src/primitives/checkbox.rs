@@ -101,24 +101,24 @@ impl RenderOnce for Checkbox {
                     .map(|mark| {
                         if filled {
                             mark.border_1()
-                                .border_color(theme.inverse)
-                                .bg(theme.inverse)
+                                .border_color(theme.primary)
+                                .bg(theme.primary)
                         } else {
                             mark.border_1()
                                 .border_color(theme.border)
-                                .bg(theme.fill)
+                                .bg(theme.secondary)
                                 .when(!self.disabled, |mark| {
                                     mark.group_hover("checkbox", |style| {
-                                        style.border_color(theme.border_strong)
+                                        style.border_color(theme.input)
                                     })
                                 })
                         }
                     })
                     .when(ring, |control| {
-                        control.child(theme.ring_around(theme.focus, px(4.0), px(1.0)))
+                        control.child(theme.ring_around(theme.ring, px(4.0), px(1.0)))
                     })
                     .when_some(mark, |container, mark| {
-                        container.child(small_icon(mark, theme.on_inverse))
+                        container.child(small_icon(mark, theme.primary_foreground))
                     }),
             )
             .child(caption(self.label, self.description, cx))

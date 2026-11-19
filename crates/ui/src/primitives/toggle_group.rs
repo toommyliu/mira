@@ -13,7 +13,7 @@ use gpui::{
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _,
     nav::{self, Axis, Step},
-    theme::{CONTROL_MD, LINE_BODY, Radii, TEXT_SMALL},
+    theme::{CONTROL_MD, LINE_BODY, TEXT_SMALL},
 };
 
 const INSET: Pixels = px(2.0);
@@ -178,7 +178,7 @@ impl RenderOnce for ToggleGroup {
             .h(CONTROL_MD)
             .p(INSET)
             .rounded(theme.radius.control)
-            .bg(theme.fill)
+            .bg(theme.secondary)
             .when(self.full_width, |group| group.w_full())
             .child(probe(layout.clone(), None))
             .when_some(indicator, |group, (left, width)| {
@@ -189,12 +189,11 @@ impl RenderOnce for ToggleGroup {
                         .bottom(INSET)
                         .left(px(left))
                         .w(px(width))
-                        .rounded(Radii::inside(theme.radius.control, INSET))
-                        .bg(theme.thumb)
-                        .shadow(theme.raised())
+                        .rounded(theme.radius.control)
+                        .bg(theme.muted_foreground)
+                        .shadow(theme.surface_edge())
                         .when(ring, |indicator| {
-                            indicator
-                                .child(theme.focus_ring(Radii::inside(theme.radius.control, INSET)))
+                            indicator.child(theme.focus_ring(theme.radius.control))
                         }),
                 )
             })
@@ -229,13 +228,13 @@ impl RenderOnce for ToggleGroup {
                     .line_height(LINE_BODY)
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(if checked {
-                        theme.text
+                        theme.foreground
                     } else {
-                        theme.text_secondary
+                        theme.muted_foreground
                     })
                     .pointer_cursor(&theme)
                     .when(!checked, |segment| {
-                        segment.hover(|style| style.text_color(theme.text))
+                        segment.hover(|style| style.text_color(theme.foreground))
                     })
                     .when_some(on_select, |segment, on_select| {
                         segment.on_click(move |_, window, cx| {

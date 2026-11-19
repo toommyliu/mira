@@ -68,7 +68,7 @@ impl RenderOnce for Switch {
             cx,
         );
         let theme = cx.theme().clone();
-        let track = mix(theme.border_strong, theme.accent, t);
+        let track = mix(theme.input, theme.primary, t);
         let on = self.on;
         let (row, ring) = labelled(
             self.id.clone(),
@@ -102,8 +102,8 @@ impl RenderOnce for Switch {
                             .ml(px(travel))
                             .size(px(THUMB))
                             .rounded_full()
-                            .bg(theme.knob)
-                            .shadow(theme.raised()),
+                            .bg(theme.background)
+                            .shadow(theme.surface_edge()),
                     ),
             )
             .when(self.show_label, |row| {

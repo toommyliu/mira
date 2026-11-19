@@ -47,8 +47,8 @@ pub(super) fn overlay(
         .map(|frame| frame.logic_ms.max(frame.render_ms))
         .fold(4.0, f64::max);
     let theme = Theme::dark();
-    let (logic_color, render_color) = (theme.accent, theme.text);
-    let (column_line, row_line, axis) = (theme.border_strong, theme.border, theme.text_secondary);
+    let (logic_color, render_color) = (theme.primary, theme.foreground);
+    let (column_line, row_line, axis) = (theme.input, theme.border, theme.muted_foreground);
     let panel = div()
         .id("player-stats")
         .role(gpui::Role::Group)
@@ -59,8 +59,8 @@ pub(super) fn overlay(
         .cursor_move()
         .p_2()
         .w(px(GRAPH_WIDTH + 16.0))
-        .bg(theme.overlay.opacity(0.75))
-        .text_color(theme.text)
+        .bg(theme.popover.opacity(0.75))
+        .text_color(theme.foreground)
         .text_size(TEXT_CAPTION)
         .line_height(gpui::relative(1.3))
         .font_family(SYSTEM_MONO)
@@ -108,7 +108,7 @@ pub(super) fn overlay(
                         }
                     },
                 ).size_full())
-                .child(div().absolute().top_0().left_1().text_size(px(9.0)).text_color(theme.text_secondary).child(format!("{scale_ms:.0} ms"))),
+                .child(div().absolute().top_0().left_1().text_size(px(9.0)).text_color(theme.muted_foreground).child(format!("{scale_ms:.0} ms"))),
         )
         .child(canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::BlockMouse),
