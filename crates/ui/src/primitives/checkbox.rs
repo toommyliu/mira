@@ -2,18 +2,15 @@ use std::rc::Rc;
 
 use gpui::{
     App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Window, div,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
     prelude::FluentBuilder as _, px,
 };
 
 use super::{
-    Icon,
-    icon::small_icon,
+    Icon, icon,
     label::{ToggleHandler, caption, labelled},
 };
 use crate::ActiveTheme as _;
-
-const BOX: f32 = 14.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CheckedState {
@@ -48,6 +45,31 @@ impl Checkbox {
         }
     }
 
+    pub fn indicator(value: CheckedState, theme: &crate::Theme) -> gpui::Div {
+        let checked = value != CheckedState::Unchecked;
+        let glyph = match value {
+            CheckedState::Unchecked => None,
+            CheckedState::Checked => Some(Icon::Check),
+            CheckedState::Indeterminate => Some(Icon::Minus),
+        };
+        crate::h_flex()
+            .relative()
+            .flex_none()
+            .justify_center()
+            .size(theme.layout.check)
+            .rounded(theme.radius.tag)
+            .border_1()
+            .when(!checked, |mark| mark.border_color(theme.input))
+            .bg(if checked {
+                theme.primary
+            } else {
+                theme.outline_fill()
+            })
+            .when_some(glyph, |mark, glyph| {
+                mark.child(icon(glyph, theme.primary_foreground).size(theme.layout.check_mark))
+            })
+    }
+
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
         self
@@ -67,12 +89,8 @@ impl Checkbox {
 impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
         let filled = self.state != CheckedState::Unchecked;
-        let mark = match self.state {
-            CheckedState::Unchecked => None,
-            CheckedState::Checked => Some(Icon::Check),
-            CheckedState::Indeterminate => Some(Icon::Minus),
-        };
         let next = self.state != CheckedState::Checked;
         let (row, ring) = labelled(
             self.id.clone(),
@@ -90,35 +108,35 @@ impl RenderOnce for Checkbox {
                 CheckedState::Indeterminate => Toggled::Mixed,
             })
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .mt(px(2.0))
-                    .size(px(BOX))
-                    .rounded(theme.radius.tag)
-                    .map(|mark| {
-                        if filled {
-                            mark.border_1()
-                                .border_color(theme.primary)
-                                .bg(theme.primary)
-                        } else {
-                            mark.border_1()
-                                .border_color(theme.border)
-                                .bg(theme.secondary)
-                                .when(!self.disabled, |mark| {
-                                    mark.group_hover("checkbox", |style| {
-                                        style.border_color(theme.input)
-                                    })
-                                })
-                        }
+                Self::indicator(self.state, &theme)
+                    .id("box")
+                    .mt((theme.typography.body_line - layout.check) / 2.0)
+                    .when(!self.disabled && !filled, |mark| {
+                        mark.group_hover("checkbox", |style| style.border_color(theme.ring))
+                    })
+                    .when(!self.disabled, |mark| {
+                        mark.group_active("checkbox", |style| {
+                            style.bg(theme.pressed(
+                                theme.background,
+                                if filled {
+                                    theme.primary
+                                } else {
+                                    theme.input_fill()
+                                },
+                                if filled {
+                                    theme.primary_foreground
+                                } else {
+                                    theme.foreground
+                                },
+                            ))
+                        })
                     })
                     .when(ring, |control| {
-                        control.child(theme.ring_around(theme.ring, px(4.0), px(1.0)))
-                    })
-                    .when_some(mark, |container, mark| {
-                        container.child(small_icon(mark, theme.primary_foreground))
+                        control.border_color(theme.ring).child(theme.ring_around(
+                            theme.ring,
+                            theme.radius.tag,
+                            px(1.0),
+                        ))
                     }),
             )
             .child(caption(self.label, self.description, cx))

@@ -7,10 +7,7 @@ use gpui::{
     px, relative,
 };
 
-use crate::{
-    ActiveTheme as _, PointerCursor as _, nav,
-    theme::{TEXT_SMALL, tabular},
-};
+use crate::{ActiveTheme as _, PointerCursor as _, nav, theme::tabular};
 
 type ValueHandler<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
 
@@ -66,6 +63,8 @@ struct Drag {
 
 impl RenderOnce for Slider {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let drag = window
             .use_keyed_state((self.id.clone(), "drag"), cx, |_, _| {
@@ -106,7 +105,7 @@ impl RenderOnce for Slider {
         div()
             .flex()
             .items_center()
-            .gap(px(12.0))
+            .gap(layout.space(3.0))
             .w_full()
             .child(
                 div()
@@ -156,7 +155,7 @@ impl RenderOnce for Slider {
                         }
                     })
                     .flex_1()
-                    .h(px(20.0))
+                    .h(layout.control_xs)
                     .relative()
                     .pointer_cursor(&theme)
                     .child(
@@ -189,26 +188,26 @@ impl RenderOnce for Slider {
                             },
                         )
                         .absolute()
-                        .top(px(8.0))
-                        .left(px(7.0))
-                        .right(px(7.0))
-                        .h(px(4.0)),
+                        .top((layout.control_xs - layout.track) / 2.0)
+                        .left(layout.thumb / 2.0)
+                        .right(layout.thumb / 2.0)
+                        .h(layout.track),
                     )
                     .child(
                         div()
                             .absolute()
-                            .top(px(8.0))
-                            .left(px(7.0))
-                            .right(px(7.0))
-                            .h(px(4.0))
+                            .top((layout.control_xs - layout.track) / 2.0)
+                            .left(layout.thumb / 2.0)
+                            .right(layout.thumb / 2.0)
+                            .h(layout.track)
                             .rounded_full()
-                            .bg(theme.border)
+                            .bg(theme.muted)
                             .child(
                                 div()
                                     .h_full()
                                     .w(relative(fraction))
                                     .rounded_full()
-                                    .bg(theme.muted_foreground),
+                                    .bg(theme.primary),
                             ),
                     )
                     .child(
@@ -216,22 +215,25 @@ impl RenderOnce for Slider {
                             .absolute()
                             .top_0()
                             .bottom_0()
-                            .left(px(7.0))
-                            .right(px(7.0))
+                            .left(layout.thumb / 2.0)
+                            .right(layout.thumb / 2.0)
                             .child(
                                 div()
                                     .absolute()
-                                    .top(px(3.0))
+                                    .top((layout.control_xs - layout.thumb) / 2.0)
                                     .left(relative(fraction))
-                                    .ml(px(-7.0))
-                                    .size(px(14.0))
+                                    .ml(-layout.thumb / 2.0)
+                                    .size(layout.thumb)
                                     .rounded_full()
-                                    .bg(theme.background)
+                                    .bg(gpui::white())
                                     .border_1()
-                                    .border_color(theme.input)
-                                    .shadow(theme.surface_edge())
+                                    .border_color(theme.ring)
                                     .when(ring, |thumb| {
-                                        thumb.child(theme.ring_around(theme.ring, px(7.0), px(1.0)))
+                                        thumb.child(theme.ring_around(
+                                            theme.ring,
+                                            layout.thumb / 2.0,
+                                            px(1.0),
+                                        ))
                                     }),
                             ),
                     ),
@@ -240,7 +242,7 @@ impl RenderOnce for Slider {
                 div()
                     .flex_none()
                     .min_w(px(44.0))
-                    .text_size(TEXT_SMALL)
+                    .text_size(typography.secondary)
                     .text_color(theme.muted_foreground)
                     .font_features(tabular())
                     .child(label),

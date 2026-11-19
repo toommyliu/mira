@@ -12,21 +12,20 @@ use mira_ui::{
         button::{Joined, Size, Variant},
     },
     snapshot,
-    theme::{TEXT_BODY, UI_FONT},
+    theme::UI_FONT,
 };
 
-struct Scene(
-    fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
-    gpui::FocusHandle,
-);
+type PaintScene = Box<dyn Fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement>;
+
+struct Scene(PaintScene, gpui::FocusHandle);
 
 impl Scene {
     fn open(
-        render: fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement,
+        render: impl Fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement + 'static,
         window: &mut Window,
         cx: &mut gpui::App,
     ) -> gpui::Entity<Scene> {
-        let scene = cx.new(|cx| Scene(render, cx.focus_handle()));
+        let scene = cx.new(|cx| Scene(Box::new(render), cx.focus_handle()));
         let focus = scene.read(cx).1.clone();
         window.focus(&focus, cx);
         scene
@@ -36,15 +35,17 @@ impl Scene {
 impl Render for Scene {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         div()
             .size_full()
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.1)
-            .p(px(16.0))
+            .p(layout.space(4.0))
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(UI_FONT)
-            .text_size(TEXT_BODY)
+            .text_size(typography.body)
             .child((self.0)(window, cx))
     }
 }
@@ -77,6 +78,68 @@ fn scene_after_keys(
     ) {
         assert!(path.exists(), "{} was not written", path.display());
     }
+}
+
+#[test]
+fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
+    use gpui::{MouseMoveEvent, PlatformInput, point};
+
+    mira_ui::snapshot_with(
+        "checkbox-hover",
+        size(px(160.0), px(104.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    div()
+                        .child(
+                            Checkbox::new("rewards", "Rewards", CheckedState::Checked)
+                                .on_toggle(|_, _, _| {}),
+                        )
+                        .child(Checkbox::new("mixed", "Mixed", CheckedState::Indeterminate))
+                        .child(Checkbox::new("off", "Unchecked", CheckedState::Unchecked))
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            cx.update_window(owner, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(24.0), px(30.0)),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.refresh();
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let image = cx.capture_screenshot(owner).unwrap();
+            let scale = image.width() / 160;
+            let pixel = |x, y| image.get_pixel(x * scale, y * scale);
+            let fill = pixel(19, 27);
+            assert_ne!(fill, pixel(12, 27));
+            assert_eq!(pixel(16, 27), fill, "checked edge and fill");
+            let background = f32::from(pixel(12, 27)[0]);
+            let contrast = f32::from(fill[0]) - background;
+            let radius = 4;
+            let mut cutout = 0.0;
+            for y in 0..radius * scale {
+                for x in 0..radius * scale {
+                    let ink = image.get_pixel(16 * scale + x, 22 * scale + y)[0];
+                    cutout += 1.0 - (f32::from(ink) - background) / contrast;
+                }
+            }
+            let expected = (radius * radius) as f32 * (1.0 - std::f32::consts::FRAC_PI_4);
+            let area = cutout / (scale * scale) as f32;
+            assert!(
+                (area - expected).abs() < 0.3,
+                "4 px rounded corner, got {area} px²"
+            );
+        },
+    );
 }
 
 #[test]
@@ -184,6 +247,64 @@ fn snapshot_controls() {
             )
             .into_any_element()
     });
+}
+
+#[test]
+fn snapshot_button_pointer_states() {
+    use gpui::{MouseButton, MouseDownEvent, MouseMoveEvent, PlatformInput, point};
+
+    for (name, held) in [("button-hover", false), ("button-held", true)] {
+        let paths = mira_ui::snapshot_with(
+            name,
+            size(px(400.0), px(100.0)),
+            |window, cx| {
+                Scene::open(
+                    |_, cx| {
+                        mira_ui::h_flex()
+                            .gap(cx.theme().space(2.0))
+                            .child(Button::new("edit", "Edit").tooltip("Edit profile"))
+                            .child(Button::new("selected", "Selected").pressed(true))
+                            .child(Button::new("save", "Save").variant(Variant::Primary))
+                            .child(Button::new("disabled", "Disabled").disabled(true))
+                            .into_any_element()
+                    },
+                    window,
+                    cx,
+                )
+            },
+            |cx, owner| {
+                let position = point(px(32.0), px(29.0));
+                cx.update_window(owner, |_, window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::MouseMove(MouseMoveEvent {
+                            position,
+                            pressed_button: None,
+                            modifiers: Default::default(),
+                        }),
+                        cx,
+                    );
+                })
+                .expect("hover the first button");
+                cx.run_until_parked();
+                if held {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                position,
+                                button: MouseButton::Left,
+                                click_count: 1,
+                                first_mouse: false,
+                                modifiers: Default::default(),
+                            }),
+                            cx,
+                        );
+                    })
+                    .expect("press the first button");
+                }
+            },
+        );
+        assert!(paths.iter().all(|path| path.exists()));
+    }
 }
 
 #[test]
@@ -598,6 +719,8 @@ struct Form {
 
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         use mira_ui::{
             components::{Empty, FieldRow, Group},
             primitives::Field,
@@ -605,19 +728,19 @@ impl Render for Form {
         let theme = cx.theme().clone();
         div()
             .size_full()
-            .p(px(16.0))
+            .p(layout.space(4.0))
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(UI_FONT)
-            .text_size(TEXT_BODY)
+            .text_size(typography.body)
             .flex()
-            .gap(px(16.0))
+            .gap(layout.space(4.0))
             .child(
                 div()
                     .w(px(300.0))
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
+                    .gap(layout.space(3.0))
                     .child(
                         Group::new()
                             .title("Gameplay")

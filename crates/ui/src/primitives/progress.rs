@@ -1,13 +1,10 @@
 use gpui::{
     App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px, relative,
+    prelude::FluentBuilder as _, relative,
 };
 
-use crate::{
-    ActiveTheme as _, motion,
-    theme::{LINE_SMALL, TEXT_SMALL, tabular},
-};
+use crate::{ActiveTheme as _, motion, theme::tabular};
 
 #[derive(IntoElement)]
 pub struct Progress {
@@ -39,6 +36,8 @@ impl Progress {
 
 impl RenderOnce for Progress {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let shown = self.value.map(|value| {
             motion::travel((self.id.clone(), "fill"), value.clamp(0.0, 1.0), window, cx)
         });
@@ -47,10 +46,10 @@ impl RenderOnce for Progress {
         let track = div()
             .relative()
             .w_full()
-            .h(px(4.0))
+            .h(layout.track)
             .rounded_full()
             .overflow_hidden()
-            .bg(theme.border);
+            .bg(theme.muted);
         div()
             .id(self.id.clone())
             .role(Role::ProgressIndicator)
@@ -63,14 +62,14 @@ impl RenderOnce for Progress {
             .when_some(self.detail.clone(), |bar, detail| bar.aria_value(detail))
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(layout.space(1.5))
             .w_full()
             .child(
                 div()
                     .flex()
                     .justify_between()
-                    .text_size(TEXT_SMALL)
-                    .line_height(LINE_SMALL)
+                    .text_size(typography.secondary)
+                    .line_height(typography.secondary_line)
                     .child(div().text_color(theme.foreground).child(self.label))
                     .when_some(self.detail, |row, detail| {
                         row.child(

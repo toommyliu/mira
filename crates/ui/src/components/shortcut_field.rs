@@ -7,10 +7,7 @@ use gpui::{
 };
 
 use crate::primitives::Kbd;
-use crate::{
-    ActiveTheme as _, PointerCursor as _, nav,
-    theme::{CONTROL_MD, TEXT_SMALL},
-};
+use crate::{ActiveTheme as _, PointerCursor as _, nav};
 
 fn pressed(keystroke: &Keystroke) -> (bool, String) {
     let pressed = crate::keyboard::pressed(keystroke);
@@ -189,6 +186,8 @@ impl ShortcutField {
 
 impl RenderOnce for ShortcutField {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let focused = focus.is_focused(window);
         let theme = cx.theme().clone();
@@ -225,19 +224,19 @@ impl RenderOnce for ShortcutField {
             .flex()
             .items_center()
             .justify_between()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .w(px(180.0))
-            .h(CONTROL_MD)
-            .px(px(8.0))
+            .h(layout.control)
+            .px(layout.space(2.0))
             .rounded(theme.radius.control)
-            .bg(theme.secondary)
+            .bg(theme.input_fill())
             .border_1()
-            .border_color(if recording { theme.ring } else { theme.border })
+            .border_color(if focused { theme.ring } else { theme.input })
             .when(focused, |field| {
                 field.child(theme.ring_around(theme.ring, theme.radius.control, px(1.0)))
             })
             .pointer_cursor(&theme)
-            .text_size(TEXT_SMALL)
+            .text_size(typography.secondary)
             .child(match (&self.value, recording) {
                 (_, true) => div()
                     .text_color(theme.muted_foreground)
@@ -254,7 +253,7 @@ impl RenderOnce for ShortcutField {
             .when(recording, |field| {
                 field.child(
                     div()
-                        .text_size(TEXT_SMALL)
+                        .text_size(typography.secondary)
                         .text_color(theme.muted_foreground)
                         .child("esc"),
                 )

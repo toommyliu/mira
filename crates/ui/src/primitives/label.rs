@@ -3,13 +3,10 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 
-use crate::{
-    ActiveTheme as _, PointerCursor as _, nav,
-    theme::{DISABLED_OPACITY, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
-};
+use crate::{ActiveTheme as _, PointerCursor as _, nav, theme::DISABLED_OPACITY};
 
 pub(crate) type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 
@@ -21,6 +18,8 @@ pub(crate) fn labelled(
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Stateful<gpui::Div>, bool) {
+    let layout = cx.theme().layout;
+    let typography = cx.theme().typography;
     let focus = nav::focus_handle((id.clone(), "focus"), window, cx);
     let ring = !disabled && nav::keyboard_focused(&focus, window, cx);
     let theme = cx.theme();
@@ -31,15 +30,15 @@ pub(crate) fn labelled(
             row.aria_description(description)
         })
         .when(!disabled, |row| {
-            row.track_focus(&focus.tab_stop(true))
-                .pointer_cursor(&theme)
+            row.track_focus(&focus.tab_stop(true)).pointer_cursor(theme)
         })
         .flex()
         .items_start()
-        .gap(px(8.0))
-        .py(px(3.0))
-        .text_size(TEXT_BODY)
-        .line_height(LINE_BODY)
+        .gap(layout.space(2.0))
+        .min_h(layout.control)
+        .py(theme.space(1.0))
+        .text_size(typography.body)
+        .line_height(typography.body_line)
         .text_color(theme.foreground)
         .when(disabled, |row| row.opacity(DISABLED_OPACITY));
     (row, ring)
@@ -61,17 +60,22 @@ pub(crate) fn caption_with(
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let layout = theme.layout;
+    let typography = theme.typography;
     let text = div()
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .gap(theme.space(0.5))
         .child(label)
         .when_some(description, |column, description| {
             column.child(
                 div()
-                    .text_size(TEXT_SMALL)
-                    .line_height(LINE_SMALL)
+                    .font_weight(gpui::FontWeight::NORMAL)
+                    .text_size(typography.secondary)
+                    .line_height(typography.secondary_line)
                     .text_color(if invalid {
                         theme.destructive
                     } else {
@@ -85,7 +89,7 @@ pub(crate) fn caption_with(
         .flex_1()
         .min_w_0()
         .items_center()
-        .gap(px(8.0))
+        .gap(layout.space(2.0))
         .child(text)
         .when_some(accessory, |row, accessory| {
             row.child(

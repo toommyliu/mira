@@ -1,45 +1,23 @@
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement,
-    Pixels, Refineable as _, RenderOnce, Role, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, Pixels, Refineable as _, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
 
 use super::{Icon, Spinner, icon, tooltip};
-use crate::{
-    ActiveTheme as _, PointerCursor as _, h_flex, nav,
-    theme::{
-        CONTROL_MD, CONTROL_SM, CONTROL_XS, DISABLED_OPACITY, LINE_BODY, TEXT_BODY, TEXT_SMALL,
-    },
-};
+use crate::{ActiveTheme as _, PointerCursor as _, h_flex, nav, theme::DISABLED_OPACITY};
 
 pub type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 pub(crate) const FACE_GROUP: &str = "face";
 
-const MIN_PRESS: Duration = Duration::from_millis(120);
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Joined {
     Next,
     Previous,
-}
-
-pub(crate) struct Face {
-    pub radius: Pixels,
-    pub joined: Option<Joined>,
-    pub divider: Option<Hsla>,
-    pub bg: Hsla,
-    pub border: Option<Hsla>,
-    pub states: Option<(Hsla, Hsla)>,
-    pub edge: Vec<BoxShadow>,
 }
 
 fn corners(element: Div, radius: Pixels, joined: Option<Joined>) -> Div {
@@ -48,58 +26,6 @@ fn corners(element: Div, radius: Pixels, joined: Option<Joined>) -> Div {
         Some(Joined::Next) => element.rounded_r(px(0.0)),
         Some(Joined::Previous) => element.rounded_l(px(0.0)),
         None => element,
-    }
-}
-
-impl Face {
-    pub fn render(
-        self,
-        id: impl Into<ElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Stateful<Div> {
-        let pressed_at = window
-            .use_keyed_state(id, cx, |_, _| Rc::new(Cell::new(None::<Instant>)))
-            .read(cx)
-            .clone();
-        let lingering = pressed_at.get().is_some_and(|at| at.elapsed() < MIN_PRESS);
-        if lingering {
-            window.request_animation_frame();
-        }
-        let pressed =
-            move |style: StyleRefinement, active: Hsla| style.bg(active).shadow(Vec::new());
-        let face = corners(div(), self.radius, self.joined)
-            .id("face")
-            .absolute()
-            .inset_0()
-            .bg(self.bg)
-            .when_some(self.border, |face, border| {
-                face.border_1().border_color(border)
-            })
-            .when_some(self.divider, |face, divider| {
-                face.border_l_1().border_color(divider)
-            })
-            .shadow(self.edge);
-        match self.states {
-            None => face,
-            Some((hover, active)) => {
-                let face = face
-                    .group_hover(FACE_GROUP, move |style| style.bg(hover))
-                    .group_active(FACE_GROUP, move |style| pressed(style, active))
-                    .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                        pressed_at.set(Some(Instant::now()));
-                        window.refresh();
-                    });
-                if lingering {
-                    let mut face = face;
-                    let held = pressed(face.style().clone(), active);
-                    *face.style() = held;
-                    face
-                } else {
-                    face
-                }
-            }
-        }
     }
 }
 
@@ -119,26 +45,28 @@ pub enum Size {
     Small,
     #[default]
     Medium,
+    Large,
 }
 
 impl Size {
-    fn height(self) -> Pixels {
+    fn height(self, layout: crate::theme::Layout) -> Pixels {
         match self {
-            Size::XSmall => CONTROL_XS,
-            Size::Small => CONTROL_SM,
-            Size::Medium => CONTROL_MD,
+            Size::XSmall => layout.control_xs,
+            Size::Small => layout.control_sm,
+            Size::Medium => layout.control,
+            Size::Large => layout.control_lg,
         }
     }
 
-    fn padding(self) -> Pixels {
-        match self {
-            Size::XSmall => px(6.0),
-            Size::Small => px(8.0),
-            Size::Medium => px(10.0),
-        }
+    fn icon_size(self) -> Pixels {
+        px(match self {
+            Self::XSmall => 10.0,
+            Self::Small => 12.0,
+            Self::Medium => 14.0,
+            Self::Large => 16.0,
+        })
     }
 }
-
 pub(crate) type PressHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 pub(crate) type KeyHandler = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
 
@@ -314,6 +242,7 @@ impl Styled for Button {
 
 impl RenderOnce for Button {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let typography = cx.theme().typography;
         let focus = match self.focus.take() {
             Some(focus) => focus,
             None => nav::focus_handle((self.id.clone(), "focus"), window, cx),
@@ -322,86 +251,110 @@ impl RenderOnce for Button {
         let theme = cx.theme().clone();
         let inert = self.disabled || self.busy;
         let lit = self.selected == Some(true) || self.expanded == Some(true);
-        let (bg, hover, active, fg, border) = match self.variant {
-            Variant::Primary => (
-                theme.primary,
-                theme.primary.opacity(0.8),
-                theme.primary.opacity(0.8),
-                theme.primary_foreground,
-                None,
-            ),
-            Variant::Secondary => (
-                if lit { theme.muted } else { theme.secondary },
-                theme.muted,
-                theme.muted,
+        let clear = gpui::transparent_black();
+        let (bg, hover, fg, border) = if self.role == Role::ComboBox {
+            (
+                theme.input_fill(),
+                theme.input.opacity(0.5),
                 theme.foreground,
-                Some(theme.border),
-            ),
-            Variant::Outline => (
-                if lit {
-                    theme.muted
-                } else {
-                    gpui::transparent_black()
-                },
-                theme.muted,
-                theme.muted,
-                theme.foreground,
-                Some(theme.border),
-            ),
-            Variant::Ghost => (
-                if lit {
-                    theme.accent
-                } else {
-                    gpui::transparent_black()
-                },
-                theme.muted,
-                theme.muted,
-                if lit {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                },
-                None,
-            ),
-            Variant::Danger => (
-                theme.destructive,
-                theme.destructive.opacity(0.2),
-                theme.destructive.opacity(0.2),
-                theme.destructive,
-                None,
-            ),
-        };
-        let divider = fg.opacity(0.2);
-        let fg = match (self.disabled, self.joined) {
-            (false, _) => fg,
-            (true, None) => theme.muted_foreground.opacity(DISABLED_OPACITY),
-            (true, Some(_)) => fg.opacity(DISABLED_OPACITY),
-        };
-        let bg = if self.disabled
-            && self.joined.is_none()
-            && matches!(self.variant, Variant::Primary | Variant::Danger)
-        {
-            theme.secondary
+                theme.input,
+            )
         } else {
-            bg
+            match self.variant {
+                Variant::Primary => (
+                    theme.primary,
+                    theme.primary.opacity(0.8),
+                    theme.primary_foreground,
+                    clear,
+                ),
+                Variant::Secondary => (
+                    theme.secondary,
+                    crate::theme::perceptual_mix(theme.secondary, theme.foreground, 0.05),
+                    theme.secondary_foreground,
+                    clear,
+                ),
+                Variant::Outline => (
+                    if lit {
+                        theme.muted
+                    } else {
+                        theme.outline_fill()
+                    },
+                    theme.input.opacity(0.5),
+                    theme.foreground,
+                    theme.border,
+                ),
+                Variant::Ghost => (
+                    if lit { theme.muted } else { clear },
+                    theme.ghost_hover(),
+                    theme.foreground,
+                    clear,
+                ),
+                Variant::Danger => (
+                    theme.destructive_fill(),
+                    theme
+                        .destructive
+                        .opacity(if theme.dark_mode { 0.3 } else { 0.2 }),
+                    theme.destructive,
+                    clear,
+                ),
+            }
         };
-        let height = self.size.height();
+        let active = theme.pressed(theme.background, hover, fg);
+        let radius = if self.size == Size::XSmall {
+            theme.radius.small
+        } else {
+            theme.radius.control
+        };
+        let destructive = self.variant == Variant::Danger;
+        let focus_border = if destructive {
+            theme.destructive.opacity(0.4)
+        } else {
+            theme.ring
+        };
+        let halo = if destructive {
+            theme.invalid_halo()
+        } else {
+            theme.ring.opacity(0.3)
+        };
+        let nudge = !inert && self.expanded.is_none() && !cx.reduce_motion();
+        let has_start = self.start.is_some();
+        let has_end = self.end.is_some();
+        let height = self.size.height(theme.layout);
         let icon_only = self.icon.is_some() && self.children.is_empty();
         let tip = self.tooltip.clone();
         let describe = tip.clone().filter(|tip| *tip != self.label);
         let content = h_flex()
+            .id("content")
             .flex_1()
             .min_w_0()
-            .gap(px(6.0))
+            .gap(theme.space(if self.role == Role::ComboBox {
+                1.5
+            } else {
+                1.0
+            }))
             .justify_center()
+            .relative()
+            .when(nudge, |content| {
+                content.group_active(FACE_GROUP, |style| style.top(px(1.0)))
+            })
             .when(self.busy, |content| content.opacity(0.0))
             .when_some(self.start, |content, start| {
                 content.child(h_flex().flex_none().child(start))
             })
             .map(|content| match (self.icon, self.children.is_empty()) {
-                (Some(glyph), true) => content.child(icon(glyph, fg)),
+                (Some(glyph), true) => content.child(icon(glyph, fg).size(self.size.icon_size())),
                 (_, true) => content.child(div().truncate().child(self.label.clone())),
                 (_, false) => content.children(self.children),
+            })
+            .when(self.selected.is_some() && self.icon.is_none(), |content| {
+                content.child(
+                    div()
+                        .flex_none()
+                        .w(self.size.icon_size())
+                        .when(self.selected == Some(true), |mark| {
+                            mark.child(icon(Icon::Check, fg).size(self.size.icon_size()))
+                        }),
+                )
             })
             .when_some(self.end, |content, end| {
                 content.child(h_flex().flex_none().child(end))
@@ -429,44 +382,56 @@ impl RenderOnce for Button {
             .relative()
             .flex_none()
             .justify_center()
-            .when(
-                self.joined == Some(Joined::Previous) && border.is_some(),
-                |button| button.ml(px(-1.0)),
-            )
+            .when(self.joined == Some(Joined::Previous), |button| {
+                button.ml(px(-1.0))
+            })
             .h(height)
             .map(|button| {
                 if icon_only {
                     button.w(height)
                 } else {
-                    button.px(self.size.padding())
+                    let padding = if self.size == Size::Large {
+                        theme.space(2.5)
+                    } else {
+                        theme.space(2.0)
+                    };
+                    let icon_padding = padding - theme.space(0.5);
+                    button
+                        .pl(if has_start { icon_padding } else { padding })
+                        .pr(if has_end { icon_padding } else { padding })
                 }
             })
             .text_size(match self.size {
-                Size::XSmall | Size::Small => TEXT_SMALL,
-                Size::Medium => TEXT_BODY,
+                Size::XSmall => typography.secondary,
+                _ => typography.body,
             })
-            .line_height(LINE_BODY)
+            .line_height(if self.size == Size::XSmall {
+                typography.secondary_line
+            } else {
+                typography.body_line
+            })
             .font_weight(FontWeight::MEDIUM)
             .text_color(fg)
             .group(FACE_GROUP)
+            .when(self.disabled, |button| button.opacity(DISABLED_OPACITY))
             .child(
-                Face {
-                    radius: theme.radius.control,
-                    joined: self.joined,
-                    divider: (self.joined == Some(Joined::Previous) && border.is_none())
-                        .then_some(divider),
-                    bg,
-                    border: border.filter(|_| !self.disabled || self.joined.is_some()),
-                    states: (!inert).then_some((hover, active)),
-                    edge: if matches!(self.variant, Variant::Ghost | Variant::Outline)
-                        || (self.disabled && self.joined.is_none())
-                    {
-                        Vec::new()
-                    } else {
-                        theme.surface_edge()
-                    },
-                }
-                .render((self.id.clone(), "face"), window, cx),
+                corners(div(), radius, self.joined)
+                    .id("face")
+                    .absolute()
+                    .inset_0()
+                    .bg(bg)
+                    .border_1()
+                    .border_color(if ring { focus_border } else { border })
+                    .when(!inert, |face| {
+                        face.group_hover(FACE_GROUP, |style| style.bg(hover))
+                            .group_active(FACE_GROUP, |style| {
+                                if nudge {
+                                    style.bg(active).top(px(1.0)).bottom(px(-1.0))
+                                } else {
+                                    style.bg(active)
+                                }
+                            })
+                    }),
             )
             .when(!inert, |button| button.pointer_cursor(&theme))
             .when_some(self.on_click.filter(|_| !inert), |button, on_click| {
@@ -505,15 +470,11 @@ impl RenderOnce for Button {
                 )
             })
             .when(ring, |button| {
-                button.child(match self.joined {
-                    None => theme.focus_ring(theme.radius.control),
-                    Some(joined) => corners(div(), theme.radius.control, Some(joined))
-                        .absolute()
-                        .inset_0()
-                        .border_2()
-                        .border_color(theme.ring)
-                        .child(nav::reveal_probe()),
-                })
+                button.child(corners(
+                    theme.halo(halo, radius, Pixels::ZERO, px(2.0)),
+                    radius + px(2.0),
+                    self.joined,
+                ))
             });
         button.style().refine(&self.style);
         match tip {

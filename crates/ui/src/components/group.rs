@@ -44,13 +44,15 @@ impl ParentElement for Group {
 impl RenderOnce for Group {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         v_flex()
-            .gap(px(6.0))
+            .gap(theme.space(2.0))
             .when_some(self.title, |group, title| {
                 group.child(
                     div()
-                        .px(px(12.0))
-                        .text_caption(theme.typography)
+                        .px(layout.space(3.0))
+                        .text_caption(typography)
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.muted_foreground)
                         .child(title),
@@ -60,8 +62,7 @@ impl RenderOnce for Group {
                 v_flex()
                     .rounded(theme.radius.panel)
                     .bg(theme.card)
-                    .border_1()
-                    .border_color(theme.border)
+                    .shadow(theme.surface_edge())
                     .children(self.children.into_iter().enumerate().map(|(index, row)| {
                         div()
                             .when(index > 0, |row| row.border_t_1().border_color(theme.border))
@@ -102,20 +103,28 @@ impl ParentElement for FieldRow {
 impl RenderOnce for FieldRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
         h_flex()
             .justify_between()
-            .gap(px(16.0))
-            .min_h(px(34.0))
-            .py(px(6.0))
-            .px(px(12.0))
-            .text_body(theme.typography)
+            .flex_wrap()
+            .gap(theme.space(2.0))
+            .min_h(theme.layout.toolbar)
+            .py(layout.space(1.5))
+            .px(layout.space(3.0))
+            .text_body(typography)
             .text_color(theme.foreground)
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(120.0))
                     .child(caption(self.label, self.description, cx)),
             )
-            .child(h_flex().flex_none().gap(px(6.0)).children(self.children))
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap(theme.space(2.0))
+                    .children(self.children),
+            )
     }
 }
