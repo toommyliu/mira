@@ -12,7 +12,6 @@ use mira_ui::{
         button::{Size, Variant},
         icon,
     },
-    theme::TEXT_BODY,
 };
 use tokio::sync::watch;
 
@@ -163,7 +162,6 @@ fn tab_menu(
             Button::new("tab-menu-trigger", label)
                 .variant(Variant::Ghost)
                 .size(Size::Small)
-                .text_size(TEXT_BODY)
                 .flex_shrink(1.0)
                 .min_w_0()
                 .when(pinned, |trigger| {
@@ -286,7 +284,6 @@ mod tests {
                 .bg(theme.background)
                 .text_color(theme.foreground)
                 .font_family(mira_ui::theme::UI_FONT)
-                .text_size(TEXT_BODY)
                 .child(title_bar(tool, Some(menu), window, cx))
         }
     }

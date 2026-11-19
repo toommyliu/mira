@@ -1,3 +1,4 @@
+use mira_ui::StyledExt as _;
 use std::{
     collections::{HashMap, HashSet},
     fs, io, iter,
@@ -17,11 +18,11 @@ use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone, h_flex,
     primitives::{
         Alert, Align, Badge, Button, Checkbox, CheckedState, Dot, DropdownMenu, Icon, Input,
-        InputEvent, List, ListItem, MenuItem, Popover, Scrollbar, Select, Switch, Toaster,
-        ToggleGroup, ToggleItem, VirtualList,
+        InputEvent, List, ListItem, MenuItem, Popover, Scrollbar, Select, Switch, Tab, Tabs,
+        Toaster, VirtualList,
         button::{Size, Variant},
     },
-    theme::{LINE_BODY, LINE_SMALL, RING_ROOM, ROW, TEXT_BODY, TEXT_SMALL},
+    theme::RING_ROOM,
     v_flex,
 };
 
@@ -29,7 +30,7 @@ use super::{
     Changed, Client, RuffleView,
     account::file_name,
     client::CloseSession,
-    form::{LABEL_WIDTH, note, row, row_label, switch_row},
+    form::{note, row, row_label, switch_row},
     package_dialogs::{PackageDialogs, PackageEvent},
     queue::{self, EntryId, Queue},
     script::failure,
@@ -63,8 +64,6 @@ const HEIGHT: f32 = 500.0;
 const MIN_WIDTH: f32 = 600.0;
 const MIN_HEIGHT: f32 = 360.0;
 const PADDING: Pixels = px(16.0);
-const GAP: Pixels = px(20.0);
-const LIST_WIDTH: Pixels = px(290.0);
 const SEARCH_WIDTH: Pixels = px(260.0);
 const PANES_WIDTH: Pixels = px(180.0);
 const RUN_WIDTH: Pixels = px(80.0);
@@ -868,7 +867,6 @@ impl ScriptsWindow {
             DropdownMenu::new("filter")
                 .trigger(
                     Button::new("filter", "Filter")
-                        .font_weight(FontWeight::NORMAL)
                         .pressed(self.filter.is_some())
                         .end_slot(
                             div()
@@ -881,13 +879,18 @@ impl ScriptsWindow {
                 .max_height(FILTER_HEIGHT)
                 .items(move |window, cx| {
                     this.upgrade()
-                        .map(|scripts| scripts.read(cx).filter_items(&this, window))
+                        .map(|scripts| scripts.read(cx).filter_items(&this, window, cx.theme()))
                         .unwrap_or_default()
                 }),
         )
     }
 
-    fn filter_items(&self, this: &WeakEntity<Self>, window: &Window) -> Vec<MenuItem> {
+    fn filter_items(
+        &self,
+        this: &WeakEntity<Self>,
+        window: &Window,
+        theme: &Theme,
+    ) -> Vec<MenuItem> {
         let Some(library) = &self.library else {
             return Vec::new();
         };
@@ -900,7 +903,12 @@ impl ScriptsWindow {
         };
         let source = |label: SharedString, root: &Path, count: SharedString| {
             choose(label, Some(root.to_owned()))
-                .description(fit_path_to(&home_relative(root), FILTER_PATH_WIDTH, window))
+                .description(fit_path_to(
+                    &home_relative(root),
+                    FILTER_PATH_WIDTH,
+                    window,
+                    theme,
+                ))
                 .end_slot(count)
         };
         let built_in = library
@@ -1480,7 +1488,14 @@ impl ScriptsWindow {
             .width(px(376.0))
     }
 
-    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &mut Context<Self>) -> AnyElement {
+    fn inputs(
+        &self,
+        theme: &Theme,
+        key: &FormKey,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let layout = theme.layout;
         let Some(form) = self.forms.get(key) else {
             return muted(theme, "Reading inputs…").into_any_element();
         };
@@ -1524,7 +1539,7 @@ impl ScriptsWindow {
             let key = key.clone();
             h_flex()
                 .justify_between()
-                .gap(px(12.0))
+                .gap(layout.space(3.0))
                 .child(muted(
                     theme,
                     if saved {
@@ -1558,90 +1573,74 @@ impl ScriptsWindow {
                     };
                     let label = SharedString::from(field.label.clone());
                     let control = match (&field.kind, &draft.draft, &texts[index]) {
-                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => switch_row(
+                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
+                            Switch::new(("input", index), label.clone(), *on)
+                                .hide_label()
+                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx))
+                                .into_any_element()
+                        }
+                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => Select::new(
+                            ("input", index),
                             label.clone(),
-                            true,
-                            Switch::new(("input", index), label, *on)
-                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx)),
-                        ),
-                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => row(
-                            label.clone(),
-                            true,
-                            Select::new(
-                                ("input", index),
-                                label,
-                                options.iter().cloned().map(SharedString::from),
-                                *chosen,
-                            )
-                            .placeholder("Choose…")
-                            .full_width()
-                            .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx)),
-                        ),
+                            options.iter().cloned().map(SharedString::from),
+                            *chosen,
+                        )
+                        .placeholder("Choose…")
+                        .full_width()
+                        .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
+                        .into_any_element(),
                         (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
                             let set = Rc::new(set);
-                            h_flex()
-                                .items_start()
-                                .gap(px(12.0))
-                                .child(
-                                    h_flex()
-                                        .flex_none()
-                                        .w(LABEL_WIDTH)
-                                        .h(ROW)
-                                        .child(row_label(label, true)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap(px(6.0))
-                                        .py(px(4.0))
-                                        .children(options.iter().enumerate().map(
-                                            |(option, name)| {
-                                                let set = set.clone();
-                                                let chosen = chosen.clone();
-                                                let state = if chosen[option] {
-                                                    CheckedState::Checked
-                                                } else {
-                                                    CheckedState::Unchecked
-                                                };
-                                                Checkbox::new(
-                                                    SharedString::from(format!(
-                                                        "input-{index}-{option}"
-                                                    )),
-                                                    name.clone(),
-                                                    state,
-                                                )
-                                                .on_toggle(move |on, _, cx| {
-                                                    let mut chosen = chosen.clone();
-                                                    chosen[option] = on;
-                                                    set(Draft::Choices(chosen), cx);
-                                                })
-                                            },
-                                        )),
-                                )
+                            v_flex()
+                                .gap(layout.space(3.0))
+                                .children(options.iter().enumerate().map(|(option, name)| {
+                                    let set = set.clone();
+                                    let chosen = chosen.clone();
+                                    let state = if chosen[option] {
+                                        CheckedState::Checked
+                                    } else {
+                                        CheckedState::Unchecked
+                                    };
+                                    Checkbox::new(
+                                        SharedString::from(format!("input-{index}-{option}")),
+                                        name.clone(),
+                                        state,
+                                    )
+                                    .on_toggle(
+                                        move |on, _, cx| {
+                                            let mut chosen = chosen.clone();
+                                            chosen[option] = on;
+                                            set(Draft::Choices(chosen), cx);
+                                        },
+                                    )
+                                }))
+                                .into_any_element()
                         }
-                        (kind, _, Some(input)) => row(
-                            label,
-                            true,
-                            div()
-                                .when(matches!(kind, Kind::Number { .. }), |slot| slot.w(px(80.0)))
-                                .child(input.clone()),
-                        ),
-                        _ => div(),
+                        (kind, _, Some(input)) => div()
+                            .when(matches!(kind, Kind::Number { .. }), |slot| slot.w(px(80.0)))
+                            .child(input.clone())
+                            .into_any_element(),
+                        _ => div().into_any_element(),
                     };
-                    v_flex().gap(px(4.0)).child(control).map(|column| {
-                        match (error(field, draft), &field.description) {
+                    let control = if width < theme.layout.inspector {
+                        mira_ui::primitives::Field::new(label, control).into_any_element()
+                    } else {
+                        row(layout, label, true, control).into_any_element()
+                    };
+                    v_flex()
+                        .gap(layout.space(1.0))
+                        .child(control)
+                        .map(|column| match (error(field, draft), &field.description) {
                             (Some(problem), _) => column
                                 .child(note(problem, true, theme).text_color(theme.destructive)),
                             (None, Some(description)) => {
                                 column.child(note(description.clone(), true, theme))
                             }
                             (None, None) => column,
-                        }
-                    })
+                        })
                 });
         v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .children(unreadable)
             .children(stale)
             .children(fields)
@@ -1659,11 +1658,11 @@ impl ScriptsWindow {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
-        let path = fit_path_to(&home_relative(&entry.path), width, window);
+        let path = fit_path_to(&home_relative(&entry.path), width, window, theme);
         v_flex()
-            .gap(px(14.0))
+            .gap(theme.space(4.0))
             .child(heading(theme, entry.name.clone(), path, None))
-            .child(self.inputs(theme, &FormKey::Script(entry.path.clone()), cx))
+            .child(self.inputs(theme, &FormKey::Script(entry.path.clone()), width, cx))
             .into_any_element()
     }
 
@@ -1671,8 +1670,10 @@ impl ScriptsWindow {
         &self,
         theme: &Theme,
         queue: &[queue::Entry],
+        width: Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let layout = theme.layout;
         let Some(queued) = queue.get(self.queued) else {
             return div().into_any_element();
         };
@@ -1698,7 +1699,7 @@ impl ScriptsWindow {
         };
         let key = FormKey::Entry(queued.id);
         let body = match self.forms.get(&key).map(|form| &form.state) {
-            _ if queued.waiting() => self.inputs(theme, &key, cx),
+            _ if queued.waiting() => self.inputs(theme, &key, width, cx),
             None => muted(theme, "Reading inputs…").into_any_element(),
             Some(FormState::Broken { title, message }) => {
                 Alert::new("queued-broken", Tone::Danger, *title)
@@ -1713,16 +1714,15 @@ impl ScriptsWindow {
                     .map(|values| rows(definition, values))
                     .unwrap_or_default();
                 v_flex()
-                    .gap(px(8.0))
-                    .children(
-                        rows.into_iter()
-                            .map(|(label, value)| row(label, true, div().truncate().child(value))),
-                    )
+                    .gap(layout.space(2.0))
+                    .children(rows.into_iter().map(|(label, value)| {
+                        row(layout, label, true, div().truncate().child(value))
+                    }))
                     .into_any_element()
             }
         };
         v_flex()
-            .gap(px(14.0))
+            .gap(theme.space(4.0))
             .child(heading(
                 theme,
                 file_name(&queued.script).into(),
@@ -1809,6 +1809,8 @@ impl ScriptsWindow {
     }
 
     fn library(&self, theme: &Theme, rows: Rc<[Row]>, cx: &mut Context<Self>) -> AnyElement {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let note = || empty_frame(theme);
         let Some(library) = &self.library else {
             return note().into_any_element();
@@ -1818,9 +1820,9 @@ impl ScriptsWindow {
             return note()
                 .child(
                     div()
-                        .text_size(TEXT_BODY)
-                        .line_height(LINE_BODY)
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(typography.body)
+                        .line_height(typography.body_line)
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.foreground)
                         .child("No scripts yet"),
                 )
@@ -1831,7 +1833,7 @@ impl ScriptsWindow {
                 .child(
                     div()
                         .flex()
-                        .gap(px(8.0))
+                        .gap(layout.space(2.0))
                         .child(
                             Button::new("empty-show", "Show in Finder")
                                 .size(Size::Small)
@@ -1956,8 +1958,13 @@ fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
     cut(kept).into()
 }
 
-pub(super) fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedString {
-    let font = window.text_style().font();
+pub(super) fn fit_path_to(
+    path: &str,
+    width: Pixels,
+    window: &Window,
+    theme: &Theme,
+) -> SharedString {
+    let font = gpui::font(theme.font_family.clone());
     fit_path(path, |text| {
         let run = TextRun {
             len: text.len(),
@@ -1969,7 +1976,12 @@ pub(super) fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedS
         };
         window
             .text_system()
-            .shape_line(text.to_owned().into(), TEXT_SMALL, &[run], None)
+            .shape_line(
+                text.to_owned().into(),
+                theme.typography.secondary,
+                &[run],
+                None,
+            )
             .width
             <= width
     })
@@ -1978,6 +1990,8 @@ pub(super) fn fit_path_to(path: &str, width: Pixels, window: &Window) -> SharedS
 impl Render for ScriptsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let has_tab = self.shown.is_some();
         let rows = self.rows(cx);
         let chosen = self.target(cx);
@@ -2033,32 +2047,28 @@ impl Render for ScriptsWindow {
                 .id("script-status")
                 .role(gpui::Role::Status)
                 .aria_label(status.clone())
-                .flex_none()
+                .min_w_0()
                 .max_w(px(360.0))
                 .pr(PADDING)
                 .truncate()
-                .text_size(TEXT_SMALL)
+                .text_size(typography.secondary)
                 .text_color(status_color)
                 .child(status),
         );
         let this = cx.entity().downgrade();
-        let panes = ToggleGroup::new(
-            "pane",
-            "Show",
-            [
-                ToggleItem::new("Library"),
-                if unfinished == 0 {
-                    ToggleItem::new("Queue")
+        let panes = Tabs::new("pane", "Show", 2, move |index| {
+            if index == 0 {
+                Tab::new("Library")
+            } else {
+                let tab = Tab::new("Queue");
+                if unfinished > 0 {
+                    tab.end_slot(Badge::new(unfinished.to_string()))
                 } else {
-                    ToggleItem::new("Queue").end_slot(Badge::new(unfinished.to_string()))
-                },
-            ],
-            match self.pane {
-                Pane::Library => 0,
-                Pane::Queue => 1,
-            },
-        )
-        .full_width()
+                    tab
+                }
+            }
+        })
+        .selected(usize::from(self.pane == Pane::Queue))
         .on_select(move |index, _, cx| {
             let pane = if index == 0 {
                 Pane::Library
@@ -2080,22 +2090,21 @@ impl Render for ScriptsWindow {
                 cx.stop_propagation();
             }))
             .child(self.search.clone());
-        let toolbar = h_flex()
-            .flex_none()
-            .gap(px(12.0))
-            .px(PADDING)
-            .pt(px(14.0))
+        let toolbar = theme
+            .toolbar()
             .child(div().w(PANES_WIDTH).child(panes))
             .child(div().flex_1())
             .when(library, |toolbar| {
                 toolbar.child(
                     h_flex()
-                        .gap(px(6.0))
+                        .gap(layout.space(1.5))
                         .children(self.filter(&theme, cx))
                         .child(search),
                 )
             });
-        let detail_width = window.viewport_size().width - PADDING * 2.0 - LIST_WIDTH - GAP;
+        let list_width = (window.viewport_size().width * 0.4).min(theme.layout.script_list_max);
+        let detail_width =
+            window.viewport_size().width - list_width - px(1.0) - theme.space(4.0) * 2.0;
         let (list, detail) = match self.pane {
             Pane::Library => (
                 self.library(&theme, rows, cx),
@@ -2103,24 +2112,30 @@ impl Render for ScriptsWindow {
             ),
             Pane::Queue => (
                 self.queue_list(&theme, &queue, cx),
-                self.queued_detail(&theme, &queue, cx),
+                self.queued_detail(&theme, &queue, detail_width, cx),
             ),
         };
         let body = h_flex()
             .flex_1()
             .min_h_0()
             .items_start()
-            .gap(GAP)
-            .p(PADDING)
-            .child(v_flex().flex_none().w(LIST_WIDTH).h_full().child(list))
+            .child(
+                v_flex()
+                    .flex_none()
+                    .w(list_width)
+                    .h_full()
+                    .p(theme.space(3.0))
+                    .border_r_1()
+                    .border_color(theme.border)
+                    .child(list),
+            )
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .ml(-RING_ROOM)
-                    .mr(-Scrollbar::GUTTER)
+                    .p(theme.space(4.0))
                     .child(
                         div()
                             .id("detail")
@@ -2137,14 +2152,7 @@ impl Render for ScriptsWindow {
                         self.detail_scroll.clone(),
                     )),
             );
-        let footer = h_flex()
-            .flex_none()
-            .gap(px(6.0))
-            .px(PADDING)
-            .py(px(10.0))
-            .border_t_1()
-            .border_color(theme.border)
-            .child(self.options_popover(cx));
+        let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
         let footer = match self.pane {
             Pane::Library => footer
                 .child(self.sources(cx))
@@ -2157,7 +2165,7 @@ impl Render for ScriptsWindow {
                 .child(div().flex_1())
                 .child(
                     Button::new("queue", "Add to queue")
-                        .end_slot(key_hint("⌘⏎"))
+                        .end_slot(mira_ui::primitives::Kbd::hint("⌘⏎"))
                         .disabled(!has_tab || !valid)
                         .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
                 )
@@ -2166,7 +2174,7 @@ impl Render for ScriptsWindow {
                         .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                 } else {
                     Button::new("run", "Run")
-                        .end_slot(key_hint("⏎"))
+                        .end_slot(mira_ui::primitives::Kbd::hint("⏎"))
                         .variant(Variant::Primary)
                         .disabled(!has_tab || !valid)
                         .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
@@ -2214,9 +2222,7 @@ impl Render for ScriptsWindow {
         };
         v_flex()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("scripts")
             .track_focus(&self.focus)
@@ -2250,24 +2256,21 @@ fn heading(
     detail: SharedString,
     action: Option<AnyElement>,
 ) -> impl IntoElement {
+    let layout = theme.layout;
+    let typography = theme.typography;
     h_flex()
         .items_start()
-        .gap(px(8.0))
+        .gap(layout.space(2.0))
         .child(
             v_flex()
                 .flex_1()
                 .min_w_0()
+                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
                 .child(
                     div()
                         .truncate()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(name),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(TEXT_SMALL)
-                        .line_height(LINE_SMALL)
+                        .text_size(typography.secondary)
+                        .line_height(typography.secondary_line)
                         .text_color(theme.muted_foreground)
                         .child(detail),
                 ),
@@ -2276,27 +2279,26 @@ fn heading(
 }
 
 fn empty_frame(theme: &Theme) -> gpui::Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
     v_flex()
         .size_full()
-        .gap(px(10.0))
-        .p(px(12.0))
+        .gap(layout.space(2.5))
+        .p(layout.space(3.0))
         .rounded(theme.radius.panel)
         .bg(theme.card)
         .border_1()
         .border_color(theme.border)
-        .text_size(TEXT_SMALL)
-        .line_height(LINE_SMALL)
+        .text_size(typography.secondary)
+        .line_height(typography.secondary_line)
         .text_color(theme.muted_foreground)
 }
 
-fn key_hint(keys: &'static str) -> impl IntoElement {
-    div().text_size(TEXT_SMALL).opacity(0.55).child(keys)
-}
-
 fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
+    let typography = theme.typography;
     div()
-        .text_size(TEXT_BODY)
-        .line_height(LINE_BODY)
+        .text_size(typography.body)
+        .line_height(typography.body_line)
         .text_color(theme.muted_foreground)
         .child(text)
 }
@@ -2330,6 +2332,7 @@ fn options_panel(
     room_input: Entity<Input>,
     cx: &App,
 ) -> AnyElement {
+    let layout = cx.theme().layout;
     let editable = options.is_some();
     let options = options.unwrap_or_default();
     let private = matches!(options.rooms, Rooms::Private { .. });
@@ -2349,14 +2352,15 @@ fn options_panel(
     };
     let theme = cx.theme().clone();
     v_flex()
-        .gap(px(8.0))
+        .gap(layout.space(2.0))
         .when(!editable, |options| {
             options.child(note("Log in to change script settings.", true, &theme))
         })
         .child(
             v_flex()
-                .gap(px(4.0))
+                .gap(layout.space(1.0))
                 .child(switch_row(
+                    layout,
                     "Safe start and stop",
                     editable,
                     Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
@@ -2370,8 +2374,9 @@ fn options_panel(
         )
         .child(
             v_flex()
-                .gap(px(4.0))
+                .gap(layout.space(1.0))
                 .child(switch_row(
+                    layout,
                     "Restart after reconnecting",
                     editable,
                     Switch::new(
@@ -2387,11 +2392,12 @@ fn options_panel(
                     &theme,
                 )),
         )
-        .child(div().h(px(1.0)).my(px(4.0)).bg(theme.border))
+        .child(div().h(px(1.0)).my(layout.space(1.0)).bg(theme.border))
         .child(
             v_flex()
-                .gap(px(4.0))
+                .gap(layout.space(1.0))
                 .child(switch_row(
+                    layout,
                     "Private rooms",
                     editable,
                     Switch::new("private-rooms", "Private rooms", private).on_toggle(set_private),
@@ -2405,12 +2411,12 @@ fn options_panel(
         .when(editable && private, |options| {
             options.child(
                 v_flex()
-                    .gap(px(4.0))
+                    .gap(layout.space(1.0))
                     .child(
                         h_flex()
                             .justify_between()
-                            .gap(px(12.0))
-                            .min_h(ROW)
+                            .gap(layout.space(3.0))
+                            .min_h(layout.control)
                             .child(row_label("Room", true))
                             .child(div().flex_none().w(px(96.0)).child(room_input)),
                     )
@@ -2650,6 +2656,7 @@ mod tests {
 
     impl Render for OpenSources {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let layout = cx.theme().layout;
             let menu = self
                 .0
                 .update(cx, |scripts, cx| scripts.sources(cx))
@@ -2658,7 +2665,7 @@ mod tests {
             div()
                 .size_full()
                 .bg(cx.theme().background)
-                .p(px(16.0))
+                .p(layout.space(4.0))
                 .child(div().w(px(140.0)).child(menu))
         }
     }
@@ -2730,12 +2737,13 @@ mod tests {
 
     impl Render for OptionsPanels {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let layout = cx.theme().layout;
             let this = self.scripts.downgrade();
             let room = self.scripts.read(cx).room.clone();
             let panel = |options: Option<ScriptOptions>, cx: &App| {
                 div()
                     .w(px(376.0))
-                    .p(px(12.0))
+                    .p(layout.space(3.0))
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(cx.theme().border)
@@ -2755,8 +2763,8 @@ mod tests {
             h_flex()
                 .size_full()
                 .items_start()
-                .gap(px(16.0))
-                .p(px(16.0))
+                .gap(layout.space(4.0))
+                .p(layout.space(4.0))
                 .bg(cx.theme().background)
                 .child(panel(Some(pinned), cx))
                 .child(panel(Some(public), cx))
@@ -2813,29 +2821,33 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "").unwrap();
         }
-        let size = gpui::size(px(WIDTH), px(HEIGHT));
-        for written in mira_ui::snapshot("scripts-nested", size, move |window, cx| {
-            let temp = temp.clone();
-            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
-            cx.new(|cx| {
-                let client = Client::empty_for_tests(&temp, cx);
-                let mut scripts = ScriptsWindow::new(
-                    client,
-                    temp.join("scripts"),
-                    temp.join("types"),
-                    Target::Selected,
-                    window,
-                    cx,
-                );
-                scripts.shown = Some(ShownTab::fake(
-                    "Alt 1",
-                    crate::automation::settings::Automation::default(),
-                ));
-                scripts
-            })
-        }) {
-            assert!(written.exists(), "{} was not written", written.display());
+        for (name, w, h) in [
+            ("scripts-nested", WIDTH, HEIGHT),
+            ("scripts-nested-min", MIN_WIDTH, MIN_HEIGHT),
+        ] {
+            for written in mira_ui::snapshot(name, gpui::size(px(w), px(h)), |window, cx| {
+                let temp = temp.clone();
+                crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+                crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&temp, cx);
+                    let mut scripts = ScriptsWindow::new(
+                        client,
+                        temp.join("scripts"),
+                        temp.join("types"),
+                        Target::Selected,
+                        window,
+                        cx,
+                    );
+                    scripts.shown = Some(ShownTab::fake(
+                        "Alt 1",
+                        crate::automation::settings::Automation::default(),
+                    ));
+                    scripts
+                })
+            }) {
+                assert!(written.exists(), "{} was not written", written.display());
+            }
         }
     }
 

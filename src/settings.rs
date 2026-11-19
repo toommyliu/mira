@@ -1,3 +1,4 @@
+use mira_ui::StyledExt as _;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -14,7 +15,6 @@ use mira_ui::{
     components::{Group, ShortcutField},
     h_flex,
     primitives::{Button, Icon, Input, InputEvent, Scrollbar, Select, Switch, button::Size},
-    theme::TEXT_BODY,
 };
 use serde::{Deserialize, Serialize};
 
@@ -368,6 +368,7 @@ impl SettingsWindow {
 
 impl SettingsWindow {
     fn shortcuts(&self, category: Category, cx: &mut Context<Self>) -> Group {
+        let layout = cx.theme().layout;
         let os = cx.platform_info().os;
         let overrides = shortcuts(cx);
         Shortcut::ALL
@@ -406,7 +407,7 @@ impl SettingsWindow {
                     shortcut.label(),
                     (self.taken == Some(shortcut))
                         .then(|| "Mira already uses that shortcut.".into()),
-                    h_flex().gap(px(4.0)).children(reset).child(field),
+                    h_flex().gap(layout.space(1.0)).children(reset).child(field),
                 )
             })
     }
@@ -414,6 +415,7 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let layout = cx.theme().layout;
         let settings = &cx.global::<Store>().settings;
         let appearances = Appearance::ALL
             .map(|appearance| SharedString::from(appearance.label()))
@@ -436,9 +438,7 @@ impl Render for SettingsWindow {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(theme)
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
@@ -456,15 +456,15 @@ impl Render for SettingsWindow {
                     .child(
                 div()
                     .id("settings")
-                    .size_full()
+                    .size_full().max_w(px(600.0)).mx_auto()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
-                    .gap(px(16.0))
-                    .px(px(16.0))
-                    .pt(px(12.0))
-                    .pb(px(16.0))
+                    .gap(layout.space(4.0))
+                    .px(layout.space(4.0))
+                    .pt(layout.space(3.0))
+                    .pb(layout.space(4.0))
                     .child(
                         Group::new().title("General").row(
                             "Open at launch",

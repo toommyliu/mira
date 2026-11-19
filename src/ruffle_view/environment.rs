@@ -1,9 +1,9 @@
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Pixels, Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
-    actions, div, prelude::FluentBuilder as _, px, size,
+    Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
@@ -13,7 +13,7 @@ use mira_ui::{
         Button, Checkbox, CheckedState, Dialog, Icon, Input, InputEvent, Switch,
         button::{Size, Variant},
     },
-    theme::{DISABLED_OPACITY, RING_ROOM, ROW, TEXT_BODY, tabular},
+    theme::{DISABLED_OPACITY, RING_ROOM, tabular},
     v_flex,
 };
 
@@ -42,7 +42,7 @@ const WIDTH: f32 = 760.0;
 const HEIGHT: f32 = 600.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 280.0;
-const COLUMNS_FROM: Pixels = px(560.0);
+
 const MAX_LIST: usize = 1024;
 
 type Setting<C> = (&'static str, &'static str, fn(&mut C) -> &mut bool);
@@ -596,6 +596,7 @@ impl Environment {
         chips: Option<AnyElement>,
         cx: &mut Context<Self>,
     ) -> Div {
+        let layout = cx.theme().layout;
         let input = self.input(list).clone();
         input.update(cx, |input, cx| input.set_disabled(!enabled, cx));
         let typed = div()
@@ -606,9 +607,9 @@ impl Environment {
                 }
             });
         v_flex()
-            .gap(px(10.0))
-            .child(row(list.label(), enabled, typed))
-            .child(note.mt(px(-4.0)))
+            .gap(layout.space(2.5))
+            .child(row(layout, list.label(), enabled, typed))
+            .child(note.mt(layout.space(-1.0)))
             .children(chips)
     }
 
@@ -650,6 +651,8 @@ impl Environment {
     }
 
     fn drops(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let state = automation.drops();
         let on = state.config.enabled;
         let switching = automation.clone();
@@ -714,10 +717,10 @@ impl Environment {
             let marking = automation.clone();
             let names = from_quests.clone();
             v_flex()
-                .gap(px(6.0))
+                .gap(layout.space(1.5))
                 .child(
                     div()
-                        .text_caption(theme.typography)
+                        .text_caption(typography)
                         .text_color(theme.muted_foreground)
                         .when(!on, |caption| caption.opacity(DISABLED_OPACITY))
                         .child("From your quests"),
@@ -752,7 +755,7 @@ impl Environment {
             (None, None) => None,
             (listed, derived) => Some(
                 v_flex()
-                    .gap(px(10.0))
+                    .gap(layout.space(2.5))
                     .children(listed)
                     .children(derived)
                     .into_any_element(),
@@ -770,7 +773,7 @@ impl Environment {
         ];
         let kinds = v_flex().children(kinds.into_iter().map(|(id, label, setting)| {
             let automation = automation.clone();
-            h_flex().min_h(ROW).child(
+            h_flex().min_h(layout.control).child(
                 Checkbox::new(id, label, checked(*setting(&mut state.config.clone())))
                     .disabled(!on)
                     .on_toggle(move |on, _, _| {
@@ -784,7 +787,7 @@ impl Environment {
                 rejecting.update_drops(|state| state.config.reject_others = on);
             });
         v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(section(
                 "Drops",
                 "Picks up listed drops and any kind ticked below.",
@@ -802,25 +805,30 @@ impl Environment {
             .child(
                 h_flex()
                     .items_start()
-                    .gap(px(12.0))
+                    .gap(layout.space(3.0))
                     .child(
                         h_flex()
                             .flex_none()
                             .w(LABEL_WIDTH)
-                            .min_h(ROW)
+                            .min_h(layout.control)
                             .child(row_label("Also pick up", on)),
                     )
                     .child(div().flex_1().min_w_0().child(kinds)),
             )
             .child(
                 v_flex()
-                    .gap(px(10.0))
-                    .child(switch_row("Reject others", on, reject))
-                    .child(note("Rejects every drop not picked up above.", on, theme).mt(px(-4.0))),
+                    .gap(layout.space(2.5))
+                    .child(switch_row(layout, "Reject others", on, reject))
+                    .child(
+                        note("Rejects every drop not picked up above.", on, theme)
+                            .mt(layout.space(-1.0)),
+                    ),
             )
     }
 
     fn quests(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let state = automation.quests();
         let on = state.config.enabled;
         let switching = automation.clone();
@@ -849,14 +857,14 @@ impl Environment {
         });
         let message = match &self.unreadable {
             Some(unreadable) => div()
-                .text_caption(theme.typography)
+                .text_caption(typography)
                 .text_color(theme.destructive)
                 .child(unreadable.reason.clone()),
             None => note(List::Quests.note(), on, theme),
         };
         let settled = matches!(self.pickup, Pickup::Idle);
         let pickups = h_flex()
-            .gap(px(12.0))
+            .gap(layout.space(3.0))
             .children(Taken::ALL.into_iter().map(|taken| {
                 let (automation, this) = (automation.clone(), cx.weak_entity());
                 div().flex_1().min_w_0().child(
@@ -881,7 +889,7 @@ impl Environment {
         let status = matches!(self.pickup, Pickup::Checking { .. })
             .then(|| ("Checking drops…".into(), theme.muted_foreground));
         v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(section(
                 "Quests",
                 "Accepts listed quests and turns them in when done.",
@@ -890,10 +898,11 @@ impl Environment {
                 theme,
             ))
             .child(self.list_field(List::Quests, on, message, chips, cx))
-            .child(row("Also pick up", on, pickups))
+            .child(row(layout, "Also pick up", on, pickups))
     }
 
     fn boosts(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
         let state = automation.boosts();
         let on = state.config.enabled;
         let switching = automation.clone();
@@ -940,13 +949,13 @@ impl Environment {
                 .into_any_element()
         });
         v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(section(
                 "Boosts",
                 "Uses one of each kind when it runs out.",
                 status,
                 h_flex()
-                    .gap(px(10.0))
+                    .gap(layout.space(2.5))
                     .child(fetch)
                     .child(switch.hide_label()),
                 theme,
@@ -969,28 +978,16 @@ impl Environment {
     ) -> Div {
         let drops = self.drops(theme, automation, cx);
         let others = v_flex()
-            .gap(px(14.0))
+            .gap(theme.space(4.0))
             .child(self.quests(theme, automation, cx))
             .child(div().h(px(1.0)).bg(theme.border))
             .child(self.boosts(theme, automation, cx));
-        if window.viewport_size().width >= COLUMNS_FROM {
-            h_flex()
-                .items_start()
-                .min_h_full()
-                .child(div().flex_1().min_w_0().p(px(16.0)).child(drops))
-                .child(div().self_stretch().w(px(1.0)).bg(theme.border))
-                .child(div().flex_1().min_w_0().p(px(16.0)).child(others))
-        } else {
-            v_flex()
-                .gap(px(14.0))
-                .p(px(16.0))
-                .child(drops)
-                .child(div().h(px(1.0)).bg(theme.border))
-                .child(others)
-        }
+        theme.form_columns(window.viewport_size().width, drops, others)
     }
 
     fn fetch_dialog(&self, theme: &Theme, cx: &mut Context<Self>) -> Dialog {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let (found, picked) = match &self.fetch {
             Fetch::Picking { found, picked } => (found.as_slice(), picked.as_slice()),
             _ => (&[][..], &[][..]),
@@ -1000,13 +997,13 @@ impl Environment {
             .map(|automation| automation.boosts().items)
             .unwrap_or_default();
         let count = picked.iter().filter(|picked| **picked).count();
-        let mut rows = v_flex().gap(px(2.0));
+        let mut rows = v_flex().gap(layout.space(0.5));
         for (index, owned) in found.iter().enumerate() {
             if index == 0 || found[index - 1].kind != owned.kind {
                 rows = rows.child(
                     div()
-                        .when(index > 0, |kind| kind.pt(px(8.0)))
-                        .text_caption(theme.typography)
+                        .when(index > 0, |kind| kind.pt(layout.space(2.0)))
+                        .text_caption(typography)
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.muted_foreground)
                         .child(kind_name(owned.kind)),
@@ -1073,6 +1070,7 @@ impl Environment {
     }
 
     fn pickup_dialog(&self, theme: &Theme, cx: &mut Context<Self>) -> Dialog {
+        let layout = theme.layout;
         let (change, waiting, picked) = match &self.pickup {
             Pickup::Asking {
                 change,
@@ -1109,7 +1107,7 @@ impl Environment {
         };
         let this = cx.weak_entity();
         let rows = v_flex()
-            .gap(px(2.0))
+            .gap(layout.space(0.5))
             .children(waiting.iter().enumerate().map(|(index, waiting)| {
                 let this = this.clone();
                 pick_row(
@@ -1206,16 +1204,18 @@ impl Environment {
 }
 
 fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme: &Theme) -> Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
     h_flex()
-        .min_h(ROW)
-        .gap(px(8.0))
+        .min_h(layout.control)
+        .gap(layout.space(2.0))
         .child(div().flex_1().min_w_0().child(checkbox))
         .when_some(tag, |row, tag| {
             row.child(
                 div()
                     .flex_none()
                     .w(px(48.0))
-                    .text_caption(theme.typography)
+                    .text_caption(typography)
                     .text_color(theme.muted_foreground)
                     .child(tag),
             )
@@ -1225,7 +1225,7 @@ fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme:
                 .flex_none()
                 .w(px(40.0))
                 .text_right()
-                .text_caption(theme.typography)
+                .text_caption(typography)
                 .font_features(tabular())
                 .text_color(theme.muted_foreground)
                 .child(format!("×{quantity}")),
@@ -1394,9 +1394,7 @@ impl Render for Environment {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(FOCUS_SCOPE)
             .id("environment")
             .track_focus(&self.focus)
@@ -1412,13 +1410,8 @@ impl Render for Environment {
                     .child(body),
             )
             .child(
-                h_flex()
-                    .flex_none()
-                    .gap(px(8.0))
-                    .px(px(16.0))
-                    .py(px(10.0))
-                    .border_t_1()
-                    .border_color(theme.border)
+                theme
+                    .footer()
                     .child(
                         Button::new("copy-to-all", "Copy to all tabs…")
                             .size(Size::Small)
