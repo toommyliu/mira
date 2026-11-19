@@ -221,23 +221,24 @@ impl Shortcut {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Taken;
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Taken(pub(crate) String);
 
 pub(crate) fn assign(
     overrides: &mut Overrides,
     shortcut: Shortcut,
     keys: Option<String>,
-    taken_by_app: impl Fn(&str) -> bool,
+    taken_by_app: impl Fn(&str) -> Option<String>,
 ) -> Result<(), Taken> {
     if let Some(keys) = &keys {
-        if taken_by_app(keys) {
-            return Err(Taken);
+        if let Some(owner) = taken_by_app(keys) {
+            return Err(Taken(owner));
         }
-        for other in Shortcut::ALL {
-            if other != shortcut && other.keys(overrides) == Some(keys) {
-                set(overrides, other, None);
-            }
+        if let Some(other) = Shortcut::ALL
+            .into_iter()
+            .find(|&other| other != shortcut && other.keys(overrides) == Some(keys))
+        {
+            return Err(Taken(other.label().to_owned()));
         }
     }
     set(overrides, shortcut, keys);
@@ -296,15 +297,31 @@ pub(crate) fn apply(cx: &mut App) {
     cx.refresh_windows();
 }
 
-pub(crate) fn taken_by_app(keys: &str, cx: &App) -> bool {
-    let Ok(wanted) = Keystroke::parse_with_os(keys, cx.platform_info().os) else {
-        return false;
-    };
+pub(crate) fn taken_by_app(keys: &str, cx: &App) -> Option<String> {
+    let wanted = Keystroke::parse_with_os(keys, cx.platform_info().os).ok()?;
     let wanted = keyboard::typed(&wanted);
-    cx.key_bindings().borrow().bindings().any(|binding| {
-        !Shortcut::ALL.iter().any(|shortcut| shortcut.owns(binding))
-            && matches!(binding.keystrokes(), [only] if same(only.inner(), &wanted))
-    })
+    cx.key_bindings()
+        .borrow()
+        .bindings()
+        .find(|binding| {
+            !Shortcut::ALL.iter().any(|shortcut| shortcut.owns(binding))
+                && matches!(binding.keystrokes(), [only] if same(only.inner(), &wanted))
+        })
+        .map(|binding| command_name(binding.action().name()))
+}
+
+fn command_name(action: &str) -> String {
+    let name = action.rsplit("::").next().unwrap_or(action);
+    let mut words = String::new();
+    for (index, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() && index > 0 {
+            words.push(' ');
+            words.extend(ch.to_lowercase());
+        } else {
+            words.push(ch);
+        }
+    }
+    words
 }
 
 fn same(a: &Keystroke, b: &Keystroke) -> bool {
@@ -323,12 +340,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_shortcut_moves_its_keys_off_another_and_back_to_default_saves_nothing() {
+    fn a_shortcut_cant_take_keys_another_uses_and_back_to_default_saves_nothing() {
         let mut overrides = Overrides::new();
-        let free = |_: &str| false;
+        let free = |_: &str| None;
+        assert_eq!(
+            assign(&mut overrides, Shortcut::Bank, Some("cmd-r".into()), free),
+            Err(Taken("Start/stop script".into()))
+        );
+        assert_eq!(Shortcut::StartStopScript.keys(&overrides), Some("cmd-r"));
+
+        assign(&mut overrides, Shortcut::StartStopScript, None, free).unwrap();
         assign(&mut overrides, Shortcut::Bank, Some("cmd-r".into()), free).unwrap();
         assert_eq!(Shortcut::Bank.keys(&overrides), Some("cmd-r"));
-        assert_eq!(Shortcut::StartStopScript.keys(&overrides), None);
 
         assign(&mut overrides, Shortcut::Bank, Some("cmd-b".into()), free).unwrap();
         assign(
@@ -372,9 +395,9 @@ mod tests {
             &mut overrides,
             Shortcut::Bank,
             Some("cmd-q".into()),
-            |keys| keys == "cmd-q",
+            |keys| (keys == "cmd-q").then(|| "Quit".to_owned()),
         );
-        assert!(taken.is_err());
+        assert_eq!(taken, Err(Taken("Quit".into())));
         assert_eq!(Shortcut::Bank.keys(&overrides), Some("cmd-b"));
     }
 
@@ -401,8 +424,8 @@ mod tests {
                 Some("⌘I")
             );
             assert_eq!(keys_for(&game::ToggleScript, cx).as_deref(), Some("⌘R"));
-            assert!(!taken_by_app("cmd-shift-p", cx));
-            assert!(taken_by_app("cmd-,", cx));
+            assert_eq!(taken_by_app("cmd-shift-p", cx), None);
+            assert_eq!(taken_by_app("cmd-,", cx).as_deref(), Some("Open settings"));
             let bound = cx.key_bindings().borrow().bindings().count();
             apply(cx);
             assert_eq!(cx.key_bindings().borrow().bindings().count(), bound);

@@ -1,22 +1,33 @@
 use mira_ui::StyledExt as _;
 use std::{
+    collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, InteractiveElement as _,
-    IntoElement, KeyBinding, Keystroke, Menu, MenuItem, ParentElement as _, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
-    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
+    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, Hsla,
+    InteractiveElement as _, IntoElement, KeyBinding, Keystroke, Menu, MenuItem,
+    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, TitlebarOptions, Window, WindowAppearance, WindowBounds,
+    WindowHandle, WindowOptions, actions, div, point, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, Theme,
-    components::{Group, ShortcutField},
+    ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme,
+    components::{Disclosure, Empty, Group, ShortcutField},
     h_flex,
-    primitives::{Button, Icon, Input, InputEvent, Scrollbar, Select, Switch, button::Size},
+    primitives::{
+        Button, ColorPicker, Icon, Input, InputEvent, Numeric, Radio, RadioGroup, Scrollbar,
+        Select, Switch, Tab, Tabs,
+        button::{Size, Variant as ButtonVariant},
+    },
+    theme::Typography,
+    theme::{UI_FONT, parse_hex, to_hex},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+mod previews;
 
 use crate::{
     packages,
@@ -53,6 +64,107 @@ impl Appearance {
             Appearance::Dark => "Dark",
         }
     }
+
+    fn variants(self) -> &'static [Variant] {
+        match self {
+            Appearance::System => &Variant::ALL,
+            Appearance::Light => &[Variant::Light],
+            Appearance::Dark => &[Variant::Dark],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Variant {
+    Light,
+    Dark,
+}
+
+impl Variant {
+    const ALL: [Variant; 2] = [Variant::Light, Variant::Dark];
+
+    fn label(self) -> &'static str {
+        match self {
+            Variant::Light => "Light",
+            Variant::Dark => "Dark",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hex(Hsla);
+
+impl Serialize for Hex {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&to_hex(self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Hex {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        parse_hex(&text)
+            .map(Hex)
+            .ok_or_else(|| serde::de::Error::custom(format!("{text} isn't a #RRGGBB color")))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+struct FontSize<const MIN: u8, const MAX: u8, const DEFAULT: u8>(u8);
+
+type TextSize = FontSize<11, 16, 13>;
+type MonoSize = FontSize<9, 14, 11>;
+
+impl<const MIN: u8, const MAX: u8, const DEFAULT: u8> FontSize<MIN, MAX, DEFAULT> {
+    fn parse(text: &str) -> Option<Self> {
+        text.trim()
+            .parse::<u8>()
+            .ok()
+            .filter(|size| (MIN..=MAX).contains(size))
+            .map(Self)
+    }
+
+    fn pixels(self) -> gpui::Pixels {
+        px(f32::from(self.0))
+    }
+}
+
+impl<const MIN: u8, const MAX: u8, const DEFAULT: u8> Default for FontSize<MIN, MAX, DEFAULT> {
+    fn default() -> Self {
+        Self(DEFAULT)
+    }
+}
+
+impl<'de, const MIN: u8, const MAX: u8, const DEFAULT: u8> Deserialize<'de>
+    for FontSize<MIN, MAX, DEFAULT>
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(u8::deserialize(deserializer)?.clamp(MIN, MAX)))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Colors {
+    light: BTreeMap<ColorToken, Hex>,
+    dark: BTreeMap<ColorToken, Hex>,
+}
+
+impl Colors {
+    fn of(&self, variant: Variant) -> &BTreeMap<ColorToken, Hex> {
+        match variant {
+            Variant::Light => &self.light,
+            Variant::Dark => &self.dark,
+        }
+    }
+
+    fn of_mut(&mut self, variant: Variant) -> &mut BTreeMap<ColorToken, Hex> {
+        match variant {
+            Variant::Light => &mut self.light,
+            Variant::Dark => &mut self.dark,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,13 +186,18 @@ impl Start {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
     start: Start,
     sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
+    font: Option<String>,
+    mono_font: Option<String>,
+    text_size: TextSize,
+    mono_size: MonoSize,
+    colors: Colors,
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
     hidden_recent_scripts: Vec<PathBuf>,
@@ -89,6 +206,44 @@ struct Settings {
 }
 
 impl Settings {
+    fn theme(&self, variant: Variant) -> Theme {
+        let colors: Vec<_> = self
+            .colors
+            .of(variant)
+            .iter()
+            .map(|(&token, &Hex(color))| (token, color))
+            .collect();
+        let mut theme = Theme::customized(variant == Variant::Dark, &colors);
+        theme.pointer_cursor = self.pointer_cursors;
+        if let Some(font) = &self.font {
+            theme.font_family = font.clone().into();
+        }
+        if let Some(font) = &self.mono_font {
+            theme.mono_family = font.clone().into();
+        }
+        theme.typography = Typography {
+            mono: self.mono_size.pixels(),
+            ..Typography::sized(f32::from(self.text_size.0))
+        };
+        theme
+    }
+
+    fn variant(&self, window: WindowAppearance) -> Variant {
+        match self.appearance {
+            Appearance::Light => Variant::Light,
+            Appearance::Dark => Variant::Dark,
+            Appearance::System if Theme::for_window(window).dark_mode => Variant::Dark,
+            Appearance::System => Variant::Light,
+        }
+    }
+
+    fn set_color(&mut self, variant: Variant, token: ColorToken, color: Hsla) {
+        self.colors.of_mut(variant).remove(&token);
+        if to_hex(self.theme(variant).color(token)) != to_hex(color) {
+            self.colors.of_mut(variant).insert(token, Hex(color));
+        }
+    }
+
     fn load(path: &Path) -> io::Result<Self> {
         match fs::read(path) {
             Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
@@ -129,7 +284,10 @@ struct Store {
 
 impl Global for Store {}
 
+const SETTINGS_WIDTH: f32 = 720.0;
 const SETTINGS_HEIGHT: f32 = 600.0;
+const SETTINGS_MIN_WIDTH: f32 = 620.0;
+const SETTINGS_MIN_HEIGHT: f32 = 400.0;
 
 struct Open(WindowHandle<SettingsWindow>);
 
@@ -280,14 +438,175 @@ fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
 
 fn apply(cx: &mut App) {
     let settings = &cx.global::<Store>().settings;
-    let mut theme = match settings.appearance {
-        Appearance::System => Theme::for_window(cx.window_appearance()),
-        Appearance::Light => Theme::light(),
-        Appearance::Dark => Theme::dark(),
-    };
-    theme.pointer_cursor = settings.pointer_cursors;
+    let theme = settings.theme(settings.variant(cx.window_appearance()));
     cx.set_global(theme);
     cx.refresh_windows();
+}
+
+fn reset_button(
+    id: impl std::fmt::Debug,
+    label: &str,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> Button {
+    Button::icon(
+        SharedString::from(format!("{id:?}-reset")),
+        Icon::RotateCcw,
+        format!("Reset {}", label.to_lowercase()),
+    )
+    .size(Size::Small)
+    .tooltip("Reset")
+    .on_click(move |_, window, cx| on_click(window, cx))
+}
+
+fn with_reset(reset: Option<Button>, control: impl IntoElement, theme: &Theme) -> gpui::Div {
+    h_flex()
+        .gap(theme.space(2.0))
+        .children(reset)
+        .child(control)
+}
+
+fn reset_size(input: &Entity<Input>, default: u8) -> impl Fn(&mut Window, &mut App) + 'static {
+    let input = input.clone();
+    move |_, cx| input.update(cx, |input, cx| input.set_text(default.to_string(), cx))
+}
+
+fn sized(input: Entity<Input>, theme: &Theme) -> gpui::Div {
+    h_flex()
+        .gap(theme.space(1.5))
+        .child(div().w(px(48.0)).child(input))
+        .child(div().text_color(theme.muted_foreground).child("px"))
+}
+
+fn size_input<const MIN: u8, const MAX: u8, const DEFAULT: u8>(
+    label: &'static str,
+    size: FontSize<MIN, MAX, DEFAULT>,
+    apply: fn(&mut Settings, FontSize<MIN, MAX, DEFAULT>),
+    cx: &mut Context<SettingsWindow>,
+) -> (Entity<Input>, Subscription) {
+    let input = cx.new(|cx| {
+        let mut input = Input::new(label, cx)
+            .numeric(Numeric {
+                min: i64::from(MIN),
+                max: i64::from(MAX),
+                step: 1,
+            })
+            .small();
+        input.set_text(size.0.to_string(), cx);
+        input
+    });
+    let changes = cx.subscribe(&input, move |_, input, event, cx| {
+        if !matches!(event, InputEvent::Changed) {
+            return;
+        }
+        let size = FontSize::<MIN, MAX, DEFAULT>::parse(input.read(cx).text());
+        input.update(cx, |input, cx| input.set_invalid(size.is_none(), cx));
+        if let Some(size) = size {
+            change(cx, |settings| apply(settings, size));
+        }
+    });
+    (input, changes)
+}
+
+fn font_select(
+    id: &'static str,
+    label: &'static str,
+    defaults: &[(&'static str, Option<&'static str>)],
+    installed: &[SharedString],
+    current: Option<&str>,
+    apply: fn(&mut Settings, Option<String>),
+) -> Select {
+    let mut labels: Vec<SharedString> = Vec::new();
+    let mut families: Vec<Option<SharedString>> = Vec::new();
+    for &(name, family) in defaults {
+        labels.push(name.into());
+        families.push(family.map(SharedString::from));
+    }
+    for name in installed {
+        labels.push(name.clone());
+        families.push(Some(name.clone()));
+    }
+    let chosen = families
+        .iter()
+        .position(|family| family.as_deref() == current)
+        .unwrap_or_else(|| {
+            let font: SharedString = current.unwrap_or_default().to_owned().into();
+            labels.push(font.clone());
+            families.push(Some(font));
+            families.len() - 1
+        });
+    Select::new(id, label, labels, Some(chosen))
+        .width(px(176.0))
+        .on_select(move |index, _, cx| {
+            let font = families[index].as_ref().map(ToString::to_string);
+            change(cx, |settings| apply(settings, font));
+        })
+}
+
+fn colors(
+    title: &'static str,
+    shown: bool,
+    tokens: &[ColorToken],
+    settings: &Settings,
+    themes: [&Theme; 2],
+    cx: &App,
+) -> Section {
+    let theme = cx.theme();
+    let layout = theme.layout;
+    let variants = settings.appearance.variants();
+    let reset_slot = layout.control_sm;
+    let cell = reset_slot + layout.space(1.0) + ColorPicker::width(theme);
+    let column = |text: &'static str| {
+        div()
+            .w(cell)
+            .pl(reset_slot + layout.space(1.0))
+            .flex()
+            .justify_center()
+            .child(text)
+    };
+    let header = h_flex()
+        .gap(layout.space(2.0))
+        .children(variants.iter().map(|variant| column(variant.label())));
+    let section = Section {
+        title: shown.then_some(title.into()),
+        search_title: Some(title.into()),
+        header_end: Some(header.into_any_element()),
+        rows: Vec::new(),
+    };
+    tokens.iter().fold(section, |section, &token| {
+        let cells = variants.iter().map(|&variant| {
+            let shown = match variant {
+                Variant::Light => themes[0],
+                Variant::Dark => themes[1],
+            };
+            let name = format!("{} {}", variant.label(), token.label().to_lowercase());
+            let reset = settings.colors.of(variant).contains_key(&token).then(|| {
+                reset_button((variant, token), &name, move |_, cx| {
+                    change(cx, |settings| {
+                        settings.colors.of_mut(variant).remove(&token);
+                    })
+                })
+            });
+            h_flex()
+                .w(cell)
+                .gap(layout.space(1.0))
+                .child(div().flex_none().w(reset_slot).children(reset))
+                .child(
+                    ColorPicker::new(
+                        SharedString::from(format!("{variant:?}-{token:?}")),
+                        name,
+                        shown.color(token),
+                    )
+                    .on_change(move |color, _, cx| {
+                        change(cx, |settings| settings.set_color(variant, token, color))
+                    }),
+                )
+        });
+        section.row(Row::new(
+            token.label(),
+            None,
+            h_flex().gap(layout.space(2.0)).children(cells),
+        ))
+    })
 }
 
 fn open(cx: &mut App) {
@@ -301,7 +620,7 @@ fn open(cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(480.0), px(SETTINGS_HEIGHT)),
+            size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
@@ -311,10 +630,15 @@ fn open(cx: &mut App) {
         }),
         app_owns_titlebar_drag: true,
         is_minimizable: false,
+        window_min_size: Some(size(px(SETTINGS_MIN_WIDTH), px(SETTINGS_MIN_HEIGHT))),
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let view = cx.new(SettingsWindow::new);
+        let view = cx.new(|cx| {
+            let settings = SettingsWindow::new(cx);
+            settings.load_fonts(cx);
+            settings
+        });
         window.focus(&view.read(cx).focus.clone(), cx);
         view
     }) {
@@ -323,12 +647,109 @@ fn open(cx: &mut App) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    General,
+    Appearance,
+    Shortcuts,
+}
+
+impl Pane {
+    const ALL: [Pane; 3] = [Pane::General, Pane::Appearance, Pane::Shortcuts];
+
+    fn label(self) -> &'static str {
+        match self {
+            Pane::General => "General",
+            Pane::Appearance => "Appearance",
+            Pane::Shortcuts => "Shortcuts",
+        }
+    }
+}
+
+struct Row {
+    label: SharedString,
+    description: Option<SharedString>,
+    control: AnyElement,
+}
+
+impl Row {
+    fn new(
+        label: impl Into<SharedString>,
+        description: Option<&'static str>,
+        control: impl IntoElement,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            description: description.map(SharedString::from),
+            control: control.into_any_element(),
+        }
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        contains(&self.label, query)
+            || self
+                .description
+                .as_ref()
+                .is_some_and(|description| contains(description, query))
+    }
+}
+
+#[derive(Default)]
+struct Section {
+    title: Option<SharedString>,
+    search_title: Option<SharedString>,
+    header_end: Option<AnyElement>,
+    rows: Vec<Row>,
+}
+
+impl Section {
+    fn titled(title: impl Into<SharedString>) -> Self {
+        Self {
+            title: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    fn row(mut self, row: Row) -> Self {
+        self.rows.push(row);
+        self
+    }
+
+    fn into_group(self) -> Group {
+        let group = self
+            .title
+            .into_iter()
+            .fold(Group::new(), |group, title| group.title(title));
+        let group = self
+            .header_end
+            .into_iter()
+            .fold(group, |group, end| group.header_end(end));
+        self.rows.into_iter().fold(group, |group, row| {
+            group.row(row.label, row.description, row.control)
+        })
+    }
+}
+
+enum Block {
+    Section(Section),
+    Element(AnyElement),
+}
+
+fn contains(text: &str, query: &str) -> bool {
+    text.to_lowercase().contains(query)
+}
+
 struct SettingsWindow {
     focus: FocusHandle,
     scroll: ScrollHandle,
-    taken: Option<Shortcut>,
+    pane: Pane,
+    advanced: bool,
+    search: Entity<Input>,
+    text_size: Entity<Input>,
+    mono_size: Entity<Input>,
+    fonts: Rc<[SharedString]>,
     github_token: Entity<Input>,
-    _token_changes: Subscription,
+    _subscriptions: [Subscription; 4],
 }
 
 impl SettingsWindow {
@@ -345,6 +766,11 @@ impl SettingsWindow {
             input.set_text(saved, cx);
             input
         });
+        let search = cx.new(|cx| {
+            Input::new("Search settings", cx)
+                .placeholder("Search")
+                .search()
+        });
         let token_changes = cx.subscribe(&github_token, |_, input, event, cx| {
             if !matches!(event, InputEvent::Changed) {
                 return;
@@ -356,46 +782,276 @@ impl SettingsWindow {
                 tracing::error!(%error, "couldn't save the GitHub token");
             }
         });
+        let settings = &cx.global::<Store>().settings;
+        let (text_size, size_changes) = size_input(
+            "Interface font size",
+            settings.text_size,
+            |settings, size| settings.text_size = size,
+            cx,
+        );
+        let settings = &cx.global::<Store>().settings;
+        let (mono_size, mono_changes) = size_input(
+            "Code font size",
+            settings.mono_size,
+            |settings, size| settings.mono_size = size,
+            cx,
+        );
+        let search_changes = cx.subscribe(&search, |this, _, event, cx| {
+            if matches!(event, InputEvent::Changed) {
+                this.scroll.set_offset(point(px(0.0), px(0.0)));
+                cx.notify();
+            }
+        });
         Self {
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            taken: None,
+            pane: Pane::General,
+            advanced: false,
+            search,
+            text_size,
+            mono_size,
+            fonts: Rc::from([]),
             github_token,
-            _token_changes: token_changes,
+            _subscriptions: [token_changes, search_changes, size_changes, mono_changes],
         }
     }
-}
 
-impl SettingsWindow {
-    fn shortcuts(&self, category: Category, cx: &mut Context<Self>) -> Group {
+    fn load_fonts(&self, cx: &mut Context<Self>) {
+        let system = cx.text_system().clone();
+        let names = cx.background_spawn(async move {
+            system
+                .all_font_names()
+                .into_iter()
+                .filter(|name| !name.starts_with('.') && name != UI_FONT)
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let names = names.await;
+            let _ = this.update(cx, |this, cx| {
+                this.fonts = names.into_iter().map(SharedString::from).collect();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn blocks(&self, pane: Pane, advanced: bool, cx: &mut Context<Self>) -> Vec<Block> {
+        match pane {
+            Pane::General => self.general(cx),
+            Pane::Appearance => self.appearance(advanced, cx),
+            Pane::Shortcuts => self.shortcuts(cx),
+        }
+    }
+
+    fn general(&self, cx: &App) -> Vec<Block> {
+        let settings = &cx.global::<Store>().settings;
+        let theme = cx.theme();
+        let starts = Start::ALL
+            .map(|start| {
+                let preview = match start {
+                    Start::Client => previews::client(theme),
+                    Start::Manager => previews::manager(theme),
+                };
+                Radio::new(start.label()).preview(preview.w(previews::WIDE).h(previews::HEIGHT))
+            })
+            .into_iter()
+            .collect();
+        let start = Start::ALL.iter().position(|&start| start == settings.start);
+        vec![
+            Block::Section(Section::default().row(Row::new(
+                "Open at launch",
+                None,
+                RadioGroup::new("start", "Open at launch", starts, start).on_select(
+                    |index, _, cx| change(cx, |settings| settings.start = Start::ALL[index]),
+                ),
+            ))),
+            Block::Section(Section::titled("GitHub").row(Row::new(
+                "Token",
+                Some(
+                    "Used for all GitHub requests. Unlocks private repos and a higher rate limit.",
+                ),
+                div().w(px(200.0)).child(self.github_token.clone()),
+            ))),
+        ]
+    }
+
+    fn appearance(&self, advanced: bool, cx: &mut Context<Self>) -> Vec<Block> {
+        let settings = &cx.global::<Store>().settings;
+        let light = settings.theme(Variant::Light);
+        let dark = settings.theme(Variant::Dark);
+        let modes = Appearance::ALL
+            .map(|appearance| {
+                let preview = match appearance {
+                    Appearance::System => previews::split(&light, &dark),
+                    Appearance::Light => previews::theme(&light),
+                    Appearance::Dark => previews::theme(&dark),
+                };
+                Radio::new(appearance.label())
+                    .preview(preview.w(previews::NARROW).h(previews::HEIGHT))
+            })
+            .into_iter()
+            .collect();
+        let chosen = Appearance::ALL
+            .iter()
+            .position(|&appearance| appearance == settings.appearance);
+        let this = cx.weak_entity();
+        let disclosure = h_flex().px(cx.theme().space(3.0)).child(
+            Disclosure::new("advanced-colors", "Advanced", advanced).on_toggle(
+                move |open, _, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.advanced = open;
+                        cx.notify();
+                    });
+                },
+            ),
+        );
+        let mut blocks = vec![
+            Block::Section(
+                Section::default().row(Row::new(
+                    "Mode",
+                    None,
+                    RadioGroup::new("appearance", "Mode", modes, chosen)
+                        .on_select(|index, _, cx| choose(Appearance::ALL[index], cx)),
+                )),
+            ),
+            Block::Section(colors(
+                "Colors",
+                true,
+                &ColorToken::SEEDS,
+                settings,
+                [&light, &dark],
+                cx,
+            )),
+            Block::Element(disclosure.into_any_element()),
+        ];
+        if advanced {
+            let theme = &cx.theme().clone();
+            blocks.push(Block::Section(
+                Section {
+                    search_title: Some("Advanced".into()),
+                    ..Section::default()
+                }
+                .row(Row::new(
+                    "Interface font",
+                    None,
+                    with_reset(
+                        settings.font.is_some().then(|| {
+                            reset_button("font", "Interface font", |_, cx| {
+                                change(cx, |settings| settings.font = None)
+                            })
+                        }),
+                        font_select(
+                            "font",
+                            "Interface font",
+                            &[("Inter", None), ("System", Some(".SystemUIFont"))],
+                            &self.fonts,
+                            settings.font.as_deref(),
+                            |settings, font| settings.font = font,
+                        ),
+                        theme,
+                    ),
+                ))
+                .row(Row::new(
+                    "Interface font size",
+                    None,
+                    with_reset(
+                        (settings.text_size != TextSize::default()).then(|| {
+                            reset_button(
+                                "text-size",
+                                "Interface font size",
+                                reset_size(&self.text_size, TextSize::default().0),
+                            )
+                        }),
+                        sized(self.text_size.clone(), theme),
+                        theme,
+                    ),
+                ))
+                .row(Row::new(
+                    "Code font",
+                    None,
+                    with_reset(
+                        settings.mono_font.is_some().then(|| {
+                            reset_button("mono-font", "Code font", |_, cx| {
+                                change(cx, |settings| settings.mono_font = None)
+                            })
+                        }),
+                        font_select(
+                            "mono-font",
+                            "Code font",
+                            &[("System", None)],
+                            &self.fonts,
+                            settings.mono_font.as_deref(),
+                            |settings, font| settings.mono_font = font,
+                        ),
+                        theme,
+                    ),
+                ))
+                .row(Row::new(
+                    "Code font size",
+                    None,
+                    with_reset(
+                        (settings.mono_size != MonoSize::default()).then(|| {
+                            reset_button(
+                                "mono-size",
+                                "Code font size",
+                                reset_size(&self.mono_size, MonoSize::default().0),
+                            )
+                        }),
+                        sized(self.mono_size.clone(), theme),
+                        theme,
+                    ),
+                ))
+                .row(Row::new(
+                    "Use cursor pointers",
+                    Some("Show a hand cursor over clickable controls."),
+                    Switch::new(
+                        "pointer-cursors",
+                        "Use cursor pointers",
+                        settings.pointer_cursors,
+                    )
+                    .hide_label()
+                    .on_toggle(|on, _, cx| change(cx, |settings| settings.pointer_cursors = on)),
+                )),
+            ));
+            blocks.push(Block::Section(colors(
+                "Advanced colors",
+                false,
+                &ColorToken::ADVANCED,
+                settings,
+                [&light, &dark],
+                cx,
+            )));
+        }
+        blocks
+    }
+
+    fn shortcuts(&self, cx: &mut Context<Self>) -> Vec<Block> {
+        Category::ALL
+            .into_iter()
+            .map(|category| Block::Section(self.category(category, cx)))
+            .collect()
+    }
+
+    fn category(&self, category: Category, cx: &mut Context<Self>) -> Section {
         let layout = cx.theme().layout;
         let os = cx.platform_info().os;
         let overrides = shortcuts(cx);
         Shortcut::ALL
             .iter()
             .filter(|shortcut| shortcut.category() == category)
-            .fold(Group::new().title(category.label()), |group, &shortcut| {
+            .fold(Section::titled(category.label()), |section, &shortcut| {
                 let keys = shortcut
                     .keys(overrides)
                     .and_then(|keys| Keystroke::parse_with_os(keys, os).ok());
-                let this = cx.weak_entity();
                 let record = move |keys: Option<Keystroke>, _: &mut Window, cx: &mut App| {
-                    let taken = set_shortcut(shortcut, keys, cx).is_err();
-                    let _ = this.update(cx, |this, cx| {
-                        this.taken = taken.then_some(shortcut);
-                        cx.notify();
-                    });
+                    set_shortcut(shortcut, keys, cx)
+                        .map_err(|Taken(owner)| SharedString::from(format!("Used by {owner}")))
                 };
                 let changed = !shortcut.is_default(overrides);
                 let reset = changed.then(|| {
-                    let record = record.clone();
-                    Button::icon(
-                        SharedString::from(format!("{shortcut:?}-reset")),
-                        Icon::RotateCcw,
-                        format!("Reset {}", shortcut.label().to_lowercase()),
-                    )
-                    .size(Size::XSmall)
-                    .on_click(move |_, window, cx| record(shortcut.default_keystroke(), window, cx))
+                    reset_button(shortcut, shortcut.label(), move |window, cx| {
+                        record(shortcut.default_keystroke(), window, cx).ok();
+                    })
                 });
                 let field = ShortcutField::new(
                     SharedString::from(format!("{shortcut:?}")),
@@ -403,37 +1059,101 @@ impl SettingsWindow {
                     keys,
                 )
                 .on_change(record);
-                group.row(
+                section.row(Row::new(
                     shortcut.label(),
-                    (self.taken == Some(shortcut))
-                        .then(|| "Mira already uses that shortcut.".into()),
+                    None,
                     h_flex().gap(layout.space(1.0)).children(reset).child(field),
-                )
+                ))
             })
+    }
+
+    fn results(&self, query: &str, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut found = Vec::new();
+        for pane in Pane::ALL {
+            for block in self.blocks(pane, true, cx) {
+                let Block::Section(section) = block else {
+                    continue;
+                };
+                let heading: SharedString =
+                    match section.title.as_ref().or(section.search_title.as_ref()) {
+                        Some(title) => format!("{} · {title}", pane.label()).into(),
+                        None => pane.label().into(),
+                    };
+                let whole = contains(&heading, query);
+                let rows: Vec<Row> = section
+                    .rows
+                    .into_iter()
+                    .filter(|row| whole || row.matches(query))
+                    .collect();
+                if !rows.is_empty() {
+                    let section = Section {
+                        title: Some(heading),
+                        search_title: None,
+                        header_end: section.header_end,
+                        rows,
+                    };
+                    found.push(section.into_group().into_any_element());
+                }
+            }
+        }
+        if found.is_empty() {
+            found.push(
+                Empty::new("No settings match", "Try a different search.").into_any_element(),
+            );
+        }
+        found
+    }
+
+    fn show(&mut self, pane: Pane, cx: &mut Context<Self>) {
+        self.search.update(cx, |search, cx| {
+            if !search.text().is_empty() {
+                search.set_text("", cx);
+            }
+        });
+        if self.pane != pane {
+            self.pane = pane;
+            self.scroll.set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        }
     }
 }
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = cx.theme().layout;
-        let settings = &cx.global::<Store>().settings;
-        let appearances = Appearance::ALL
-            .map(|appearance| SharedString::from(appearance.label()))
-            .to_vec();
-        let chosen = Appearance::ALL
-            .iter()
-            .position(|&appearance| appearance == settings.appearance);
-        let starts = Start::ALL
-            .map(|start| SharedString::from(start.label()))
-            .to_vec();
-        let start = Start::ALL.iter().position(|&start| start == settings.start);
         mira_ui::nav::set_scroll_root(&self.scroll, window, cx);
-        let shortcuts: Vec<_> = Category::ALL
-            .into_iter()
-            .map(|category| self.shortcuts(category, cx))
-            .collect();
+        let query = self.search.read(cx).text().trim().to_lowercase();
+        let groups: Vec<AnyElement> = if query.is_empty() {
+            self.blocks(self.pane, self.advanced, cx)
+                .into_iter()
+                .map(|block| match block {
+                    Block::Section(section) => section.into_group().into_any_element(),
+                    Block::Element(element) => element,
+                })
+                .collect()
+        } else {
+            self.results(&query, cx)
+        };
+        let this = cx.weak_entity();
+        let tabs = Tabs::new(
+            "settings-pane",
+            "Settings sections",
+            Pane::ALL.len(),
+            |index| Tab::new(Pane::ALL[index].label()),
+        )
+        .vertical()
+        .selected(if query.is_empty() {
+            Pane::ALL
+                .iter()
+                .position(|&pane| pane == self.pane)
+                .unwrap_or(0)
+        } else {
+            usize::MAX
+        })
+        .on_select(move |index, _, cx| {
+            let _ = this.update(cx, |this, cx| this.show(Pane::ALL[index], cx));
+        });
         let theme = cx.theme();
-        let settings = &cx.global::<Store>().settings;
         div()
             .flex()
             .flex_col()
@@ -446,75 +1166,70 @@ impl Render for SettingsWindow {
             .child(
                 window_bar(window, cx)
                     .child(bar_title("Settings", cx))
-                    .child(drag_area().flex_1()),
+                    .child(drag_area().flex_1().h_full()),
             )
             .child(
-                div()
-                    .relative()
+                h_flex()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
                     .child(
-                div()
-                    .id("settings")
-                    .size_full().max_w(px(600.0)).mx_auto()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .flex()
-                    .flex_col()
-                    .gap(layout.space(4.0))
-                    .px(layout.space(4.0))
-                    .pt(layout.space(3.0))
-                    .pb(layout.space(4.0))
-                    .child(
-                        Group::new().title("General").row(
-                            "Open at launch",
-                            Some("Start in a game tab or your account list.".into()),
-                            Select::new("start", "Open at launch", starts, start)
-                                .width(px(128.0))
-                                .align_item_with_trigger()
-                                .on_select(|index, _, cx| {
-                                    change(cx, |settings| settings.start = Start::ALL[index])
-                                }),
-                        ),
-                    )
-                    .child(
-                        Group::new()
-                            .title("Appearance")
-                            .row(
-                                "Theme",
-                                None,
-                                Select::new("appearance", "Theme", appearances, chosen)
-                                    .width(px(128.0))
-                                    .align_item_with_trigger()
-                                    .on_select(|index, _, cx| choose(Appearance::ALL[index], cx)),
+                        theme
+                            .sidebar_pane()
+                            .h_full()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .p(layout.space(2.0))
+                                    .child(self.search.clone()),
                             )
-                            .row(
-                                "Pointer cursors",
-                                Some("Show a hand cursor over clickable controls.".into()),
-                                Switch::new(
-                                    "pointer-cursors",
-                                    "Pointer cursors",
-                                    settings.pointer_cursors,
-                                )
-                                .hide_label()
-                                .on_toggle(|on, _, cx| {
-                                    change(cx, |settings| settings.pointer_cursors = on)
-                                }),
+                            .child(tabs)
+                            .child(div().flex_1())
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .flex_wrap()
+                                    .justify_between()
+                                    .gap(layout.space(2.0))
+                                    .p(layout.space(2.0))
+                                    .pl(layout.space(4.0))
+                                    .child(
+                                        div()
+                                            .text_caption(theme.typography)
+                                            .text_color(theme.muted_foreground)
+                                            .child(concat!("Mira ", env!("CARGO_PKG_VERSION"))),
+                                    )
+                                    .child(
+                                        Button::new("check-updates", "Check for updates")
+                                            .variant(ButtonVariant::Ghost)
+                                            .size(Size::XSmall)
+                                            .disabled(true),
+                                    ),
                             ),
                     )
                     .child(
-                        Group::new().title("GitHub").row(
-                            "Token",
-                            Some(
-                                "For private packages and a higher rate limit. A read-only fine-grained token is safest."
-                                    .into(),
-                            ),
-                            div().w(px(200.0)).child(self.github_token.clone()),
-                        ),
-                    )
-                    .children(shortcuts),
-                    )
-                    .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .id("settings")
+                                    .size_full()
+                                    .max_w(px(600.0))
+                                    .mx_auto()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.scroll)
+                                    .flex()
+                                    .flex_col()
+                                    .gap(layout.space(4.0))
+                                    .px(layout.space(4.0))
+                                    .pt(layout.space(3.0))
+                                    .pb(layout.space(4.0))
+                                    .children(groups),
+                            )
+                            .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
+                    ),
             )
     }
 }
@@ -541,6 +1256,14 @@ mod tests {
             sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
+            font: Some("Menlo".into()),
+            mono_font: Some("Courier".into()),
+            text_size: FontSize(15),
+            mono_size: FontSize(12),
+            colors: Colors {
+                light: BTreeMap::new(),
+                dark: BTreeMap::from([(ColorToken::Accent, Hex(parse_hex("#3B82F6").unwrap()))]),
+            },
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
@@ -548,6 +1271,24 @@ mod tests {
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["colors"]["dark"]["accent"], "#3B82F6");
+        assert_eq!(saved["textSize"], 15);
+        assert_eq!(
+            serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
+                .unwrap()
+                .text_size,
+            FontSize(16),
+            "a size outside the offered range is clamped instead of discarding the file"
+        );
+        let theme = chosen.theme(Variant::Dark);
+        assert_eq!(theme.font_family.as_ref(), "Menlo");
+        assert_eq!(theme.mono_family.as_ref(), "Courier");
+        assert_eq!(theme.typography.mono, px(12.0));
+        assert_eq!(TextSize::parse("16"), Some(FontSize(16)));
+        assert_eq!(TextSize::parse("17"), None);
+        assert_eq!(TextSize::parse(""), None);
+        assert_eq!(theme.typography.body, px(15.0));
         fs::write(&path, r#"{"appearance":"light"}"#).unwrap();
         assert_eq!(
             Settings::load(&path).unwrap(),
@@ -557,6 +1298,70 @@ mod tests {
             }
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_custom_color_paints_only_its_variant_and_picking_the_default_clears_it() {
+        let blue = parse_hex("#1D4ED8").unwrap();
+        let mut settings = Settings::default();
+        settings.set_color(Variant::Dark, ColorToken::Accent, blue);
+        assert_eq!(to_hex(settings.theme(Variant::Dark).primary), "#1D4ED8");
+        assert_eq!(
+            to_hex(settings.theme(Variant::Dark).primary_foreground),
+            "#FAFAFA"
+        );
+        assert_eq!(
+            to_hex(settings.theme(Variant::Light).primary),
+            to_hex(Theme::light().primary)
+        );
+        settings.set_color(Variant::Dark, ColorToken::Accent, Theme::dark().primary);
+        assert_eq!(settings.colors, Colors::default());
+        let navy = parse_hex("#101830").unwrap();
+        settings.set_color(Variant::Dark, ColorToken::Background, navy);
+        let card = settings.theme(Variant::Dark).card;
+        settings.set_color(Variant::Dark, ColorToken::Card, card);
+        assert_eq!(
+            settings.colors.dark.keys().collect::<Vec<_>>(),
+            [&ColorToken::Background],
+            "a card that matches what the background derives isn't an override"
+        );
+        assert!(
+            serde_json::from_str::<Settings>(r#"{"colors":{"dark":{"primary":"blue"}}}"#).is_err()
+        );
+    }
+
+    #[gpui::test]
+    fn typing_a_size_applies_it_and_resetting_restores_the_default(cx: &mut gpui::TestAppContext) {
+        let path = std::env::temp_dir().join(format!(
+            "mira-settings-size-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            init(path.clone(), |_| {}, cx);
+            packages::init(
+                std::env::temp_dir().join("mira-settings-size-packages"),
+                std::env::temp_dir().join("mira-settings-size-token"),
+                cx,
+            );
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(cx));
+        let size = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| cx.global::<Store>().settings.text_size)
+        };
+        let input = cx.update(|_, cx| view.read(cx).text_size.clone());
+        cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("15", cx)));
+        cx.run_until_parked();
+        assert_eq!(size(cx), FontSize(15));
+        cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("40", cx)));
+        cx.run_until_parked();
+        assert_eq!(size(cx), FontSize(15), "an out-of-range size isn't applied");
+        cx.update(|window, cx| reset_size(&input, TextSize::default().0)(window, cx));
+        cx.run_until_parked();
+        assert_eq!(size(cx), TextSize::default());
+        assert_eq!(cx.update(|_, cx| input.read(cx).text().to_owned()), "13");
+        fs::remove_file(path).ok();
     }
 
     #[gpui::test]
@@ -617,18 +1422,78 @@ mod tests {
     #[test]
     fn snapshot_settings_window() {
         let edited = Settings {
+            appearance: Appearance::System,
+            colors: Colors {
+                light: BTreeMap::from([(ColorToken::Accent, Hex(parse_hex("#2563EB").unwrap()))]),
+                dark: BTreeMap::from([
+                    (ColorToken::Accent, Hex(parse_hex("#3B82F6").unwrap())),
+                    (ColorToken::Background, Hex(parse_hex("#101830").unwrap())),
+                ]),
+            },
             shortcuts: Overrides::from([
                 (Shortcut::Bank, Some("cmd-k".into())),
                 (Shortcut::Packets, None),
             ]),
             ..Settings::default()
         };
-        for (name, height, settings, taken) in [
-            ("settings", SETTINGS_HEIGHT, Settings::default(), None),
-            ("settings-shortcuts", 2200.0, edited, Some(Shortcut::Jump)),
+        for (name, height, pane, settings, query) in [
+            (
+                "settings",
+                SETTINGS_HEIGHT,
+                Pane::General,
+                Settings::default(),
+                "",
+            ),
+            (
+                "settings-appearance",
+                980.0,
+                Pane::Appearance,
+                edited.clone(),
+                "",
+            ),
+            (
+                "settings-appearance-light",
+                SETTINGS_HEIGHT,
+                Pane::Appearance,
+                Settings {
+                    appearance: Appearance::Light,
+                    ..Settings::default()
+                },
+                "",
+            ),
+            (
+                "settings-shortcuts",
+                1300.0,
+                Pane::Shortcuts,
+                edited.clone(),
+                "",
+            ),
+            (
+                "settings-min",
+                SETTINGS_MIN_HEIGHT,
+                Pane::Appearance,
+                Settings::default(),
+                "",
+            ),
+            (
+                "settings-search",
+                SETTINGS_HEIGHT,
+                Pane::General,
+                edited,
+                "color",
+            ),
         ] {
-            for written in
-                mira_ui::snapshot(name, size(px(480.0), px(height)), move |window, cx| {
+            for written in mira_ui::snapshot(
+                name,
+                size(
+                    px(if name == "settings-min" {
+                        SETTINGS_MIN_WIDTH
+                    } else {
+                        SETTINGS_WIDTH
+                    }),
+                    px(height),
+                ),
+                move |window, cx| {
                     cx.set_global(Store {
                         path: PathBuf::new(),
                         settings: settings.clone(),
@@ -641,14 +1506,61 @@ mod tests {
                     );
                     cx.new(|cx| {
                         let mut settings = SettingsWindow::new(cx);
-                        settings.taken = taken;
+                        settings.pane = pane;
+                        settings.advanced = pane == Pane::Appearance;
+                        settings
+                            .search
+                            .update(cx, |search, cx| search.set_text(query, cx));
                         window.focus(&settings.focus, cx);
                         settings
                     })
-                })
-            {
+                },
+            ) {
                 assert!(written.exists(), "{} was not written", written.display());
             }
+        }
+    }
+
+    #[test]
+    fn snapshot_settings_with_large_text_in_another_font() {
+        let settings = Settings {
+            font: Some("Georgia".into()),
+            text_size: FontSize(16),
+            mono_size: FontSize(13),
+            ..Settings::default()
+        };
+        let themed = settings.clone();
+        for written in mira_ui::snapshot_with(
+            "settings-text",
+            size(px(SETTINGS_WIDTH), px(900.0)),
+            move |window, cx| {
+                cx.set_global(Store {
+                    path: PathBuf::new(),
+                    settings: settings.clone(),
+                    on_change: |_| {},
+                });
+                packages::init(
+                    std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                    std::env::temp_dir().join("mira-settings-snapshot-token"),
+                    cx,
+                );
+                cx.new(|cx| {
+                    let mut settings = SettingsWindow::new(cx);
+                    settings.pane = Pane::Appearance;
+                    settings.advanced = true;
+                    window.focus(&settings.focus, cx);
+                    settings
+                })
+            },
+            move |cx, _| {
+                cx.update(|cx| {
+                    let dark = cx.theme().dark_mode;
+                    let variant = if dark { Variant::Dark } else { Variant::Light };
+                    cx.set_global(themed.theme(variant));
+                });
+            },
+        ) {
+            assert!(written.exists(), "{} was not written", written.display());
         }
     }
 }
