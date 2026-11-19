@@ -1,15 +1,14 @@
 use gpui::{
     App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions,
-    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowOptions, actions, div, px, size,
 };
+use mira_ui::StyledExt as _;
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
     components::{Chips, Empty},
-    h_flex,
     primitives::{Align, Input, InputEvent, Select, Switch},
-    theme::TEXT_BODY,
     v_flex,
 };
 
@@ -34,7 +33,7 @@ const WIDTH: f32 = 640.0;
 const HEIGHT: f32 = 340.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 240.0;
-const COLUMNS_FROM: Pixels = px(560.0);
+
 const MAX_NAME: usize = 32;
 const MAX_LIST: usize = 256;
 
@@ -327,6 +326,7 @@ impl Follower {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let layout = theme.layout;
         let settings = automation.follower();
         let this = cx.weak_entity();
         let unnamed = !settings.enabled && self.typed_target(cx).is_empty();
@@ -363,7 +363,7 @@ impl Follower {
             },
         ));
         let following = v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(section(
                 "Follow",
                 "Goes wherever they go, across maps and cells.",
@@ -371,11 +371,11 @@ impl Follower {
                 follow.hide_label(),
                 theme,
             ))
-            .child(row("Player", true, player))
-            .child(switch_row("Copy walk", true, copy_walk))
+            .child(row(layout, "Player", true, player))
+            .child(switch_row(layout, "Copy walk", true, copy_walk))
             .child(self.entries(Entries::Maps, &settings, automation, true, theme));
         let fighting = v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(section(
                 "Fight",
                 "Attacks monsters in their cell with this profile.",
@@ -384,6 +384,7 @@ impl Follower {
                 theme,
             ))
             .child(row(
+                layout,
                 "Profile",
                 settings.fight,
                 profile_select(&settings, automation, cx),
@@ -395,21 +396,7 @@ impl Follower {
                 settings.fight,
                 theme,
             ));
-        if window.viewport_size().width >= COLUMNS_FROM {
-            h_flex()
-                .items_start()
-                .min_h_full()
-                .child(div().flex_1().min_w_0().p(px(16.0)).child(following))
-                .child(div().self_stretch().w(px(1.0)).bg(theme.border))
-                .child(div().flex_1().min_w_0().p(px(16.0)).child(fighting))
-        } else {
-            v_flex()
-                .gap(px(14.0))
-                .p(px(16.0))
-                .child(following)
-                .child(div().h(px(1.0)).bg(theme.border))
-                .child(fighting)
-        }
+        theme.form_columns(window.viewport_size().width, following, fighting)
     }
 
     fn entries(
@@ -420,6 +407,7 @@ impl Follower {
         enabled: bool,
         theme: &Theme,
     ) -> Div {
+        let layout = theme.layout;
         let input = self.input(entries).clone();
         let typed = div()
             .child(input.clone())
@@ -429,9 +417,9 @@ impl Follower {
                 }
             });
         let field = v_flex()
-            .gap(px(10.0))
-            .child(row(entries.label(), enabled, typed))
-            .child(note(entries.note(), enabled, theme).mt(px(-4.0)));
+            .gap(layout.space(2.5))
+            .child(row(layout, entries.label(), enabled, typed))
+            .child(note(entries.note(), enabled, theme).mt(layout.space(-1.0)));
         let items = entries.items(settings);
         if items.is_empty() {
             return field;
@@ -538,9 +526,7 @@ impl Render for Follower {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(FOCUS_SCOPE)
             .id("follower")
             .track_focus(&self.focus)
@@ -584,6 +570,33 @@ mod tests {
         });
         cx.run_until_parked();
         (follower, automation, cx)
+    }
+
+    #[test]
+    fn snapshot_follower_columns_and_stack() {
+        let dir = std::env::temp_dir().join(format!("mira-follower-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, w, h) in [
+            ("follower-min", MIN_WIDTH, MIN_HEIGHT),
+            ("follower", WIDTH, HEIGHT),
+        ] {
+            for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
+                combat_profiles::init(dir.join("profiles.json"), cx);
+                let client = Client::empty_for_tests(&dir, cx);
+                let automation = Automation::default();
+                automation
+                    .update_follower(|settings| settings.target = "Battleon party leader".into());
+                cx.new(|cx| {
+                    let mut follower = Follower::new(client, Target::Selected, window, cx);
+                    follower.shown = Some(ShownTab::fake("Battleon", automation));
+                    follower.fill(cx);
+                    follower
+                })
+            }) {
+                assert!(written.exists());
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn press(cx: &mut VisualTestContext, keys: &str) {

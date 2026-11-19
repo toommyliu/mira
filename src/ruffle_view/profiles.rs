@@ -21,12 +21,11 @@ use mira_ui::{
         MenuItem, Numeric, Scrollbar, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
     },
-    theme::{CONTROL_MD, CONTROL_SM, ROW, TEXT_BODY, TEXT_SMALL},
     v_flex,
 };
 
 use super::{
-    client::{CloseSession, SIDEBAR_WIDTH, bar_title, drag_area, reveal_tab, window_bar},
+    client::{CloseSession, bar_title, drag_area, reveal_tab, window_bar},
     form,
     profile_form::{Form, FormStep, FormTrigger, Item, Rule, Subject},
 };
@@ -44,7 +43,7 @@ actions!(mira, [OpenCombatProfiles, SaveProfile, NewProfile]);
 const CONTEXT: &str = "CombatProfiles";
 const WIDTH: f32 = 1000.0;
 const HEIGHT: f32 = 640.0;
-const INSPECTOR_WIDTH: Pixels = px(340.0);
+
 const PADDING: Pixels = px(16.0);
 const STATUS_WIDTH: Pixels = px(420.0);
 const RENAME_INSET: Pixels = px(9.0);
@@ -898,6 +897,8 @@ impl Editor {
     }
 
     fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let entries: Rc<[usize]> = self.entries(cx).into();
         let listed = !entries.is_empty();
         let rows: Rc<[ProfileRow]> = entries
@@ -939,7 +940,7 @@ impl Editor {
                 tab = tab.child(
                     div()
                         .mx(-RENAME_INSET)
-                        .my(px(-4.0))
+                        .my(layout.space(-1.0))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_key_down(move |event, window, cx| {
                             if event.keystroke.key == "escape" {
@@ -996,21 +997,15 @@ impl Editor {
         let query = self.search.read(cx).text().trim();
         let no_match = (!listed && !query.is_empty())
             .then(|| format!("No profiles match \u{201c}{query}\u{201d}."));
-        v_flex()
-            .flex_none()
-            .w(SIDEBAR_WIDTH)
+        theme
+            .sidebar_pane()
             .h_full()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.border)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
             .child(
                 div()
                     .flex_none()
-                    .px(px(8.0))
-                    .pt(px(8.0))
-                    .pb(px(6.0))
+                    .px(layout.space(2.0))
+                    .pt(layout.space(2.0))
+                    .pb(layout.space(1.5))
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         let by = match event.keystroke.key.as_str() {
                             "up" => -1,
@@ -1024,9 +1019,9 @@ impl Editor {
             )
             .children(no_match.map(|text| {
                 div()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .text_caption(theme.typography)
+                    .px(layout.space(3.0))
+                    .py(layout.space(2.0))
+                    .text_caption(typography)
                     .text_color(theme.muted_foreground)
                     .child(text)
             }))
@@ -1047,8 +1042,8 @@ impl Editor {
                 sidebar.child(
                     div()
                         .flex_none()
-                        .p(px(12.0))
-                        .text_caption(theme.typography)
+                        .p(layout.space(3.0))
+                        .text_caption(typography)
                         .text_color(theme.foreground)
                         .child(if issues == 1 {
                             "1 saved profile couldn't be read, so it's left out.".to_owned()
@@ -1060,7 +1055,7 @@ impl Editor {
                 )
             })
             .child(
-                div().flex_none().p(px(8.0)).child(
+                div().flex_none().p(layout.space(2.0)).child(
                     Button::new("new-profile", "New profile")
                         .variant(Variant::Ghost)
                         .w_full()
@@ -1077,6 +1072,7 @@ impl Editor {
     }
 
     fn section(&self, theme: &Theme, section: Section, cx: &mut Context<Self>) -> AnyElement {
+        let layout = theme.layout;
         let (title, subtitle, empty) = section.copy();
         let editable = self.draft().is_some();
         let form = self.form();
@@ -1153,7 +1149,7 @@ impl Editor {
         };
         let add = editable.then(|| self.add_menu(section, cx));
         v_flex()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(form::section(
                 title,
                 subtitle,
@@ -1199,8 +1195,10 @@ impl Editor {
     }
 
     fn on_cooldown_row(&self, cx: &mut Context<Self>) -> Div {
+        let layout = cx.theme().layout;
         let this = cx.weak_entity();
         form::row(
+            layout,
             "On cooldown",
             true,
             ToggleGroup::new(
@@ -1225,6 +1223,8 @@ impl Editor {
     }
 
     fn save_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let draft = self.draft();
         let unsaved = draft.and_then(|draft| draft.unsaved(&self.library));
         let note = draft.and_then(|draft| draft.name_note(&self.library));
@@ -1246,17 +1246,17 @@ impl Editor {
                 .on_click(cx.listener(|this, _, window, cx| this.revert(window, cx)))
         });
         h_flex()
-            .flex_none()
-            .gap(px(6.0))
+            .min_w_0()
+            .gap(theme.space(2.0))
             .children(status.map(|(text, color)| {
                 div()
                     .id("profile-status")
                     .role(Role::Status)
                     .aria_label(text.clone())
                     .max_w(STATUS_WIDTH)
-                    .mr(px(6.0))
+                    .mr(layout.space(1.5))
                     .truncate()
-                    .text_caption(theme.typography)
+                    .text_caption(typography)
                     .text_color(color)
                     .child(text)
             }))
@@ -1265,19 +1265,21 @@ impl Editor {
                 Button::new("save-profile", "Save")
                     .variant(Variant::Primary)
                     .size(Size::Small)
-                    .end_slot(key_hint("⌘S"))
+                    .end_slot(mira_ui::primitives::Kbd::hint("⌘S"))
                     .disabled(unsaved.is_none())
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
             )
     }
 
     fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let pane = v_flex()
             .id("inspector")
             .size_full()
-            .gap(px(14.0))
+            .gap(theme.space(4.0))
             .p(PADDING)
-            .pt(px(12.0))
+            .pt(layout.space(3.0))
             .overflow_y_scroll()
             .track_scroll(&self.inspector_scroll);
         if self.draft().is_none() {
@@ -1300,31 +1302,25 @@ impl Editor {
         let slot = u8::from(skill);
         let this = cx.weak_entity();
         let skill_this = this.clone();
-        let skills = h_flex().gap(px(8.0)).children(SLOTS.map(|key| {
-            let on = key == slot;
-            let this = skill_this.clone();
-            Button::new(("item-skill", usize::from(key)), key.to_string())
-                .variant(if on {
-                    Variant::Primary
-                } else {
-                    Variant::Secondary
-                })
-                .pressed(on)
-                .w(CONTROL_MD)
-                .px_0()
-                .on_click(move |_, _, cx| {
-                    let _ = this.update(cx, |this, cx| this.set_skill(key, cx));
-                })
-        }));
+        let skills = ToggleGroup::new(
+            "item-skill",
+            "Skill",
+            SLOTS.map(|key| SharedString::from(key.to_string())),
+            usize::from(slot),
+        )
+        .small()
+        .on_select(move |index, _, cx| {
+            let _ = skill_this.update(cx, |this, cx| this.set_skill(SLOTS[index], cx));
+        });
         let pane = pane.child(
             h_flex()
-                .h(ROW)
+                .h(layout.control)
                 .justify_between()
-                .gap(px(8.0))
+                .gap(layout.space(2.0))
                 .child(heading(item_title(item)))
                 .child(
                     h_flex()
-                        .gap(px(2.0))
+                        .gap(layout.space(0.5))
                         .child(
                             Button::new("duplicate-item", "Duplicate")
                                 .variant(Variant::Ghost)
@@ -1346,6 +1342,7 @@ impl Editor {
         match item {
             Item::Trigger(_) => pane
                 .child(form::row(
+                    layout,
                     "Message",
                     true,
                     div().children(texts.get(Text::Includes)),
@@ -1354,7 +1351,7 @@ impl Editor {
                     theme,
                     "Matched anywhere in combat and server messages, ignoring case.",
                 ))
-                .child(form::row("Cast", true, skills))
+                .child(mira_ui::primitives::Field::new("Cast",skills))
                 .child(row_note(
                     theme,
                     "Casts once, as soon as the skill is ready. Gives up if that takes more than 3 seconds.",
@@ -1363,7 +1360,7 @@ impl Editor {
                 let Some(step) = self.form().lane(lane).get(index) else {
                     return pane;
                 };
-                let mut pane = pane.child(form::row("Skill", true, skills));
+                let mut pane = pane.child(mira_ui::primitives::Field::new("Skill",skills));
                 if lane == Lane::Rotation {
                     let chosen = match step.on_cooldown {
                         None => 0,
@@ -1377,6 +1374,7 @@ impl Editor {
                     let cooldown_this = this.clone();
                     pane = pane
                         .child(form::row(
+                    layout,
                             "On cooldown",
                             true,
                             ToggleGroup::new(
@@ -1413,16 +1411,17 @@ impl Editor {
                     .then_some("A missing aura counts as 0.");
                 let adder = this.clone();
                 pane.child(form::row(
+                    layout,
                     "Pause after",
                     true,
                     millis_input(texts, Text::Pause),
                 ))
                 .child(
                     v_flex()
-                        .gap(px(6.0))
+                        .gap(layout.space(1.5))
                         .child(
                             h_flex()
-                                .h(ROW)
+                                .h(layout.control)
                                 .justify_between()
                                 .child(heading("Conditions".into()))
                                 .child(
@@ -1459,7 +1458,7 @@ impl Editor {
                         .child(if conditions.is_empty() {
                             empty_box(theme, "None, so it casts as soon as it's ready.")
                         } else {
-                            v_flex().gap(px(12.0)).pt(px(2.0)).children(
+                            v_flex().gap(layout.space(3.0)).pt(layout.space(0.5)).children(
                                 conditions.into_iter().enumerate().map(|(index, row)| {
                                     h_flex()
                                         .items_start()
@@ -1469,9 +1468,9 @@ impl Editor {
                                                 .flex_none()
                                                 .flex()
                                                 .items_center()
-                                                .h(CONTROL_SM)
+                                                .h(layout.control_sm)
                                                 .w(CONJUNCTION_WIDTH)
-                                                .text_caption(theme.typography)
+                                                .text_caption(typography)
                                                 .text_color(theme.muted_foreground)
                                                 .child(if index == 0 { "If" } else { "and" }),
                                         )
@@ -1479,7 +1478,7 @@ impl Editor {
                                 }),
                             )
                         })
-                        .children(hint.map(|hint| form::note(hint, true, theme).mt(px(4.0)))),
+                        .children(hint.map(|hint| form::note(hint, true, theme).mt(layout.space(1.0)))),
                 )
             }
         }
@@ -1510,13 +1509,15 @@ fn profile_menu(this: &WeakEntity<Editor>, index: usize) -> Vec<MenuItem> {
 }
 
 fn empty_box(theme: &Theme, text: &'static str) -> Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
     div()
-        .px(px(12.0))
-        .py(px(8.0))
+        .px(layout.space(3.0))
+        .py(layout.space(2.0))
         .rounded(theme.radius.panel)
         .border_1()
         .border_color(theme.border)
-        .text_caption(theme.typography)
+        .text_caption(typography)
         .text_color(theme.muted_foreground)
         .child(text)
 }
@@ -1539,13 +1540,10 @@ fn heading(text: SharedString) -> Div {
 }
 
 fn row_note(theme: &Theme, text: &'static str) -> Div {
+    let layout = theme.layout;
     form::note(text, true, theme)
-        .ml(form::LABEL_WIDTH + px(12.0))
-        .mt(px(-6.0))
-}
-
-fn key_hint(keys: &'static str) -> impl IntoElement {
-    div().text_size(TEXT_SMALL).opacity(0.55).child(keys)
+        .ml(form::LABEL_WIDTH + layout.space(2.0))
+        .mt(layout.space(-1.5))
 }
 
 fn millis_input(texts: &Texts, text: Text) -> impl IntoElement + use<> {
@@ -1571,6 +1569,7 @@ fn condition_editor(
     cx: &mut Context<Editor>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme().clone();
+    let layout = theme.layout;
     let edit = |change: fn(&mut Rule)| {
         let this = this.clone();
         move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
@@ -1623,7 +1622,7 @@ fn condition_editor(
         },
     )
     .size(Size::Small)
-    .w(CONTROL_SM)
+    .w(layout.control_sm)
     .px_0()
     .child(if condition.at_most { "≤" } else { "≥" })
     .on_click(edit(|rule| rule.at_most = !rule.at_most));
@@ -1704,7 +1703,7 @@ impl Render for Editor {
                 )
                 .action(
                     Button::new("first-profile", "New profile")
-                        .end_slot(key_hint("⌘N"))
+                        .end_slot(mira_ui::primitives::Kbd::hint("⌘N"))
                         .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
                 )
                 .into_any_element(),
@@ -1722,7 +1721,7 @@ impl Render for Editor {
                     .flex()
                     .flex_col()
                     .size_full()
-                    .gap(px(20.0))
+                    .gap(theme.space(4.0))
                     .p(PADDING)
                     .overflow_y_scroll()
                     .track_scroll(&self.lanes_scroll)
@@ -1732,13 +1731,10 @@ impl Render for Editor {
                 "profile-scrollbar",
                 self.lanes_scroll.clone(),
             ));
-        let inspector_pane = div()
+        let inspector_pane = theme
+            .inspector_pane()
             .relative()
-            .flex_none()
-            .w(INSPECTOR_WIDTH)
             .h_full()
-            .border_l_1()
-            .border_color(theme.border)
             .child(self.inspector(&theme, cx))
             .child(Scrollbar::new(
                 "inspector-scrollbar",
@@ -1752,9 +1748,7 @@ impl Render for Editor {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("combat-profiles")
             .track_focus(&self.focus)
@@ -1849,7 +1843,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ruffle_view::BAR_HEIGHT;
 
     fn library_file(name: &str) -> std::path::PathBuf {
         let mut library = Library::default();
@@ -1993,7 +1986,7 @@ mod tests {
     fn profile_row(index: usize) -> gpui::Point<gpui::Pixels> {
         gpui::point(
             px(60.0),
-            BAR_HEIGHT + px(40.0 + 4.0 + 15.0 + 32.0 * index as f32),
+            mira_ui::theme::Layout::default().chrome + px(40.0 + 4.0 + 15.0 + 32.0 * index as f32),
         )
     }
 
