@@ -102,6 +102,13 @@ pub struct Numeric {
 
 const HISTORY: usize = 100;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    Boxed,
+    Bare,
+    Inline,
+}
+
 struct Snapshot {
     content: SharedString,
     selected: Range<usize>,
@@ -120,7 +127,7 @@ pub struct Input {
     suffix: Option<SharedString>,
     small: bool,
     pill: bool,
-    bare: bool,
+    frame: Frame,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     typing: bool,
@@ -153,7 +160,7 @@ impl Input {
             suffix: None,
             small: false,
             pill: false,
-            bare: false,
+            frame: Frame::Boxed,
             undo: Vec::new(),
             redo: Vec::new(),
             typing: false,
@@ -211,7 +218,12 @@ impl Input {
     }
 
     pub fn bare(mut self) -> Self {
-        self.bare = true;
+        self.frame = Frame::Bare;
+        self
+    }
+
+    pub fn inline(mut self) -> Self {
+        self.frame = Frame::Inline;
         self
     }
 
@@ -803,10 +815,11 @@ impl Render for Input {
         }
         self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
-        let height = match (self.bare, self.small) {
-            (true, _) => typography.body_line,
-            (false, true) => layout.control_sm,
-            (false, false) => layout.control,
+        let frame = self.frame;
+        let height = match frame {
+            Frame::Boxed if self.small => layout.control_sm,
+            Frame::Boxed => layout.control,
+            Frame::Bare | Frame::Inline => typography.body_line,
         };
         let radius = if self.pill {
             height / 2.0
@@ -872,9 +885,15 @@ impl Render for Input {
             .flex()
             .items_center()
             .gap(layout.space(1.0))
-            .w_full()
-            .h(height)
-            .when(!self.bare, |field| {
+            .when(frame != Frame::Inline, |field| {
+                field
+                    .w_full()
+                    .h(height)
+                    .text_size(typography.body)
+                    .line_height(typography.body_line)
+                    .text_color(theme.foreground)
+            })
+            .when(frame == Frame::Boxed, |field| {
                 field
                     .pl(layout.space(2.0))
                     .pr(px(if clearable || self.password { 2.0 } else { 8.0 }))
@@ -895,18 +914,8 @@ impl Render for Input {
                 } else {
                     theme.ring
                 };
-                if self.bare {
-                    field.child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom(px(-3.0))
-                            .h(px(1.0))
-                            .bg(color),
-                    )
-                } else {
-                    field.child(theme.halo(
+                match frame {
+                    Frame::Boxed => field.child(theme.halo(
                         if self.invalid {
                             theme.invalid_halo()
                         } else {
@@ -915,12 +924,19 @@ impl Render for Input {
                         radius,
                         px(1.0),
                         px(2.0),
-                    ))
+                    )),
+                    Frame::Bare => field.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom(px(-3.0))
+                            .h(px(1.0))
+                            .bg(color),
+                    ),
+                    Frame::Inline => field,
                 }
             })
-            .text_size(typography.body)
-            .line_height(typography.body_line)
-            .text_color(theme.foreground)
             .when(self.disabled, |field| {
                 field.opacity(crate::theme::DISABLED_OPACITY)
             })
@@ -932,8 +948,9 @@ impl Render for Input {
             })
             .child(
                 div()
-                    .flex_1()
-                    .overflow_hidden()
+                    .when(frame != Frame::Inline, |text| {
+                        text.flex_1().overflow_hidden()
+                    })
                     .child(TextElement { field: cx.entity() }),
             )
             .when_some(self.suffix.clone(), |field, suffix| {
@@ -984,6 +1001,58 @@ impl Render for Input {
 
 const CARET_WIDTH: Pixels = px(1.5);
 
+fn shape(field: &Input, window: &Window, cx: &App) -> ShapedLine {
+    let style = window.text_style();
+    let (text, color) = if field.content.is_empty() {
+        let color = cx.theme().muted_foreground;
+        (field.placeholder.clone(), color)
+    } else {
+        (field.display_text(), style.color)
+    };
+    let run = TextRun {
+        len: text.len(),
+        font: style.font(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let marked = field
+        .marked
+        .as_ref()
+        .filter(|_| !field.content.is_empty())
+        .map(|marked| field.to_display(marked.start)..field.to_display(marked.end));
+    let runs = match marked {
+        Some(marked) => [
+            TextRun {
+                len: marked.start,
+                ..run.clone()
+            },
+            TextRun {
+                len: marked.end - marked.start,
+                underline: Some(UnderlineStyle {
+                    color: Some(color),
+                    thickness: px(1.0),
+                    wavy: false,
+                }),
+                ..run.clone()
+            },
+            TextRun {
+                len: text.len() - marked.end,
+                ..run
+            },
+        ]
+        .into_iter()
+        .filter(|run| run.len > 0)
+        .collect(),
+        None => vec![run],
+    };
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    window
+        .text_system()
+        .shape_line(text, font_size, &runs, None)
+}
+
 struct TextElement {
     field: Entity<Input>,
 }
@@ -1015,8 +1084,12 @@ impl gpui::Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
+        let field = self.field.read(cx);
         let mut style = Style::default();
-        style.size.width = relative(1.0).into();
+        style.size.width = match field.frame {
+            Frame::Inline => shape(field, window, cx).width.into(),
+            Frame::Boxed | Frame::Bare => relative(1.0).into(),
+        };
         style.size.height = window.line_height().into();
         (window.request_layout(style, [], cx), ())
     }
@@ -1032,55 +1105,7 @@ impl gpui::Element for TextElement {
     ) -> Prepainted {
         let theme = cx.theme().clone();
         let field = self.field.read(cx);
-        let style = window.text_style();
-        let (text, color) = if field.content.is_empty() {
-            let color = theme.muted_foreground;
-            (field.placeholder.clone(), color)
-        } else {
-            (field.display_text(), style.color)
-        };
-        let run = TextRun {
-            len: text.len(),
-            font: style.font(),
-            color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let marked = field
-            .marked
-            .as_ref()
-            .filter(|_| !field.content.is_empty())
-            .map(|marked| field.to_display(marked.start)..field.to_display(marked.end));
-        let runs = match marked {
-            Some(marked) => [
-                TextRun {
-                    len: marked.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked.end - marked.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: text.len() - marked.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect(),
-            None => vec![run],
-        };
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(text, font_size, &runs, None);
+        let line = shape(field, window, cx);
         let bounds = if field.pill {
             let inset = ((bounds.size.width - line.width) / 2.0).max(Pixels::ZERO);
             Bounds::new(
@@ -1095,7 +1120,10 @@ impl gpui::Element for TextElement {
         } else {
             line.x_for_index(field.to_display(field.cursor()))
         };
-        let visible = bounds.size.width - CARET_WIDTH;
+        let visible = match field.frame {
+            Frame::Inline => bounds.size.width,
+            Frame::Boxed | Frame::Bare => bounds.size.width - CARET_WIDTH,
+        };
         let mut scroll = field.scroll;
         if field.focus.is_focused(window) {
             scroll = scroll.min(caret_x).max(caret_x - visible);

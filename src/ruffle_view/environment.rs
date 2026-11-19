@@ -734,6 +734,7 @@ impl Environment {
                 .disabled(!on)
                 .marked(
                     Icon::Bell,
+                    Icon::BellRing,
                     "Beep",
                     state.items.iter().map(|query| state.rings(query)),
                 )
@@ -797,10 +798,10 @@ impl Environment {
                             .iter()
                             .map(|name| SharedString::from(name.clone())),
                     )
-                    .quiet()
                     .disabled(!on)
                     .marked(
                         Icon::Bell,
+                        Icon::BellRing,
                         "Beep",
                         from_quests
                             .iter()
@@ -1803,6 +1804,7 @@ mod tests {
                 let automation = Automation::default();
                 automation.update_drops(|state| {
                     register_items(&mut state.items, items("Tainted Gem, Dark Crystal Shard"));
+                    state.set_sound(&ItemQuery::Name("Tainted Gem".into()), true);
                     state.config.accept_ac_member_only = true;
                     state.config.accept_non_ac_member_only = true;
                 });

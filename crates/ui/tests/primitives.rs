@@ -1944,16 +1944,16 @@ impl Render for Maps {
                         })
                     })
                     .when_some(self.marked.clone(), |chips, marked| {
-                        chips.marked(Icon::Bell, "Beeps", marked).on_mark(
-                            move |index, on, _, cx| {
+                        chips
+                            .marked(Icon::Bell, Icon::BellRing, "Beeps", marked)
+                            .on_mark(move |index, on, _, cx| {
                                 let _ = marking.update(cx, |this, cx| {
                                     if let Some(marked) = &mut this.marked {
                                         marked[index] = on;
                                     }
                                     cx.notify();
                                 });
-                            },
-                        )
+                            })
                     })
             })
     }
