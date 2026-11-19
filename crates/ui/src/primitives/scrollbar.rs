@@ -53,16 +53,23 @@ impl State {
 pub struct Scrollbar {
     id: ElementId,
     handle: ScrollHandle,
+    persistent: bool,
 }
 
 impl Scrollbar {
-    pub const GUTTER: Pixels = px(10.0);
+    pub const GUTTER: Pixels = px(6.0);
 
     pub fn new(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
         Self {
             id: id.into(),
             handle,
+            persistent: false,
         }
+    }
+
+    pub fn persistent(mut self) -> Self {
+        self.persistent = true;
+        self
     }
 }
 
@@ -104,12 +111,31 @@ impl RenderOnce for Scrollbar {
             );
         let viewport = handle.bounds().size.height;
         let max = handle.max_offset().y;
+        let strip = strip.when(self.persistent, |strip| {
+            let measured = handle.clone();
+            strip.child(
+                canvas(
+                    move |_, window, _| {
+                        let now = (measured.bounds().size.height, measured.max_offset().y);
+                        if now != (viewport, max) {
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute(),
+            )
+        });
         if max <= px(0.0) || viewport <= px(0.0) {
             state.hovered.set(false);
             return strip;
         }
         let now = Instant::now();
-        let opacity = state.opacity(now, cx.reduce_motion());
+        let opacity = if self.persistent {
+            1.0
+        } else {
+            state.opacity(now, cx.reduce_motion())
+        };
         if opacity <= 0.0 {
             state.hide.take();
             return strip;
