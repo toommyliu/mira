@@ -20,6 +20,8 @@ sealed class RunContext(string name, string? core) : AssemblyLoadContext(name, i
 
     public IRunner Runner()
     {
+        if (core is not null)
+            LoadFromAssemblyPath(core);
         var bot = LoadFromAssemblyName(new AssemblyName("Mira.Skua.Bot"));
         return (IRunner)Activator.CreateInstance(bot.GetType("Mira.Skua.Bot.Runner", throwOnError: true)!)!;
     }
