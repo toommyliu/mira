@@ -1,17 +1,18 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, CursorStyle, ElementId, Entity, FocusHandle,
     Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Toggled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Toggled, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, h_flex,
     nav::{self, Axis, Step},
-    primitives::{Flow, Icon, Input, InputEvent, Sortable, icon, small_icon},
-    theme::DISABLED_OPACITY,
+    primitives::{Flow, Icon, Input, InputEvent, Scrollbar, Sortable, icon, small_icon},
+    theme::{DISABLED_OPACITY, RING_ROOM},
 };
 
 type ReorderHandler = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
@@ -56,6 +57,7 @@ pub struct Chips {
     on_reorder: Option<ReorderHandler>,
     on_mark: Option<MarkHandler>,
     on_edit: Option<EditHandler>,
+    scrollable: bool,
 }
 
 impl Chips {
@@ -75,6 +77,7 @@ impl Chips {
             on_reorder: None,
             on_mark: None,
             on_edit: None,
+            scrollable: false,
         }
     }
 
@@ -116,6 +119,11 @@ impl Chips {
 
     pub fn on_mark(mut self, f: impl Fn(usize, bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_mark = Some(Rc::new(f));
+        self
+    }
+
+    pub fn scrollable(mut self, scrollable: bool) -> Self {
+        self.scrollable = scrollable;
         self
     }
 
@@ -446,7 +454,10 @@ impl RenderOnce for Chips {
                     _ => Step::from_key(event, Axis::Horizontal)
                         .or_else(|| Step::from_key(event, Axis::Vertical))
                         .and_then(|step| nav::step(current, count, step, false, |_| true))
-                        .map(|next| select(&selection, next, cx)),
+                        .map(|next| {
+                            nav::request_reveal(cx);
+                            select(&selection, next, cx)
+                        }),
                 };
                 if handled.is_some() {
                     cx.stop_propagation();
@@ -462,7 +473,7 @@ impl RenderOnce for Chips {
             .when(interactive, |list| {
                 list.track_focus(&focus.tab_stop(true)).on_key_down(keys)
             });
-        match on_reorder {
+        let body = match on_reorder {
             Some(reorder) => h_flex()
                 .flex_wrap()
                 .gap(layout.space(2.0))
@@ -486,6 +497,54 @@ impl RenderOnce for Chips {
                     (0..count).map(|index| chip.render(index, cx)).collect();
                 list.children(chips).children(self.end).into_any_element()
             }
+        };
+        if !self.scrollable {
+            return body;
         }
+        let scroll = window
+            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| ScrollHandle::new())
+            .read(cx)
+            .clone();
+        let shown = window
+            .use_keyed_state((self.id.clone(), "shown"), cx, |_, _| {
+                Rc::new(RefCell::new(self.items.clone()))
+            })
+            .read(cx)
+            .clone();
+        let appended = {
+            let before = shown.replace(self.items.clone());
+            self.items.len() > before.len() && self.items.starts_with(&before)
+        };
+        if appended {
+            scroll.scroll_to_bottom();
+        }
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .min_h(layout.chip + RING_ROOM * 2.0)
+            .m(-RING_ROOM)
+            .child(
+                div()
+                    .id((self.id.clone(), "scroll"))
+                    .min_h_0()
+                    .p(RING_ROOM)
+                    .pr(RING_ROOM + Scrollbar::GUTTER + layout.space(2.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(nav::pane_start(scroll.clone()))
+                    .child(body)
+                    .child(nav::pane_end()),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(RING_ROOM)
+                    .bottom(RING_ROOM)
+                    .right(RING_ROOM)
+                    .w(Scrollbar::GUTTER)
+                    .child(Scrollbar::new((self.id.clone(), "scrollbar"), scroll).persistent()),
+            )
+            .into_any_element()
     }
 }
