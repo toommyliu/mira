@@ -10,7 +10,7 @@ use super::label::{ToggleHandler, caption, labelled};
 use crate::{ActiveTheme as _, motion, theme::mix};
 
 const TRACK_W: f32 = 28.0;
-const TRACK_H: f32 = 16.6;
+const TRACK_H: f32 = 16.0;
 const THUMB: f32 = 14.0;
 const DRAG: Pixels = px(6.0);
 
