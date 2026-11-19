@@ -2070,3 +2070,72 @@ fn enter_edits_a_chip_return_saves_and_escape_cancels(cx: &mut TestAppContext) {
     press(cx, "backspace");
     assert_eq!(items(cx), ["yulgar-9999"], "the list has focus again");
 }
+
+struct PaneUnderPopup {
+    pane: gpui::ScrollHandle,
+}
+
+impl Render for PaneUnderPopup {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        let rows =
+            |count: usize| (0..count).map(|index| div().h(px(40.0)).child(format!("Row {index}")));
+        div()
+            .size_full()
+            .relative()
+            .child(
+                div()
+                    .id("pane")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane)
+                    .children(rows(40)),
+            )
+            .child(mira_ui::primitives::Scrollbar::new(
+                "pane-scrollbar",
+                self.pane.clone(),
+            ))
+            .child(
+                div()
+                    .id("popup")
+                    .absolute()
+                    .top(px(20.0))
+                    .left(px(20.0))
+                    .w(px(200.0))
+                    .h(px(160.0))
+                    .occlude()
+                    .overflow_y_scroll()
+                    .children(rows(20)),
+            )
+    }
+}
+
+#[gpui::test]
+fn scrolling_a_popup_over_a_pane_leaves_the_panes_scrollbar_hidden(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        PaneUnderPopup {
+            pane: gpui::ScrollHandle::new(),
+        }
+    });
+    cx.run_until_parked();
+    let wheel = |cx: &mut VisualTestContext, x: f32, y: f32| {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(x), px(y)),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    wheel(cx, 100.0, 100.0);
+    assert!(
+        cx.debug_bounds("scrollbar-thumb").is_none(),
+        "scrolling the popup revealed the pane's scrollbar"
+    );
+    wheel(cx, 400.0, 300.0);
+    assert!(cx.debug_bounds("scrollbar-thumb").is_some());
+}
