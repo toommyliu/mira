@@ -45,12 +45,8 @@ impl AssetSource for Assets {
             "icons/loader-circle.svg" => include_str!("../assets/icons/lucide/loader-circle.svg"),
             "icons/circle.svg" => include_str!("../assets/icons/lucide/circle.svg"),
             "icons/circle-stop.svg" => include_str!("../assets/icons/lucide/circle-stop.svg"),
-            "icons/panel-left-open.svg" => {
-                include_str!("../assets/icons/lucide/panel-left-open.svg")
-            }
-            "icons/panel-left-close.svg" => {
-                include_str!("../assets/icons/lucide/panel-left-close.svg")
-            }
+            "icons/sidebar.svg" => include_str!("../assets/icons/sidebar.svg"),
+            "icons/sidebar-open.svg" => include_str!("../assets/icons/sidebar-open.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(icon.as_bytes())))
