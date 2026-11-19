@@ -6,25 +6,20 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FontWeight, Global, InteractiveElement as _,
+    AnyElement, App, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _,
     IntoElement, ParentElement as _, Pixels, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{Button, Icon, button::Size};
-use crate::{
-    ActiveTheme as _, Tone, motion, nav,
-    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
-};
+use crate::{ActiveTheme as _, Tone, motion, nav};
 
 const LINGER: Duration = Duration::from_secs(5);
 const LIMIT: usize = 3;
-const WIDTH: Pixels = px(340.0);
-const GAP: Pixels = px(12.0);
-const PEEK: Pixels = px(12.0);
+const GAP: Pixels = px(14.0);
+const PEEK: Pixels = px(14.0);
 const SHRINK: f32 = 0.05;
-const UNMOUNT: Duration = Duration::from_millis(200);
-const EDGE: Pixels = px(20.0);
+const UNMOUNT: Duration = motion::GLIDE;
 const FALLBACK_HEIGHT: Pixels = px(58.0);
 
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -73,6 +68,9 @@ impl Toast {
 
 #[derive(Clone)]
 struct Shown {
+    focus: gpui::FocusHandle,
+    action_focus: gpui::FocusHandle,
+    dismiss_focus: gpui::FocusHandle,
     id: u64,
     toast: Toast,
     left: Option<Leaving>,
@@ -91,8 +89,12 @@ enum Timer {
     Paused(Duration),
 }
 
-#[derive(Default)]
 pub struct Toaster {
+    focus: gpui::FocusHandle,
+    return_focus: Option<gpui::FocusHandle>,
+    inactive: bool,
+    paused: bool,
+    _subscriptions: [gpui::Subscription; 2],
     next: u64,
     shown: Vec<Shown>,
     hovered: bool,
@@ -101,18 +103,148 @@ pub struct Toaster {
     heights: Rc<RefCell<HashMap<u64, Pixels>>>,
 }
 
-struct Stack(Entity<Toaster>);
-
-impl Global for Stack {}
-
 impl Toaster {
-    pub fn init(cx: &mut App) {
-        let stack = cx.new(|_| Toaster::default());
-        cx.set_global(Stack(stack));
+    pub fn new(window: &mut Window, cx: &mut App) -> Entity<Self> {
+        let owner = window.window_handle().window_id();
+        cx.new(|cx: &mut Context<Self>| {
+            let stack = cx.weak_entity();
+            let keys = cx.intercept_keystrokes(move |event, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if window.window_handle().window_id() != owner
+                    || !matches!(key, "f6" | "escape" | "tab")
+                {
+                    return;
+                }
+                let modified = event.keystroke.modifiers;
+                if modified.control
+                    || modified.platform
+                    || modified.alt
+                    || modified.function
+                    || (modified.shift && key != "tab")
+                {
+                    return;
+                }
+                if window
+                    .context_stack()
+                    .iter()
+                    .any(|ctx| ctx.contains("Modal"))
+                {
+                    return;
+                }
+                let _ = stack.update(cx, |stack, cx| {
+                    stack.navigate(key, modified.shift, window, cx)
+                });
+            });
+            let activation = cx.observe_window_activation(window, |stack, window, cx| {
+                stack.inactive = !window.is_window_active();
+                stack.pause_timers(stack.expanded || stack.inactive, cx);
+                cx.notify();
+            });
+            Self {
+                focus: cx.focus_handle(),
+                return_focus: None,
+                inactive: !window.is_window_active(),
+                paused: !window.is_window_active(),
+                next: 0,
+                shown: Vec::new(),
+                hovered: false,
+                expanded: false,
+                timers: HashMap::new(),
+                heights: Rc::default(),
+                _subscriptions: [keys, activation],
+            }
+        })
     }
 
-    pub fn push(toast: Toast, cx: &mut App) {
-        let stack = cx.global::<Stack>().0.clone();
+    fn navigate(
+        &mut self,
+        key: &str,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let inside = self.focus.contains_focused(window, cx);
+        if key == "f6" {
+            let newest = self.present().next().map(|s| s.focus.clone());
+            if inside {
+                self.restore(window, cx);
+            } else if let Some(newest) = newest {
+                self.return_focus = window.focused(cx);
+                window.focus(&newest, cx);
+            } else {
+                return;
+            }
+        } else if inside {
+            let active: Vec<_> = self.present().take(LIMIT).cloned().collect();
+            if key == "escape" {
+                let Some(current) = active
+                    .iter()
+                    .position(|s| s.focus.contains_focused(window, cx))
+                else {
+                    return;
+                };
+                self.dismiss_card(active[current].id, window, cx);
+            } else {
+                let stops: Vec<_> = active
+                    .iter()
+                    .flat_map(|s| {
+                        [
+                            Some(&s.focus),
+                            s.toast.action.as_ref().map(|_| &s.action_focus),
+                            Some(&s.dismiss_focus),
+                        ]
+                        .into_iter()
+                        .flatten()
+                    })
+                    .collect();
+                let current = stops.iter().position(|s| s.is_focused(window));
+                let next = current
+                    .and_then(|i| {
+                        if backwards {
+                            i.checked_sub(1)
+                        } else {
+                            Some(i + 1)
+                        }
+                    })
+                    .and_then(|i| stops.get(i));
+                if let Some(next) = next {
+                    window.focus(next, cx);
+                } else {
+                    self.restore(window, cx);
+                }
+            }
+        } else {
+            return;
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn dismiss_card(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self
+            .present()
+            .any(|shown| shown.id == id && shown.focus.contains_focused(window, cx));
+        self.dismiss(id);
+        if had_focus {
+            let next = self.present().next().map(|shown| shown.focus.clone());
+            if let Some(next) = next {
+                window.focus(&next, cx);
+            } else {
+                self.restore(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn restore(&mut self, window: &mut Window, cx: &mut App) {
+        if let Some(previous) = self.return_focus.take() {
+            window.focus(&previous, cx);
+        } else {
+            window.focus_next(cx);
+        }
+    }
+
+    pub fn push(stack: &Entity<Self>, toast: Toast, cx: &mut App) {
         let stays = toast.stays();
         let reduce = cx.reduce_motion();
         stack.update(cx, |toasts, cx| {
@@ -122,13 +254,16 @@ impl Toaster {
             toasts.shown.insert(
                 0,
                 Shown {
+                    focus: cx.focus_handle(),
+                    action_focus: cx.focus_handle(),
+                    dismiss_focus: cx.focus_handle(),
                     id,
                     toast,
                     left: None,
                 },
             );
             if !stays {
-                if toasts.expanded {
+                if toasts.paused {
                     toasts.timers.insert(id, Timer::Paused(LINGER));
                 } else {
                     toasts.start(id, LINGER, cx);
@@ -157,11 +292,11 @@ impl Toaster {
         );
     }
 
-    fn open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if open == self.expanded {
+    fn pause_timers(&mut self, paused: bool, cx: &mut Context<Self>) {
+        if self.paused == paused {
             return;
         }
-        self.expanded = open;
+        self.paused = paused;
         let now = Instant::now();
         let timers: Vec<(u64, Duration)> = self
             .timers
@@ -172,7 +307,7 @@ impl Toaster {
             })
             .collect();
         for (id, left) in timers {
-            if open {
+            if paused {
                 self.timers.insert(id, Timer::Paused(left));
             } else {
                 self.start(id, left, cx);
@@ -220,9 +355,8 @@ impl Toaster {
         }
     }
 
-    pub fn layer(window: &mut Window, cx: &mut App) -> AnyElement {
-        let stack = cx.global::<Stack>().0.clone();
-        let focus = nav::focus_handle("toasts-focus", window, cx);
+    pub fn layer(stack: &Entity<Self>, window: &mut Window, cx: &mut App) -> AnyElement {
+        let focus = stack.read(cx).focus.clone();
         let reduce = cx.reduce_motion();
         let focused = focus.contains_focused(window, cx) && nav::keyboard_input(window, cx);
         let (shown, expanded, heights) = stack.update(cx, |toasts, cx| {
@@ -231,10 +365,8 @@ impl Toaster {
                 toasts.hovered = false;
             }
             let leaving = toasts.shown.iter().any(|shown| shown.left.is_some());
-            toasts.open(
-                toasts.hovered || focused || (leaving && toasts.expanded),
-                cx,
-            );
+            toasts.expanded = toasts.hovered || focused || (leaving && toasts.expanded);
+            toasts.pause_timers(toasts.expanded || toasts.inactive, cx);
             (
                 toasts.shown.clone(),
                 toasts.expanded,
@@ -245,6 +377,17 @@ impl Toaster {
             return div().into_any_element();
         }
         let theme = cx.theme().clone();
+        let viewport_width = window.viewport_size().width;
+        let edge = theme.space(4.0);
+        let width = theme
+            .layout
+            .overlay_max_width
+            .min((viewport_width - edge * 2.0).max(px(1.0)));
+        let end = if viewport_width < theme.layout.compact_overlay {
+            (viewport_width - width) / 2.0
+        } else {
+            edge
+        };
         let height_of = |id: u64| {
             heights
                 .borrow()
@@ -328,7 +471,7 @@ impl Toaster {
                 let inset = if expanded || leaving_behind {
                     Pixels::ZERO
                 } else {
-                    WIDTH * SHRINK / 2.0 * at as f32
+                    width * SHRINK / 2.0 * at as f32
                 };
                 let offset = px(motion::glide(
                     ("toast-y", id),
@@ -385,29 +528,40 @@ impl Toaster {
                         .absolute()
                         .inset_0(),
                     )
-                    .child(card(&stack, entry, content, bg, &theme))
+                    .child(card(
+                        stack,
+                        entry,
+                        content,
+                        bg,
+                        &theme,
+                        entry.focus.is_focused(window) && nav::keyboard_input(window, cx),
+                    ))
                     .into_any_element(),
             );
         }
         let hover_stack = stack.clone();
+        let viewport = window.viewport_size();
         deferred(
-            div()
-                .id("toasts")
-                .track_focus(&focus)
-                .absolute()
-                .right(EDGE)
-                .bottom(EDGE)
-                .w(WIDTH)
-                .h(stack_height)
-                .children(cards)
-                .child(div().id("toasts-hover").absolute().inset_0().on_hover(
-                    move |hovered, _, cx| {
-                        hover_stack.update(cx, |toasts, cx| {
-                            toasts.hovered = *hovered;
-                            cx.notify();
-                        })
-                    },
-                )),
+            gpui::anchored()
+                .anchor(gpui::Anchor::BottomRight)
+                .position(gpui::point(viewport.width - end, viewport.height - edge))
+                .child(
+                    div()
+                        .id("toasts")
+                        .track_focus(&focus)
+                        .relative()
+                        .w(width)
+                        .h(stack_height)
+                        .children(cards)
+                        .child(div().id("toasts-hover").absolute().inset_0().on_hover(
+                            move |hovered, _, cx| {
+                                hover_stack.update(cx, |toasts, cx| {
+                                    toasts.hovered = *hovered;
+                                    cx.notify();
+                                })
+                            },
+                        )),
+                ),
         )
         .with_priority(super::layer::TOASTS)
         .into_any_element()
@@ -432,21 +586,22 @@ fn card(
     content: f32,
     bg: gpui::Hsla,
     theme: &crate::Theme,
+    focused: bool,
 ) -> impl IntoElement + gpui::Styled + 'static {
+    let layout = theme.layout;
+    let typography = theme.typography;
     let id = shown.id;
     let toast = &shown.toast;
     let (_, _, tone_text) = theme.tone(toast.tone);
     let dismiss = {
         let stack = stack.clone();
-        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
-            stack.update(cx, |toasts, cx| {
-                toasts.dismiss(id);
-                cx.notify();
-            });
+        move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+            stack.update(cx, |toasts, cx| toasts.dismiss_card(id, window, cx));
         }
     };
     div()
         .id(("toast", id))
+        .track_focus(&shown.focus)
         .role(if toast.tone == Tone::Danger {
             Role::Alert
         } else {
@@ -457,15 +612,20 @@ fn card(
         .occlude()
         .flex()
         .size_full()
-        .overflow_hidden()
-        .py(px(10.0))
-        .pl(px(14.0))
-        .pr(px(6.0))
-        .rounded(theme.radius.panel)
+        .p(theme.space(4.0))
+        .rounded(theme.radius.control)
         .bg(bg)
         .border_1()
         .border_color(theme.border)
-        .shadow(theme.popup_shadow())
+        .shadow(theme.large_shadow())
+        .when(focused, |card| {
+            card.border_color(theme.ring).child(theme.halo(
+                theme.ring.opacity(0.5),
+                theme.radius.control,
+                px(1.0),
+                px(3.0),
+            ))
+        })
         .when(content > 0.0, |card| {
             card.child(
                 div()
@@ -473,7 +633,7 @@ fn card(
                     .flex_1()
                     .min_w_0()
                     .items_start()
-                    .gap(px(12.0))
+                    .gap(layout.space(3.0))
                     .opacity(content)
                     .child(
                         div()
@@ -481,11 +641,11 @@ fn card(
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .py(px(2.0))
+                            .gap(theme.space(1.0))
                             .child(
                                 div()
-                                    .text_size(TEXT_BODY)
-                                    .line_height(LINE_BODY)
+                                    .text_size(typography.body)
+                                    .line_height(typography.body_line)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if toast.tone == Tone::Neutral {
                                         theme.foreground
@@ -497,8 +657,8 @@ fn card(
                             .when_some(toast.body.clone(), |column, body| {
                                 column.child(
                                     div()
-                                        .text_size(TEXT_SMALL)
-                                        .line_height(LINE_SMALL)
+                                        .text_size(typography.body)
+                                        .line_height(typography.body_line)
                                         .text_color(theme.muted_foreground)
                                         .child(body),
                                 )
@@ -506,21 +666,25 @@ fn card(
                     )
                     .when_some(toast.action.clone(), |row, (label, action)| {
                         let stack = stack.clone();
-                        row.child(Button::new("action", label).size(Size::Small).on_click(
-                            move |_, window, cx| {
-                                if !stack.read(cx).present().any(|shown| shown.id == id) {
-                                    return;
-                                }
-                                action(window, cx);
-                                stack.update(cx, |toasts, cx| {
-                                    toasts.dismiss(id);
-                                    cx.notify();
-                                });
-                            },
-                        ))
+                        row.child(
+                            Button::new("action", label)
+                                .focus(shown.action_focus.clone())
+                                .variant(super::button::Variant::Outline)
+                                .size(Size::Small)
+                                .on_click(move |_, window, cx| {
+                                    if !stack.read(cx).present().any(|shown| shown.id == id) {
+                                        return;
+                                    }
+                                    stack.update(cx, |toasts, cx| {
+                                        toasts.dismiss_card(id, window, cx)
+                                    });
+                                    action(window, cx);
+                                }),
+                        )
                     })
                     .child(
                         Button::icon("dismiss", Icon::X, "Dismiss")
+                            .focus(shown.dismiss_focus.clone())
                             .size(Size::Small)
                             .on_click(dismiss),
                     ),

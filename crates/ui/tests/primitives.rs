@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Context, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent, Keystroke,
+    Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent, Keystroke,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     TestAppContext, VisualTestContext, Window, div, prelude::FluentBuilder as _,
 };
@@ -1056,6 +1056,8 @@ fn switch_description_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
 }
 
 struct Host {
+    editor: FocusHandle,
+    stack: Entity<mira_ui::primitives::Toaster>,
     renders: Rc<Cell<usize>>,
 }
 
@@ -1064,7 +1066,8 @@ impl Render for Host {
         self.renders.set(self.renders.get() + 1);
         div()
             .size_full()
-            .child(mira_ui::primitives::Toaster::layer(window, cx))
+            .child(div().id("editor").track_focus(&self.editor).child("Editor"))
+            .child(mira_ui::primitives::Toaster::layer(&self.stack, window, cx))
     }
 }
 
@@ -1072,16 +1075,52 @@ impl Render for Host {
 fn pushing_a_toast_redraws_the_window_that_shows_the_stack(cx: &mut TestAppContext) {
     cx.update(mira_ui::init);
     let renders = Rc::new(Cell::new(0));
-    let (_, cx) = cx.add_window_view(|_, _| Host {
+    let (host, cx) = cx.add_window_view(|window, cx| Host {
+        editor: cx.focus_handle(),
+        stack: mira_ui::primitives::Toaster::new(window, cx),
         renders: renders.clone(),
     });
     cx.run_until_parked();
     let before = renders.get();
     cx.update(|_, cx| {
-        mira_ui::primitives::Toaster::push(mira_ui::primitives::Toast::new("Saved"), cx)
+        mira_ui::primitives::Toaster::push(
+            &host.read(cx).stack.clone(),
+            mira_ui::primitives::Toast::new("Saved"),
+            cx,
+        )
     });
     cx.run_until_parked();
     assert!(renders.get() > before);
+}
+
+#[gpui::test]
+fn toast_action_returns_keyboard_focus_to_the_originating_control(cx: &mut TestAppContext) {
+    use mira_ui::primitives::{Toast, Toaster};
+    cx.update(mira_ui::init);
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        let editor = cx.focus_handle();
+        window.activate_window();
+        window.focus(&editor, cx);
+        Host {
+            editor,
+            stack: Toaster::new(window, cx),
+            renders: Rc::default(),
+        }
+    });
+    let invoked = Rc::new(Cell::new(false));
+    let action = invoked.clone();
+    cx.update(|_, cx| {
+        let toast = Toast::new("Saved").action("Undo", move |_, _| action.set(true));
+        Toaster::push(&host.read(cx).stack.clone(), toast, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| host.read(cx).editor.is_focused(window)));
+    press(cx, "f6");
+    assert!(!cx.update(|window, cx| host.read(cx).editor.is_focused(window)));
+    press(cx, "tab");
+    press(cx, "enter");
+    assert!(invoked.get());
+    assert!(cx.update(|window, cx| host.read(cx).editor.is_focused(window)));
 }
 
 struct ThemedToolbar;
