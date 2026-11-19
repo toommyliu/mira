@@ -577,12 +577,12 @@ mod tests {
                 crate::shortcuts::keys_for(&crate::ruffle_view::OpenBank, cx).as_deref(),
                 Some("⌘K")
             );
-            assert!(set_shortcut(Shortcut::Jump, keys("cmd-,"), cx).is_err());
-            assert_eq!(Shortcut::Jump.keys(shortcuts(cx)), Some("cmd-j"));
+            assert!(set_shortcut(Shortcut::StartStopScript, keys("cmd-,"), cx).is_err());
+            assert_eq!(Shortcut::StartStopScript.keys(shortcuts(cx)), Some("cmd-r"));
         });
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["shortcuts"]["bank"], "cmd-k");
-        assert_eq!(saved["shortcuts"]["jump"], "cmd-j");
+        assert_eq!(saved["shortcuts"]["startStopScript"], "cmd-r");
         fs::remove_file(path).unwrap();
     }
 
@@ -600,7 +600,7 @@ mod tests {
             written["shortcuts"].as_object().unwrap().len(),
             Shortcut::ALL.len()
         );
-        assert_eq!(written["shortcuts"]["jump"], "cmd-j");
+        assert_eq!(written["shortcuts"]["loadScript"], "cmd-o");
 
         fs::write(&path, r#"{"appearance":"dark"}"#).unwrap();
         assert!(Settings::open(&path).is_some());
