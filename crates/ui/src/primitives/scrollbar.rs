@@ -5,9 +5,9 @@ use std::{
 };
 
 use gpui::{
-    App, DispatchPhase, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, RenderOnce, ScrollEvent,
-    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div, point,
+    App, ElementId, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, RenderOnce, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -23,6 +23,7 @@ struct State {
     drag: Cell<Option<(Pixels, Pixels)>>,
     hovered: Cell<bool>,
     scrolled: Cell<Option<Instant>>,
+    offset: Cell<Option<Point<Pixels>>>,
     hide: Cell<Option<Task<()>>>,
 }
 
@@ -93,18 +94,18 @@ impl RenderOnce for Scrollbar {
             .w(Self::GUTTER)
             .child(
                 canvas(
-                    |_, _, _| (),
-                    move |_, _, window, _| {
-                        let wheel = wheel.clone();
-                        let watched = watched.clone();
-                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, _| {
-                            if phase == DispatchPhase::Capture
-                                && watched.bounds().contains(&event.position)
-                            {
-                                wheel.reveal(window);
-                            }
-                        });
+                    move |_, window, _| {
+                        let now = watched.offset();
+                        if wheel
+                            .offset
+                            .replace(Some(now))
+                            .is_some_and(|was| was != now)
+                        {
+                            wheel.scrolled.set(Some(Instant::now()));
+                            window.request_animation_frame();
+                        }
                     },
+                    |_, _, _, _| {},
                 )
                 .absolute()
                 .inset_0(),
@@ -184,6 +185,7 @@ impl RenderOnce for Scrollbar {
             .child(
                 div()
                     .id("thumb")
+                    .debug_selector(|| "scrollbar-thumb".into())
                     .absolute()
                     .top(top)
                     .right(INSET)
