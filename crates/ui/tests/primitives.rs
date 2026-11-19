@@ -639,17 +639,17 @@ fn a_select_in_a_popover_picks_options_that_hang_below_the_popover(cx: &mut Test
     let select = cx.debug_bounds("server").unwrap();
     cx.simulate_click(select.center(), Modifiers::none());
     cx.run_until_parked();
-    let tenth = point(
+    let eighth = point(
         select.center().x,
-        select.bottom() + px(4.0 + 5.0 + 24.0 * 10.0 + 12.0),
+        select.bottom() + px(4.0 + 4.0 + 28.0 * 8.0 + 14.0),
     );
-    cx.simulate_mouse_down(tenth, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_down(eighth, MouseButton::Left, Modifiers::none());
     std::thread::sleep(std::time::Duration::from_millis(150));
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    cx.simulate_mouse_up(tenth, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(eighth, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(picked.get(), Some(10));
+    assert_eq!(picked.get(), Some(8));
 }
 
 struct RoomThenGo {
