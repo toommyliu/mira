@@ -36,10 +36,12 @@ public sealed class Runner : IRunner
             run.Cancel();
         };
         Faults.Warn = game.Warn;
-        var events = Start(() => Listen(bot, game));
+        Thread? events = null;
         var handlers = Start(() => bot.HandlerSource.Run(bot, run.Token));
         try
         {
+            game.Request("skua", "events", new { id = 1 }, game.Stopping);
+            events = Start(() => Listen(bot, game));
             var (type, main) = Load(start);
             var script = Activator.CreateInstance(type)!;
             options.Initialize(script);
@@ -64,7 +66,7 @@ public sealed class Runner : IRunner
             bot.EventSource.Stopping(failure);
             cleanup.Cancel();
         }
-        events.Join();
+        events?.Join();
         handlers.Join();
         bot.Detach();
         Dialogs.Current = null;
@@ -104,7 +106,6 @@ public sealed class Runner : IRunner
 
     private static void Listen(MiraBot bot, Game game)
     {
-        game.Request("skua", "events", new { id = 1 }, game.Stopping);
         var flash = (Flash)bot.Flash;
         while (!game.Stopping.IsCancellationRequested)
         {
