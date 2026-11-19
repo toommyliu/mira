@@ -2139,3 +2139,61 @@ fn scrolling_a_popup_over_a_pane_leaves_the_panes_scrollbar_hidden(cx: &mut Test
     wheel(cx, 400.0, 300.0);
     assert!(cx.debug_bounds("scrollbar-thumb").is_some());
 }
+
+struct PreviewsAboveTheFold {
+    focus: FocusHandle,
+    pane: gpui::ScrollHandle,
+}
+
+impl Render for PreviewsAboveTheFold {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        use mira_ui::primitives::{Radio, RadioGroup};
+        mira_ui::nav::set_scroll_root(&self.pane, window, cx);
+        let thumbnail = || div().w(px(60.0)).h(px(40.0));
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                div()
+                    .id("pane")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane)
+                    .child(RadioGroup::new(
+                        "mode",
+                        "Mode",
+                        vec![
+                            Radio::new("Light").preview(thumbnail()),
+                            Radio::new("Dark").preview(thumbnail()),
+                        ],
+                        Some(0),
+                    ))
+                    .child(div().h(px(2000.0)))
+                    .child(Button::new("below", "Below the fold")),
+            )
+    }
+}
+
+#[gpui::test]
+fn tabbing_past_a_selected_preview_reveals_the_next_control(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        PreviewsAboveTheFold {
+            focus,
+            pane: gpui::ScrollHandle::new(),
+        }
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    press(cx, "tab");
+    let offset = cx.update(|_, cx| view.read(cx).pane.offset().y);
+    assert!(
+        offset < gpui::px(0.0),
+        "the button below the fold stayed hidden"
+    );
+}
