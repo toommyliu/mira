@@ -964,24 +964,22 @@ impl Render for Input {
             .when(self.password, |field| {
                 let entity = cx.entity();
                 let revealed = self.revealed;
+                let (icon, verb) = if revealed {
+                    (Icon::EyeOff, "Hide")
+                } else {
+                    (Icon::Eye, "Show")
+                };
                 field.child(trailing(
                     &self.focus,
-                    Button::icon(
-                        "reveal",
-                        if revealed { Icon::EyeOff } else { Icon::Eye },
-                        if revealed {
-                            "Hide password"
-                        } else {
-                            "Show password"
-                        },
-                    )
-                    .size(Size::Small)
-                    .on_click(move |_, window, cx| {
-                        entity.update(cx, |field, cx| {
-                            field.reveal(!revealed, cx);
-                            window.focus(&field.focus, cx);
-                        })
-                    }),
+                    Button::icon("reveal", icon, format!("{verb} {}", self.label))
+                        .tooltip(verb)
+                        .size(Size::Small)
+                        .on_click(move |_, window, cx| {
+                            entity.update(cx, |field, cx| {
+                                field.reveal(!revealed, cx);
+                                window.focus(&field.focus, cx);
+                            })
+                        }),
                 ))
             })
             .when(clearable, |field| {
