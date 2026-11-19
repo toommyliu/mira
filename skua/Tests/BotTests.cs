@@ -1,6 +1,6 @@
 namespace Mira.Skua.Tests;
 
-public class OptionsTests
+public class BotTests
 {
     [Fact]
     public void Reading_an_option_returns_what_the_script_set_without_calling_the_game()
@@ -16,6 +16,17 @@ public class OptionsTests
         Assert.True(bot.Options.SkipCutscenes);
         Assert.False(bot.Options.Magnetise);
         Assert.Equal(calls, game.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Waiting_for_a_value_matches_an_equal_value()
+    {
+        var bot = Offline.Bot();
+        var health = 100;
+
+        Assert.True(bot.Wait.For(() => health, 100, 1));
+        Assert.True(await bot.Wait.ForAsync(() => health, 100, 1, TestContext.Current.CancellationToken));
+        Assert.False(bot.Wait.For(() => health, 50, 1));
     }
 
     [Fact]
