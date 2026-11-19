@@ -29,11 +29,11 @@ impl Category {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Category::Scripts => "Script shortcuts",
-            Category::Game => "Game shortcuts",
-            Category::Options => "Option shortcuts",
-            Category::View => "View shortcuts",
-            Category::Windows => "Window shortcuts",
+            Category::Scripts => "Scripts",
+            Category::Game => "Client",
+            Category::Options => "Client options",
+            Category::View => "View",
+            Category::Windows => "Windows",
         }
     }
 }
@@ -125,10 +125,10 @@ impl Shortcut {
     pub(crate) fn category(self) -> Category {
         match self {
             Shortcut::LoadScript | Shortcut::StartStopScript => Category::Scripts,
-            Shortcut::AutoAttack | Shortcut::Bank | Shortcut::Jump | Shortcut::OptionsMenu => {
-                Category::Game
-            }
-            Shortcut::MinimalRendering | Shortcut::InterfaceOnlyRendering => Category::Options,
+            Shortcut::AutoAttack | Shortcut::Bank | Shortcut::Jump => Category::Game,
+            Shortcut::OptionsMenu
+            | Shortcut::MinimalRendering
+            | Shortcut::InterfaceOnlyRendering => Category::Options,
             _ if self.option().is_some() => Category::Options,
             Shortcut::Sidebar | Shortcut::GridView => Category::View,
             _ => Category::Windows,
