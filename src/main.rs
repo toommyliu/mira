@@ -86,7 +86,7 @@ fn main() -> anyhow::Result<()> {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(960.0), px(550.0) + ruffle_view::BAR_HEIGHT),
+                    size(px(960.0), px(550.0) + mira_ui::ActiveTheme::theme(cx).layout.chrome),
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
@@ -95,7 +95,7 @@ fn main() -> anyhow::Result<()> {
                     traffic_light_position: Some(point(px(12.0), px(12.0))),
                 }),
                 window_background: WindowBackgroundAppearance::Transparent,
-                window_min_size: Some(size(px(920.0), px(528.0) + ruffle_view::BAR_HEIGHT)),
+                window_min_size: Some(size(px(920.0), px(528.0) + mira_ui::ActiveTheme::theme(cx).layout.chrome)),
                 app_owns_titlebar_drag: true,
                 ..Default::default()
             };

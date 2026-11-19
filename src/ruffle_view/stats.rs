@@ -4,10 +4,7 @@ use gpui::{
     PathBuilder, Pixels, Point, Size, StatefulInteractiveElement as _, Styled as _, Window,
     anchored, canvas, div, fill, point, px, size,
 };
-use mira_ui::{
-    Theme,
-    theme::{SYSTEM_MONO, TEXT_CAPTION},
-};
+use mira_ui::{Theme, theme::SYSTEM_MONO};
 
 use crate::ruffle::stats::{GRAPH_SAMPLES, Report, Timing};
 
@@ -26,7 +23,9 @@ pub(super) fn overlay(
     placement: &Placement,
     area: Bounds<Pixels>,
     this: Entity<super::RuffleView>,
-) -> impl IntoElement {
+    theme: &Theme,
+) -> impl IntoElement + use<> {
+    let typography = theme.typography;
     let fps = report.game_fps.map_or_else(
         || format!("FPS:        - / {:.0}", report.target_fps),
         |fps| format!("FPS:    {fps:>5.1} / {:.0}", report.target_fps),
@@ -46,9 +45,11 @@ pub(super) fn overlay(
         .frames()
         .map(|frame| frame.logic_ms.max(frame.render_ms))
         .fold(4.0, f64::max);
-    let theme = Theme::dark();
-    let (logic_color, render_color) = (theme.primary, theme.foreground);
-    let (column_line, row_line, axis) = (theme.input, theme.border, theme.muted_foreground);
+    let (logic_color, render_color) = (
+        theme.chart[if theme.dark_mode { 0 } else { 3 }],
+        theme.chart[1],
+    );
+    let (column_line, row_line, axis) = (theme.ring, theme.border, theme.muted_foreground);
     let panel = div()
         .id("player-stats")
         .role(gpui::Role::Group)
@@ -57,13 +58,13 @@ pub(super) fn overlay(
         .relative()
         .occlude()
         .cursor_move()
-        .p_2()
+        .p(theme.space(2.0))
         .w(px(GRAPH_WIDTH + 16.0))
-        .bg(theme.popover.opacity(0.75))
+        .bg(theme.popover)
         .text_color(theme.foreground)
-        .text_size(TEXT_CAPTION)
-        .line_height(gpui::relative(1.3))
-        .font_family(SYSTEM_MONO)
+        .text_size(typography.secondary)
+        .line_height(typography.secondary_line)
+        .font_family(SYSTEM_MONO).font_features(mira_ui::theme::tabular())
         .flex()
         .flex_col()
         .child(div().flex().justify_between().child("Metal").child(format!("[{}×{}]", report.width, report.height)))
