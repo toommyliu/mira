@@ -71,7 +71,7 @@ impl Default for Layout {
             cell_header: px(40.0),
             check: px(16.0),
             check_mark: px(13.0),
-            chip: px(19.0),
+            chip: CONTROL_SM,
             track: px(4.0),
             thumb: px(12.0),
             chrome: px(38.0),

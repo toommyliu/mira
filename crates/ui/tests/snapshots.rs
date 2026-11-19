@@ -798,3 +798,33 @@ fn snapshot_form() {
         assert!(path.exists());
     }
 }
+
+#[test]
+fn snapshot_chip_editing() {
+    fn render(_: &mut Window, _: &mut Context<Scene>) -> gpui::AnyElement {
+        mira_ui::components::Chips::new(
+            "drops",
+            "Drops",
+            ["Tainted Gem", "Dark Crystal Shard", "Void Aura"].map(Into::into),
+        )
+        .marked(Icon::Bell, Icon::BellRing, "Beep", [true, false, false])
+        .on_mark(|_, _, _, _| {})
+        .on_remove(|_, _, _| {})
+        .on_edit(|_, _, _, _| {})
+        .into_any_element()
+    }
+    scene_after_keys(
+        "chip-editing-selected",
+        420.0,
+        80.0,
+        &["tab", "right", "enter"],
+        render,
+    );
+    scene_after_keys(
+        "chip-editing-caret",
+        420.0,
+        80.0,
+        &["tab", "right", "enter", "right"],
+        render,
+    );
+}
