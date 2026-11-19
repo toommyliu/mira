@@ -88,6 +88,27 @@ pub(super) fn row(
         .child(div().flex_1().min_w_0().child(control))
 }
 
+pub(super) fn choices_row(
+    layout: Layout,
+    label: impl Into<SharedString>,
+    enabled: bool,
+    choices: impl IntoElement,
+) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap_x(layout.space(2.0))
+        .child(
+            h_flex()
+                .flex_none()
+                .w(LABEL_WIDTH)
+                .min_h(layout.control)
+                .child(row_label(label, enabled)),
+        )
+        .child(div().flex_none().child(choices))
+}
+
 pub(super) fn switch_row(
     layout: Layout,
     label: impl Into<SharedString>,
