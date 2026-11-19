@@ -17,7 +17,7 @@ use mira_ui::{
         button::{Size, Variant},
         icon,
     },
-    theme::{DISABLED_OPACITY, ROW, TEXT_BODY},
+    theme::DISABLED_OPACITY,
     v_flex,
 };
 
@@ -735,7 +735,6 @@ fn bar_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Butto
     Button::new(id, label)
         .variant(Variant::Ghost)
         .size(Size::Small)
-        .text_size(TEXT_BODY)
 }
 
 fn trigger(
@@ -820,12 +819,13 @@ pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl I
 
 fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
     let theme = cx.theme();
+    let layout = theme.layout;
     let menubar = Menubar::new(("game-bar", this.entity_id()), "Game")
         .flex_none()
         .w_full()
-        .h(BAR_HEIGHT)
-        .gap(px(2.0))
-        .pr(px(6.0))
+        .h(cx.theme().layout.chrome)
+        .gap(layout.space(0.5))
+        .pr(layout.space(1.5))
         .bg(theme.background)
         .border_b_1()
         .border_color(theme.border)
@@ -977,28 +977,35 @@ fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Ve
 }
 
 fn heading(title: &'static str, cx: &App) -> impl IntoElement {
+    let typography = cx.theme().typography;
     div()
-        .text_caption(cx.theme().typography)
+        .text_caption(typography)
         .font_weight(FontWeight::MEDIUM)
         .text_color(cx.theme().muted_foreground)
         .child(title)
 }
 
 fn note(text: &'static str, cx: &App) -> AnyElement {
+    let layout = cx.theme().layout;
+    let typography = cx.theme().typography;
     div()
-        .px(px(8.0))
-        .py(px(6.0))
-        .text_caption(cx.theme().typography)
+        .px(layout.space(2.0))
+        .py(layout.space(1.5))
+        .text_caption(typography)
         .text_color(cx.theme().muted_foreground)
         .child(text)
         .into_any_element()
 }
 
-fn pair(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
+fn pair(
+    layout: mira_ui::theme::Layout,
+    left: impl IntoElement,
+    right: impl IntoElement,
+) -> impl IntoElement {
     div()
         .grid()
         .grid_cols(2)
-        .gap(px(12.0))
+        .gap(layout.space(3.0))
         .child(div().min_w_0().child(left))
         .child(div().min_w_0().child(right))
 }
@@ -1074,6 +1081,7 @@ fn options_panel(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let layout = cx.theme().layout;
     let Options {
         automation,
         live,
@@ -1097,7 +1105,7 @@ fn options_panel(
         });
         h_flex()
             .justify_between()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(switch)
             .children(shortcuts::keys_for(&ToggleOption(option), cx).map(Kbd::new))
     });
@@ -1149,12 +1157,12 @@ fn options_panel(
         let enabled = setting.enabled(&automation, live);
         h_flex()
             .justify_between()
-            .gap(px(8.0))
+            .gap(layout.space(2.0))
             .child(row_label(setting.label(), enabled))
             .child(
                 h_flex()
                     .flex_none()
-                    .gap(px(4.0))
+                    .gap(layout.space(1.0))
                     .child(reset_button(setting, &automation, enabled, this))
                     .child(div().w(px(44.0)).child(setting_input(
                         setting,
@@ -1184,35 +1192,43 @@ fn options_panel(
     };
     v_flex()
         .w(px(320.0))
-        .gap(px(12.0))
+        .max_w_full()
+        .debug_selector(|| "options-form".into())
+        .gap(layout.space(3.0))
         .child(
             v_flex()
-                .gap(px(4.0))
+                .gap(layout.space(1.0))
                 .child(heading("Gameplay", cx))
-                .child(div().grid().grid_cols(2).gap_x(px(12.0)).children(switches))
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_x(layout.space(3.0))
+                        .children(switches),
+                )
                 .child(
                     v_flex()
-                        .gap(px(6.0))
-                        .pt(px(6.0))
+                        .gap(layout.space(1.5))
+                        .pt(layout.space(1.5))
                         .child(
                             h_flex()
                                 .justify_between()
-                                .gap(px(12.0))
+                                .gap(layout.space(3.0))
                                 .child(row_label("Rendering", live))
                                 .child(rendering),
                         )
-                        .child(pair(walk_speed, frame_rate)),
+                        .child(pair(layout, walk_speed, frame_rate)),
                 ),
         )
         .child(
             v_flex()
-                .gap(px(8.0))
+                .gap(layout.space(2.0))
                 .child(heading("Identity", cx))
-                .child(pair(custom_name, custom_guild)),
+                .child(pair(layout, custom_name, custom_guild)),
         )
         .child(
             h_flex()
-                .gap(px(6.0))
+                .gap(layout.space(1.5))
                 .child(command("reload-map", "Reload map", Command::ReloadMap))
                 .child(command(
                     "set-spawnpoint",
@@ -1229,6 +1245,7 @@ fn relogin_panel(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let layout = cx.theme().layout;
     let settings = relogin.automation.auto_relogin();
     let mut servers = relogin.servers.clone();
     if let Some(saved) = &settings.server
@@ -1280,7 +1297,8 @@ fn relogin_panel(
     });
     v_flex()
         .w(px(264.0))
-        .gap(px(12.0))
+        .max_w_full()
+        .gap(layout.space(3.0))
         .child(match relogin.status {
             Some(status) => toggle.description(status),
             None => toggle,
@@ -1292,10 +1310,10 @@ fn relogin_panel(
         )
         .child(
             v_flex()
-                .gap(px(8.0))
+                .gap(layout.space(2.0))
                 .child(heading("Retry schedule", cx))
-                .child(pair(delay, retries))
-                .child(pair(backoff, backoff_cap)),
+                .child(pair(layout, delay, retries))
+                .child(pair(layout, backoff, backoff_cap)),
         )
         .into_any_element()
 }
@@ -1319,6 +1337,7 @@ fn jump_panel(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let layout = cx.theme().layout;
     let Some(location) = location else {
         return note("Log in to travel", cx);
     };
@@ -1388,18 +1407,20 @@ fn jump_panel(
         };
         let hover = spot.clone();
         let travel = travel.clone();
-        let pressed = theme.muted;
+        let pressed = theme.pressed(theme.background, theme.muted, theme.foreground);
         h_flex()
             .id(id)
             .flex_none()
-            .h(ROW)
-            .px(px(6.0))
-            .gap(px(6.0))
+            .h(layout.control)
+            .px(layout.space(1.5))
+            .gap(layout.space(1.5))
             .rounded(theme.radius.control)
             .role(Role::MenuItemRadio)
             .aria_label(label.clone())
             .pointer_cursor(&theme)
-            .when(*spot.read(cx) == spot_here, |row| row.bg(theme.muted))
+            .when(*spot.read(cx) == spot_here, |row| {
+                row.bg(theme.ghost_hover())
+            })
             .active(move |style| style.bg(pressed))
             .child(div().flex_none().w(px(12.0)).when(here, |mark| {
                 mark.child(icon(Icon::Check, theme.foreground).size(px(12.0)))
@@ -1462,16 +1483,19 @@ fn jump_panel(
         })
         .collect();
     let column = |label| {
-        v_flex()
-            .flex_1()
-            .min_w_0()
-            .child(div().px(px(6.0)).pb(px(2.0)).child(heading(label, cx)))
+        v_flex().flex_1().min_w_0().child(
+            div()
+                .px(layout.space(1.5))
+                .pb(layout.space(0.5))
+                .child(heading(label, cx)),
+        )
     };
     let (keys, next, previous) = (respond.clone(), respond.clone(), respond);
     h_flex()
         .id("jump")
         .items_start()
         .w(px(300.0))
+        .max_w_full()
         .track_focus(&focus.tab_stop(true))
         .on_key_down(move |event, window, cx| {
             if keys(event, window, cx) {
@@ -1491,7 +1515,7 @@ fn jump_panel(
                     .child(
                         v_flex()
                             .id("jump-cells")
-                            .max_h(ROW * VISIBLE_CELLS)
+                            .max_h(layout.control * VISIBLE_CELLS)
                             .when(location.cells.len() as f32 > VISIBLE_CELLS, |list| {
                                 list.pr(Scrollbar::GUTTER + SCROLLBAR_CLEARANCE)
                             })
@@ -1508,7 +1532,7 @@ fn jump_panel(
                 .flex_none()
                 .self_stretch()
                 .w(px(1.0))
-                .mx(px(6.0))
+                .mx(layout.space(1.5))
                 .bg(theme.border),
         )
         .child(column("Pad").children(pads))
@@ -1607,6 +1631,8 @@ mod tests {
     impl gpui::Render for Scene {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
+            let layout = theme.layout;
+            let typography = theme.typography;
             let panel = self.panel.clone();
             div()
                 .key_context(mira_ui::FOCUS_SCOPE)
@@ -1614,18 +1640,17 @@ mod tests {
                 .bg(theme.background)
                 .text_color(theme.foreground)
                 .font_family(mira_ui::theme::UI_FONT)
-                .text_body(theme.typography)
+                .text_body(typography)
                 .child(
                     Menubar::new("bar", "Game")
-                        .h(BAR_HEIGHT)
-                        .px(px(6.0))
+                        .h(cx.theme().layout.chrome)
+                        .px(layout.space(1.5))
                         .border_b_1()
                         .border_color(theme.border)
                         .popover(
                             Button::new("entry", self.title)
                                 .variant(Variant::Ghost)
-                                .size(Size::Small)
-                                .text_size(TEXT_BODY),
+                                .size(Size::Small),
                             move |close, window, cx| panel(close, window, cx),
                         )
                         .default_open(0),
@@ -1651,6 +1676,20 @@ mod tests {
                 options_panel(options, &WeakEntity::new_invalid(), close, window, cx)
             }),
         }
+    }
+
+    #[gpui::test]
+    fn options_form_fits_inside_its_panel(cx: &mut gpui::TestAppContext) {
+        cx.update(mira_ui::init);
+        let (_, cx) = cx.add_window_view(|_, cx| options_fixture(RenderingMode::Full, cx));
+        cx.simulate_resize(gpui::size(px(460.0), px(520.0)));
+        cx.run_until_parked();
+        let panel = cx.debug_bounds("popover-panel").unwrap();
+        let form = cx.debug_bounds("options-form").unwrap();
+        assert_eq!(form.size.width, px(320.0), "two-column form width");
+        let inset = form.left() - panel.left();
+        assert!(inset > Pixels::ZERO);
+        assert_eq!(panel.right() - form.right(), inset, "inline form padding");
     }
 
     #[gpui::test]
@@ -1756,16 +1795,18 @@ mod tests {
     impl gpui::Render for WindowsMenu {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
+            let layout = theme.layout;
+            let typography = theme.typography;
             div()
                 .size_full()
                 .bg(theme.background)
                 .text_color(theme.foreground)
                 .font_family(mira_ui::theme::UI_FONT)
-                .text_body(theme.typography)
+                .text_body(typography)
                 .child(
                     Menubar::new("bar", "Game")
-                        .h(BAR_HEIGHT)
-                        .px(px(6.0))
+                        .h(cx.theme().layout.chrome)
+                        .px(layout.space(1.5))
                         .menu(trigger("windows", "Windows", None, None, cx), |_, cx| {
                             windows_menu(cx)
                         })
@@ -1819,13 +1860,15 @@ mod tests {
     impl gpui::Render for Bars {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
+            let layout = theme.layout;
+            let typography = theme.typography;
             v_flex()
                 .size_full()
-                .gap(px(8.0))
+                .gap(layout.space(2.0))
                 .bg(theme.card)
                 .text_color(theme.foreground)
                 .font_family(mira_ui::theme::UI_FONT)
-                .text_body(theme.typography)
+                .text_body(typography)
                 .children((self.0)().into_iter().enumerate().map(|(index, bar)| {
                     div()
                         .id(("bar", index))
