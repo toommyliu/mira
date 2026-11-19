@@ -47,7 +47,7 @@ public sealed class MiraBot : IScriptInterface
         UltraBossHelper = new Members.UltraBossHelper(game, () => Combat);
         Accounts = new Members.Accounts(() => Player);
         Handlers = HandlerSource;
-        Wait = new ScriptWait(new(() => Flash), new(() => Player), new(() => status), new(() => Map), new(() => Combat), new(() => Inventory),
+        Wait = new Members.Wait(new(() => Flash), new(() => Player), new(() => status), new(() => Map), new(() => Combat), new(() => Inventory),
             new(() => Monsters), new(() => House), new(() => Quests), new(() => Drops), new(() => Skills!));
         Kill = new ScriptKill(new(() => Wait), new(() => Options), new(() => Combat), new(() => Player), new(() => Drops),
             new(() => Inventory), new(() => TempInv), new(() => status), new(() => Map), Services.Logs, new(() => Monsters));
