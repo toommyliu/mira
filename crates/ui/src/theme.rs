@@ -24,6 +24,20 @@ pub struct Typography {
     pub secondary: Pixels,
     pub body_line: Pixels,
     pub secondary_line: Pixels,
+    pub mono: Pixels,
+}
+
+impl Typography {
+    pub fn sized(body: f32) -> Self {
+        let secondary = body - 2.0;
+        Self {
+            body: px(body),
+            secondary: px(secondary),
+            body_line: px((body * 20.0 / 13.0).round()),
+            secondary_line: px((secondary * 16.0 / 11.0).round()),
+            mono: TEXT_CAPTION,
+        }
+    }
 }
 
 impl Default for Typography {
@@ -33,6 +47,7 @@ impl Default for Typography {
             secondary: TEXT_CAPTION,
             body_line: LINE_BODY,
             secondary_line: LINE_CAPTION,
+            mono: TEXT_CAPTION,
         }
     }
 }
@@ -184,6 +199,7 @@ pub enum Tone {
 pub struct Theme {
     pub dark_mode: bool,
     pub font_family: gpui::SharedString,
+    pub mono_family: gpui::SharedString,
     pub typography: Typography,
     pub layout: Layout,
     pub radius: Radii,
@@ -241,6 +257,7 @@ impl Theme {
         Self {
             dark_mode: dark,
             font_family: UI_FONT.into(),
+            mono_family: SYSTEM_MONO.into(),
             typography: Typography::default(),
             layout: Layout::default(),
             radius: Radii::scaled(1.0),
@@ -634,6 +651,26 @@ pub fn perceptual_mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_text_size_keeps_the_design_metrics() {
+        let sized = Typography::sized(13.0);
+        let default = Typography::default();
+        assert_eq!(
+            (
+                sized.body,
+                sized.secondary,
+                sized.body_line,
+                sized.secondary_line
+            ),
+            (
+                default.body,
+                default.secondary,
+                default.body_line,
+                default.secondary_line
+            )
+        );
+    }
 
     #[test]
     fn without_custom_colors_a_theme_is_its_preset() {
