@@ -7,10 +7,10 @@ use gpui::{
     prelude::FluentBuilder as _, px, uniform_list,
 };
 use mira_ui::{
-    ActiveTheme as _, PointerCursor as _, StyledExt as _, Theme, Tone,
+    ActiveTheme as _, PointerCursor as _, Theme, Tone,
     nav::{self, Axis, Step},
     primitives::{ContextMenu, Icon, MenuItem, Scrollbar, icon},
-    theme::{SYSTEM_MONO, TEXT_CAPTION},
+    theme::SYSTEM_MONO,
 };
 
 const ID: &str = "packet-lines";
@@ -94,6 +94,8 @@ struct Shown {
 
 impl RenderOnce for PacketLines {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let scroll = window
             .use_keyed_state(key("scroll"), cx, |_, _| UniformListScrollHandle::new())
             .read(cx)
@@ -177,15 +179,15 @@ impl RenderOnce for PacketLines {
                         .when(current, |line| line.aria_active_descendant())
                         .flex()
                         .items_center()
-                        .gap(px(12.0))
+                        .gap(layout.space(3.0))
                         .h(ROW_HEIGHT)
-                        .px(px(12.0))
+                        .px(layout.space(3.0))
                         .font_family(SYSTEM_MONO)
-                        .text_size(TEXT_CAPTION)
+                        .text_size(typography.secondary)
                         .line_height(px(17.0))
                         .whitespace_nowrap()
                         .overflow_hidden()
-                        .when(current, |line| line.bg(theme.accent))
+                        .when(current, |line| line.bg(theme.muted))
                         .pointer_cursor(&theme)
                         .when(entry.actions, |line| {
                             line.on_mouse_down(MouseButton::Right, move |_, window, cx| {
@@ -240,7 +242,7 @@ impl RenderOnce for PacketLines {
         })
         .track_scroll(&scroll)
         .size_full()
-        .py(px(4.0))
+        .py(layout.space(1.0))
         .pr(Scrollbar::GUTTER);
         let lines = div()
             .id(ID)
@@ -272,48 +274,27 @@ impl RenderOnce for PacketLines {
 }
 
 fn jump(theme: &Theme, unseen: u64, scroll: UniformListScrollHandle) -> AnyElement {
+    let layout = theme.layout;
     let label: SharedString = match unseen {
         0 => "Jump to latest".into(),
         1 => "1 new packet".into(),
         n => format!("{n} new packets").into(),
     };
-    let button = div()
-        .id(key("jump"))
-        .role(Role::Button)
-        .aria_label(label.clone())
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(6.0))
-        .h(px(28.0))
-        .rounded_full()
-        .bg(theme.popover)
-        .border_1()
-        .border_color(theme.border)
-        .shadow(theme.surface_edge())
-        .text_caption(theme.typography)
-        .text_color(theme.muted_foreground)
-        .pointer_cursor(theme)
-        .hover(|style| style.text_color(theme.foreground))
-        .on_click(move |_, window, cx| {
+    let button = mira_ui::primitives::Button::new(key("jump"), label)
+        .variant(mira_ui::primitives::button::Variant::Outline)
+        .start_slot(icon(Icon::ArrowDownToLine, theme.muted_foreground))
+        .on_click(move |_, window, _| {
             scroll.scroll_to_bottom();
             window.refresh();
-            cx.stop_propagation();
         });
     div()
         .absolute()
-        .bottom(px(12.0))
+        .bottom(layout.space(3.0))
         .left_0()
         .right_0()
         .flex()
         .justify_center()
-        .child(
-            button
-                .pl(px(10.0))
-                .pr(px(12.0))
-                .child(icon(Icon::ArrowDownToLine, theme.muted_foreground))
-                .child(label),
-        )
+        .child(button)
         .into_any_element()
 }
 
