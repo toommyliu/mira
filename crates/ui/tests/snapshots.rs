@@ -867,6 +867,19 @@ fn snapshot_chip_editing() {
         render,
     );
 }
+
+#[test]
+fn snapshot_color_picker_open() {
+    scene_after_keys("color-picker", 320.0, 300.0, &["tab", "enter"], |_, _| {
+        mira_ui::primitives::ColorPicker::new(
+            "primary",
+            "Light primary",
+            mira_ui::theme::parse_hex("#2563EB").unwrap(),
+        )
+        .into_any_element()
+    });
+}
+
 #[test]
 fn snapshot_radio_previews_focused() {
     scene_after_keys("radio-previews", 420.0, 150.0, &["tab"], |_, cx| {

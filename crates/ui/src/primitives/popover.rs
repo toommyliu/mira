@@ -105,6 +105,7 @@ pub struct Popover {
     content: Content,
     placement: Placement,
     width: Pixels,
+    inset: Option<Pixels>,
     default_open: bool,
 }
 
@@ -116,6 +117,7 @@ impl Popover {
             content: Rc::new(|_, _, _| div().into_any_element()),
             placement: Placement::new(Side::Bottom, Align::Center),
             width: POPOVER_WIDTH,
+            inset: None,
             default_open: false,
         }
     }
@@ -135,6 +137,11 @@ impl Popover {
 
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = width;
+        self
+    }
+
+    pub(crate) fn inset(mut self, inset: Pixels) -> Self {
+        self.inset = Some(inset);
         self
     }
 
@@ -202,7 +209,9 @@ impl RenderOnce for Popover {
             return trigger;
         };
         let content = (self.content)(&closer, window, cx);
-        let panel = panel(&self.id, label, closer, Some(self.width), window, cx).child(content);
+        let panel = panel(&self.id, label, closer, Some(self.width), window, cx)
+            .when_some(self.inset, |panel, inset| panel.p(inset))
+            .child(content);
         trigger = trigger.attach(
             menu::attach(
                 self.placement,
