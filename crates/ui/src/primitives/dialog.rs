@@ -9,14 +9,8 @@ use gpui::{
 
 use super::{Button, Icon, Scrollbar, button::Size};
 use crate::{
-    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, h_flex,
-    motion::{self, From},
-    nav,
-    theme::{LINE_BODY, LINE_TITLE, RING_ROOM, TEXT_BODY, TEXT_TITLE},
+    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, h_flex, motion, nav, theme::RING_ROOM,
 };
-
-const PADDING: Pixels = px(16.0);
-const WINDOW_MARGIN: Pixels = px(16.0);
 
 type CloseHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -50,7 +44,7 @@ pub struct Dialog {
     open: bool,
     alert: bool,
     title: SharedString,
-    width: Pixels,
+    width: Option<Pixels>,
     description: Option<SharedString>,
     header_end: Option<AnyElement>,
     body: Vec<AnyElement>,
@@ -66,7 +60,7 @@ impl Dialog {
             open,
             alert: false,
             title: title.into(),
-            width: px(420.0),
+            width: None,
             description: None,
             header_end: None,
             body: Vec::new(),
@@ -82,7 +76,7 @@ impl Dialog {
     }
 
     pub fn width(mut self, width: Pixels) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -119,6 +113,8 @@ impl Dialog {
 
 impl RenderOnce for Dialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let state = window.use_keyed_state((self.id.clone(), "dialog"), cx, |_, cx| {
             DialogState::new(cx)
         });
@@ -172,17 +168,17 @@ impl RenderOnce for Dialog {
         let theme = cx.theme().clone();
         let close = self.on_close.clone();
         let dismiss = self.on_close.clone().filter(|_| !self.alert);
-        let close_size = if self.header_end.is_some() {
-            Size::Medium
-        } else {
-            Size::Small
-        };
+        let close_size = Size::Small;
         let backdrop_close = dismiss.clone();
         let close_focus = nav::focus_handle((self.id.clone(), "close"), window, cx).tab_index(1);
         let close_id = self.id.clone();
         let next_focus = focus.clone();
         let prev_focus = focus.clone();
         let viewport = window.viewport_size();
+        let inset = layout.space(4.0);
+        let narrow = viewport.width < layout.compact_overlay;
+        let stack_actions = narrow && !self.alert;
+        let equal_choices = narrow && self.alert && self.actions.len() == 2;
         if self.open {
             nav::set_scroll_root(&scroll, window, cx);
         }
@@ -198,13 +194,13 @@ impl RenderOnce for Dialog {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(gpui::black().opacity(0.80))
+                        .bg(gpui::black().opacity(0.8))
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             if let Some(close) = &backdrop_close {
                                 close(window, cx);
                             }
                         })
-                        .child(motion::arrive(
+                        .child(motion::fade(
                             (self.id.clone(), "panel"),
                             div()
                                 .id((self.id.clone(), "panel"))
@@ -217,7 +213,7 @@ impl RenderOnce for Dialog {
                                 .when_some(self.description.clone(), |panel, description| {
                                     panel.aria_description(description)
                                 })
-                                .key_context(FOCUS_SCOPE)
+                                .key_context(format!("{FOCUS_SCOPE} Modal").as_str())
                                 .track_focus(&focus)
                                 .on_action(move |_: &FocusNext, window, cx| {
                                     nav::trap_tab(&next_focus, false, window, cx)
@@ -237,38 +233,44 @@ impl RenderOnce for Dialog {
                                 .relative()
                                 .flex()
                                 .flex_col()
-                                .gap(px(12.0))
-                                .w(self.width)
-                                .max_w(viewport.width - WINDOW_MARGIN * 2.0)
-                                .max_h(viewport.height - WINDOW_MARGIN * 2.0)
-                                .p(PADDING)
+                                .gap(theme.space(if self.alert { 3.0 } else { 4.0 }))
+                                .w(self.width.unwrap_or_else(|| {
+                                    if !narrow {
+                                        layout.overlay_max_width
+                                    } else if self.alert {
+                                        px(320.0)
+                                    } else {
+                                        viewport.width - inset * 2.0
+                                    }
+                                }))
+                                .max_w(viewport.width - inset * 2.0)
+                                .max_h(viewport.height - inset * 2.0)
+                                .p(inset)
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.popover)
-                                .text_color(theme.foreground)
-                                .border_1()
-                                .border_color(theme.border)
-                                .shadow(theme.popup_shadow())
+                                .text_color(theme.popover_foreground)
+                                .shadow(theme.surface_edge())
                                 .child(
                                     div()
                                         .flex()
                                         .flex_none()
                                         .flex_col()
-                                        .gap(px(2.0))
+                                        .gap(layout.space(0.5))
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
                                                 .justify_between()
-                                                .gap(px(12.0))
+                                                .gap(layout.space(3.0))
                                                 .child(
                                                     div()
                                                         .id((self.id.clone(), "title"))
                                                         .role(Role::Heading)
                                                         .aria_level(2)
                                                         .min_w_0()
-                                                        .text_size(TEXT_TITLE)
-                                                        .line_height(LINE_TITLE)
-                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_size(typography.body)
+                                                        .line_height(typography.body_line)
+                                                        .font_weight(FontWeight::MEDIUM)
                                                         .child(self.title),
                                                 )
                                                 .when_some(self.header_end, |row, end| {
@@ -292,8 +294,8 @@ impl RenderOnce for Dialog {
                                         .when_some(self.description, |header, description| {
                                             header.child(
                                                 div()
-                                                    .text_size(TEXT_BODY)
-                                                    .line_height(LINE_BODY)
+                                                    .text_size(typography.body)
+                                                    .line_height(typography.body_line)
                                                     .text_color(theme.muted_foreground)
                                                     .child(description),
                                             )
@@ -306,16 +308,16 @@ impl RenderOnce for Dialog {
                                             .flex()
                                             .flex_col()
                                             .min_h_0()
-                                            .mx(-PADDING)
+                                            .mx(-inset)
                                             .my(-RING_ROOM)
                                             .child(
                                                 div()
                                                     .id((self.id.clone(), "body"))
                                                     .flex()
                                                     .flex_col()
-                                                    .gap(px(12.0))
+                                                    .gap(layout.space(3.0))
                                                     .min_h_0()
-                                                    .px(PADDING)
+                                                    .px(inset)
                                                     .py(RING_ROOM)
                                                     .overflow_y_scroll()
                                                     .track_scroll(&scroll)
@@ -335,30 +337,50 @@ impl RenderOnce for Dialog {
                                                 .flex_none()
                                                 .flex_wrap()
                                                 .justify_end()
-                                                .gap(px(6.0))
-                                                .pt(px(4.0))
-                                                .child(
-                                                    h_flex()
-                                                        .id((self.id.clone(), "footer-start"))
-                                                        .track_focus(&footer_start)
-                                                        .flex_grow(1.0)
-                                                        .min_w_0()
-                                                        .gap(px(6.0))
-                                                        .children(self.footer_start),
-                                                )
+                                                .gap(theme.space(2.0))
+                                                .pt(layout.space(1.0))
+                                                .when(stack_actions, |footer| {
+                                                    footer.flex_col_reverse().items_stretch()
+                                                })
+                                                .when_some(self.footer_start, |footer, start| {
+                                                    footer.child(
+                                                        h_flex()
+                                                            .id((self.id.clone(), "footer-start"))
+                                                            .track_focus(&footer_start)
+                                                            .flex_grow(1.0)
+                                                            .min_w_0()
+                                                            .gap(theme.space(2.0))
+                                                            .child(start),
+                                                    )
+                                                })
                                                 .child(
                                                     h_flex()
                                                         .id((self.id.clone(), "actions"))
                                                         .track_focus(&actions)
+                                                        .when(equal_choices, |group| group.w_full())
                                                         .flex_wrap()
+                                                        .when(stack_actions, |group| {
+                                                            group.flex_col_reverse().items_stretch()
+                                                        })
                                                         .justify_end()
-                                                        .gap(px(6.0))
-                                                        .children(self.actions),
+                                                        .gap(theme.space(2.0))
+                                                        .children(self.actions.into_iter().map(
+                                                            |action| {
+                                                                if equal_choices {
+                                                                    crate::v_flex()
+                                                                        .flex_1()
+                                                                        .min_w_0()
+                                                                        .child(action)
+                                                                        .into_any_element()
+                                                                } else {
+                                                                    action
+                                                                }
+                                                            },
+                                                        )),
                                                 ),
                                         )
                                     },
                                 ),
-                            From::Below,
                         )),
                 )),
             ),

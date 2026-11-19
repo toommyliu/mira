@@ -1,34 +1,21 @@
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Div, ElementId, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Window, anchored, canvas, deferred, div, point,
+    AnyElement, App, Bounds, Context, Div, ElementId, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, PathBuilder, Pixels, RenderOnce, SharedString, Size, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, deferred, div, point,
     prelude::FluentBuilder as _, px,
 };
 
-use crate::{
-    ActiveTheme as _,
-    theme::{LINE_SMALL, TEXT_SMALL},
-};
-
-const DELAY: Duration = Duration::from_millis(450);
-const WARM: Duration = Duration::from_millis(400);
-const GAP: Pixels = px(6.0);
-const MARGIN: Pixels = px(8.0);
-const HEIGHT: Pixels = px(26.0);
-const INSET: Pixels = px(9.0);
+use super::{Align, Placement, Side, placement::COLLISION_MARGIN};
+use crate::{ActiveTheme as _, Theme, motion::From};
 
 #[derive(IntoElement)]
 pub struct Tooltip {
     id: ElementId,
     label: SharedString,
     trigger: AnyElement,
-    start: bool,
+    placement: Placement,
 }
 
 impl Tooltip {
@@ -41,12 +28,17 @@ impl Tooltip {
             id: id.into(),
             label: label.into(),
             trigger: trigger.into_any_element(),
-            start: false,
+            placement: Placement::new(Side::Top, Align::Center),
         }
     }
 
     pub fn align_start(mut self) -> Self {
-        self.start = true;
+        self.placement.align = Align::Start;
+        self
+    }
+
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
         self
     }
 }
@@ -59,26 +51,57 @@ impl RenderOnce for Tooltip {
             .min_w_0()
             .aria_description(self.label.clone())
             .child(self.trigger);
-        let id = ElementId::from((self.id, "tooltip"));
-        let popup_id = id.clone();
-        let (label, start) = (self.label, self.start);
-        hover(trigger, id, false, window, cx, move |at, window, cx| {
-            popup(popup_id, label, at, start, window, cx)
-        })
+        hover(
+            trigger,
+            (self.id, "tooltip").into(),
+            false,
+            self.placement,
+            window,
+            cx,
+            move |at, from, theme| panel(self.label, at, from, theme),
+        )
     }
 }
 
 #[derive(Default)]
-struct LastClosed(Option<Instant>);
-
-impl gpui::Global for LastClosed {}
-
-#[derive(Default)]
 struct Tip {
-    hovered: bool,
+    over_trigger: bool,
+    over_panel: bool,
+    focused: bool,
     shown: bool,
-    generation: u64,
+    dismissed: bool,
+    close: Option<Task<()>>,
     trigger: Rc<Cell<Bounds<Pixels>>>,
+    size: Rc<Cell<Size<Pixels>>>,
+}
+
+impl Tip {
+    fn pointer(&mut self, over_trigger: bool, entered: bool, cx: &mut Context<Self>) {
+        if over_trigger {
+            self.over_trigger = entered;
+            if entered {
+                self.dismissed = false;
+            }
+        } else {
+            self.over_panel = entered;
+        }
+        if self.over_trigger || self.over_panel {
+            self.close = None;
+            self.shown = true;
+        } else {
+            // Keep the popup mounted while the pointer crosses the gap beside its anchor.
+            self.close = Some(cx.spawn(async move |tip, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let _ = tip.update(cx, |tip, cx| {
+                    tip.shown = false;
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
+    }
 }
 
 pub fn attach(
@@ -89,134 +112,147 @@ pub fn attach(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    let id = id.into();
-    let popup_id = id.clone();
-    hover(trigger, id, focused, window, cx, move |at, window, cx| {
-        popup(popup_id, label, at, false, window, cx)
-    })
+    hover(
+        trigger,
+        id.into(),
+        focused,
+        Placement::new(Side::Top, Align::Center),
+        window,
+        cx,
+        move |at, from, theme| panel(label, at, from, theme),
+    )
 }
 
-pub(crate) fn hover(
+pub(crate) fn hover<E: IntoElement>(
     trigger: Stateful<Div>,
     id: ElementId,
     focused: bool,
+    placement: Placement,
     window: &mut Window,
     cx: &mut App,
-    popup: impl FnOnce(Bounds<Pixels>, &Window, &App) -> AnyElement,
+    content: impl FnOnce(Bounds<Pixels>, From, &Theme) -> E,
 ) -> Stateful<Div> {
     let tip = window.use_keyed_state(id.clone(), cx, |_, _| Tip::default());
-    let (shown, bounds) = {
-        let tip = tip.read(cx);
-        (tip.shown || focused, tip.trigger.clone())
-    };
+    let (shown, bounds, measured) = tip.update(cx, |tip, _| {
+        if focused && !tip.focused {
+            tip.dismissed = false;
+        }
+        tip.focused = focused;
+        (
+            (tip.shown || focused) && !tip.dismissed,
+            tip.trigger.clone(),
+            tip.size.clone(),
+        )
+    });
     let at = bounds.get();
     let hover = tip.clone();
-    let press = tip;
+    let press = tip.clone();
+    let escape = tip.clone();
     trigger
-        .on_hover(move |hovered, _, cx| {
-            let hovered = *hovered;
-            let generation = hover.update(cx, |tip, cx| {
-                tip.hovered = hovered;
-                tip.generation += 1;
-                if !hovered && tip.shown {
-                    tip.shown = false;
-                    cx.default_global::<LastClosed>().0 = Some(Instant::now());
-                    cx.notify();
-                }
-                tip.generation
-            });
-            if !hovered {
-                return;
-            }
-            if cx
-                .default_global::<LastClosed>()
-                .0
-                .is_some_and(|at| at.elapsed() < WARM)
-            {
-                hover.update(cx, |tip, cx| {
-                    tip.shown = true;
+        .on_hover(move |over, _, cx| hover.update(cx, |tip, cx| tip.pointer(true, *over, cx)))
+        .on_key_down(move |event, _, cx| {
+            if shown && event.keystroke.key == "escape" {
+                escape.update(cx, |tip, cx| {
+                    tip.dismissed = true;
+                    tip.over_panel = false;
                     cx.notify();
                 });
-                return;
             }
-            let tip = hover.downgrade();
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(DELAY).await;
-                tip.update(cx, |tip, cx| {
-                    if tip.hovered && tip.generation == generation {
-                        tip.shown = true;
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
         })
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             press.update(cx, |tip, cx| {
-                tip.hovered = false;
-                tip.generation += 1;
-                if tip.shown {
-                    tip.shown = false;
-                    cx.default_global::<LastClosed>().0 = Some(Instant::now());
-                    cx.notify();
-                }
-            });
+                tip.dismissed = true;
+                tip.over_panel = false;
+                cx.notify();
+            })
         })
         .child(
-            canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
-                .absolute()
-                .inset_0(),
+            canvas(
+                move |area, window, _| {
+                    if bounds.replace(area) != area && shown {
+                        window.request_animation_frame();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
         )
-        .when(shown, |trigger| trigger.child(popup(at, window, cx)))
+        .when(shown, |trigger| {
+            let viewport = window.viewport_size();
+            let (positioner, from) = placement.resolve(at, measured.get(), viewport);
+            let panel = div()
+                .id((id, "floating-help"))
+                .relative()
+                .max_w(viewport.width - COLLISION_MARGIN * 2.0)
+                .on_hover(move |over, _, cx| {
+                    tip.update(cx, |tip, cx| tip.pointer(false, *over, cx))
+                })
+                .child(content(at, from, cx.theme()))
+                .child(
+                    canvas(
+                        move |area, window, _| {
+                            if measured.replace(area.size) != area.size {
+                                window.request_animation_frame();
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                );
+            trigger.child(deferred(positioner.child(panel)).with_priority(super::layer::TOOLTIP))
+        })
 }
 
-fn popup(
-    id: ElementId,
+fn panel(
     label: SharedString,
-    trigger: Bounds<Pixels>,
-    start: bool,
-    window: &Window,
-    cx: &App,
-) -> AnyElement {
-    let theme = cx.theme();
-    let room_above = trigger.top() - GAP - HEIGHT >= MARGIN;
-    let room_below = trigger.bottom() + GAP + HEIGHT <= window.viewport_size().height - MARGIN;
-    let above = room_above || !room_below;
-    let x = if start {
-        trigger.left() - INSET
-    } else {
-        trigger.center().x
-    };
-    let (position, anchor) = match (above, start) {
-        (true, false) => (point(x, trigger.top() - GAP), Anchor::BottomCenter),
-        (true, true) => (point(x, trigger.top() - GAP), Anchor::BottomLeft),
-        (false, false) => (point(x, trigger.bottom() + GAP), Anchor::TopCenter),
-        (false, true) => (point(x, trigger.bottom() + GAP), Anchor::TopLeft),
-    };
-    deferred(
-        anchored()
-            .position(position)
-            .anchor(anchor)
-            .snap_to_window_with_margin(MARGIN)
-            .child(
-                div()
-                    .id((id, "tooltip"))
-                    .py(px(4.0))
-                    .px(px(8.0))
-                    .rounded(theme.radius.control)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow(theme.popup_shadow())
-                    .text_size(TEXT_SMALL)
-                    .line_height(LINE_SMALL)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.foreground)
-                    .whitespace_nowrap()
-                    .child(label),
-            ),
-    )
-    .with_priority(super::layer::TOOLTIP)
-    .into_any_element()
+    target: Bounds<Pixels>,
+    from: From,
+    theme: &Theme,
+) -> impl IntoElement + use<> {
+    let color = theme.foreground;
+    let panel = div()
+        .relative()
+        .max_w(px(320.0))
+        .py(theme.space(1.5))
+        .px(theme.space(3.0))
+        .rounded(theme.radius.control)
+        .bg(color)
+        .text_color(theme.background)
+        .text_size(theme.typography.body)
+        .line_height(theme.typography.secondary_line)
+        .child(label)
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let center = target.center();
+                    let (along, low, high) = match from {
+                        From::Above | From::Below => (center.x, bounds.left(), bounds.right()),
+                        From::Left | From::Right => (center.y, bounds.top(), bounds.bottom()),
+                    };
+                    let inset = px(8.0).min((high - low) / 2.0);
+                    let tip = along.clamp(low + inset, high - inset);
+                    let vertex = |along: f32, depth: f32| match from {
+                        From::Above => point(tip + px(along), bounds.top() - px(depth)),
+                        From::Below => point(tip + px(along), bounds.bottom() + px(depth)),
+                        From::Left => point(bounds.left() - px(depth), tip + px(along)),
+                        From::Right => point(bounds.right() + px(depth), tip + px(along)),
+                    };
+                    let mut path = PathBuilder::fill();
+                    path.move_to(vertex(-7.0, -1.0));
+                    path.line_to(vertex(-1.4, 4.6));
+                    path.curve_to(vertex(1.4, 4.6), vertex(0.0, 6.0));
+                    path.line_to(vertex(7.0, -1.0));
+                    path.close();
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        );
+    crate::motion::arrive_for("tooltip-enter", panel, from, crate::motion::TRAVEL)
 }

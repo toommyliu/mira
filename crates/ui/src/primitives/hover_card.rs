@@ -1,17 +1,11 @@
 use gpui::{
-    Anchor, AnyElement, App, Bounds, ElementId, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, Styled as _, Window, anchored, deferred, div,
-    point, px,
+    AnyElement, App, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    ParentElement, RenderOnce, SharedString, Stateful, Styled as _, Window, div, px,
 };
 
 use super::tooltip;
-use crate::{
-    ActiveTheme as _, Tone,
-    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
-};
+use crate::Tone;
 
-const GAP: Pixels = px(6.0);
-const MARGIN: Pixels = px(8.0);
 const MAX_LINES: usize = 3;
 
 struct Card {
@@ -24,6 +18,7 @@ pub struct HoverCard {
     id: ElementId,
     card: Card,
     children: Vec<AnyElement>,
+    placement: super::Placement,
 }
 
 impl HoverCard {
@@ -35,7 +30,13 @@ impl HoverCard {
                 rows: Vec::new(),
             },
             children: Vec::new(),
+            placement: super::Placement::new(super::Side::Bottom, super::Align::Center),
         }
+    }
+
+    pub fn placement(mut self, placement: super::Placement) -> Self {
+        self.placement = placement;
+        self
     }
 
     pub fn row(
@@ -47,6 +48,26 @@ impl HoverCard {
         self.card.rows.push((label.into(), text.into(), tone));
         self
     }
+
+    pub(super) fn attach(
+        self,
+        trigger: Stateful<Div>,
+        focused: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Stateful<Div> {
+        tooltip::hover(
+            trigger.children(self.children),
+            (self.id, "card").into(),
+            focused,
+            self.placement,
+            window,
+            cx,
+            move |_, from, theme| {
+                crate::motion::arrive("hover-card-enter", popup(self.card, theme), from)
+            },
+        )
+    }
 }
 
 impl ParentElement for HoverCard {
@@ -57,82 +78,58 @@ impl ParentElement for HoverCard {
 
 impl RenderOnce for HoverCard {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let trigger = div()
-            .id(self.id.clone())
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .children(self.children);
-        let card = self.card;
-        tooltip::hover(
-            trigger,
-            (self.id, "card").into(),
-            false,
-            window,
-            cx,
-            move |at, _, cx| popup(card, at, cx),
-        )
+        let trigger = div().id(self.id.clone()).flex().flex_1().min_w_0();
+        self.attach(trigger, false, window, cx)
     }
 }
 
-fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    deferred(
-        anchored()
-            .position(point(trigger.right() + GAP, trigger.center().y))
-            .anchor(Anchor::LeftCenter)
-            .snap_to_window_with_margin(MARGIN)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .w(px(260.0))
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .rounded(theme.radius.panel)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow(theme.popup_shadow())
-                    .child(
-                        div()
-                            .mb(px(2.0))
-                            .truncate()
-                            .text_size(TEXT_BODY)
-                            .line_height(LINE_BODY)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child(card.title),
-                    )
-                    .children(card.rows.into_iter().map(|(label, text, tone)| {
-                        div()
-                            .flex()
-                            .gap(px(12.0))
-                            .text_size(TEXT_SMALL)
-                            .line_height(LINE_SMALL)
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(44.0))
-                                    .text_color(theme.muted_foreground)
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .line_clamp(MAX_LINES)
-                                    .text_ellipsis()
-                                    .text_color(match tone {
-                                        Tone::Neutral => theme.foreground,
-                                        tone => theme.tone(tone).2,
-                                    })
-                                    .child(text),
-                            )
-                    })),
-            ),
-    )
-    .with_priority(super::layer::TOOLTIP)
-    .into_any_element()
+fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
+    div()
+        .flex()
+        .flex_col()
+        .gap(layout.space(1.5))
+        .w(super::popover::POPOVER_WIDTH)
+        .max_w_full()
+        .p(theme.space(2.5))
+        .rounded(theme.radius.panel)
+        .bg(theme.popover)
+        .shadow(theme.popup_shadow())
+        .child(
+            div()
+                .mb(layout.space(0.5))
+                .truncate()
+                .text_size(typography.body)
+                .line_height(typography.body_line)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child(card.title),
+        )
+        .children(card.rows.into_iter().map(|(label, text, tone)| {
+            div()
+                .flex()
+                .gap(layout.space(3.0))
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(44.0))
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .line_clamp(MAX_LINES)
+                        .text_ellipsis()
+                        .text_color(match tone {
+                            Tone::Neutral => theme.foreground,
+                            tone => theme.tone(tone).2,
+                        })
+                        .child(text),
+                )
+        }))
 }

@@ -11,7 +11,7 @@ use super::{Flow, Pose, Scrollbar, Sortable};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
     nav::{self, Axis, Step},
-    theme::{ROW, tabular},
+    theme::tabular,
     v_flex,
 };
 
@@ -154,23 +154,25 @@ impl Options {
     }
 
     fn header(&self, index: usize, item: ListItem) -> Stateful<Div> {
+        let layout = self.theme.layout;
+        let typography = self.theme.typography;
         h_flex()
             .id(index)
             .role(Role::Heading)
             .aria_label(item.label.clone())
             .flex_none()
             .items_end()
-            .gap(px(6.0))
-            .px(px(8.0))
-            .pb(px(2.0))
+            .gap(layout.space(1.5))
+            .px(layout.space(2.0))
+            .pb(layout.space(0.5))
             .map(|header| {
                 if self.uniform {
-                    header.h(ROW)
+                    header.h(layout.control)
                 } else {
                     header.pt(px(if index == 0 { 4.0 } else { 10.0 }))
                 }
             })
-            .text_caption(self.theme.typography)
+            .text_caption(typography)
             .font_weight(FontWeight::MEDIUM)
             .text_color(self.theme.muted_foreground)
             .when_some(item.start, |header, start| header.child(start))
@@ -179,17 +181,15 @@ impl Options {
     }
 
     fn item(&self, index: usize, item: ListItem, pose: Pose) -> Stateful<Div> {
+        let layout = self.theme.layout;
+        let typography = self.theme.typography;
         let theme = &self.theme;
         let current = self.selected == Some(index) && pose != Pose::Lifted;
         let focus = self.focus.clone();
         let on_select = self.on_select.clone();
         let on_activate = self.on_activate.clone();
         let disabled = item.disabled;
-        let quiet = if current {
-            theme.muted_foreground
-        } else {
-            theme.muted_foreground
-        };
+        let quiet = theme.muted_foreground;
         h_flex()
             .id(index)
             .debug_selector(move || format!("row-{index}"))
@@ -204,38 +204,41 @@ impl Options {
             .when(current, |row| row.aria_active_descendant())
             .relative()
             .flex_none()
-            .gap(px(8.0))
-            .min_h(ROW)
-            .px(px(8.0))
-            .py(px(4.0))
+            .gap(layout.space(2.0))
+            .min_h(layout.control)
+            .px(layout.space(2.0))
+            .py(layout.space(1.0))
             .rounded(theme.radius.control)
-            .text_body(theme.typography)
-            .text_color(if disabled {
-                theme
-                    .muted_foreground
-                    .opacity(crate::theme::DISABLED_OPACITY)
-            } else {
-                theme.foreground
-            })
-            .when(current, |row| row.bg(theme.accent))
+            .text_body(typography)
+            .text_color(theme.foreground)
+            .when(disabled, |row| row.opacity(crate::theme::DISABLED_OPACITY))
+            .when(current, |row| row.bg(theme.muted))
             .when(current && self.ring, |row| {
-                row.child(theme.focus_ring(theme.radius.control))
+                row.child(theme.halo(
+                    theme.ring.opacity(0.5),
+                    theme.radius.control,
+                    Pixels::ZERO,
+                    px(3.0),
+                ))
             })
             .when(!current && !disabled && pose == Pose::Rest, |row| {
-                row.hover(|style| style.bg(theme.secondary))
+                row.hover(|style| style.bg(theme.muted.opacity(0.5)))
             })
             .when(!disabled, |row| {
-                row.pointer_cursor(theme)
-                    .on_click(move |event, window, cx| {
-                        window.focus(&focus, cx);
-                        if event.click_count() >= 2
-                            && let Some(on_activate) = &on_activate
-                        {
-                            on_activate(index, window, cx);
-                        } else if let Some(on_select) = &on_select {
-                            on_select(index, window, cx);
-                        }
-                    })
+                row.active(|style| {
+                    style.bg(theme.pressed(theme.card, theme.muted, theme.foreground))
+                })
+                .pointer_cursor(theme)
+                .on_click(move |event, window, cx| {
+                    window.focus(&focus, cx);
+                    if event.click_count() >= 2
+                        && let Some(on_activate) = &on_activate
+                    {
+                        on_activate(index, window, cx);
+                    } else if let Some(on_select) = &on_select {
+                        on_select(index, window, cx);
+                    }
+                })
             })
             .when_some(item.start, |row, start| {
                 row.child(h_flex().flex_none().child(start))
@@ -255,7 +258,7 @@ impl Options {
                         body.child(
                             div()
                                 .truncate()
-                                .text_caption(theme.typography)
+                                .text_caption(typography)
                                 .text_color(quiet)
                                 .child(description),
                         )
@@ -265,8 +268,8 @@ impl Options {
                 row.child(
                     h_flex()
                         .flex_none()
-                        .gap(px(4.0))
-                        .text_caption(theme.typography)
+                        .gap(layout.space(1.0))
+                        .text_caption(typography)
                         .font_features(tabular())
                         .text_color(quiet)
                         .child(end),

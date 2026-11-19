@@ -5,14 +5,14 @@ use gpui::{
     Styled, Svg, Transformation, Window, percentage, px,
 };
 
-pub const ARRIVE: Duration = Duration::from_millis(150);
+pub const ARRIVE: Duration = Duration::from_millis(100);
 pub const LEAVE: Duration = Duration::from_millis(100);
-pub const TRAVEL: Duration = Duration::from_millis(160);
-pub const GLIDE: Duration = Duration::from_millis(300);
+pub const TRAVEL: Duration = Duration::from_millis(150);
+pub const GLIDE: Duration = Duration::from_millis(400);
 const BREATH: Duration = Duration::from_millis(2400);
 const SWEEP: Duration = Duration::from_millis(1400);
-const SPIN: Duration = Duration::from_millis(800);
-const ARRIVE_DISTANCE: f32 = 4.0;
+const SPIN: Duration = Duration::from_millis(1000);
+const ARRIVE_DISTANCE: f32 = 8.0;
 
 pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
@@ -49,6 +49,8 @@ fn cubic_bezier(p1: (f32, f32), p2: (f32, f32), x: f32) -> f32 {
 
 #[derive(Clone, Copy)]
 pub enum From {
+    Left,
+    Right,
     Above,
     Below,
 }
@@ -58,13 +60,24 @@ pub fn arrive<E: IntoElement + Styled + 'static>(
     element: E,
     from: From,
 ) -> AnimationElement<E> {
+    arrive_for(id, element, from, ARRIVE)
+}
+
+pub(crate) fn arrive_for<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+    from: From,
+    duration: Duration,
+) -> AnimationElement<E> {
     element.with_animation(
         id,
-        Animation::new(ARRIVE).with_easing(ease_out_quint),
+        Animation::new(duration).with_easing(ease),
         move |element, t| {
             let shift = px((1.0 - t) * ARRIVE_DISTANCE);
             let element = element.relative().opacity(t);
             match from {
+                From::Left => element.left(-shift),
+                From::Right => element.left(shift),
                 From::Above => element.top(-shift),
                 From::Below => element.top(shift),
             }
@@ -136,7 +149,15 @@ struct Tween {
 }
 
 pub fn travel(id: impl Into<ElementId>, target: f32, window: &mut Window, cx: &mut App) -> f32 {
-    tween(id, None, target, TRAVEL, ease_out, window, cx)
+    tween(
+        id,
+        None,
+        target,
+        TRAVEL,
+        |t| cubic_bezier((0.4, 0.0), (0.2, 1.0), t),
+        window,
+        cx,
+    )
 }
 
 pub fn travel_from(
@@ -146,7 +167,15 @@ pub fn travel_from(
     window: &mut Window,
     cx: &mut App,
 ) -> f32 {
-    tween(id, Some(from), target, TRAVEL, ease_out, window, cx)
+    tween(
+        id,
+        Some(from),
+        target,
+        TRAVEL,
+        |t| cubic_bezier((0.4, 0.0), (0.2, 1.0), t),
+        window,
+        cx,
+    )
 }
 
 pub fn glide(
