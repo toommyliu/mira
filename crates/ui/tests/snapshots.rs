@@ -881,6 +881,29 @@ fn snapshot_color_picker_open() {
 }
 
 #[test]
+fn snapshot_shortcut_field_recording() {
+    scene_after_keys("shortcut-recording", 320.0, 120.0, &["tab"], |_, _| {
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(12.0))
+            .child(mira_ui::components::ShortcutField::new(
+                "bank",
+                "Bank",
+                Some(gpui::Keystroke::parse("cmd-b").unwrap()),
+            ))
+            .child(mira_ui::components::ShortcutField::new(
+                "jump",
+                "Jump",
+                Some(gpui::Keystroke::parse("cmd-j").unwrap()),
+            ))
+            .child(mira_ui::components::ShortcutField::new("ads", "Ads", None))
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_radio_previews_focused() {
     scene_after_keys("radio-previews", 420.0, 150.0, &["tab"], |_, cx| {
         let theme = cx.theme().clone();
@@ -989,4 +1012,23 @@ fn snapshot_long_select_scrolls() {
         },
     );
     assert!(paths.iter().all(|path| path.exists()));
+}
+
+#[test]
+fn snapshot_shortcut_field_hints() {
+    for (name, keys) in [
+        ("shortcut-plain-key", &["tab", "a"][..]),
+        ("shortcut-rejected", &["tab", "cmd-q"][..]),
+        ("shortcut-return", &["tab", "enter"][..]),
+    ] {
+        scene_after_keys(name, 320.0, 80.0, keys, |_, _| {
+            mira_ui::components::ShortcutField::new(
+                "bank",
+                "Bank",
+                Some(gpui::Keystroke::parse("cmd-b").unwrap()),
+            )
+            .on_change(|_, _, _| Err("Used by Quit".into()))
+            .into_any_element()
+        });
+    }
 }
