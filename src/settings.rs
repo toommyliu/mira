@@ -86,6 +86,7 @@ struct Settings {
     hidden_recent_scripts: Vec<PathBuf>,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
+    dotnet: Option<PathBuf>,
 }
 
 impl Settings {
@@ -286,6 +287,7 @@ fn apply(cx: &mut App) {
         Appearance::Dark => Theme::dark(),
     };
     theme.pointer_cursor = settings.pointer_cursors;
+    crate::scripting::set_skua_dotnet(settings.dotnet.clone());
     cx.set_global(theme);
     cx.refresh_windows();
 }
@@ -328,7 +330,8 @@ struct SettingsWindow {
     scroll: ScrollHandle,
     taken: Option<Shortcut>,
     github_token: Entity<Input>,
-    _token_changes: Subscription,
+    dotnet: Entity<Input>,
+    _changes: [Subscription; 2],
 }
 
 impl SettingsWindow {
@@ -356,12 +359,30 @@ impl SettingsWindow {
                 tracing::error!(%error, "couldn't save the GitHub token");
             }
         });
+        let chosen = cx.global::<Store>().settings.dotnet.clone();
+        let dotnet = cx.new(|cx| {
+            let mut input = Input::new("dotnet", cx).placeholder("dotnet from your PATH");
+            if let Some(chosen) = chosen {
+                input.set_text(chosen.display().to_string(), cx);
+            }
+            input
+        });
+        let dotnet_changes = cx.subscribe(&dotnet, |_, input, event, cx| {
+            if !matches!(event, InputEvent::Changed) {
+                return;
+            }
+            let text = input.read(cx).text().trim().to_owned();
+            change(cx, |settings| {
+                settings.dotnet = (!text.is_empty()).then(|| PathBuf::from(text));
+            });
+        });
         Self {
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             taken: None,
             github_token,
-            _token_changes: token_changes,
+            dotnet,
+            _changes: [token_changes, dotnet_changes],
         }
     }
 }
@@ -512,6 +533,16 @@ impl Render for SettingsWindow {
                             div().w(px(200.0)).child(self.github_token.clone()),
                         ),
                     )
+                    .child(
+                        Group::new().title("Skua scripts (experimental)").row(
+                            "dotnet",
+                            Some(
+                                "Skua scripts need .NET 10. Set where dotnet is if Mira can't find it, for example when you open Mira from Finder."
+                                    .into(),
+                            ),
+                            div().w(px(200.0)).child(self.dotnet.clone()),
+                        ),
+                    )
                     .children(shortcuts),
                     )
                     .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
@@ -545,6 +576,7 @@ mod tests {
             skip_shop_warning: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
+            dotnet: Some(PathBuf::from("/opt/dotnet/dotnet")),
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
@@ -636,6 +668,7 @@ mod tests {
                     });
                     packages::init(
                         std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                        std::env::temp_dir().join("mira-settings-snapshot-skua"),
                         std::env::temp_dir().join("mira-settings-snapshot-token"),
                         cx,
                     );

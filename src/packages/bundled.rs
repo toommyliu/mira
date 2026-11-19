@@ -142,7 +142,7 @@ pub(crate) fn recommended(resources: &Path, store: &Store) -> Vec<Recommended> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packages::{archive::tests::scratch, store::tests::Bin};
+    use crate::packages::{Kind, archive::tests::scratch, store::tests::Bin};
 
     fn bundle(root: &Path) -> PathBuf {
         let resources = root.join("Resources");
@@ -176,7 +176,7 @@ mod tests {
         let root = scratch("bundled");
         let resources = bundle(&root);
         let (_bin, trash) = Bin::new(&root);
-        let store = Store::new(root.join("packages"), trash);
+        let store = Store::new(root.join("packages"), trash, Kind::Mira);
         assert_eq!(recommended(&resources, &store).len(), 2);
 
         seed(&resources, &store).unwrap();
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(receipt.tree.as_str(), "2".repeat(40));
         assert_eq!(receipt.files.len(), 2);
         assert!(
-            super::super::store::Edits::find(&installed, &receipt.files)
+            super::super::store::Edits::find(&installed, &receipt.files, Kind::Mira)
                 .unwrap()
                 .is_empty()
         );

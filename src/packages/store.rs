@@ -9,14 +9,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    PackagePath, RECEIPT, Sha,
+    Kind, PackagePath, RECEIPT, Sha,
     archive::{self, Files},
 };
 
 const STAGING: &str = ".staging";
 const UNPACKED: &str = "unpacked";
 const IGNORED: [&str; 1] = [".DS_Store"];
-const GENERATED: [&str; 1] = ["tsconfig.json"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,11 +58,14 @@ impl Edits {
         self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
     }
 
-    pub(crate) fn find(package: &Path, baseline: &Files) -> io::Result<Self> {
+    pub(crate) fn find(package: &Path, baseline: &Files, kind: Kind) -> io::Result<Self> {
         let mut edits = Self::default();
         let mut seen = Vec::new();
+        let tracked = |path: &PackagePath| {
+            path.as_str() != RECEIPT && !kind.rewritten().contains(&path.as_str())
+        };
         visit(package, package, &mut |path, file| {
-            if path.as_str() == RECEIPT {
+            if !tracked(&path) {
                 return Ok(());
             }
             match baseline.get(&path) {
@@ -73,14 +75,14 @@ impl Edits {
                     }
                     seen.push(path);
                 }
-                None if GENERATED.contains(&path.as_str()) => {}
+                None if kind.generated().contains(&path.as_str()) => {}
                 None => edits.added.push(path),
             }
             Ok(())
         })?;
         edits.removed = baseline
             .keys()
-            .filter(|path| !seen.contains(path))
+            .filter(|path| tracked(path) && !seen.contains(path))
             .cloned()
             .collect();
         edits.changed.sort();
@@ -128,11 +130,16 @@ pub(crate) enum StoreError {
 pub(crate) struct Store {
     root: PathBuf,
     trash: Trash,
+    kind: Kind,
 }
 
 impl Store {
-    pub(crate) fn new(root: PathBuf, trash: Trash) -> Self {
-        Self { root, trash }
+    pub(crate) fn new(root: PathBuf, trash: Trash, kind: Kind) -> Self {
+        Self { root, trash, kind }
+    }
+
+    pub(crate) fn kind(&self) -> Kind {
+        self.kind
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -351,7 +358,7 @@ pub(crate) mod tests {
     fn installing_publishes_the_package_with_its_receipt_and_never_overwrites() {
         let root = scratch("store");
         let (_bin, trash) = Bin::new(&root);
-        let store = Store::new(root.join("packages"), trash);
+        let store = Store::new(root.join("packages"), trash, Kind::Mira);
         let (staged, files) = stage_files(&store, &[("package.json", "{}"), ("scripts/a.ts", "a")]);
         let installed = store
             .publish(staged, "o-r", &receipt(files.clone()))
@@ -388,7 +395,7 @@ pub(crate) mod tests {
     fn edits_since_install_are_found_and_kept_in_the_trash_when_replaced() {
         let root = scratch("store");
         let (bin, trash) = Bin::new(&root);
-        let store = Store::new(root.join("packages"), trash);
+        let store = Store::new(root.join("packages"), trash, Kind::Mira);
         let (staged, files) = stage_files(
             &store,
             &[
@@ -400,7 +407,10 @@ pub(crate) mod tests {
         let installed = store
             .publish(staged, "o-r", &receipt(files.clone()))
             .unwrap();
-        assert_eq!(Edits::find(&installed, &files).unwrap(), Edits::default());
+        assert_eq!(
+            Edits::find(&installed, &files, Kind::Mira).unwrap(),
+            Edits::default()
+        );
 
         fs::write(installed.join("scripts/a.ts"), "my edit").unwrap();
         fs::remove_file(installed.join("lib/c.ts")).unwrap();
@@ -409,7 +419,7 @@ pub(crate) mod tests {
         fs::write(installed.join("tsconfig.json"), "{}").unwrap();
         let path = |text: &str| PackagePath::parse(text).unwrap();
         assert_eq!(
-            Edits::find(&installed, &files).unwrap(),
+            Edits::find(&installed, &files, Kind::Mira).unwrap(),
             Edits {
                 changed: vec![path("scripts/a.ts")],
                 added: vec![path("scripts/mine.ts")],
@@ -427,10 +437,26 @@ pub(crate) mod tests {
         );
         assert!(!installed.join("scripts/mine.ts").exists());
         assert_eq!(Receipt::read(&installed), Ok(Some(receipt(next.clone()))));
-        assert_eq!(Edits::find(&installed, &next).unwrap(), Edits::default());
+        assert_eq!(
+            Edits::find(&installed, &next, Kind::Mira).unwrap(),
+            Edits::default()
+        );
         let trashed = bin.contents();
         assert!(trashed.contains(&b"my edit".to_vec()));
         assert!(trashed.contains(&b"mine".to_vec()));
+
+        let (staged, shipped) = stage_files(&store, &[("tsconfig.json", "{}")]);
+        let configured = store
+            .publish(staged, "o-config", &receipt(shipped.clone()))
+            .unwrap();
+        fs::write(configured.join("tsconfig.json"), r#"{"strict":false}"#).unwrap();
+        assert_eq!(
+            Edits::find(&configured, &shipped, Kind::Mira).unwrap(),
+            Edits {
+                changed: vec![path("tsconfig.json")],
+                ..Edits::default()
+            }
+        );
         assert!(staging_is_empty(&store));
         fs::remove_dir_all(root).unwrap();
     }
@@ -439,7 +465,7 @@ pub(crate) mod tests {
     fn a_previous_copy_that_couldnt_be_trashed_is_trashed_on_the_next_sweep() {
         let root = scratch("store");
         let (bin, trash) = Bin::new(&root);
-        let store = Store::new(root.join("packages"), trash);
+        let store = Store::new(root.join("packages"), trash, Kind::Mira);
         store.sweep().unwrap();
         let (staged, files) = stage_files(&store, &[("scripts/a.ts", "old")]);
         let installed = store.publish(staged, "o-r", &receipt(files)).unwrap();

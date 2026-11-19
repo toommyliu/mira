@@ -1,9 +1,14 @@
-use std::{fs, path::Path, time::SystemTime};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use super::{
-    Manifest, PackagePath,
+    Kind, Manifest, PackagePath,
     archive::{self, Limits},
     github::{GitHub, GitHubError, Head, Locator},
+    skua,
     store::{Edits, Receipt, Staged, Store, StoreError},
 };
 
@@ -13,14 +18,21 @@ pub(crate) const LIMITS: Limits = Limits {
     file: 10_000_000,
     files: 10_000,
 };
+const SKUA_LIMITS: Limits = Limits {
+    file: 32_000_000,
+    ..LIMITS
+};
 const MANIFEST_LIMIT: u64 = 256 * 1024;
 const NO_SCRIPTS: &str =
     "This package has no scripts. Add a .ts, .mts, .js or .mjs file under scripts/.";
+const NOT_SKUA: &str = "This isn't Skua's script repository. It has no CoreBots.cs.";
+const NO_SKUA_LIST: &str =
+    "This version of Skua's scripts has no readable scripts.json, so Mira can't list its scripts.";
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Failure {
     #[error("This package is already installed.")]
-    AlreadyInstalled(String),
+    AlreadyInstalled(PathBuf),
     #[error("{0}")]
     Other(String),
 }
@@ -42,7 +54,7 @@ pub(crate) async fn install(
     github: &GitHub,
     store: &Store,
     locator: &Locator,
-) -> Result<String, Failure> {
+) -> Result<PathBuf, Failure> {
     let label = format!("{}/{}", locator.owner, locator.repo);
     let repository = github
         .repository(&locator.owner, &locator.repo)
@@ -54,7 +66,7 @@ pub(crate) async fn install(
         .find(|(_, receipt)| receipt.repository == repository.id && receipt.path == locator.path)
         .map(|(dir, _)| dir)
     {
-        return Err(Failure::AlreadyInstalled(dir));
+        return Err(Failure::AlreadyInstalled(store.package(&dir)));
     }
     let source = Source {
         owner: repository.owner,
@@ -64,10 +76,13 @@ pub(crate) async fn install(
     };
     let head = head(github, &source).await?;
     let (staged, files) = fetch(github, store, &source, &head).await?;
-    let mut dir = format!("{}-{}", source.owner, source.repo);
-    if let Some((_, last)) = source.path.split_last() {
-        dir = format!("{dir}-{last}");
-    }
+    let dir = match store.kind() {
+        Kind::Mira => match source.path.split_last() {
+            Some((_, last)) => format!("{}-{}-{last}", source.owner, source.repo),
+            None => format!("{}-{}", source.owner, source.repo),
+        },
+        Kind::Skua => skua::FOLDER.to_owned(),
+    };
     let receipt = Receipt {
         repository: repository.id,
         owner: source.owner,
@@ -85,8 +100,7 @@ pub(crate) async fn install(
                 "A folder named {dir} is already in your packages folder."
             )),
             StoreError::Io(error) => Failure::Other(format!("Couldn't install it: {error}.")),
-        })?;
-    Ok(dir)
+        })
 }
 
 pub(crate) async fn check(github: &GitHub, receipt: &Receipt) -> Result<Option<Head>, String> {
@@ -130,7 +144,7 @@ pub(crate) async fn update(
         .await
         .map_err(|failure| failure.to_string())?;
     if !overwrite_edits {
-        let edits = Edits::find(&package, &receipt.files)
+        let edits = Edits::find(&package, &receipt.files, store.kind())
             .map_err(|error| format!("Couldn't check the package for edits: {error}."))?;
         if !edits.is_empty() {
             return Ok(Updated::Edited(edits));
@@ -187,6 +201,55 @@ async fn fetch(
     head: &Head,
 ) -> Result<(Staged, archive::Files), Failure> {
     let label = source.label();
+    let (manifest, limits) = match store.kind() {
+        Kind::Mira => (Some(manifest(github, source, head).await?), LIMITS),
+        Kind::Skua => (None, SKUA_LIMITS),
+    };
+    let staged = store
+        .stage()
+        .map_err(|error| Failure::Other(format!("Couldn't prepare the download: {error}.")))?;
+    let download = staged.file("download.zip");
+    github
+        .download(
+            &source.owner,
+            &source.repo,
+            &head.commit,
+            &download,
+            limits.download,
+        )
+        .await
+        .map_err(|error| match error {
+            GitHubError::TooLarge(_) => format!("{label} is too large to install: {error}."),
+            error => explain(error, github, &label),
+        })?;
+    let files = archive::extract(&download, &source.path, &staged.unpacked(), limits)
+        .map_err(|error| Failure::Other(format!("Couldn't install it: {error}.")))?;
+    let unpacked = staged.unpacked();
+    match manifest {
+        Some(manifest) => {
+            if fs::read(unpacked.join("package.json")).ok().as_deref() != Some(&manifest[..]) {
+                return Err(Failure::Other(
+                    "The download didn't match what GitHub reported. Try again.".into(),
+                ));
+            }
+            if !has_scripts(&unpacked.join("scripts")) {
+                return Err(Failure::Other(NO_SCRIPTS.into()));
+            }
+        }
+        None => {
+            if !unpacked.join("CoreBots.cs").is_file() {
+                return Err(Failure::Other(NOT_SKUA.into()));
+            }
+            if !skua::listed(&unpacked).is_ok_and(|scripts| !scripts.is_empty()) {
+                return Err(Failure::Other(NO_SKUA_LIST.into()));
+            }
+        }
+    }
+    Ok((staged, files))
+}
+
+async fn manifest(github: &GitHub, source: &Source, head: &Head) -> Result<Vec<u8>, Failure> {
+    let label = source.label();
     let manifest_path = source
         .path
         .join("package.json")
@@ -210,35 +273,7 @@ async fn fetch(
         Err(error) => return Err(Failure::Other(explain(error, github, &label))),
     };
     Manifest::parse(&manifest).map_err(|error| Failure::Other(error.to_string()))?;
-    let staged = store
-        .stage()
-        .map_err(|error| Failure::Other(format!("Couldn't prepare the download: {error}.")))?;
-    let download = staged.file("download.zip");
-    github
-        .download(
-            &source.owner,
-            &source.repo,
-            &head.commit,
-            &download,
-            LIMITS.download,
-        )
-        .await
-        .map_err(|error| match error {
-            GitHubError::TooLarge(_) => format!("{label} is too large to install: {error}."),
-            error => explain(error, github, &label),
-        })?;
-    let files = archive::extract(&download, &source.path, &staged.unpacked(), LIMITS)
-        .map_err(|error| Failure::Other(format!("Couldn't install it: {error}.")))?;
-    let unpacked = staged.unpacked();
-    if fs::read(unpacked.join("package.json")).ok().as_deref() != Some(&manifest[..]) {
-        return Err(Failure::Other(
-            "The download didn't match what GitHub reported. Try again.".into(),
-        ));
-    }
-    if !has_scripts(&unpacked.join("scripts")) {
-        return Err(Failure::Other(NO_SCRIPTS.into()));
-    }
-    Ok((staged, files))
+    Ok(manifest)
 }
 
 fn has_scripts(dir: &Path) -> bool {
@@ -323,9 +358,13 @@ mod tests {
 
     impl World {
         fn new() -> Self {
+            Self::of(Kind::Mira)
+        }
+
+        fn of(kind: Kind) -> Self {
             let root = scratch("service");
             let (bin, trash) = Bin::new(&root);
-            let store = Store::new(root.join("packages"), trash);
+            let store = Store::new(root.join("packages"), trash, kind);
             let fake = Fake::start();
             let repository =
                 r#"{"id":42,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#;
@@ -391,6 +430,31 @@ mod tests {
             );
         }
 
+        fn serve_root(&self, (commit, _): (&str, &str), files: &[(&str, &str)]) {
+            self.fake.route(
+                "/repos/o/r/branches/main",
+                Reply::json(format!(
+                    r#"{{"commit":{{"sha":"{commit}","commit":{{"tree":{{"sha":"{commit}"}}}}}}}}"#
+                )),
+            );
+            let top = format!("o-r-{}", &commit[..7]);
+            let names: Vec<String> = files
+                .iter()
+                .map(|(path, _)| format!("{top}/{path}"))
+                .collect();
+            let items: Vec<Item> = files
+                .iter()
+                .zip(&names)
+                .map(|((_, text), name)| Item::File(name, text.as_bytes()))
+                .collect();
+            let zip = self.root.join(format!("{commit}.zip"));
+            write_zip(&zip, &items);
+            self.fake.route(
+                &format!("/repos/o/r/zipball/{commit}"),
+                Reply::bytes(fs::read(&zip).unwrap()),
+            );
+        }
+
         fn packages(&self) -> Vec<String> {
             let Ok(items) = fs::read_dir(self.store.root()) else {
                 return Vec::new();
@@ -440,7 +504,7 @@ mod tests {
         let github = world.github(None);
         assert_eq!(
             install(&github, &world.store, &dailies()).await,
-            Ok("o-r-dailies".into())
+            Ok(world.store.package("o-r-dailies"))
         );
         let installed = world.store.package("o-r-dailies");
         assert_eq!(
@@ -462,7 +526,9 @@ mod tests {
 
         assert_eq!(
             install(&github, &world.store, &dailies()).await,
-            Err(Failure::AlreadyInstalled("o-r-dailies".into()))
+            Err(Failure::AlreadyInstalled(
+                world.store.package("o-r-dailies")
+            ))
         );
         assert_eq!(world.packages(), ["o-r-dailies"]);
         assert_eq!(world.downloads(), 1);
@@ -549,7 +615,8 @@ mod tests {
             &[("package.json", MANIFEST), ("scripts/spin.ts", "spin")],
         );
         let github = world.github(None);
-        let dir = install(&github, &world.store, &dailies()).await.unwrap();
+        install(&github, &world.store, &dailies()).await.unwrap();
+        let dir = "o-r-dailies";
 
         world.fake.route(
             "/repositories/42",
@@ -575,10 +642,10 @@ mod tests {
             ],
         );
         assert_eq!(
-            update(&github, &world.store, &dir, false).await,
+            update(&github, &world.store, dir, false).await,
             Ok(Updated::Replaced)
         );
-        let installed = world.store.package(&dir);
+        let installed = world.store.package(dir);
         assert_eq!(
             fs::read_to_string(installed.join("scripts/spin.ts")).unwrap(),
             "spin v2"
@@ -596,12 +663,13 @@ mod tests {
             &[("package.json", MANIFEST), ("scripts/spin.ts", "spin")],
         );
         let github = world.github(None);
-        let dir = install(&github, &world.store, &dailies()).await.unwrap();
-        let installed = world.store.package(&dir);
+        install(&github, &world.store, &dailies()).await.unwrap();
+        let dir = "o-r-dailies";
+        let installed = world.store.package(dir);
         let receipt = || Receipt::read(&installed).unwrap().unwrap();
         assert_eq!(check(&github, &receipt()).await, Ok(None));
         assert_eq!(
-            update(&github, &world.store, &dir, false).await,
+            update(&github, &world.store, dir, false).await,
             Ok(Updated::Current)
         );
 
@@ -614,7 +682,7 @@ mod tests {
         assert_eq!(available.tree.as_str(), SECOND.1);
 
         fs::write(installed.join("scripts/spin.ts"), "my tweak").unwrap();
-        let Ok(Updated::Edited(edits)) = update(&github, &world.store, &dir, false).await else {
+        let Ok(Updated::Edited(edits)) = update(&github, &world.store, dir, false).await else {
             panic!("an edited package should ask first");
         };
         assert_eq!(
@@ -627,7 +695,7 @@ mod tests {
         );
 
         assert_eq!(
-            update(&github, &world.store, &dir, true).await,
+            update(&github, &world.store, dir, true).await,
             Ok(Updated::Replaced)
         );
         assert_eq!(
@@ -645,6 +713,91 @@ mod tests {
         assert_eq!(
             check(&github, &receipt()).await,
             Err("o/r has no main branch.".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn skua_scripts_install_without_a_manifest_and_tolerate_the_quest_cache() {
+        let world = World::of(Kind::Skua);
+        let root = Locator::parse("github.com/o/r", "").unwrap();
+        world.serve_root(FIRST, &[("Story/Intro.cs", "class Intro {}")]);
+        let github = world.github(None);
+        assert_eq!(
+            install(&github, &world.store, &root).await,
+            Err(Failure::Other(NOT_SKUA.into()))
+        );
+        assert!(world.packages().is_empty());
+
+        world.serve_root(
+            FIRST,
+            &[
+                ("CoreBots.cs", "class CoreBots {}"),
+                ("Story/Intro.cs", "class Intro {}"),
+            ],
+        );
+        assert_eq!(
+            install(&github, &world.store, &root).await,
+            Err(Failure::Other(NO_SKUA_LIST.into()))
+        );
+        assert!(world.packages().is_empty());
+
+        world.serve_root(
+            FIRST,
+            &[
+                ("CoreBots.cs", "class CoreBots {}"),
+                ("QuestData.json", "[]"),
+                (
+                    "scripts.json",
+                    r#"[{"name":"Intro","path":"Story/Intro.cs"}]"#,
+                ),
+                ("Story/Intro.cs", "class Intro {}"),
+            ],
+        );
+        let installed = install(&github, &world.store, &root).await.unwrap();
+        assert_eq!(installed, world.store.package("Scripts"));
+        assert_eq!(
+            fs::read_to_string(installed.join("Story/Intro.cs")).unwrap(),
+            "class Intro {}"
+        );
+
+        world.serve_root(
+            SECOND,
+            &[
+                ("CoreBots.cs", "class CoreBots { }"),
+                ("README.md", "Skua scripts"),
+                ("scripts.json", r#"[{"name":"Read me","path":"README.md"}]"#),
+                ("Story/Intro.cs", "class Intro {}"),
+            ],
+        );
+        assert_eq!(
+            update(&github, &world.store, "Scripts", false).await,
+            Err(NO_SKUA_LIST.into())
+        );
+        assert_eq!(
+            fs::read_to_string(installed.join("CoreBots.cs")).unwrap(),
+            "class CoreBots {}"
+        );
+
+        world.serve_root(
+            SECOND,
+            &[
+                ("CoreBots.cs", "class CoreBots { }"),
+                ("QuestData.json", "[]"),
+                (
+                    "scripts.json",
+                    r#"[{"name":"Intro","path":"Story/Intro.cs"}]"#,
+                ),
+                ("Story/Intro.cs", "class Intro {}"),
+            ],
+        );
+        fs::write(installed.join("QuestData.json"), "[{\"id\":1}]").unwrap();
+        assert_eq!(
+            update(&github, &world.store, "Scripts", false).await,
+            Ok(Updated::Replaced)
+        );
+        assert_eq!(
+            fs::read_to_string(installed.join("CoreBots.cs")).unwrap(),
+            "class CoreBots { }"
         );
     }
 }

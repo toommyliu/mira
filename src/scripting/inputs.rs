@@ -25,6 +25,7 @@ pub(crate) struct Definition(Vec<Field>);
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Field {
     pub(crate) key: String,
+    pub(crate) group: Option<String>,
     pub(crate) label: String,
     pub(crate) description: Option<String>,
     pub(crate) kind: Kind,
@@ -64,6 +65,10 @@ pub(crate) enum Problem {
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 impl Definition {
+    pub(crate) fn new(fields: Vec<Field>) -> Self {
+        Self(fields)
+    }
+
     pub(crate) fn fields(&self) -> &[Field] {
         &self.0
     }
@@ -253,6 +258,14 @@ pub(super) fn prepare(
     let Some(definition) = extract(display, path, text).map_err(ExtractError::into_message)? else {
         return Ok(Values::new());
     };
+    resolve(display, &definition, supplied)
+}
+
+pub(super) fn resolve(
+    display: &str,
+    definition: &Definition,
+    supplied: &Supplied,
+) -> Result<Values, String> {
     match supplied {
         Supplied::Values(values) => definition
             .resolve(values)
@@ -742,6 +755,7 @@ fn field(key: String, offset: u32, properties: Vec<Property>) -> Result<Field, E
     };
     Ok(Field {
         key,
+        group: None,
         label,
         description,
         kind,

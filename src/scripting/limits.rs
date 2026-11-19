@@ -85,6 +85,10 @@ impl Clock {
         self.stop.store(true, Ordering::SeqCst);
     }
 
+    pub(super) fn stopped_now(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
     pub(super) fn tripped(&self) -> Option<Tripped> {
         match self.tripped.load(Ordering::SeqCst) {
             1 => Some(Tripped::Stop),

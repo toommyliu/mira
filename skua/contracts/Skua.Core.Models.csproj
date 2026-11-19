@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Nullable>annotations</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS0108;SYSLIB0014</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../vendor/Skua.Core.Models/**/*.cs" />
+    <Compile Remove="../vendor/Skua.Core.Models/ClientFileSources.cs" />
+    <Compile Include="ClientFileSources.cs" />
+    <PackageReference Include="Caseless.Fody" Version="1.9.1" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <ProjectReference Include="Skua.Core.Utils.csproj" />
+  </ItemGroup>
+</Project>

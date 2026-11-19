@@ -1,0 +1,1548 @@
+{
+  "Bank.Items": {
+    "kind": "object",
+    "paths": [
+      "world.bankinfo.items"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Bank.Slots": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.iBankSlots"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Bank.UsedSlots": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.iBankCount"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "House.Items": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.houseitems"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "House.Slots": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.iHouseSlots"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "House.UsedSlots": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.houseitems.length"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Inventory.Items": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.items"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Inventory.Slots": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.iBagSlots"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "TempInv.Items": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.tempitems"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Combat.ApproachTarget": {
+    "kind": "method",
+    "function": "world.approachTarget",
+    "game": true,
+    "parameters": 0
+  },
+  "Combat.UntargetSelf": {
+    "kind": "method",
+    "function": "untargetSelf",
+    "game": false,
+    "parameters": 0
+  },
+  "Combat.CancelAutoAttack": {
+    "kind": "method",
+    "function": "world.cancelAutoAttack",
+    "game": true,
+    "parameters": 0
+  },
+  "Reputation.FactionList": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.factions"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.Debugger": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDebugger"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DebugPacket": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"debugPacket\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideUI": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bHideUI"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowMonsterType": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bMonsType"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.SmoothBackground": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bSmoothBG"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.UntargetSelf": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bUntargetSelf"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.UntargetDead": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bUntargetDead"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.CustomDropsUI": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bCustomDrops"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.QuestLogTurnIn": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bQuestLog"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.BattlePets": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bBattlepet"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.StaticPlayerArt": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bCachePlayers"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ChatFilter": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bChatFilter"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ChatUI": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bChatUI"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.AurasUI": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bAuras"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ColorSets": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bColorSets"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DraggableDrops": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDraggable"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableChatScrolling": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisChatScroll"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableDamageNumbers": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisDmgDisplay"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableSoundFx": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisSoundFX"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableQuestPopup": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisQPopup"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableQuestTracker": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisQTracker"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.QuestPinner": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bQuestPin"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.QuestProgressNotifications": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bQuestNotif"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.VisualSkillCooldowns": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bSkillCD"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideGroundItems": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisGround"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideHealingBubbles": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisHealBubble"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableAuraAnimations": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisAuraAnim"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HidePlayerNames": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bHideNames"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableDamageStrobe": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisDmgStrobe"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableMonsterAnimation": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisMonAnim"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableSelfAnimation": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisSelfMAnim"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableSkillAnimation": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisSkillAnim"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableWeaponAnimation": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bDisWepAnim"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.FreezeMonsterPosition": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bFreezeMons"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.InvisibleMonsters": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bHideMons"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HidePlayers": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bHidePlayers"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ReacceptQuest": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bReaccept"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.CharacterSelectScreen": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.bCharSelect"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableRedWarning": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"disRed\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.VanishingMessages": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"vanishMsg\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.Timestamps": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"timeStamps\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableBlueMessages": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"disBlue\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.MinimalChatMode": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"chatMinimal\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableAutoScrollToBottom": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"chatScroll\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableAuraTooltips": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"disAuraTips\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DisableAuraText": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"disAuraText\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.InvertMenu": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"invertMenu\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.WarnWhenDecliningDrop": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"warnDecline\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideDropNotifications": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"hideDrop\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideTemporaryDropNotifications": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"hideTemp\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.OpenedMenu": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"openMenu\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.DragMode": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"dragMode\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.LockPosition": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"lockMode\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.QuantityWarnings": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"termsAgree\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowYourSkillAnimationsOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"animSelf\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.KeepYourWeaponAnimationsOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"wepSelf\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowNameTags": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"showNames\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowShadows": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"showShadows\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideGuildNamesOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"hideGuild\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.HideYourNameOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"hideSelf\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowYourGroundItemOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"groundSelf\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Lite.ShowYourAuraAnimationOnly": {
+    "kind": "object",
+    "paths": [
+      "litePreference.data.dOptions[\"auraAnimSelf\"]"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.Name": {
+    "kind": "object",
+    "paths": [
+      "world.strMapName"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "string.Empty",
+    "requireNotNull": "world",
+    "select": null
+  },
+  "Map.Loading": {
+    "kind": "object",
+    "paths": [
+      "world.mapLoadInProgress"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "false",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.RoomID": {
+    "kind": "object",
+    "paths": [
+      "world.curRoom"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.PlayerCount": {
+    "kind": "object",
+    "paths": [
+      "world.areaUsers.length"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.PlayerNames": {
+    "kind": "object",
+    "paths": [
+      "world.areaUsers"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.PlayersDictionary": {
+    "kind": "object",
+    "paths": [
+      "world.uoTree"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Map.Cells": {
+    "kind": "object",
+    "paths": [
+      "world.map.currentScene.labels"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": "name"
+  },
+  "Map.Reload": {
+    "kind": "method",
+    "function": "world.reloadCurrentMap",
+    "game": true,
+    "parameters": 0
+  },
+  "Monsters.MapMonsters": {
+    "kind": "json",
+    "function": "getMonsters",
+    "fallback": "new()"
+  },
+  "Monsters.CurrentAvailableMonsters": {
+    "kind": "json",
+    "function": "availableMonsters",
+    "fallback": "new()"
+  },
+  "Options.SkipCutscenes": {
+    "kind": "call",
+    "function": "skipCutscenes",
+    "fallback": null
+  },
+  "Options.Magnetise": {
+    "kind": "call",
+    "function": "magnetize",
+    "fallback": null
+  },
+  "Options.LagKiller": {
+    "kind": "call",
+    "function": "killLag",
+    "fallback": null
+  },
+  "Options.SetFPS": {
+    "kind": "object",
+    "paths": [
+      "stage.frameRate"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.ShowFPS": {
+    "kind": "object",
+    "paths": [
+      "ui.mcFPS.visible"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.InfiniteRange": {
+    "kind": "call",
+    "function": "infiniteRange",
+    "fallback": null
+  },
+  "Options.DisableDeathAds": {
+    "kind": "call",
+    "function": "disableDeathAd",
+    "fallback": null
+  },
+  "Options.CustomName": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.strUsername",
+      "world.rootClass.ui.mcPortrait.strName.text",
+      "world.myAvatar.pMC.pname.ti.text"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.NameColor": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.pMC.pname.ti.textColor"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": "0xFFFFFF",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.CustomGuild": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.pMC.pname.tg.text"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.GuildColor": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.pMC.pname.tg.textColor"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Options.WalkSpeed": {
+    "kind": "object",
+    "paths": [
+      "world.WALKSPEED"
+    ],
+    "static": false,
+    "get": false,
+    "set": true,
+    "fallback": "8",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.ID": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.uid"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.XP": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intExp"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.RequiredXP": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intExpToLevel"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Cell": {
+    "kind": "object",
+    "paths": [
+      "world.strFrame"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Pad": {
+    "kind": "object",
+    "paths": [
+      "world.strPad"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.ServerIP": {
+    "kind": "object",
+    "paths": [
+      "serverIP"
+    ],
+    "static": true,
+    "get": true,
+    "set": false,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.LoggedIn": {
+    "kind": "call",
+    "function": "isLoggedIn",
+    "fallback": null
+  },
+  "Player.Username": {
+    "kind": "object",
+    "paths": [
+      "loginInfo.strUsername"
+    ],
+    "static": true,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Password": {
+    "kind": "object",
+    "paths": [
+      "loginInfo.strPassword"
+    ],
+    "static": true,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Guild": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.guild.Name"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Kicked": {
+    "kind": "call",
+    "function": "isKicked",
+    "fallback": null
+  },
+  "Player.State": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.intState"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": "world.myAvatar",
+    "select": null
+  },
+  "Player.Health": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.intHP"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.MaxHealth": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.intHPMax"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Mana": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intMP"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.MaxMana": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.intMPMax"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Level": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.intLevel"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Gold": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intGold"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Coins": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intCoins"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.CurrentClassRank": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.iRank"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.AccessLevel": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.objData.intAccessLevel"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Skills": {
+    "kind": "object",
+    "paths": [
+      "world.actions.active"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "Array.Empty<Skua.Core.Models.Skills.SkillInfo>()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.AFK": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.afk"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.X": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.pMC.x"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Y": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.pMC.y"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.WalkSpeed": {
+    "kind": "object",
+    "paths": [
+      "world.WALKSPEED"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": "8",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Scale": {
+    "kind": "object",
+    "paths": [
+      "world.SCALE"
+    ],
+    "static": false,
+    "get": true,
+    "set": true,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.Target": {
+    "kind": "json",
+    "function": "getTargetMonster",
+    "fallback": "new()"
+  },
+  "Player.Stats": {
+    "kind": "object",
+    "paths": [
+      "world.myAvatar.dataLeaf.sta"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Player.SetSpawnPoint": {
+    "kind": "method",
+    "function": "world.setSpawnPoint",
+    "game": true,
+    "parameters": 2
+  },
+  "Player.Goto": {
+    "kind": "method",
+    "function": "world.goto",
+    "game": true,
+    "parameters": 1
+  },
+  "Quests.Quests": {
+    "kind": "object",
+    "paths": [
+      "world.questTree"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Quests.IsInProgress": {
+    "kind": "method",
+    "function": "world.isQuestInProgress",
+    "game": true,
+    "parameters": 1
+  },
+  "Servers.ServerList": {
+    "kind": "object",
+    "paths": [
+      "serialCmd.servers"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Servers.Login": {
+    "kind": "method",
+    "function": "login",
+    "game": true,
+    "parameters": 2
+  },
+  "Servers.IsConnected": {
+    "kind": "object",
+    "paths": [
+      "sfc.isConnected"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "false",
+    "requireNotNull": "sfc",
+    "select": null
+  },
+  "Shops.Items": {
+    "kind": "object",
+    "paths": [
+      "world.shopinfo.items"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "new()",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Shops.ID": {
+    "kind": "object",
+    "paths": [
+      "world.shopinfo.ShopID"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": null,
+    "requireNotNull": null,
+    "select": null
+  },
+  "Shops.Name": {
+    "kind": "object",
+    "paths": [
+      "world.shopinfo.sName"
+    ],
+    "static": false,
+    "get": true,
+    "set": false,
+    "fallback": "string.Empty",
+    "requireNotNull": null,
+    "select": null
+  },
+  "Shops.LoadArmourCustomizer": {
+    "kind": "method",
+    "function": "openArmorCustomize",
+    "game": true,
+    "parameters": 0
+  },
+  "Skills.CanUseSkill": {
+    "kind": "method",
+    "function": "canUseSkill",
+    "game": false,
+    "parameters": 1
+  },
+  "Skills.SkillCooldownRemaining": {
+    "kind": "method",
+    "function": "skillCooldownRemaining",
+    "game": false,
+    "parameters": 1
+  },
+  "Skills.GlobalCooldownRemaining": {
+    "kind": "method",
+    "function": "globalCooldownRemaining",
+    "game": false,
+    "parameters": 0
+  },
+  "Skills.UseSkill": {
+    "kind": "method",
+    "function": "useSkill",
+    "game": false,
+    "parameters": 1
+  }
+}

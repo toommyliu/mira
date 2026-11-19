@@ -27,6 +27,7 @@ type Read = Box<dyn Fn(Event, &mut Vec<Value>)>;
 pub(crate) struct Feed {
     events: Subscription,
     read: Read,
+    primed: RefCell<Vec<Value>>,
 }
 
 impl Feed {
@@ -37,10 +38,22 @@ impl Feed {
         Self {
             events,
             read: Box::new(read),
+            primed: RefCell::default(),
+        }
+    }
+
+    pub(super) fn primed(self, items: Vec<Value>) -> Self {
+        Self {
+            primed: RefCell::new(items),
+            ..self
         }
     }
 
     async fn next(&self) -> Value {
+        let primed = self.primed.take();
+        if !primed.is_empty() {
+            return json!({ "items": primed, "lagged": false });
+        }
         let Drained { events, lagged } = self.events.drain().await;
         let mut items = Vec::new();
         for event in events {

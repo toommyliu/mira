@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
@@ -19,7 +21,7 @@ const WIDTH: f32 = 440.0;
 const LISTED_EDITS: usize = 8;
 
 pub(super) enum PackageEvent {
-    Installed(String),
+    Installed(PathBuf),
     Changed,
 }
 
@@ -32,7 +34,7 @@ struct Install {
 }
 
 struct Confirm {
-    dir: String,
+    root: PathBuf,
     name: SharedString,
     edits: Edits,
 }
@@ -122,20 +124,20 @@ impl PackageDialogs {
 
     fn finish_install(
         &mut self,
-        task: gpui::Task<Result<String, Failure>>,
+        task: gpui::Task<Result<PathBuf, Failure>>,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(dir) => {
+                Ok(root) => {
                     this.close_install(cx);
-                    cx.emit(PackageEvent::Installed(dir));
+                    cx.emit(PackageEvent::Installed(root));
                 }
-                Err(Failure::AlreadyInstalled(dir)) => {
+                Err(Failure::AlreadyInstalled(root)) => {
                     this.close_install(cx);
                     toast("Already installed", Tone::Neutral, None, cx);
-                    cx.emit(PackageEvent::Installed(dir));
+                    cx.emit(PackageEvent::Installed(root));
                 }
                 Err(Failure::Other(message)) => {
                     if let Some(install) = &mut this.install {
@@ -150,14 +152,14 @@ impl PackageDialogs {
 
     pub(super) fn update(
         &mut self,
-        dir: String,
+        root: PathBuf,
         name: SharedString,
         overwrite_edits: bool,
         cx: &mut Context<Self>,
     ) {
         self.confirm = None;
         let task = packages::packages(cx).update(cx, |packages, cx| {
-            packages.update(dir.clone(), overwrite_edits, cx)
+            packages.update(root.clone(), overwrite_edits, cx)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -167,7 +169,7 @@ impl PackageDialogs {
                         toast(format!("{name} is up to date"), Tone::Neutral, None, cx);
                     }
                     Ok(Updated::Edited(edits)) => {
-                        this.confirm = Some(Confirm { dir, name, edits });
+                        this.confirm = Some(Confirm { root, name, edits });
                     }
                     Ok(Updated::Replaced) => {
                         toast(format!("Updated {name}"), Tone::Success, None, cx);
@@ -188,8 +190,8 @@ impl PackageDialogs {
         .detach();
     }
 
-    pub(super) fn remove(&mut self, dir: String, name: SharedString, cx: &mut Context<Self>) {
-        let task = packages::packages(cx).update(cx, |packages, cx| packages.remove(dir, cx));
+    pub(super) fn remove(&mut self, root: PathBuf, name: SharedString, cx: &mut Context<Self>) {
+        let task = packages::packages(cx).update(cx, |packages, cx| packages.remove(root, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |_, cx| match result {
@@ -423,7 +425,7 @@ impl Render for PackageDialogs {
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(confirm) = this.confirm.take() {
-                                    this.update(confirm.dir, confirm.name, true, cx);
+                                    this.update(confirm.root, confirm.name, true, cx);
                                 }
                             })),
                     )
@@ -455,7 +457,12 @@ mod tests {
     ) {
         for written in mira_ui::snapshot(name, size(px(720.0), px(500.0)), move |window, cx| {
             let scratch = std::env::temp_dir().join(format!("mira-{name}"));
-            packages::init(scratch.join("packages"), scratch.join("token"), cx);
+            packages::init(
+                scratch.join("packages"),
+                scratch.join("skua"),
+                scratch.join("token"),
+                cx,
+            );
             cx.new(|cx| {
                 let mut dialogs = PackageDialogs::new(cx);
                 prepare(&mut dialogs, window, cx);
@@ -513,7 +520,7 @@ mod tests {
         dialogs("confirm-package-update", |dialogs, _, _| {
             let path = |text: &str| PackagePath::parse(text).unwrap();
             dialogs.confirm = Some(Confirm {
-                dir: "toommyliu-mira-dailies".into(),
+                root: "toommyliu-mira-dailies".into(),
                 name: "Dailies".into(),
                 edits: Edits {
                     changed: vec![path("scripts/spin.ts"), path("lib/wheel.ts")],
