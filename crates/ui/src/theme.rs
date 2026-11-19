@@ -480,13 +480,16 @@ impl Theme {
         self.halo(color.opacity(0.30), radius, border, px(2.0))
     }
     pub fn halo(&self, color: Hsla, radius: Pixels, border: Pixels, width: Pixels) -> Div {
+        self.outline(color, radius, border, width)
+            .child(crate::nav::reveal_probe())
+    }
+    pub fn outline(&self, color: Hsla, radius: Pixels, border: Pixels, width: Pixels) -> Div {
         div()
             .absolute()
             .inset(-border - width)
             .rounded(radius + width)
             .border(width)
             .border_color(color)
-            .child(crate::nav::reveal_probe())
     }
     pub fn surface_ring(&self, radius: Pixels) -> Div {
         div()

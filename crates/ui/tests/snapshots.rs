@@ -868,6 +868,30 @@ fn snapshot_chip_editing() {
     );
 }
 #[test]
+fn snapshot_radio_previews_focused() {
+    scene_after_keys("radio-previews", 420.0, 150.0, &["tab"], |_, cx| {
+        let theme = cx.theme().clone();
+        let art = move || {
+            div()
+                .w(px(96.0))
+                .h(px(56.0))
+                .rounded(px(4.0))
+                .bg(theme.muted)
+        };
+        mira_ui::primitives::RadioGroup::new(
+            "mode",
+            "Mode",
+            ["System", "Light", "Dark"]
+                .map(|label| mira_ui::primitives::Radio::new(label).preview(art()))
+                .into_iter()
+                .collect(),
+            Some(1),
+        )
+        .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_long_select_scrolls() {
     use gpui::{Keystroke, PlatformInput, ScrollDelta, ScrollEvent, point};
 
