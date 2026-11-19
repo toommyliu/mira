@@ -4,6 +4,7 @@ use gpui::{
 };
 
 pub const DISABLED_OPACITY: f32 = 0.5;
+pub const UI_FONT: &str = "Inter";
 
 pub const TEXT_CAPTION: Pixels = px(11.0);
 pub const TEXT_SMALL: Pixels = px(12.0);
