@@ -932,6 +932,15 @@ fn password_input_hides_its_text_until_revealed_and_keeps_it_off_the_clipboard(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some("unchanged".into())
     );
+
+    press(cx, "home");
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let middle = mira_ui::theme::CONTROL_MD / 2.0;
+    cx.simulate_click(point(viewport.width - px(12.0), middle), Modifiers::none());
+    assert!((caret_x(4, cx) - 3.0 * bullet).abs() < 0.01);
+    cx.simulate_mouse_move(point(px(12.0), middle), None, Modifiers::none());
+    cx.simulate_input("X");
+    assert_eq!(text(&input, cx), "Xab\u{1F642}c");
 }
 
 #[gpui::test]
