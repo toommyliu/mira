@@ -94,6 +94,7 @@ pub struct Button {
     role: Role,
     value: Option<SharedString>,
     joined: Option<Joined>,
+    swatch: bool,
     style: StyleRefinement,
 }
 
@@ -122,6 +123,7 @@ impl Button {
             role: Role::Button,
             value: None,
             joined: None,
+            swatch: false,
             style: StyleRefinement::default(),
         }
     }
@@ -217,6 +219,11 @@ impl Button {
         self
     }
 
+    pub(crate) fn swatch(mut self) -> Self {
+        self.swatch = true;
+        self
+    }
+
     pub(crate) fn focus(mut self, focus: gpui::FocusHandle) -> Self {
         self.focus = Some(focus);
         self
@@ -306,8 +313,19 @@ impl RenderOnce for Button {
                 ),
             }
         };
-        let active = theme.pressed(theme.background, hover, fg);
-        let radius = if self.size == Size::XSmall {
+        let (bg, hover) = if self.swatch {
+            (clear, clear)
+        } else {
+            (bg, hover)
+        };
+        let active = if self.swatch {
+            clear
+        } else {
+            theme.pressed(theme.background, hover, fg)
+        };
+        let radius = if self.swatch {
+            self.size.height(theme.layout)
+        } else if self.size == Size::XSmall {
             theme.radius.small
         } else {
             theme.radius.control
