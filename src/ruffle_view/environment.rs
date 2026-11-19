@@ -48,6 +48,17 @@ const MAX_LIST: usize = 1024;
 type Setting<C> = (&'static str, &'static str, fn(&mut C) -> &mut bool);
 type Answer<T> = async_channel::Receiver<Result<T, CallError>>;
 
+pub(crate) const DROP_KINDS: [Setting<drops::Config>; 4] = [
+    ("drops-ac", "AC", |config| &mut config.accept_ac),
+    ("drops-ac-member", "Member-only AC", |config| {
+        &mut config.accept_ac_member_only
+    }),
+    ("drops-non-ac", "Non-AC", |config| &mut config.accept_non_ac),
+    ("drops-non-ac-member", "Member-only non-AC", |config| {
+        &mut config.accept_non_ac_member_only
+    }),
+];
+
 struct Open(WindowHandle<Environment>);
 
 impl Global for Open {}
@@ -90,16 +101,16 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum List {
+pub(crate) enum List {
     Drops,
     Quests,
     Boosts,
 }
 
 impl List {
-    const ALL: [List; 3] = [List::Drops, List::Quests, List::Boosts];
+    pub(crate) const ALL: [List; 3] = [List::Drops, List::Quests, List::Boosts];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             List::Drops => "Pick up",
             List::Quests => "Turn in",
@@ -107,7 +118,7 @@ impl List {
         }
     }
 
-    fn input_label(self) -> &'static str {
+    pub(crate) fn input_label(self) -> &'static str {
         match self {
             List::Drops => "Add drops to pick up",
             List::Quests => "Add quests to turn in",
@@ -115,7 +126,7 @@ impl List {
         }
     }
 
-    fn placeholder(self) -> &'static str {
+    pub(crate) fn placeholder(self) -> &'static str {
         match self {
             List::Drops => "Tainted Gem, 18927",
             List::Quests => "2857, 6552:45230",
@@ -123,7 +134,7 @@ impl List {
         }
     }
 
-    fn clear_title(self, automation: &Automation) -> String {
+    pub(crate) fn clear_title(self, automation: &Automation) -> String {
         let (count, one, many) = match self {
             List::Drops => (automation.drops().items.len(), "drop", "drops"),
             List::Quests => (automation.quests().quests.len(), "quest", "quests"),
@@ -132,7 +143,7 @@ impl List {
         format!("Clear {count} {}?", if count == 1 { one } else { many })
     }
 
-    fn note(self) -> &'static str {
+    pub(crate) fn note(self) -> &'static str {
         match self {
             List::Drops => "Click a bell to beep when that item drops.",
             List::Quests => "Specify an item ID after a colon to choose a reward.",
@@ -142,15 +153,15 @@ impl List {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Confirm {
+pub(crate) enum Confirm {
     CopyToAll,
     Clear(List),
     ClearAll,
 }
 
-struct Unreadable {
-    text: String,
-    reason: SharedString,
+pub(crate) struct Unreadable {
+    pub(crate) text: String,
+    pub(crate) reason: SharedString,
 }
 
 enum Fetch {
@@ -169,22 +180,22 @@ enum Fetch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Taken {
+pub(crate) enum Taken {
     Rewards,
     Requirements,
 }
 
 impl Taken {
-    const ALL: [Taken; 2] = [Taken::Rewards, Taken::Requirements];
+    pub(crate) const ALL: [Taken; 2] = [Taken::Rewards, Taken::Requirements];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Taken::Rewards => "Rewards",
             Taken::Requirements => "Requirements",
         }
     }
 
-    fn flag(self, config: &mut quests::Config) -> &mut bool {
+    pub(crate) fn flag(self, config: &mut quests::Config) -> &mut bool {
         match self {
             Taken::Rewards => &mut config.accept_rewards,
             Taken::Requirements => &mut config.accept_requirements,
@@ -192,14 +203,14 @@ impl Taken {
     }
 }
 
-enum QuestChange {
+pub(crate) enum QuestChange {
     Take(Taken),
     Add(Vec<Registered>),
     Edit(usize, Registered),
 }
 
 impl QuestChange {
-    fn apply(&self, state: &mut quests::State) {
+    pub(crate) fn apply(&self, state: &mut quests::State) {
         match self {
             QuestChange::Take(taken) => *taken.flag(&mut state.config) = true,
             QuestChange::Add(quests) => state.register(quests.iter().copied()),
@@ -678,19 +689,7 @@ impl Environment {
                     });
                 })
                 .on_edit(move |index, text, _, _| {
-                    editing.update_drops(|state| {
-                        let rang = state
-                            .items
-                            .get(index)
-                            .is_some_and(|query| state.rings(query));
-                        let (old, new) = replace_items(&mut state.items, index, items(&text));
-                        if let Some(old) = old {
-                            state.set_sound(&old, false);
-                        }
-                        for query in new.iter().filter(|_| rang) {
-                            state.set_sound(query, true);
-                        }
-                    });
+                    editing.update_drops(|state| replace_drop(state, index, &text));
                 })
                 .on_remove(move |index, window, cx| {
                     let left = removing.update_drops(|state| {
@@ -758,17 +757,7 @@ impl Environment {
                     .into_any_element(),
             ),
         };
-        let kinds: [Setting<drops::Config>; 4] = [
-            ("drops-ac", "AC", |config| &mut config.accept_ac),
-            ("drops-ac-member", "Member-only AC", |config| {
-                &mut config.accept_ac_member_only
-            }),
-            ("drops-non-ac", "Non-AC", |config| &mut config.accept_non_ac),
-            ("drops-non-ac-member", "Member-only non-AC", |config| {
-                &mut config.accept_non_ac_member_only
-            }),
-        ];
-        let kinds = v_flex().children(kinds.into_iter().map(|(id, label, setting)| {
+        let kinds = v_flex().children(DROP_KINDS.into_iter().map(|(id, label, setting)| {
             let automation = automation.clone();
             h_flex().min_h(ROW).child(
                 Checkbox::new(id, label, checked(*setting(&mut state.config.clone())))
@@ -1242,7 +1231,7 @@ fn pick_list(id: &'static str, rows: Div) -> Stateful<Div> {
         .child(rows)
 }
 
-fn clear(automation: &Automation, list: List) {
+pub(crate) fn clear(automation: &Automation, list: List) {
     match list {
         List::Drops => {
             automation.update_drops(drops::State::clear);
@@ -1256,7 +1245,21 @@ fn clear(automation: &Automation, list: List) {
     }
 }
 
-fn replace_items(
+pub(crate) fn replace_drop(state: &mut drops::State, index: usize, text: &str) {
+    let rang = state
+        .items
+        .get(index)
+        .is_some_and(|query| state.rings(query));
+    let (old, new) = replace_items(&mut state.items, index, items(text));
+    if let Some(old) = old {
+        state.set_sound(&old, false);
+    }
+    for query in new.iter().filter(|_| rang) {
+        state.set_sound(query, true);
+    }
+}
+
+pub(crate) fn replace_items(
     list: &mut Vec<ItemQuery>,
     index: usize,
     new: Vec<ItemQuery>,
@@ -1279,7 +1282,7 @@ fn positive_id(text: &str) -> Option<i32> {
     text.trim().parse().ok().filter(|id| *id > 0)
 }
 
-fn items(text: &str) -> Vec<ItemQuery> {
+pub(crate) fn items(text: &str) -> Vec<ItemQuery> {
     text.split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
@@ -1290,7 +1293,7 @@ fn items(text: &str) -> Vec<ItemQuery> {
         .collect()
 }
 
-fn read_quests(text: &str) -> (Vec<Registered>, Option<Unreadable>) {
+pub(crate) fn read_quests(text: &str) -> (Vec<Registered>, Option<Unreadable>) {
     let mut quests = Vec::new();
     let mut left = Vec::new();
     let mut reason = None;
@@ -1314,7 +1317,7 @@ fn read_quests(text: &str) -> (Vec<Registered>, Option<Unreadable>) {
     (quests, unreadable)
 }
 
-fn read_quest(entry: &str) -> Result<Registered, String> {
+pub(crate) fn read_quest(entry: &str) -> Result<Registered, String> {
     let (quest, reward) = entry.split_once(':').unwrap_or((entry, ""));
     let quest_id = positive_id(quest).ok_or_else(|| format!("Not a quest ID: {}", quest.trim()))?;
     let reward = reward.trim();
@@ -1328,14 +1331,14 @@ fn read_quest(entry: &str) -> Result<Registered, String> {
     })
 }
 
-fn item_label(query: &ItemQuery) -> SharedString {
+pub(crate) fn item_label(query: &ItemQuery) -> SharedString {
     match query {
         ItemQuery::Name(name) => name.clone().into(),
         ItemQuery::ItemId { item_id } => item_id.to_string().into(),
     }
 }
 
-fn quest_label(registered: &Registered) -> SharedString {
+pub(crate) fn quest_label(registered: &Registered) -> SharedString {
     match registered.reward_item_id {
         Some(reward) => format!("{}:{reward}", registered.quest_id).into(),
         None => registered.quest_id.to_string().into(),
@@ -1356,7 +1359,7 @@ fn kind_name(kind: Boost) -> &'static str {
     }
 }
 
-fn checked(on: bool) -> CheckedState {
+pub(crate) fn checked(on: bool) -> CheckedState {
     if on {
         CheckedState::Checked
     } else {

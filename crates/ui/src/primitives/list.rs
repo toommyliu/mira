@@ -180,6 +180,7 @@ impl Options {
 
     fn item(&self, index: usize, item: ListItem, pose: Pose) -> Stateful<Div> {
         let theme = &self.theme;
+        let mira = theme.palette().is_some();
         let current = self.selected == Some(index) && pose != Pose::Lifted;
         let focus = self.focus.clone();
         let on_select = self.on_select.clone();
@@ -205,9 +206,17 @@ impl Options {
             .relative()
             .flex_none()
             .gap(px(8.0))
-            .min_h(ROW)
+            .min_h(if mira {
+                px(if item.description.is_some() {
+                    40.0
+                } else {
+                    28.0
+                })
+            } else {
+                ROW
+            })
             .px(px(8.0))
-            .py(px(4.0))
+            .py(px(if mira { 2.0 } else { 4.0 }))
             .rounded(theme.radius.item)
             .text_body()
             .text_color(if disabled {
@@ -219,9 +228,15 @@ impl Options {
             .when(current && self.ring, |row| {
                 row.child(theme.focus_ring(theme.radius.item))
             })
-            .when(!current && !disabled && pose == Pose::Rest, |row| {
-                row.hover(|style| style.bg(theme.fill))
+            .when(mira && !disabled && pose == Pose::Rest, |row| {
+                let (hover, press) = theme.mira_item_colors(current);
+                row.hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(press))
             })
+            .when(
+                !mira && !current && !disabled && pose == Pose::Rest,
+                |row| row.hover(|style| style.bg(theme.fill)),
+            )
             .when(!disabled, |row| {
                 row.pointer_cursor(theme)
                     .on_click(move |event, window, cx| {
@@ -254,6 +269,7 @@ impl Options {
                             div()
                                 .truncate()
                                 .text_small()
+                                .text_size(theme.secondary_text_size())
                                 .text_color(quiet)
                                 .child(description),
                         )
@@ -265,6 +281,7 @@ impl Options {
                         .flex_none()
                         .gap(px(4.0))
                         .text_small()
+                        .text_size(theme.secondary_text_size())
                         .font_features(tabular())
                         .text_color(quiet)
                         .child(end),
@@ -283,10 +300,12 @@ fn list_frame(id: ElementId, label: SharedString, options: &Options) -> Stateful
         .role(Role::ListBox)
         .aria_label(label)
         .track_focus(&options.focus.clone().tab_stop(true))
-        .rounded(options.theme.radius.panel)
-        .bg(options.theme.surface)
-        .border_1()
-        .border_color(options.theme.hairline)
+        .when(options.theme.palette().is_none(), |list| {
+            list.rounded(options.theme.radius.panel)
+                .bg(options.theme.surface)
+                .border_1()
+                .border_color(options.theme.hairline)
+        })
 }
 
 #[derive(Clone, Copy)]

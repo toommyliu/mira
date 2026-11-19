@@ -103,6 +103,20 @@ pub(crate) enum Load {
     ArmorCustomizer,
 }
 
+impl std::fmt::Display for Load {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shop(id) => write!(f, "shop {id}"),
+            Self::Quests(ids) => match ids.as_slice() {
+                [id] => write!(f, "quest {id}"),
+                ids => write!(f, "{} quests", ids.len()),
+            },
+            Self::HairShop(id) => write!(f, "hair shop {id}"),
+            Self::ArmorCustomizer => f.write_str("the armor customizer"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoadKind {
     Shop,

@@ -181,6 +181,14 @@ impl Render {
             .when(current, |tab| tab.aria_active_descendant())
             .relative()
             .pointer_cursor(theme)
+            .when(
+                theme.palette().is_some() && on_select.is_some() && pose == Pose::Rest,
+                |tab| {
+                    let (hover, press) = theme.mira_item_colors(current);
+                    tab.hover(move |style| style.bg(hover))
+                        .active(move |style| style.bg(press))
+                },
+            )
             .when_some(
                 on_select.filter(|_| pose == Pose::Rest),
                 |tab, on_select| {
@@ -236,9 +244,10 @@ impl Render {
                 theme.text_secondary
             })
             .when(current, |tab| tab.bg(theme.selected))
-            .when(!current && pose == Pose::Rest, |tab| {
-                tab.hover(|style| style.bg(theme.fill_hover))
-            })
+            .when(
+                theme.palette().is_none() && !current && pose == Pose::Rest,
+                |tab| tab.hover(|style| style.bg(theme.fill_hover)),
+            )
             .when(current && self.ring, |tab| {
                 tab.child(theme.focus_ring(theme.radius.item))
             })
@@ -295,10 +304,13 @@ impl Render {
 
     fn horizontal_tab(&self, base: Stateful<Div>, tab: Tab, current: bool) -> Stateful<Div> {
         let theme = &self.theme;
+        let mira = theme.palette().is_some();
         base.flex()
             .items_center()
             .gap(px(6.0))
-            .h(px(30.0))
+            .h(px(if mira { 28.0 } else { 30.0 }))
+            .when(mira, |tab| tab.px(px(6.0)).rounded(theme.radius.control))
+            .when(mira && current, |tab| tab.bg(theme.selected))
             .text_body()
             .font_weight(FontWeight::MEDIUM)
             .text_color(if current {
@@ -306,7 +318,7 @@ impl Render {
             } else {
                 theme.text_tertiary
             })
-            .when(!current, |tab| {
+            .when(!mira && !current, |tab| {
                 tab.hover(|style| style.text_color(theme.text_secondary))
             })
             .when_some(tab.start, |row, start| row.child(start))
@@ -321,19 +333,22 @@ impl Render {
                             label.children(tab.children)
                         }
                     })
-                    .when(current && self.ring, |label| {
+                    .when(current && self.ring && theme.palette().is_none(), |label| {
                         label.child(theme.focus_ring(px(4.0)))
                     }),
             )
+            .when(current && self.ring && theme.palette().is_some(), |tab| {
+                tab.child(theme.focus_mira(theme.radius.control, true))
+            })
             .when_some(tab.end, |row, end| {
                 row.child(
                     div()
-                        .text_small()
+                        .text_size(theme.secondary_text_size())
                         .text_color(theme.text_tertiary)
                         .child(end),
                 )
             })
-            .when(current, |tab| {
+            .when(current && !mira, |tab| {
                 tab.child(
                     div()
                         .absolute()
@@ -408,6 +423,8 @@ impl RenderOnce for Tabs {
             .map(|list| {
                 if self.vertical {
                     list.flex_col().gap(px(2.0)).px(px(6.0)).py(px(4.0))
+                } else if render.theme.palette().is_some() {
+                    list.gap(px(4.0))
                 } else {
                     list.gap(px(16.0))
                         .border_b_1()

@@ -5,7 +5,7 @@ use gpui::{
 
 use crate::{
     ActiveTheme as _, h_flex,
-    theme::{LINE_SMALL, TEXT_SMALL},
+    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
 
 #[derive(IntoElement)]
@@ -54,9 +54,10 @@ impl Field {
 impl RenderOnce for Field {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let mira = theme.palette().is_some();
         let note = |text: SharedString, color| {
             div()
-                .text_size(TEXT_SMALL)
+                .text_size(theme.secondary_text_size())
                 .line_height(LINE_SMALL)
                 .text_color(color)
                 .child(text)
@@ -64,8 +65,8 @@ impl RenderOnce for Field {
         let label = h_flex()
             .justify_between()
             .gap(px(8.0))
-            .text_size(TEXT_SMALL)
-            .line_height(LINE_SMALL)
+            .text_size(if mira { TEXT_BODY } else { TEXT_SMALL })
+            .line_height(if mira { LINE_BODY } else { LINE_SMALL })
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text)
             .child(self.label)

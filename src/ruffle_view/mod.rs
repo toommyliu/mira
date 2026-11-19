@@ -1,7 +1,7 @@
 mod account;
 mod account_card;
 mod client;
-mod environment;
+pub(crate) mod environment;
 mod follower;
 mod form;
 mod game_bar;

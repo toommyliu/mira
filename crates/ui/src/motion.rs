@@ -159,6 +159,17 @@ pub fn glide(
     tween(id, from, target, GLIDE, ease, window, cx)
 }
 
+pub(crate) fn glide_for(
+    id: impl Into<ElementId>,
+    from: Option<f32>,
+    target: f32,
+    duration: Duration,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    tween(id, from, target, duration, ease, window, cx)
+}
+
 fn tween(
     id: impl Into<ElementId>,
     from: Option<f32>,

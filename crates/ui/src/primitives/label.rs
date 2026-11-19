@@ -8,7 +8,7 @@ use gpui::{
 
 use crate::{
     ActiveTheme as _, PointerCursor as _, nav,
-    theme::{DISABLED_OPACITY, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
+    theme::{DISABLED_OPACITY, LINE_BODY, LINE_SMALL, TEXT_BODY},
 };
 
 pub(crate) type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
@@ -70,7 +70,7 @@ pub(crate) fn caption_with(
         .when_some(description, |column, description| {
             column.child(
                 div()
-                    .text_size(TEXT_SMALL)
+                    .text_size(theme.secondary_text_size())
                     .line_height(LINE_SMALL)
                     .text_color(if invalid {
                         theme.danger_text

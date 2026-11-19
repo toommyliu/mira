@@ -804,9 +804,11 @@ fn rows(
     state: &Entity<MenuState>,
     theme: &Theme,
 ) -> Vec<AnyElement> {
-    let gutter = items
-        .iter()
-        .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
+    let trailing_marks = kind == PopupKind::Menu && theme.palette().is_some();
+    let gutter = !trailing_marks
+        && items
+            .iter()
+            .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
     let count = metas.iter().filter(|meta| meta.navigable).count();
     let mut position = 0;
     items
@@ -951,6 +953,13 @@ fn rows(
                         .when_some(end, |row, end| row.child(trailing(end)))
                         .when_some(shortcut, |row, keys| {
                             row.child(trailing(keys.into_any_element()))
+                        })
+                        .when(trailing_marks && checked.is_some() && mark != Mark::Switch, |row| {
+                            row.child(
+                                div().flex_none().size(px(14.0)).when(checked == Some(true), |mark| {
+                                    mark.child(Icon::Check)
+                                }),
+                            )
                         })
                         .when(mark == Mark::Switch, |row| {
                             row.child(switch_mark(checked == Some(true), theme))

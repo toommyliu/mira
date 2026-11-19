@@ -6,9 +6,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FontWeight, Global, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, FontWeight, Global,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, deferred, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::{Button, Icon, button::Size};
@@ -26,6 +27,8 @@ const SHRINK: f32 = 0.05;
 const UNMOUNT: Duration = Duration::from_millis(200);
 const EDGE: Pixels = px(20.0);
 const FALLBACK_HEIGHT: Pixels = px(58.0);
+const SONNER_DURATION: Duration = Duration::from_millis(400);
+const SONNER_REAR_EXIT: Duration = Duration::from_millis(500);
 
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -97,6 +100,7 @@ pub struct Toaster {
     shown: Vec<Shown>,
     hovered: bool,
     expanded: bool,
+    mira: bool,
     timers: HashMap<u64, Timer>,
     heights: Rc<RefCell<HashMap<u64, Pixels>>>,
 }
@@ -115,7 +119,9 @@ impl Toaster {
         let stack = cx.global::<Stack>().0.clone();
         let stays = toast.stays();
         let reduce = cx.reduce_motion();
+        let mira = cx.theme().palette().is_some();
         stack.update(cx, |toasts, cx| {
+            toasts.mira = mira;
             toasts.prune(reduce);
             let id = toasts.next;
             toasts.next += 1;
@@ -128,7 +134,11 @@ impl Toaster {
                 },
             );
             if !stays {
-                if toasts.expanded {
+                if mira {
+                    toasts
+                        .timers
+                        .insert(id, Timer::Paused(Duration::from_secs(4)));
+                } else if toasts.expanded {
                     toasts.timers.insert(id, Timer::Paused(LINGER));
                 } else {
                     toasts.start(id, LINGER, cx);
@@ -181,11 +191,20 @@ impl Toaster {
     }
 
     fn prune(&mut self, reduce: bool) {
+        let mira = self.mira;
         let mut heights = self.heights.borrow_mut();
         self.shown.retain(|shown| {
-            let keep = shown
-                .left
-                .is_none_or(|left| !reduce && left.at.elapsed() < UNMOUNT);
+            let keep = shown.left.is_none_or(|left| {
+                !reduce
+                    && left.at.elapsed()
+                        < if !mira {
+                            UNMOUNT
+                        } else if left.behind {
+                            SONNER_REAR_EXIT
+                        } else {
+                            SONNER_DURATION
+                        }
+            });
             if !keep {
                 heights.remove(&shown.id);
             }
@@ -207,7 +226,13 @@ impl Toaster {
             let heights = self.heights.borrow();
             let height_of = |id: &u64| heights.get(id).copied().unwrap_or(FALLBACK_HEIGHT);
             let before = present[..depth].iter().map(height_of).sum();
-            rest(depth, self.expanded, before, height_of(&present[0]))
+            rest(
+                depth,
+                self.expanded,
+                before,
+                height_of(&present[0]),
+                self.mira,
+            )
         };
         let behind = !self.expanded && depth > 0;
         if let Some(shown) = self.shown.iter_mut().find(|shown| shown.id == id) {
@@ -231,10 +256,13 @@ impl Toaster {
                 toasts.hovered = false;
             }
             let leaving = toasts.shown.iter().any(|shown| shown.left.is_some());
-            toasts.open(
-                toasts.hovered || focused || (leaving && toasts.expanded),
-                cx,
-            );
+            let expanded = toasts.hovered || focused || (leaving && toasts.expanded);
+            if toasts.mira {
+                toasts.expanded = expanded;
+                toasts.tick_front(window.is_window_active() && !expanded, cx);
+            } else {
+                toasts.open(expanded, cx);
+            }
             (
                 toasts.shown.clone(),
                 toasts.expanded,
@@ -245,6 +273,10 @@ impl Toaster {
             return div().into_any_element();
         }
         let theme = cx.theme().clone();
+        let mira = theme.palette().is_some();
+        let width =
+            (if mira { px(360.0) } else { WIDTH }).min(window.viewport_size().width - EDGE * 2.0);
+        let edge = if mira { px(16.0) } else { EDGE };
         let height_of = |id: u64| {
             heights
                 .borrow()
@@ -263,7 +295,7 @@ impl Toaster {
         for (depth, id) in present.iter().enumerate() {
             slots.insert(
                 *id,
-                (depth, rest(depth.min(LIMIT), expanded, before, front)),
+                (depth, rest(depth.min(LIMIT), expanded, before, front, mira)),
             );
             if depth < LIMIT {
                 before += height_of(*id);
@@ -277,14 +309,14 @@ impl Toaster {
                     .iter()
                     .map(|id| height_of(*id))
                     .sum::<Pixels>()
-                    + GAP * (count - 1) as f32
+                    + gap(mira) * (count - 1) as f32
             }
             (false, count) => {
                 let deepest = count - 1;
-                rest(deepest, false, Pixels::ZERO, front) + scaled(front, deepest)
+                rest(deepest, false, Pixels::ZERO, front, mira) + scaled(front, deepest)
             }
         };
-        let stack_height = px(motion::glide(
+        let stack_height = px(glide(
             "toasts-height",
             None,
             f32::from(stack_height),
@@ -299,16 +331,21 @@ impl Toaster {
                 (Some(left), _) if left.depth >= LIMIT => continue,
                 (Some(left), _) => {
                     window.request_animation_frame();
-                    let (offset, fade) = if left.behind {
+                    let (offset, fade) = if mira && left.behind {
+                        (left.from - own * 0.4, UNMOUNT)
+                    } else if left.behind {
                         (-(scaled(front, left.depth) * 0.4), UNMOUNT)
                     } else {
-                        (left.from - own, motion::GLIDE)
+                        (
+                            left.from - own,
+                            if mira { SONNER_DURATION } else { motion::GLIDE },
+                        )
                     };
                     let t = left.at.elapsed().as_secs_f32() / fade.as_secs_f32();
                     (left.depth, offset, 1.0 - motion::ease(t), left.behind)
                 }
                 (None, Some(&(depth, offset))) => {
-                    let opacity = motion::glide(
+                    let opacity = glide(
                         ("toast-opacity", id),
                         Some(0.0),
                         if depth < LIMIT { 1.0 } else { 0.0 },
@@ -328,23 +365,24 @@ impl Toaster {
                 let inset = if expanded || leaving_behind {
                     Pixels::ZERO
                 } else {
-                    WIDTH * SHRINK / 2.0 * at as f32
+                    width * SHRINK / 2.0 * at as f32
                 };
-                let offset = px(motion::glide(
+                let offset = px(motion::glide_for(
                     ("toast-y", id),
                     Some(f32::from(-own)),
                     f32::from(offset),
+                    if mira && leaving_behind {
+                        SONNER_REAR_EXIT
+                    } else if mira {
+                        SONNER_DURATION
+                    } else {
+                        motion::GLIDE
+                    },
                     window,
                     cx,
                 ));
-                let inset = px(motion::glide(
-                    ("toast-x", id),
-                    None,
-                    f32::from(inset),
-                    window,
-                    cx,
-                ));
-                let tucked = motion::glide(
+                let inset = px(glide(("toast-x", id), None, f32::from(inset), window, cx));
+                let tucked = glide(
                     ("toast-tucked", id),
                     None,
                     if behind { 1.0 } else { 0.0 },
@@ -403,9 +441,9 @@ impl Toaster {
                 .id("toasts")
                 .track_focus(&focus)
                 .absolute()
-                .right(EDGE)
-                .bottom(EDGE)
-                .w(WIDTH)
+                .right(edge)
+                .bottom(edge)
+                .w(width)
                 .h(stack_height)
                 .children(cards)
                 .child(div().id("toasts-hover").absolute().inset_0().on_hover(
@@ -420,13 +458,55 @@ impl Toaster {
         .with_priority(super::layer::TOASTS)
         .into_any_element()
     }
+
+    fn tick_front(&mut self, visible: bool, cx: &mut Context<Self>) {
+        let front = if visible {
+            self.present().next().map(|entry| entry.id)
+        } else {
+            None
+        };
+        let now = Instant::now();
+        let mut start = None;
+        for (&id, timer) in &mut self.timers {
+            match (&*timer, front == Some(id)) {
+                (Timer::Paused(left), true) => start = Some((id, *left)),
+                (Timer::Running { deadline, .. }, false) => {
+                    *timer = Timer::Paused(deadline.saturating_duration_since(now));
+                }
+                _ => {}
+            }
+        }
+        if let Some((id, left)) = start {
+            self.start(id, left, cx);
+        }
+    }
 }
 
-fn rest(depth: usize, expanded: bool, before: Pixels, front: Pixels) -> Pixels {
-    if expanded {
-        before + GAP * depth as f32
+fn glide(
+    id: impl Into<ElementId>,
+    from: Option<f32>,
+    target: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    let duration = if cx.theme().palette().is_some() {
+        SONNER_DURATION
     } else {
-        PEEK * depth as f32 + front * SHRINK / 2.0 * depth as f32
+        motion::GLIDE
+    };
+    motion::glide_for(id, from, target, duration, window, cx)
+}
+
+fn gap(mira: bool) -> Pixels {
+    if mira { px(14.0) } else { GAP }
+}
+
+fn rest(depth: usize, expanded: bool, before: Pixels, front: Pixels, mira: bool) -> Pixels {
+    if expanded {
+        before + gap(mira) * depth as f32
+    } else {
+        let peek = if mira { px(14.0) } else { PEEK };
+        peek * depth as f32 + front * SHRINK / 2.0 * depth as f32
     }
 }
 
@@ -443,6 +523,7 @@ fn card(
 ) -> impl IntoElement + gpui::Styled + 'static {
     let id = shown.id;
     let toast = &shown.toast;
+    let mira = theme.palette().is_some();
     let (_, _, tone_text) = theme.tone(toast.tone);
     let dismiss = {
         let stack = stack.clone();
@@ -469,7 +550,12 @@ fn card(
         .py(px(10.0))
         .pl(px(14.0))
         .pr(px(6.0))
-        .rounded(theme.radius.panel)
+        .rounded(if mira {
+            theme.radius.control
+        } else {
+            theme.radius.panel
+        })
+        .when(mira, |card| card.p(px(16.0)))
         .bg(bg)
         .border_1()
         .border_color(theme.border)
@@ -505,9 +591,17 @@ fn card(
                             .when_some(toast.body.clone(), |column, body| {
                                 column.child(
                                     div()
-                                        .text_size(TEXT_SMALL)
+                                        .text_size(if mira {
+                                            crate::theme::TEXT_CAPTION
+                                        } else {
+                                            TEXT_SMALL
+                                        })
                                         .line_height(LINE_SMALL)
-                                        .text_color(theme.text_secondary)
+                                        .text_color(if mira {
+                                            theme.text_tertiary
+                                        } else {
+                                            theme.text_secondary
+                                        })
                                         .child(body),
                                 )
                             }),

@@ -491,7 +491,7 @@ impl LoaderGrabber {
     }
 
     fn start(&mut self, source: Source, load: Load, cx: &mut Context<Self>) {
-        let described = describe(&load);
+        let described = load.to_string();
         let lists = matches!(load, Load::Shop(_) | Load::Quests(_));
         let first = match &load {
             Load::Quests(ids) => ids.first().map(|id| i64::from(*id)),
@@ -848,9 +848,7 @@ impl LoaderGrabber {
 
     fn shop_warning_dialog(&self, cx: &mut Context<Self>) -> Dialog {
         let warning = self.shop_warning.as_ref();
-        let title = warning.map_or_else(String::new, |warning| {
-            format!("Load {}?", describe(&warning.load))
-        });
+        let title = warning.map_or_else(String::new, |warning| format!("Load {}?", warning.load));
         let quiet = if warning.is_some_and(|warning| warning.quiet) {
             CheckedState::Checked
         } else {
@@ -1308,16 +1306,6 @@ impl LoaderGrabber {
     }
 }
 
-fn describe(load: &Load) -> String {
-    match load {
-        Load::Shop(id) => format!("shop {id}"),
-        Load::Quests(ids) if ids.len() == 1 => format!("quest {}", ids[0]),
-        Load::Quests(ids) => format!("{} quests", ids.len()),
-        Load::HairShop(id) => format!("hair shop {id}"),
-        Load::ArmorCustomizer => "the armor customizer".into(),
-    }
-}
-
 fn tooltip(act: &Act) -> Option<&'static str> {
     match act {
         Act::Game(Action::FakeComplete { .. }) => Some(
@@ -1588,7 +1576,7 @@ mod tests {
     ) -> Option<(String, bool)> {
         grabber.read_with(cx, |grabber, _| {
             let warning = grabber.shop_warning.as_ref()?;
-            Some((describe(&warning.load), warning.quiet))
+            Some((warning.load.to_string(), warning.quiet))
         })
     }
 

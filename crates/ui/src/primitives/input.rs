@@ -14,7 +14,10 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use super::{Button, Icon, button::Size, icon};
 use crate::{
     ActiveTheme as _,
-    theme::{CONTROL_MD, CONTROL_SM, LINE_BODY, TEXT_BODY, TEXT_SMALL, tabular},
+    theme::{
+        CONTROL_MD, CONTROL_SM, LINE_BODY, MIRA_COMPACT, MIRA_CONTROL, TEXT_BODY, TEXT_SMALL,
+        tabular,
+    },
 };
 
 actions!(
@@ -792,6 +795,7 @@ impl Focusable for Input {
 impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let palette = theme.palette();
         let focused = !self.disabled && self.focus.is_focused(window);
         if focused && !self.was_focused && crate::nav::keyboard_input(window, cx) {
             self.selected = 0..self.content.len();
@@ -806,6 +810,8 @@ impl Render for Input {
         let clearable = self.search && !self.content.is_empty();
         let height = match (self.bare, self.small) {
             (true, _) => LINE_BODY,
+            (false, true) if palette.is_some() => MIRA_COMPACT,
+            (false, false) if palette.is_some() => MIRA_CONTROL,
             (false, true) => CONTROL_SM,
             (false, false) => CONTROL_MD,
         };
@@ -883,32 +889,57 @@ impl Render for Input {
                     .bg(theme.fill)
                     .border_1()
                     .border_color(match (self.invalid, self.pill) {
+                        (true, _) if theme.is_dark() && palette.is_some() => {
+                            theme.danger.opacity(0.5)
+                        }
                         (true, _) => theme.danger,
                         (false, true) => theme.fill,
+                        (false, false) if palette.is_some() => theme.border_strong,
                         (false, false) => theme.border,
                     })
+                    .when_some(palette.filter(|_| !self.disabled), |field, palette| {
+                        let hover = palette.input.opacity(0.4);
+                        field.hover(move |style| style.bg(hover))
+                    })
             })
-            .when(focused, |field| {
-                let color = if self.invalid {
-                    theme.danger
-                } else {
-                    theme.focus
-                };
-                if self.bare {
-                    field.child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom(px(-3.0))
-                            .h(px(1.0))
-                            .bg(color),
-                    )
-                } else {
-                    field.child(theme.ring_around(color, radius, px(1.0)))
-                }
+            .when(
+                focused || (palette.is_some() && self.invalid && !self.bare),
+                |field| {
+                    let color = if self.invalid {
+                        theme.danger
+                    } else {
+                        theme.focus
+                    };
+                    if self.bare {
+                        field.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .bottom(px(-3.0))
+                                .h(px(1.0))
+                                .bg(color),
+                        )
+                    } else if palette.is_some() && self.invalid {
+                        let dark = theme.is_dark();
+                        field.child(theme.focus_mira_with(
+                            radius,
+                            false,
+                            theme.danger.opacity(if dark { 0.5 } else { 1.0 }),
+                            theme.danger.opacity(if dark { 0.4 } else { 0.2 }),
+                        ))
+                    } else if palette.is_some() {
+                        field.child(theme.focus_ring(radius))
+                    } else {
+                        field.child(theme.ring_around(color, radius, px(1.0)))
+                    }
+                },
+            )
+            .text_size(if self.small && palette.is_none() {
+                TEXT_SMALL
+            } else {
+                TEXT_BODY
             })
-            .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
             .line_height(LINE_BODY)
             .text_color(if self.disabled {
                 theme.text_disabled

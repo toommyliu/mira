@@ -3,6 +3,7 @@ pub mod components;
 pub mod keyboard;
 pub mod motion;
 pub mod nav;
+mod palette;
 pub mod primitives;
 #[cfg(feature = "test-support")]
 mod snapshot;
@@ -10,8 +11,9 @@ mod style;
 pub mod theme;
 
 pub use assets::Assets;
+pub use palette::Palette;
 #[cfg(feature = "test-support")]
-pub use snapshot::{snapshot, snapshot_after};
+pub use snapshot::{PreviewRenderer, snapshot, snapshot_after};
 pub use style::{StyledExt, h_flex, v_flex};
 pub use theme::{ActiveTheme, PointerCursor, Theme, Tone};
 

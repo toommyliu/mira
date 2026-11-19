@@ -28,6 +28,7 @@ pub struct Checkbox {
     state: CheckedState,
     label: SharedString,
     description: Option<SharedString>,
+    show_label: bool,
     disabled: bool,
     on_toggle: Option<ToggleHandler>,
 }
@@ -43,6 +44,7 @@ impl Checkbox {
             state,
             label: label.into(),
             description: None,
+            show_label: true,
             disabled: false,
             on_toggle: None,
         }
@@ -50,6 +52,11 @@ impl Checkbox {
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn hide_label(mut self) -> Self {
+        self.show_label = false;
         self
     }
 
@@ -67,6 +74,7 @@ impl Checkbox {
 impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let mira = theme.palette().is_some();
         let filled = self.state != CheckedState::Unchecked;
         let mark = match self.state {
             CheckedState::Unchecked => None,
@@ -84,6 +92,9 @@ impl RenderOnce for Checkbox {
         );
         row.role(Role::CheckBox)
             .group("checkbox")
+            .when(!self.show_label, |row| {
+                row.w(px(24.0)).h(px(24.0)).items_center().justify_center()
+            })
             .aria_toggled(match self.state {
                 CheckedState::Unchecked => Toggled::False,
                 CheckedState::Checked => Toggled::True,
@@ -95,8 +106,8 @@ impl RenderOnce for Checkbox {
                     .flex_none()
                     .items_center()
                     .justify_center()
-                    .mt(px(2.0))
-                    .size(px(BOX))
+                    .when(self.show_label, |mark| mark.mt(px(2.0)))
+                    .size(px(if mira { 16.0 } else { BOX }))
                     .rounded(theme.radius.tag)
                     .map(|mark| {
                         if filled {
@@ -105,7 +116,11 @@ impl RenderOnce for Checkbox {
                                 .bg(theme.inverse)
                         } else {
                             mark.border_1()
-                                .border_color(theme.border)
+                                .border_color(if mira {
+                                    theme.border_strong
+                                } else {
+                                    theme.border
+                                })
                                 .bg(theme.fill)
                                 .when(!self.disabled, |mark| {
                                     mark.group_hover("checkbox", |style| {
@@ -115,13 +130,19 @@ impl RenderOnce for Checkbox {
                         }
                     })
                     .when(ring, |control| {
-                        control.child(theme.ring_around(theme.focus, px(4.0), px(1.0)))
+                        if mira {
+                            control.child(theme.focus_ring(px(4.0)))
+                        } else {
+                            control.child(theme.ring_around(theme.focus, px(4.0), px(1.0)))
+                        }
                     })
                     .when_some(mark, |container, mark| {
                         container.child(small_icon(mark, theme.on_inverse))
                     }),
             )
-            .child(caption(self.label, self.description, cx))
+            .when(self.show_label, |row| {
+                row.child(caption(self.label, self.description, cx))
+            })
             .when_some(
                 self.on_toggle.filter(|_| !self.disabled),
                 |row, on_toggle| row.on_click(move |_, window, cx| on_toggle(next, window, cx)),

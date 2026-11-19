@@ -53,6 +53,9 @@ impl RenderOnce for Group {
                         .text_small()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_secondary)
+                        .when(theme.palette().is_some(), |label| {
+                            label.text_body().font_weight(FontWeight::SEMIBOLD)
+                        })
                         .child(title),
                 )
             })

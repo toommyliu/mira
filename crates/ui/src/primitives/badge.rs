@@ -1,6 +1,6 @@
 use gpui::{
     App, FontWeight, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _,
-    Window, div, px,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -36,6 +36,7 @@ impl RenderOnce for Badge {
             .flex_none()
             .px(px(6.0))
             .rounded(theme.radius.tag)
+            .when(theme.palette().is_some(), |badge| badge.rounded_full())
             .bg(soft)
             .text_size(TEXT_CAPTION)
             .line_height(px(18.0))

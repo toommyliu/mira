@@ -1,13 +1,21 @@
+use std::{borrow::Cow, rc::Rc};
+
 use gpui::{
     App, BoxShadow, Div, Global, Hsla, ParentElement as _, Pixels, Rgba, Styled, WindowAppearance,
-    div, point, px,
+    div, point, prelude::FluentBuilder as _, px,
 };
+
+use crate::Palette;
 
 pub const DISABLED_OPACITY: f32 = 0.5;
 
 pub const TEXT_CAPTION: Pixels = px(11.0);
 pub const TEXT_SMALL: Pixels = px(12.0);
 pub const TEXT_BODY: Pixels = px(13.0);
+pub const MIRA_FONT: &str = "Inter Variable";
+pub const MIRA_CONTROL: Pixels = px(28.0);
+pub const MIRA_COMPACT: Pixels = px(24.0);
+pub const MIRA_CHROME: Pixels = px(38.0);
 pub const TEXT_TITLE: Pixels = px(15.0);
 pub const TEXT_DISPLAY: Pixels = px(22.0);
 
@@ -67,6 +75,7 @@ pub enum Tone {
 
 #[derive(Clone)]
 pub struct Theme {
+    palette: Option<Rc<Palette>>,
     pub radius: Radii,
     pub base: Hsla,
     pub well: Hsla,
@@ -118,6 +127,7 @@ impl Theme {
         let raised = |lightness| oklch(lightness, 0.006, 286.0, 1.0);
         let muted = |lightness, chroma| oklch(lightness, chroma, 262.0, 1.0);
         Self {
+            palette: None,
             radius: Radii::scaled(1.0),
             base: gray(0.172),
             well: gray(0.139),
@@ -166,6 +176,7 @@ impl Theme {
         let gray = |lightness, chroma| oklch(lightness, chroma, 265.0, 1.0);
         let text = |lightness, chroma, hue| oklch(lightness, chroma, hue, 1.0);
         Self {
+            palette: None,
             radius: Radii::scaled(1.0),
             base: gray(0.968, 0.003),
             well: gray(0.945, 0.003),
@@ -216,6 +227,139 @@ impl Theme {
         }
     }
 
+    pub fn mira(dark: bool) -> Self {
+        let palette = Palette::mira(dark);
+        let mut theme = if dark { Self::dark() } else { Self::light() };
+        theme.radius = Radii {
+            tag: px(4.0),
+            item: px(8.0),
+            control: px(8.0),
+            panel: px(10.0),
+            dialog: px(14.0),
+        };
+        theme.base = palette.background;
+        theme.well = palette.sidebar;
+        theme.surface = palette.card;
+        theme.overlay = palette.popover;
+        theme.fill = palette.input.opacity(if dark { 0.30 } else { 0.20 });
+        theme.fill_hover = palette.accent;
+        theme.fill_pressed = mix_neutral(palette.accent, palette.foreground, 0.08);
+        theme.selected = palette.muted;
+        theme.hairline = palette.border;
+        theme.border = palette.border;
+        theme.border_strong = palette.input;
+        theme.text = palette.foreground;
+        theme.text_secondary = palette.foreground;
+        theme.text_tertiary = palette.muted_foreground;
+        theme.text_disabled = palette.foreground.opacity(0.50);
+        theme.inverse = palette.primary;
+        theme.inverse_hover = palette.primary.opacity(0.80);
+        theme.on_inverse = palette.primary_foreground;
+        theme.knob = if dark {
+            palette.foreground
+        } else {
+            palette.background
+        };
+        theme.thumb = palette.ring;
+        theme.accent = palette.primary;
+        theme.accent_soft = palette.accent;
+        theme.accent_text = palette.accent_foreground;
+        theme.success = palette.foreground;
+        theme.success_soft = palette.secondary;
+        theme.success_text = palette.secondary_foreground;
+        theme.warning = palette.foreground;
+        theme.warning_soft = palette.secondary;
+        theme.warning_text = palette.secondary_foreground;
+        theme.danger = palette.destructive;
+        theme.danger_hover = palette.destructive.opacity(0.20);
+        theme.danger_soft = palette.destructive.opacity(if dark { 0.20 } else { 0.10 });
+        theme.danger_text = palette.foreground;
+        theme.on_danger = palette.foreground;
+        theme.focus = palette.ring;
+        theme.backdrop = gpui::black().opacity(0.80);
+        theme.pointer_cursor = true;
+        theme.stack_tint = 0.0;
+        theme.palette = Some(Rc::new(palette));
+        theme
+    }
+
+    pub fn palette(&self) -> Option<&Palette> {
+        self.palette.as_deref()
+    }
+
+    pub(crate) fn mira_item_colors(&self, selected: bool) -> (Hsla, Hsla) {
+        if selected {
+            (
+                mix_neutral(self.selected, self.text, 0.04),
+                mix_neutral(self.selected, self.text, 0.12),
+            )
+        } else {
+            (self.fill_hover.opacity(0.6), self.fill_pressed)
+        }
+    }
+
+    pub fn load_mira_font(cx: &App) -> anyhow::Result<()> {
+        cx.text_system()
+            .add_fonts(vec![Cow::Borrowed(include_bytes!(
+                "../assets/fonts/InterVariable.ttf"
+            ))])
+    }
+
+    pub(crate) fn is_dark(&self) -> bool {
+        self.base.l < 0.5
+    }
+
+    pub(crate) fn secondary_text_size(&self) -> Pixels {
+        if self.palette.is_some() {
+            TEXT_CAPTION
+        } else {
+            TEXT_SMALL
+        }
+    }
+
+    pub(crate) fn focus_mira(&self, radius: Pixels, tab: bool) -> Div {
+        self.focus_mira_with(
+            radius,
+            tab,
+            self.focus,
+            self.focus.opacity(if tab { 0.5 } else { 0.3 }),
+        )
+    }
+
+    pub(crate) fn focus_mira_with(
+        &self,
+        radius: Pixels,
+        tab: bool,
+        border: Hsla,
+        halo: Hsla,
+    ) -> Div {
+        let width = if tab { px(3.0) } else { px(2.0) };
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(radius)
+            .border_1()
+            .border_color(border)
+            .child(
+                div()
+                    .absolute()
+                    .top(-width - px(1.0))
+                    .bottom(-width - px(1.0))
+                    .left(-width - px(1.0))
+                    .right(-width - px(1.0))
+                    .rounded(radius + width)
+                    .map(|ring| {
+                        if tab {
+                            ring.border_3()
+                        } else {
+                            ring.border_2()
+                        }
+                    })
+                    .border_color(halo),
+            )
+            .child(crate::nav::reveal_probe())
+    }
+
     pub fn tone(&self, tone: Tone) -> (Hsla, Hsla, Hsla) {
         match tone {
             Tone::Neutral => (self.text_tertiary, self.fill, self.text_secondary),
@@ -227,6 +371,9 @@ impl Theme {
     }
 
     pub fn focus_ring(&self, radius: Pixels) -> Div {
+        if self.palette.is_some() {
+            return self.focus_mira(radius, false);
+        }
         self.ring_around(self.focus, radius, Pixels::ZERO)
     }
 
@@ -258,6 +405,9 @@ impl Theme {
     }
 
     pub fn edge(&self) -> Vec<BoxShadow> {
+        if self.palette.is_some() {
+            return Vec::new();
+        }
         let dark = self.base.l < 0.5;
         vec![BoxShadow {
             color: if dark {
@@ -273,6 +423,12 @@ impl Theme {
     }
 
     pub fn floating(&self) -> Vec<BoxShadow> {
+        if self.palette.is_some() {
+            return vec![
+                shadow(gpui::black().opacity(0.1), 4.0, 3.0, px(-1.0)),
+                shadow(gpui::black().opacity(0.1), 2.0, 2.0, px(-2.0)),
+            ];
+        }
         vec![
             shadow(
                 oklch(0.0, 0.0, 0.0, self.shadow_alpha * 1.4),
@@ -295,6 +451,25 @@ impl Theme {
             },
         ]
     }
+}
+
+// The neutral shadcn colors lie on the OKLCH lightness axis.
+pub(crate) fn mix_neutral(from: Hsla, to: Hsla, amount: f32) -> Hsla {
+    let lightness = |gray: Hsla| {
+        let gray = gray.l;
+        let linear = if gray <= 0.04045 {
+            gray / 12.92
+        } else {
+            ((gray + 0.055) / 1.055).powf(2.4)
+        };
+        linear.cbrt()
+    };
+    oklch(
+        lightness(from) * (1.0 - amount) + lightness(to) * amount,
+        0.0,
+        0.0,
+        1.0,
+    )
 }
 
 // GPUI's blur radius is the Gaussian sigma, half of a CSS blur value.

@@ -1,12 +1,63 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    App, Entity, HeadlessAppContext, Keystroke, Pixels, PlatformHeadlessRenderer, Render, Size,
-    Window,
+    App, Entity, HeadlessAppContext, Keystroke, Pixels, PlatformHeadlessRenderer, Render,
+    RenderImage, Size, Window,
 };
 use gpui_apple::{AppleTextSystem, metal_renderer::MetalHeadlessRenderer};
 
 use crate::{Assets, Theme};
+
+fn headless() -> HeadlessAppContext {
+    let mut cx = HeadlessAppContext::with_platform(
+        Arc::new(AppleTextSystem::new()),
+        Arc::new(Assets),
+        || {
+            Ok(Some(
+                Box::new(MetalHeadlessRenderer::new()?) as Box<dyn PlatformHeadlessRenderer>
+            ))
+        },
+    );
+    cx.update(|cx| {
+        crate::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    cx
+}
+
+pub struct PreviewRenderer(HeadlessAppContext);
+
+impl PreviewRenderer {
+    pub fn new(theme: Theme) -> anyhow::Result<Self> {
+        let mut cx = headless();
+        cx.update(|cx| {
+            if theme.palette().is_some() {
+                Theme::load_mira_font(cx)?;
+            }
+            cx.set_global(theme);
+            anyhow::Ok(())
+        })?;
+        Ok(Self(cx))
+    }
+
+    pub fn render<V: Render + 'static>(
+        &mut self,
+        size: Size<Pixels>,
+        build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
+    ) -> anyhow::Result<Arc<RenderImage>> {
+        let window = self.0.open_window(size, build)?;
+        self.0.run_until_parked();
+        let image = self.0.capture_screenshot(window.into());
+        self.0
+            .update_window(window.into(), |_, window, _| window.remove_window())?;
+        self.0.run_until_parked();
+        let mut image = image?;
+        for pixel in image.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        Ok(Arc::new(RenderImage::new(vec![image::Frame::new(image)])))
+    }
+}
 
 pub fn snapshot<V: Render + 'static>(
     name: &str,
@@ -24,19 +75,7 @@ pub fn snapshot_after<V: Render + 'static>(
 ) -> Vec<PathBuf> {
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).expect("create the snapshot folder");
-    let mut cx = HeadlessAppContext::with_platform(
-        Arc::new(AppleTextSystem::new()),
-        Arc::new(Assets),
-        || {
-            Ok(Some(
-                Box::new(MetalHeadlessRenderer::new()?) as Box<dyn PlatformHeadlessRenderer>
-            ))
-        },
-    );
-    cx.update(|cx| {
-        crate::init(cx);
-        cx.set_reduce_motion(true);
-    });
+    let mut cx = headless();
     [("dark", Theme::dark()), ("light", Theme::light())]
         .into_iter()
         .map(|(appearance, theme)| {

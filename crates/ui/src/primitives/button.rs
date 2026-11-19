@@ -16,7 +16,8 @@ use super::{Icon, Spinner, icon, tooltip};
 use crate::{
     ActiveTheme as _, PointerCursor as _, h_flex, nav,
     theme::{
-        CONTROL_MD, CONTROL_SM, CONTROL_XS, DISABLED_OPACITY, LINE_BODY, TEXT_BODY, TEXT_SMALL,
+        CONTROL_MD, CONTROL_SM, CONTROL_XS, DISABLED_OPACITY, LINE_BODY, MIRA_COMPACT,
+        MIRA_CONTROL, TEXT_BODY, TEXT_SMALL, mix_neutral,
     },
 };
 
@@ -122,7 +123,13 @@ pub enum Size {
 }
 
 impl Size {
-    fn height(self) -> Pixels {
+    fn height(self, mira: bool) -> Pixels {
+        if mira {
+            return match self {
+                Self::XSmall | Self::Small => MIRA_COMPACT,
+                Self::Medium => MIRA_CONTROL,
+            };
+        }
         match self {
             Size::XSmall => CONTROL_XS,
             Size::Small => CONTROL_SM,
@@ -320,64 +327,124 @@ impl RenderOnce for Button {
         };
         let ring = !self.disabled && nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
+        let mira = theme.palette().is_some();
         let inert = self.disabled || self.busy;
         let lit = self.selected == Some(true) || self.expanded == Some(true);
-        let (bg, hover, active, fg, border) = match self.variant {
-            Variant::Primary => (
-                theme.inverse,
-                theme.inverse_hover,
-                theme.inverse_hover,
-                theme.on_inverse,
-                None,
-            ),
-            Variant::Secondary => (
-                if lit { theme.fill_pressed } else { theme.fill },
-                theme.fill_hover,
-                theme.fill_pressed,
-                theme.text,
-                Some(theme.border),
-            ),
-            Variant::Outline => (
-                if lit {
-                    theme.fill_pressed
-                } else {
-                    gpui::transparent_black()
-                },
-                theme.fill_hover,
-                theme.fill_pressed,
-                theme.text,
-                Some(theme.border),
-            ),
-            Variant::Ghost => (
-                if lit {
-                    theme.selected
-                } else {
-                    gpui::transparent_black()
-                },
-                theme.fill_hover,
-                theme.fill_pressed,
-                if lit {
-                    theme.text
-                } else {
-                    theme.text_secondary
-                },
-                None,
-            ),
-            Variant::Danger => (
-                theme.danger,
-                theme.danger_hover,
-                theme.danger_hover,
-                theme.on_danger,
-                None,
-            ),
+        let (bg, hover, active, fg, border) = if let Some(palette) = theme.palette() {
+            let dark = theme.is_dark();
+            let clear = gpui::transparent_black();
+            if self.role == Role::ComboBox {
+                (
+                    if lit { palette.muted } else { theme.fill },
+                    palette.input.opacity(0.40),
+                    palette.input.opacity(0.60),
+                    palette.foreground,
+                    Some(palette.input),
+                )
+            } else {
+                match self.variant {
+                    Variant::Primary => (
+                        palette.primary,
+                        palette.primary.opacity(0.8),
+                        palette.primary.opacity(0.7),
+                        palette.primary_foreground,
+                        None,
+                    ),
+                    Variant::Secondary => (
+                        palette.secondary,
+                        mix_neutral(palette.secondary, palette.foreground, 0.05),
+                        mix_neutral(palette.secondary, palette.foreground, 0.1),
+                        palette.secondary_foreground,
+                        None,
+                    ),
+                    Variant::Outline => (
+                        if lit {
+                            palette.muted
+                        } else if dark {
+                            palette.input.opacity(0.3)
+                        } else {
+                            clear
+                        },
+                        palette.input.opacity(0.5),
+                        palette.input.opacity(0.8),
+                        palette.foreground,
+                        Some(palette.border),
+                    ),
+                    Variant::Ghost => (
+                        if lit { palette.muted } else { clear },
+                        palette.muted.opacity(if dark { 0.5 } else { 1.0 }),
+                        mix_neutral(palette.muted, palette.foreground, 0.08),
+                        palette.foreground,
+                        None,
+                    ),
+                    Variant::Danger => (
+                        palette.destructive.opacity(if dark { 0.2 } else { 0.1 }),
+                        palette.destructive.opacity(if dark { 0.3 } else { 0.2 }),
+                        palette.destructive.opacity(if dark { 0.4 } else { 0.3 }),
+                        palette.foreground,
+                        Some(palette.destructive.opacity(0.4)),
+                    ),
+                }
+            }
+        } else {
+            match self.variant {
+                Variant::Primary => (
+                    theme.inverse,
+                    theme.inverse_hover,
+                    theme.inverse_hover,
+                    theme.on_inverse,
+                    None,
+                ),
+                Variant::Secondary => (
+                    if lit { theme.fill_pressed } else { theme.fill },
+                    theme.fill_hover,
+                    theme.fill_pressed,
+                    theme.text,
+                    Some(theme.border),
+                ),
+                Variant::Outline => (
+                    if lit {
+                        theme.fill_pressed
+                    } else {
+                        gpui::transparent_black()
+                    },
+                    theme.fill_hover,
+                    theme.fill_pressed,
+                    theme.text,
+                    Some(theme.border),
+                ),
+                Variant::Ghost => (
+                    if lit {
+                        theme.selected
+                    } else {
+                        gpui::transparent_black()
+                    },
+                    theme.fill_hover,
+                    theme.fill_pressed,
+                    if lit {
+                        theme.text
+                    } else {
+                        theme.text_secondary
+                    },
+                    None,
+                ),
+                Variant::Danger => (
+                    theme.danger,
+                    theme.danger_hover,
+                    theme.danger_hover,
+                    theme.on_danger,
+                    None,
+                ),
+            }
         };
         let divider = fg.opacity(0.2);
-        let fg = match (self.disabled, self.joined) {
+        let fg = match (self.disabled && !mira, self.joined) {
             (false, _) => fg,
             (true, None) => theme.text_disabled,
             (true, Some(_)) => fg.opacity(DISABLED_OPACITY),
         };
         let bg = if self.disabled
+            && !mira
             && self.joined.is_none()
             && matches!(self.variant, Variant::Primary | Variant::Danger)
         {
@@ -385,16 +452,22 @@ impl RenderOnce for Button {
         } else {
             bg
         };
-        let height = self.size.height();
+        let height = self.size.height(mira);
         let icon_only = self.icon.is_some() && self.children.is_empty();
         let tip = self.tooltip.clone();
         let describe = tip.clone().filter(|tip| *tip != self.label);
         let content = h_flex()
+            .id("content")
             .flex_1()
             .min_w_0()
-            .gap(px(6.0))
+            .gap(px(if mira { 4.0 } else { 6.0 }))
             .justify_center()
             .when(self.busy, |content| content.opacity(0.0))
+            .when(mira && !inert && self.expanded.is_none(), |content| {
+                content
+                    .relative()
+                    .group_active(FACE_GROUP, |style| style.top(px(1.0)))
+            })
             .when_some(self.start, |content, start| {
                 content.child(h_flex().flex_none().child(start))
             })
@@ -438,16 +511,23 @@ impl RenderOnce for Button {
                 if icon_only {
                     button.w(height)
                 } else {
-                    button.px(self.size.padding())
+                    button.px(if mira { px(8.0) } else { self.size.padding() })
                 }
             })
-            .text_size(match self.size {
-                Size::XSmall | Size::Small => TEXT_SMALL,
-                Size::Medium => TEXT_BODY,
+            .text_size(if mira {
+                TEXT_BODY
+            } else {
+                match self.size {
+                    Size::XSmall | Size::Small => TEXT_SMALL,
+                    Size::Medium => TEXT_BODY,
+                }
             })
             .line_height(LINE_BODY)
             .font_weight(FontWeight::MEDIUM)
             .text_color(fg)
+            .when(mira && self.disabled, |button| {
+                button.opacity(DISABLED_OPACITY)
+            })
             .group(FACE_GROUP)
             .child(
                 Face {
@@ -506,6 +586,14 @@ impl RenderOnce for Button {
             })
             .when(ring, |button| {
                 button.child(match self.joined {
+                    None if mira && self.variant == Variant::Danger => theme.focus_mira_with(
+                        theme.radius.control,
+                        false,
+                        theme.danger.opacity(0.4),
+                        theme
+                            .danger
+                            .opacity(if theme.is_dark() { 0.4 } else { 0.2 }),
+                    ),
                     None => theme.focus_ring(theme.radius.control),
                     Some(joined) => corners(div(), theme.radius.control, Some(joined))
                         .absolute()

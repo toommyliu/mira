@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
+    AnyElement, App, ElementId, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
     ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -10,7 +10,7 @@ use super::{Icon, icon};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _,
     nav::{self, Axis, Step},
-    theme::{LINE_BODY, ROW, TEXT_BODY, TEXT_SMALL, tabular},
+    theme::{LINE_BODY, MIRA_CONTROL, ROW, SYSTEM_MONO, TEXT_BODY, tabular},
 };
 
 #[derive(Clone)]
@@ -18,6 +18,7 @@ pub struct Column {
     title: SharedString,
     width: Option<Pixels>,
     numeric: bool,
+    monospace: bool,
 }
 
 impl Column {
@@ -26,6 +27,7 @@ impl Column {
             title: title.into(),
             width: None,
             numeric: false,
+            monospace: false,
         }
     }
 
@@ -36,6 +38,11 @@ impl Column {
 
     pub fn numeric(mut self) -> Self {
         self.numeric = true;
+        self
+    }
+
+    pub fn monospace(mut self) -> Self {
+        self.monospace = true;
         self
     }
 }
@@ -56,6 +63,7 @@ pub struct Table {
     selected: Option<usize>,
     on_sort: Option<IndexHandler>,
     on_select: Option<IndexHandler>,
+    leading: Option<Rc<dyn Fn(Option<usize>) -> AnyElement>>,
 }
 
 impl Table {
@@ -74,6 +82,7 @@ impl Table {
             selected: None,
             on_sort: None,
             on_select: None,
+            leading: None,
         }
     }
 
@@ -96,6 +105,11 @@ impl Table {
         self.on_select = Some(Rc::new(f));
         self
     }
+
+    pub fn leading(mut self, cell: impl Fn(Option<usize>) -> AnyElement + 'static) -> Self {
+        self.leading = Some(Rc::new(cell));
+        self
+    }
 }
 
 impl RenderOnce for Table {
@@ -103,6 +117,25 @@ impl RenderOnce for Table {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
+        let mira = theme.palette().is_some();
+        let leading = self.leading;
+        let shift = usize::from(leading.is_some());
+        let leading_cell = |content, header| {
+            div()
+                .id("leading")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(40.0))
+                .role(if header {
+                    Role::ColumnHeader
+                } else {
+                    Role::Cell
+                })
+                .aria_column_index(1)
+                .child(content)
+        };
         let selected = self.selected;
         let count = self.rows.len();
         let columns = self.columns.clone();
@@ -129,21 +162,27 @@ impl RenderOnce for Table {
                 .when(column.numeric, |cell| {
                     cell.justify_end().font_features(tabular())
                 })
-                .when(header, |cell| cell.h(px(30.0)))
+                .when(header, |cell| cell.h(px(if mira { 24.0 } else { 30.0 })))
+                .when(!header && column.monospace, |cell| {
+                    cell.font_family(SYSTEM_MONO)
+                })
         };
         div()
             .id(self.id.clone())
             .role(Role::Table)
             .aria_label(self.label)
             .aria_row_count(count + 1)
-            .aria_column_count(columns.len())
+            .aria_column_count(columns.len() + shift)
             .flex()
             .flex_col()
-            .rounded(theme.radius.panel)
-            .bg(theme.surface)
-            .border_1()
-            .border_color(theme.hairline)
-            .overflow_hidden()
+            .when(!mira, |table| {
+                table
+                    .rounded(theme.radius.panel)
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.hairline)
+                    .overflow_hidden()
+            })
             .text_size(TEXT_BODY)
             .line_height(LINE_BODY)
             .child(
@@ -154,6 +193,11 @@ impl RenderOnce for Table {
                     .flex()
                     .border_b_1()
                     .border_color(theme.hairline)
+                    .children(
+                        leading
+                            .as_ref()
+                            .map(|leading| leading_cell(leading(None), true)),
+                    )
                     .children(columns.iter().enumerate().map(|(index, column)| {
                         let sorted = self.sort.filter(|sort| sort.column == index);
                         let on_sort = self.on_sort.clone();
@@ -161,7 +205,7 @@ impl RenderOnce for Table {
                             .id(("column", index))
                             .role(Role::ColumnHeader)
                             .aria_label(column.title.clone())
-                            .aria_column_index(index + 1)
+                            .aria_column_index(index + shift + 1)
                             .when_some(sorted, |header, sort| {
                                 header.aria_description(if sort.ascending {
                                     "Sorted ascending"
@@ -169,7 +213,7 @@ impl RenderOnce for Table {
                                     "Sorted descending"
                                 })
                             })
-                            .text_size(TEXT_SMALL)
+                            .text_size(theme.secondary_text_size())
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if sorted.is_some() {
                                 theme.text
@@ -231,14 +275,27 @@ impl RenderOnce for Table {
                             .aria_selected(current)
                             .when(current, |row| row.aria_active_descendant())
                             .flex()
-                            .h(ROW)
+                            .h(if mira { MIRA_CONTROL } else { ROW })
                             .items_center()
-                            .when(index > 0, |row| {
+                            .when(index > 0 && !mira, |row| {
                                 row.border_t_1().border_color(theme.hairline)
                             })
                             .when(current, |row| row.bg(theme.selected))
-                            .when(!current, |row| row.hover(|style| style.bg(theme.fill)))
-                            .when(current && ring, |row| {
+                            .when(mira && (current || on_select.is_some()), |row| {
+                                row.rounded(theme.radius.item)
+                            })
+                            .when(mira && on_select.is_some(), |row| {
+                                let (hover, press) = theme.mira_item_colors(current);
+                                row.hover(move |style| style.bg(hover))
+                                    .active(move |style| style.bg(press))
+                            })
+                            .when(!mira && !current, |row| {
+                                row.hover(|style| style.bg(theme.fill))
+                            })
+                            .when(current && ring && mira, |row| {
+                                row.child(theme.focus_ring(theme.radius.item))
+                            })
+                            .when(current && ring && !mira, |row| {
                                 row.child(
                                     div()
                                         .absolute()
@@ -256,13 +313,18 @@ impl RenderOnce for Table {
                                     on_select(index, window, cx);
                                 })
                             })
+                            .children(
+                                leading
+                                    .as_ref()
+                                    .map(|leading| leading_cell(leading(Some(index)), false)),
+                            )
                             .children(row.into_iter().zip(columns.iter()).enumerate().map(
                                 |(column, (text, spec))| {
                                     cell(spec, false)
                                         .id(("cell", column))
                                         .role(Role::Cell)
                                         .aria_label(text.clone())
-                                        .aria_column_index(column + 1)
+                                        .aria_column_index(column + shift + 1)
                                         .text_color(if column == 0 {
                                             theme.text
                                         } else {

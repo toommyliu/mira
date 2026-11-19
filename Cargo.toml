@@ -62,7 +62,7 @@ url = "2.5"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [features]
-storyboard = []
+storyboard = ["mira-ui/test-support"]
 
 [lints]
 workspace = true

@@ -9,7 +9,7 @@ use gpui::{
 use crate::primitives::Kbd;
 use crate::{
     ActiveTheme as _, PointerCursor as _, nav,
-    theme::{CONTROL_MD, TEXT_SMALL},
+    theme::{CONTROL_MD, MIRA_COMPACT, TEXT_SMALL},
 };
 
 fn pressed(keystroke: &Keystroke) -> (bool, String) {
@@ -192,6 +192,7 @@ impl RenderOnce for ShortcutField {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let focused = focus.is_focused(window);
         let theme = cx.theme().clone();
+        let mira = theme.palette().is_some();
         let on_change = self.on_change.clone();
         let recorder = recorder(&self.id, focus.clone(), window, cx);
         let recording = recorder.update(cx, |recorder, _| {
@@ -226,29 +227,36 @@ impl RenderOnce for ShortcutField {
             .items_center()
             .justify_between()
             .gap(px(8.0))
-            .w(px(180.0))
-            .h(CONTROL_MD)
-            .px(px(8.0))
             .rounded(theme.radius.control)
-            .bg(theme.fill)
-            .border_1()
-            .border_color(if recording { theme.focus } else { theme.border })
+            .map(|trigger| {
+                if mira {
+                    trigger.flex_none().h(MIRA_COMPACT).min_w(MIRA_COMPACT).px(px(4.0))
+                        .hover(|style| style.bg(theme.fill_hover))
+                } else {
+                    trigger.w(px(180.0)).h(CONTROL_MD).px(px(8.0)).bg(theme.fill)
+                        .border_1().border_color(if recording { theme.focus } else { theme.border })
+                }
+            })
             .when(focused, |field| {
-                field.child(theme.ring_around(theme.focus, theme.radius.control, px(1.0)))
+                if mira {
+                    field.child(theme.focus_ring(theme.radius.control))
+                } else {
+                    field.child(theme.ring_around(theme.focus, theme.radius.control, px(1.0)))
+                }
             })
             .pointer_cursor(&theme)
-            .text_size(TEXT_SMALL)
+            .text_size(theme.secondary_text_size())
             .child(match (&self.value, recording) {
                 (_, true) => div()
                     .text_color(theme.text_secondary)
-                    .child("Press a shortcut")
+                    .child(if mira { "Press shortcut" } else { "Press a shortcut" })
                     .into_any_element(),
                 (Some(keystroke), false) => {
                     Kbd::new(format_keystroke(keystroke)).into_any_element()
                 }
                 (None, false) => div()
                     .text_color(theme.text_tertiary)
-                    .child("Not set")
+                    .child(if mira { "Set shortcut" } else { "Not set" })
                     .into_any_element(),
             })
             .when(recording, |field| {

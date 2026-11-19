@@ -3985,6 +3985,7 @@ dependencies = [
  "gpui",
  "gpui_apple",
  "gpui_platform",
+ "image",
  "mira-ui",
  "unicode-segmentation",
 ]

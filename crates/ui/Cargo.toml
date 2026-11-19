@@ -5,12 +5,13 @@ edition = "2024"
 publish = false
 
 [features]
-test-support = ["dep:gpui_apple", "gpui/test-support"]
+test-support = ["dep:gpui_apple", "dep:image", "gpui/test-support"]
 
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
 gpui_apple = { workspace = true, optional = true, features = ["font-kit", "test-support"] }
+image = { version = "0.25.10", default-features = false, optional = true }
 unicode-segmentation.workspace = true
 
 [lints]

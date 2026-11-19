@@ -68,7 +68,13 @@ impl RenderOnce for Switch {
             cx,
         );
         let theme = cx.theme().clone();
-        let track = mix(theme.border_strong, theme.accent, t);
+        let mira = theme.palette().is_some();
+        let off = if mira && theme.is_dark() {
+            theme.border_strong.opacity(0.8)
+        } else {
+            theme.border_strong
+        };
+        let track = mix(off, theme.accent, t);
         let on = self.on;
         let (row, ring) = labelled(
             self.id.clone(),
@@ -78,7 +84,9 @@ impl RenderOnce for Switch {
             window,
             cx,
         );
-        let travel = (TRACK_W - THUMB - 4.0) * t;
+        let thumb = if mira { 14.0 } else { THUMB };
+        let padding = if mira { 1.0 } else { 2.0 };
+        let travel = (TRACK_W - thumb - 2.0 * padding) * t;
         let drag_start = window
             .use_keyed_state((self.id.clone(), "drag"), cx, |_, _| {
                 Rc::new(Cell::new(None))
@@ -91,19 +99,25 @@ impl RenderOnce for Switch {
                 div()
                     .flex_none()
                     .mt(px(1.0))
+                    .flex()
+                    .items_center()
                     .w(px(TRACK_W))
-                    .h(px(TRACK_H))
-                    .p(px(2.0))
+                    .h(px(if mira { 16.6 } else { TRACK_H }))
+                    .px(px(padding))
                     .rounded_full()
                     .bg(track)
                     .when(ring, |control| control.child(theme.focus_ring(px(8.0))))
                     .child(
                         div()
                             .ml(px(travel))
-                            .size(px(THUMB))
+                            .size(px(thumb))
                             .rounded_full()
-                            .bg(theme.knob)
-                            .shadow(theme.raised()),
+                            .bg(if mira && theme.is_dark() && on {
+                                theme.on_inverse
+                            } else {
+                                theme.knob
+                            })
+                            .when(!mira, |thumb| thumb.shadow(theme.raised())),
                     ),
             )
             .when(self.show_label, |row| {
