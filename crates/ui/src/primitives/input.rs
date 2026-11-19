@@ -12,7 +12,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::{Button, Icon, button::Size, icon};
-use crate::{ActiveTheme as _, theme::tabular};
+use crate::{ActiveTheme as _, PointerCursor as _, theme::tabular};
 
 actions!(
     text_field,
@@ -984,10 +984,26 @@ impl Render for Input {
             })
             .when(clearable, |field| {
                 let entity = cx.entity();
+                let mark = theme.muted_foreground;
                 field.child(trailing(
                     &self.focus,
-                    Button::icon("clear", Icon::X, "Clear search")
-                        .size(Size::Small)
+                    div()
+                        .id("clear")
+                        .role(Role::Button)
+                        .aria_label("Clear search")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(16.0))
+                        .mr(px(4.0))
+                        .rounded_full()
+                        .bg(mark)
+                        .hover(|style| {
+                            style.bg(crate::theme::perceptual_mix(mark, theme.foreground, 0.35))
+                        })
+                        .active(|style| style.bg(theme.foreground))
+                        .pointer_cursor(&theme)
+                        .child(icon(Icon::X, theme.background).size(px(10.0)))
                         .on_click(move |_, window, cx| {
                             entity.update(cx, |field, cx| {
                                 field.set_text("", cx);
@@ -999,7 +1015,7 @@ impl Render for Input {
     }
 }
 
-fn trailing(field: &FocusHandle, button: Button) -> Div {
+fn trailing(field: &FocusHandle, button: impl IntoElement) -> Div {
     let field = field.clone();
     div()
         .flex_none()
