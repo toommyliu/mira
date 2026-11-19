@@ -12,6 +12,8 @@ pub const TEXT_BODY: Pixels = px(13.0);
 pub const TEXT_CAPTION: Pixels = px(11.0);
 pub const LINE_BODY: Pixels = px(20.0);
 pub const LINE_CAPTION: Pixels = px(16.0);
+pub const TEXT_HEADING: Pixels = px(16.0);
+pub const LINE_HEADING: Pixels = px(24.0);
 pub const CONTROL_XS: Pixels = px(20.0);
 pub const CONTROL_SM: Pixels = px(24.0);
 pub const CONTROL_MD: Pixels = px(28.0);
@@ -24,17 +26,22 @@ pub struct Typography {
     pub secondary: Pixels,
     pub body_line: Pixels,
     pub secondary_line: Pixels,
+    pub heading: Pixels,
+    pub heading_line: Pixels,
     pub mono: Pixels,
 }
 
 impl Typography {
     pub fn sized(body: f32) -> Self {
         let secondary = body - 2.0;
+        let heading = (body * 16.0 / 13.0).round();
         Self {
             body: px(body),
             secondary: px(secondary),
             body_line: px((body * 20.0 / 13.0).round()),
             secondary_line: px((secondary * 16.0 / 11.0).round()),
+            heading: px(heading),
+            heading_line: px((heading * 1.5).round()),
             mono: TEXT_CAPTION,
         }
     }
@@ -47,6 +54,8 @@ impl Default for Typography {
             secondary: TEXT_CAPTION,
             body_line: LINE_BODY,
             secondary_line: LINE_CAPTION,
+            heading: TEXT_HEADING,
+            heading_line: LINE_HEADING,
             mono: TEXT_CAPTION,
         }
     }
@@ -664,13 +673,17 @@ mod tests {
                 sized.body,
                 sized.secondary,
                 sized.body_line,
-                sized.secondary_line
+                sized.secondary_line,
+                sized.heading,
+                sized.heading_line
             ),
             (
                 default.body,
                 default.secondary,
                 default.body_line,
-                default.secondary_line
+                default.secondary_line,
+                default.heading,
+                default.heading_line
             )
         );
     }
