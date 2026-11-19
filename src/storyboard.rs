@@ -105,7 +105,6 @@ mod live {
             Button, List, ListItem,
             button::{Size, Variant},
         },
-        theme::TEXT_BODY,
         v_flex,
     };
 
@@ -239,6 +238,7 @@ mod live {
     impl Render for Index {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
+            let typography = theme.typography;
             let labels: Rc<[(bool, SharedString)]> = self
                 .rows
                 .iter()
@@ -253,7 +253,7 @@ mod live {
             v_flex()
                 .size_full()
                 .bg(theme.background)
-                .text_size(TEXT_BODY)
+                .text_size(typography.body)
                 .text_color(theme.foreground)
                 .key_context(FOCUS_SCOPE)
                 .track_focus(&self.focus)
