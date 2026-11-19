@@ -1676,6 +1676,23 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_long_drop_name_stays_inside_its_column(cx: &mut TestAppContext) {
+        let (environment, automation, cx) = open(cx);
+        automation.update_drops(|state| {
+            register_items(&mut state.items, items(&"Tainted Gem ".repeat(12)))
+        });
+        environment.update(cx, |_, cx| cx.notify());
+        cx.simulate_resize(size(px(WIDTH), px(HEIGHT)));
+        cx.run_until_parked();
+        let chip = cx.debug_bounds("chip-0").expect("drop chip");
+        assert!(
+            chip.right() <= px(WIDTH / 2.0),
+            "chip ends at {:?}",
+            chip.right()
+        );
+    }
+
+    #[gpui::test]
     fn confirming_waiting_drops_holds_the_unticked_ones_and_applies_the_change(
         cx: &mut TestAppContext,
     ) {
