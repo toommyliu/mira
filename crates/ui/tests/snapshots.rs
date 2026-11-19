@@ -461,7 +461,9 @@ fn snapshot_select_short_window() {
 #[test]
 fn snapshot_long_notices() {
     for path in snapshot("long-notices", size(px(420.0), px(300.0)), |window, cx| {
+        let stack = mira_ui::primitives::Toaster::new(window, cx);
         mira_ui::primitives::Toaster::push(
+            &stack,
             mira_ui::primitives::Toast::new("Couldn't load profile")
                 .body(
                     "Couldn't read ~/Documents/Mira/profiles/void-highlord.yaml: permission denied",
@@ -470,7 +472,7 @@ fn snapshot_long_notices() {
             cx,
         );
         Scene::open(
-            |window, cx| {
+            move |window, cx| {
                 div()
                     .size_full()
                     .child(
@@ -478,7 +480,7 @@ fn snapshot_long_notices() {
                             .body("Couldn't write ~/Library/Application Support/Mira/setups.json: the disk is full")
                             .action(Button::new("retry", "Retry").size(Size::Small)),
                     )
-                    .child(mira_ui::primitives::Toaster::layer(window, cx))
+                    .child(mira_ui::primitives::Toaster::layer(&stack,window, cx))
                     .into_any_element()
             },
             window,
