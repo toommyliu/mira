@@ -4,7 +4,8 @@ use gpui::{
     App, Entity, HeadlessAppContext, Keystroke, Pixels, PlatformHeadlessRenderer, Render, Size,
     Window,
 };
-use gpui_apple::{AppleTextSystem, metal_renderer::MetalHeadlessRenderer};
+use gpui_apple::metal_renderer::MetalHeadlessRenderer;
+use mira_platform::AppleTextSystem;
 
 use crate::{Assets, Theme};
 

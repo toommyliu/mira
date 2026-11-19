@@ -63,7 +63,7 @@ impl Render for Stage {
 
 #[cfg(feature = "storyboard")]
 pub(crate) fn run() -> anyhow::Result<()> {
-    gpui_platform::application()
+    mira_platform::application()
         .with_assets(mira_ui::Assets)
         .run(|cx| {
             mira_ui::init(cx);

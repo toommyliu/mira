@@ -5,12 +5,13 @@ edition = "2024"
 publish = false
 
 [features]
-test-support = ["dep:gpui_apple", "gpui/test-support"]
+test-support = ["dep:gpui_apple", "dep:mira-platform", "gpui/test-support"]
 
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
-gpui_apple = { workspace = true, optional = true, features = ["font-kit", "test-support"] }
+gpui_apple = { workspace = true, optional = true, features = ["test-support"] }
+mira-platform = { workspace = true, optional = true }
 serde = { version = "1", features = ["derive"] }
 unicode-segmentation.workspace = true
 
