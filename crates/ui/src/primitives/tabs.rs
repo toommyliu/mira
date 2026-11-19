@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use super::{
-    Button, ContextMenu, Flow, Icon, MenuItem, Pose, Sortable,
+    Button, ContextMenu, Flow, HoverCard, Icon, MenuItem, Pose, Sortable,
     button::Size,
     menu::{self, Handler, ItemsBuilder, MenuState},
 };
@@ -30,6 +30,7 @@ pub struct Tab {
     children: Vec<AnyElement>,
     on_close: Option<Handler>,
     menu: Option<ItemsBuilder>,
+    hover_card: Option<HoverCard>,
 }
 
 impl Tab {
@@ -42,6 +43,7 @@ impl Tab {
             children: Vec::new(),
             on_close: None,
             menu: None,
+            hover_card: None,
         }
     }
 
@@ -67,6 +69,11 @@ impl Tab {
 
     pub fn menu(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
         self.menu = Some(Rc::new(f));
+        self
+    }
+
+    pub fn hover_card(mut self, card: HoverCard) -> Self {
+        self.hover_card = Some(card);
         self
     }
 }
@@ -97,6 +104,7 @@ pub struct Tabs {
     tab: TabBuilder,
     selected: usize,
     vertical: bool,
+    line: bool,
     scroll: Option<ScrollHandle>,
     on_select: Option<IndexHandler>,
     on_reorder: Option<ReorderHandler>,
@@ -116,6 +124,7 @@ impl Tabs {
             tab: Rc::new(tab),
             selected: 0,
             vertical: false,
+            line: false,
             scroll: None,
             on_select: None,
             on_reorder: None,
@@ -124,6 +133,11 @@ impl Tabs {
 
     pub fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn line(mut self) -> Self {
+        self.line = true;
         self
     }
 
@@ -154,6 +168,7 @@ struct Render {
     selected: usize,
     count: usize,
     vertical: bool,
+    line: bool,
     ring: bool,
     focus: gpui::FocusHandle,
     menu: Entity<MenuState>,
@@ -162,7 +177,7 @@ struct Render {
 }
 
 impl Render {
-    fn tab(&self, index: usize, pose: Pose) -> AnyElement {
+    fn tab(&self, index: usize, pose: Pose, window: &mut Window, cx: &mut App) -> AnyElement {
         let mut tab = (self.tab)(index);
         let current = index == self.selected && pose != Pose::Lifted;
         let theme = &self.theme;
@@ -192,11 +207,15 @@ impl Render {
             );
         let label = tab.label.clone();
         let menu = tab.menu.take().filter(|_| pose != Pose::Lifted);
+        let card = tab.hover_card.take().filter(|_| pose == Pose::Rest);
         let row = if self.vertical {
             self.vertical_tab(base, tab, index, current, pose)
         } else {
             self.horizontal_tab(base, tab, current)
-        };
+        }
+        .when_some(card, |row, card| {
+            card.attach(row, current && self.ring, window, cx)
+        });
         match menu {
             Some(items) => ContextMenu::new(("menu", index), label)
                 .items(move |window, cx| items(window, cx))
@@ -215,35 +234,45 @@ impl Render {
         current: bool,
         pose: Pose,
     ) -> Stateful<Div> {
+        let layout = self.theme.layout;
+        let typography = self.theme.typography;
         let theme = &self.theme;
-        let quiet = if current {
-            theme.muted_foreground
-        } else {
-            theme.muted_foreground
-        };
+        let quiet = theme.muted_foreground;
         base.flex()
             .flex_none()
             .items_start()
-            .gap(px(8.0))
-            .px(px(8.0))
-            .py(px(6.0))
+            .gap(layout.space(2.0))
+            .px(layout.space(2.0))
+            .min_h(layout.control_lg)
+            .py(theme.space(1.5))
             .rounded(theme.radius.control)
             .group(GROUP)
-            .text_body(theme.typography)
+            .text_body(typography)
             .text_color(if current {
                 theme.foreground
             } else {
-                theme.muted_foreground
+                theme.sidebar_foreground
             })
-            .when(current, |tab| tab.bg(theme.accent))
+            .when(current, |tab| {
+                tab.bg(theme.sidebar_accent)
+                    .text_color(theme.sidebar_accent_foreground)
+                    .font_weight(FontWeight::MEDIUM)
+            })
             .when(!current && pose == Pose::Rest, |tab| {
-                tab.hover(|style| style.bg(theme.muted))
+                tab.hover(|style| style.bg(theme.sidebar_accent))
+            })
+            .active(|style| {
+                style.bg(theme.pressed(
+                    theme.sidebar,
+                    theme.sidebar_accent,
+                    theme.sidebar_foreground,
+                ))
             })
             .when(current && self.ring, |tab| {
-                tab.child(theme.focus_ring(theme.radius.control))
+                tab.child(theme.halo(theme.sidebar_ring, theme.radius.control, px(0.0), px(2.0)))
             })
             .when_some(tab.start, |row, start| {
-                row.child(h_flex().flex_none().h(crate::theme::LINE_BODY).child(start))
+                row.child(h_flex().flex_none().h(typography.body_line).child(start))
             })
             .child(v_flex().flex_1().min_w_0().map(|body| {
                 if tab.children.is_empty() {
@@ -257,7 +286,7 @@ impl Render {
                         body.child(
                             div()
                                 .truncate()
-                                .text_caption(theme.typography)
+                                .text_caption(typography)
                                 .text_color(quiet)
                                 .child(description),
                         )
@@ -270,8 +299,8 @@ impl Render {
                 row.child(
                     h_flex()
                         .flex_none()
-                        .h(crate::theme::LINE_BODY)
-                        .text_caption(theme.typography)
+                        .h(typography.body_line)
+                        .text_caption(typography)
                         .text_color(quiet)
                         .child(end),
                 )
@@ -294,12 +323,41 @@ impl Render {
     }
 
     fn horizontal_tab(&self, base: Stateful<Div>, tab: Tab, current: bool) -> Stateful<Div> {
+        let layout = self.theme.layout;
+        let typography = self.theme.typography;
         let theme = &self.theme;
         base.flex()
             .items_center()
-            .gap(px(6.0))
-            .h(px(30.0))
-            .text_body(theme.typography)
+            .gap(layout.space(1.5))
+            .relative()
+            .h(px(25.0))
+            .px(theme.space(2.0))
+            .rounded(theme.radius.control)
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .when(current && !self.line, |tab| {
+                tab.bg(if theme.dark_mode {
+                    theme.input.opacity(0.3)
+                } else {
+                    theme.background
+                })
+                .border_color(if theme.dark_mode {
+                    theme.input
+                } else {
+                    gpui::transparent_black()
+                })
+            })
+            .when(current && self.ring, |tab| {
+                tab.border_color(theme.ring)
+                    .child(theme.halo(
+                        theme.ring.opacity(0.5),
+                        theme.radius.control,
+                        px(1.0),
+                        px(3.0),
+                    ))
+                    .child(theme.halo(theme.ring, theme.radius.control, px(1.0), px(1.0)))
+            })
+            .text_body(typography)
             .font_weight(FontWeight::MEDIUM)
             .text_color(if current {
                 theme.foreground
@@ -307,39 +365,31 @@ impl Render {
                 theme.muted_foreground
             })
             .when(!current, |tab| {
-                tab.hover(|style| style.text_color(theme.muted_foreground))
+                tab.hover(|style| style.text_color(theme.foreground))
             })
             .when_some(tab.start, |row, start| row.child(start))
-            .child(
-                div()
-                    .relative()
-                    .px(px(2.0))
-                    .map(|label| {
-                        if tab.children.is_empty() {
-                            label.child(tab.label)
-                        } else {
-                            label.children(tab.children)
-                        }
-                    })
-                    .when(current && self.ring, |label| {
-                        label.child(theme.focus_ring(px(4.0)))
-                    }),
-            )
+            .child(div().relative().px(layout.space(0.5)).map(|label| {
+                if tab.children.is_empty() {
+                    label.child(tab.label)
+                } else {
+                    label.children(tab.children)
+                }
+            }))
             .when_some(tab.end, |row, end| {
                 row.child(
                     div()
-                        .text_caption(theme.typography)
+                        .text_caption(typography)
                         .text_color(theme.muted_foreground)
                         .child(end),
                 )
             })
-            .when(current, |tab| {
+            .when(current && self.line, |tab| {
                 tab.child(
                     div()
                         .absolute()
                         .left_0()
                         .right_0()
-                        .bottom(px(-1.0))
+                        .bottom(px(-5.0))
                         .h(px(2.0))
                         .rounded_full()
                         .bg(theme.foreground),
@@ -350,6 +400,7 @@ impl Render {
 
 impl RenderOnce for Tabs {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let menu = menu::state(
             &ElementId::from((self.id.clone(), "menu")),
@@ -362,6 +413,7 @@ impl RenderOnce for Tabs {
             selected: self.selected,
             count: self.count,
             vertical: self.vertical,
+            line: self.line,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus: focus.clone(),
             menu: menu.clone(),
@@ -407,11 +459,19 @@ impl RenderOnce for Tabs {
             .flex()
             .map(|list| {
                 if self.vertical {
-                    list.flex_col().gap(px(2.0)).px(px(6.0)).py(px(4.0))
+                    list.flex_col().gap(px(1.0)).p(render.theme.space(2.0))
                 } else {
-                    list.gap(px(16.0))
-                        .border_b_1()
-                        .border_color(render.theme.border)
+                    list.h(layout.control_lg)
+                        .items_center()
+                        .p(px(3.0))
+                        .rounded(render.theme.radius.panel)
+                        .map(|list| {
+                            if self.line {
+                                list.gap(render.theme.space(1.0))
+                            } else {
+                                list.bg(render.theme.muted)
+                            }
+                        })
                 }
             });
         match self.on_reorder {
@@ -425,7 +485,7 @@ impl RenderOnce for Tabs {
                     list,
                     flow,
                     0..count,
-                    move |(index, pose), _, _| render.tab(index, pose),
+                    move |(index, pose), window, cx| render.tab(index, pose, window, cx),
                     move |from, to, window, cx| reorder(from, to, window, cx),
                 );
                 match &self.scroll {
@@ -437,7 +497,7 @@ impl RenderOnce for Tabs {
                 .when_some(self.scroll, |list, scroll| {
                     list.overflow_y_scroll().track_scroll(&scroll)
                 })
-                .children((0..count).map(|index| render.tab(index, Pose::Rest)))
+                .children((0..count).map(|index| render.tab(index, Pose::Rest, window, cx)))
                 .into_any_element(),
         }
     }

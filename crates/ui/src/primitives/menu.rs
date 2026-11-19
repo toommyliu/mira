@@ -6,11 +6,11 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
+    AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
     FontWeight, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, anchored, canvas,
-    deferred, div, point, prelude::FluentBuilder as _, px,
+    Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, deferred, div,
+    point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -22,7 +22,7 @@ use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
     motion::{self, From},
     nav::{self, Axis, Step},
-    theme::{LINE_BODY, PANEL_INSET, TEXT_BODY},
+    theme::Layout,
     v_flex,
 };
 
@@ -30,15 +30,7 @@ pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
-const ITEM_HEIGHT: Pixels = px(24.0);
-const GAP: Pixels = px(4.0);
-const BORDER: Pixels = px(1.0);
-const SUBMENU_OVERLAP: Pixels = px(2.0);
-pub(crate) const WINDOW_MARGIN: Pixels = px(8.0);
-const ROW_PADDING: Pixels = px(8.0);
-const MARK_GUTTER: Pixels = px(12.0);
-const ROW_GAP: Pixels = px(6.0);
-const TRIGGER_PADDING: Pixels = px(10.0);
+pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mark {
@@ -236,16 +228,10 @@ fn metas(items: &[MenuItem]) -> Rc<[Meta]> {
         .collect()
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub enum Align {
-    #[default]
-    Start,
-    Center,
-    End,
-}
+use super::placement::{Align, Placement, Side};
 
 pub(crate) fn attach(
-    align: Align,
+    placement: Placement,
     state: &Entity<MenuState>,
     on_outside: PressHandler,
     window: &mut Window,
@@ -254,47 +240,28 @@ pub(crate) fn attach(
 ) -> Div {
     let menu = state.read(cx);
     let trigger = menu.trigger_bounds.get();
-    let height = menu.panel_height.clone();
-    let fits_below =
-        trigger.bottom() + GAP + height.get() <= window.viewport_size().height - WINDOW_MARGIN;
-    let fits_above = trigger.top() - GAP - height.get() >= WINDOW_MARGIN;
-    let above = !fits_below && fits_above;
-    let spot = div().absolute().top(if above {
-        -GAP
-    } else {
-        trigger.size.height + GAP
-    });
-    let (spot, anchor) = match (align, above) {
-        (Align::Start, false) => (spot.left_0(), Anchor::TopLeft),
-        (Align::Center, false) => (spot.left(gpui::relative(0.5)), Anchor::TopCenter),
-        (Align::End, false) => (spot.right_0(), Anchor::TopRight),
-        (Align::Start, true) => (spot.left_0(), Anchor::BottomLeft),
-        (Align::Center, true) => (spot.left(gpui::relative(0.5)), Anchor::BottomCenter),
-        (Align::End, true) => (spot.right_0(), Anchor::BottomRight),
-    };
-    spot.child(
+    let measured = menu.panel_size.clone();
+    let (positioner, from) = placement.resolve(trigger, measured.get(), window.viewport_size());
+    div().absolute().child(
         deferred(
-            anchored()
-                .anchor(anchor)
-                .snap_to_window_with_margin(WINDOW_MARGIN)
-                .child(
-                    div()
-                        .relative()
-                        .child(dismiss_probe(state, on_outside))
-                        .child(panel(if above { From::Below } else { From::Above }, window))
-                        .child(
-                            canvas(
-                                move |area, window, _| {
-                                    if height.replace(area.size.height) != area.size.height {
-                                        window.refresh();
-                                    }
-                                },
-                                |_, _, _, _| {},
-                            )
-                            .absolute()
-                            .inset_0(),
-                        ),
-                ),
+            positioner.child(
+                div()
+                    .relative()
+                    .child(dismiss_probe(state, on_outside))
+                    .child(panel(from, window))
+                    .child(
+                        canvas(
+                            move |area, window, _| {
+                                if measured.replace(area.size) != area.size {
+                                    window.refresh();
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    ),
+            ),
         )
         .with_priority(super::layer::POPUP),
     )
@@ -307,15 +274,16 @@ pub(crate) fn item_over_trigger(
     window: &Window,
     cx: &App,
 ) -> Option<Point<Pixels>> {
-    let height = (BORDER + PANEL_INSET) * 2.0 + ITEM_HEIGHT * count as f32;
+    let layout = cx.theme().layout;
+    let inset = layout.space(1.0);
+    let height = inset * 2.0 + layout.control * count as f32;
     if height > MENU_MAX_HEIGHT {
         return None;
     }
     let trigger = state.read(cx).trigger_bounds.get();
     let offset = point(
-        BORDER + PANEL_INSET + ROW_PADDING + MARK_GUTTER + ROW_GAP - TRIGGER_PADDING,
-        BORDER + PANEL_INSET + ITEM_HEIGHT * index as f32
-            - (trigger.size.height - ITEM_HEIGHT) / 2.0,
+        inset,
+        inset + layout.control * index as f32 - (trigger.size.height - layout.control) / 2.0,
     );
     let top = trigger.top() - offset.y;
     let fits =
@@ -340,7 +308,7 @@ pub(crate) struct MenuState {
     submenu_rows: RefCell<HashMap<usize, Bounds<Pixels>>>,
     rest_scroll: ScrollHandle,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
-    panel_height: Rc<Cell<Pixels>>,
+    panel_size: Rc<Cell<gpui::Size<Pixels>>>,
     pub(crate) item_offset: Cell<Option<Point<Pixels>>>,
     reveal: Cell<bool>,
     closed_at: Option<Instant>,
@@ -361,7 +329,7 @@ impl MenuState {
             submenu_rows: RefCell::default(),
             rest_scroll: ScrollHandle::new(),
             trigger_bounds: Rc::default(),
-            panel_height: Rc::default(),
+            panel_size: Rc::default(),
             item_offset: Cell::new(None),
             reveal: Cell::new(false),
             closed_at: None,
@@ -747,6 +715,7 @@ pub(crate) fn panel_shell(
     max_height: Option<Pixels>,
     theme: &Theme,
 ) -> Stateful<Div> {
+    let typography = theme.typography;
     div()
         .id(id)
         .occlude()
@@ -755,37 +724,28 @@ pub(crate) fn panel_shell(
         .when_some(max_height, |panel, height| {
             panel.max_h(height).overflow_y_scroll()
         })
-        .p(PANEL_INSET)
+        .min_w(px(128.0))
+        .p(theme.space(1.0))
         .rounded(theme.radius.panel)
         .bg(theme.popover)
-        .border_1()
-        .border_color(theme.border)
         .shadow(theme.popup_shadow())
-        .text_size(TEXT_BODY)
-        .line_height(LINE_BODY)
-        .text_color(theme.foreground)
+        .text_size(typography.body)
+        .line_height(typography.body_line)
+        .text_color(theme.popover_foreground)
 }
 
 fn switch_mark(on: bool, theme: &Theme) -> Div {
-    div()
-        .flex_none()
-        .w(px(24.0))
-        .h(px(14.0))
-        .p(px(2.0))
-        .rounded_full()
-        .bg(if on { theme.accent } else { theme.input })
-        .child(
-            div()
-                .when(on, |thumb| thumb.ml(px(10.0)))
-                .size(px(10.0))
-                .rounded_full()
-                .bg(theme.background),
-        )
+    super::switch::track(true, f32::from(on), theme)
 }
 
 type Cursor = (Option<usize>, Option<(usize, Option<usize>)>);
 
+#[derive(IntoElement)]
 struct OpenSubmenu {
+    label: SharedString,
+    items: Vec<MenuItem>,
+    metas: Rc<[Meta]>,
+    state: Entity<MenuState>,
     index: usize,
     highlighted: Option<usize>,
     row: Bounds<Pixels>,
@@ -800,6 +760,8 @@ fn rows(
     state: &Entity<MenuState>,
     theme: &Theme,
 ) -> Vec<AnyElement> {
+    let layout = theme.layout;
+    let typography = theme.typography;
     let gutter = items
         .iter()
         .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
@@ -829,16 +791,16 @@ fn rows(
                 Kind::Separator => div()
                     .flex_none()
                     .h(px(1.0))
-                    .mx(px(-4.0))
-                    .my(PANEL_INSET)
-                    .bg(theme.border)
+                    .mx(layout.space(-1.0))
+                    .my(theme.space(1.0))
+                    .bg(theme.border.opacity(0.5))
                     .into_any_element(),
                 Kind::Header => div()
                     .flex_none()
-                    .px(ROW_PADDING)
-                    .pt(px(6.0))
-                    .pb(px(2.0))
-                    .text_caption(theme.typography)
+                    .px(layout.space(2.0))
+                    .pt(layout.space(1.5))
+                    .pb(layout.space(1.5))
+                    .text_caption(typography)
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.muted_foreground)
                     .child(label)
@@ -848,11 +810,10 @@ fn rows(
                     let lit = highlighted == Some(index);
                     let open = submenu.is_some_and(|(parent, _)| parent == index);
                     let fg = match (disabled, danger) {
-                        (true, _) => theme
-                            .muted_foreground
-                            .opacity(crate::theme::DISABLED_OPACITY),
+                        (true, _) => theme.popover_foreground,
                         (false, true) => theme.destructive,
-                        (false, false) => theme.foreground,
+                        (false, false) if lit || open => theme.accent_foreground,
+                        (false, false) => theme.popover_foreground,
                     };
                     let two_line = description.is_some();
                     let sub = match item_kind {
@@ -880,28 +841,20 @@ fn rows(
                             body.child(
                                 div()
                                     .truncate()
-                                    .text_caption(theme.typography)
-                                    .text_color(if lit {
-                                        theme.muted_foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    })
+                                    .text_caption(typography)
+                                    .text_color(if lit { fg } else { theme.muted_foreground })
                                     .child(description),
                             )
                         });
                     let trailing = |content: AnyElement| {
                         h_flex()
                             .flex_none()
-                            .gap(px(4.0))
-                            .text_caption(theme.typography)
-                            .text_color(if lit {
-                                theme.muted_foreground
-                            } else {
-                                theme.muted_foreground
-                            })
+                            .gap(layout.space(1.0))
+                            .text_caption(typography)
+                            .text_color(if lit { fg } else { theme.muted_foreground })
                             .child(content)
                     };
-                    row(index, nested, metas, state)
+                    row(index, nested, metas, state, layout)
                         .rounded(theme.radius.control)
                         .role(role)
                         .aria_label(label.clone())
@@ -931,16 +884,14 @@ fn rows(
                                 theme.accent
                             })
                         })
-                        .when(!two_line, |row| row.h(ITEM_HEIGHT))
-                        .when(two_line, |row| row.py(px(4.0)))
+                        .when(!two_line, |row| row.h(layout.control))
+                        .when(two_line, |row| row.py(layout.space(1.0)))
                         .text_color(fg)
-                        .when(gutter, |row| {
-                            row.child(
-                                div().flex_none().w(MARK_GUTTER).when(
-                                    checked == Some(true) && mark != Mark::Switch,
-                                    |gutter| gutter.child(Icon::Check),
-                                ),
-                            )
+                        .when(disabled, |row| row.opacity(crate::theme::DISABLED_OPACITY))
+                        .when(!disabled, |row| {
+                            row.active(|style| {
+                                style.bg(theme.pressed(theme.popover, theme.accent, fg))
+                            })
                         })
                         .when_some(start, |row, start| {
                             row.child(h_flex().flex_none().child(start))
@@ -949,6 +900,14 @@ fn rows(
                         .when_some(end, |row, end| row.child(trailing(end)))
                         .when_some(shortcut, |row, keys| {
                             row.child(trailing(keys.into_any_element()))
+                        })
+                        .when(gutter && mark != Mark::Switch, |row| {
+                            row.child(
+                                div().flex_none().w(theme.space(3.0)).when(
+                                    checked == Some(true) && mark != Mark::Switch,
+                                    |gutter| gutter.child(Icon::Check),
+                                ),
+                            )
                         })
                         .when(mark == Mark::Switch, |row| {
                             row.child(switch_mark(checked == Some(true), theme))
@@ -968,7 +927,7 @@ fn rows(
                                             .role(Role::Button)
                                             .aria_label(label)
                                             .text_color(theme.muted_foreground)
-                                            .hover(|button| button.bg(theme.muted))
+                                            .hover(|button| button.bg(theme.ghost_hover()))
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.stop_propagation()
                                             })
@@ -1004,18 +963,15 @@ fn rows(
                                 .child(trailing(Icon::ChevronRight.into_any_element()))
                                 .when_some(submenu_row.filter(|_| open), |row, target| {
                                     let sub_highlight = submenu.and_then(|(_, h)| h);
-                                    row.child(submenu_panel(
-                                        OpenSubmenu {
-                                            index,
-                                            highlighted: sub_highlight,
-                                            row: target,
-                                        },
-                                        &label,
-                                        sub,
-                                        &sub_metas,
-                                        state,
-                                        theme,
-                                    ))
+                                    row.child(OpenSubmenu {
+                                        label,
+                                        items: sub,
+                                        metas: sub_metas,
+                                        state: state.clone(),
+                                        index,
+                                        highlighted: sub_highlight,
+                                        row: target,
+                                    })
                                 })
                         })
                         .into_any_element()
@@ -1025,63 +981,66 @@ fn rows(
         .collect()
 }
 
-fn submenu_panel(
-    OpenSubmenu {
-        index,
-        highlighted,
-        row,
-    }: OpenSubmenu,
-    label: &SharedString,
-    items: Vec<MenuItem>,
-    metas: &Rc<[Meta]>,
-    state: &Entity<MenuState>,
-    theme: &Theme,
-) -> impl IntoElement {
-    deferred(
-        anchored()
-            .attach(row, Anchor::TopRight)
-            .offset(point(
-                PANEL_INSET + BORDER - SUBMENU_OVERLAP,
-                -(PANEL_INSET + BORDER),
-            ))
-            .snap_to_window_with_margin(WINDOW_MARGIN)
-            .child(motion::fade(
-                ("submenu", index),
-                panel_shell(("submenu-panel", index), Some(MENU_MAX_HEIGHT), theme)
-                    .role(Role::Menu)
-                    .aria_label(label.clone())
-                    .child({
-                        let state = state.clone();
-                        canvas(
-                            move |area, _, cx| state.read(cx).submenu_bounds.set(area),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .inset_0()
-                    })
-                    .children(rows(
-                        items,
-                        metas,
-                        ((highlighted, None), None),
-                        true,
-                        PopupKind::Menu,
-                        state,
-                        theme,
-                    )),
-            )),
-    )
-    .with_priority(super::layer::POPUP)
+impl RenderOnce for OpenSubmenu {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let measured = self.state.read(cx).submenu_bounds.clone();
+        let placement = Placement {
+            side_offset: theme.space(1.0),
+            align_offset: px(-3.0),
+            ..Placement::new(super::Side::Right, Align::Start)
+        };
+        let (positioner, from) =
+            placement.resolve(self.row, measured.get().size, window.viewport_size());
+        let index = self.index;
+        let panel = panel_shell(
+            ("submenu-panel", index),
+            Some(MENU_MAX_HEIGHT.min(window.viewport_size().height - WINDOW_MARGIN * 2.0)),
+            theme,
+        )
+        .role(Role::Menu)
+        .aria_label(self.label)
+        .child(
+            canvas(
+                move |area, window, _| {
+                    if measured.replace(area).size != area.size {
+                        window.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .children(rows(
+            self.items,
+            &self.metas,
+            ((self.highlighted, None), None),
+            true,
+            PopupKind::Menu,
+            &self.state,
+            theme,
+        ));
+        deferred(positioner.child(motion::arrive(("submenu", index), panel, from)))
+            .with_priority(super::layer::POPUP)
+    }
 }
 
-fn row(index: usize, nested: bool, metas: &Rc<[Meta]>, state: &Entity<MenuState>) -> Stateful<Div> {
+fn row(
+    index: usize,
+    nested: bool,
+    metas: &Rc<[Meta]>,
+    state: &Entity<MenuState>,
+    layout: Layout,
+) -> Stateful<Div> {
     let hover_state = state.clone();
     let click_state = state.clone();
     let click_metas = metas.clone();
     h_flex()
         .id(("item", index))
         .flex_none()
-        .gap(ROW_GAP)
-        .px(ROW_PADDING)
+        .gap(layout.space(2.0))
+        .px(layout.space(2.0))
         .when(nested, |row| {
             row.on_hover(move |hovered, _, cx| {
                 if !*hovered {
@@ -1283,6 +1242,7 @@ impl MenuList {
 
 impl RenderOnce for MenuList {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let typography = cx.theme().typography;
         let state = state(&self.id, false, window, cx);
         let theme = cx.theme().clone();
         let metas = metas(&self.items);
@@ -1322,13 +1282,13 @@ impl RenderOnce for MenuList {
             })
             .flex()
             .flex_col()
-            .p(PANEL_INSET)
+            .p(theme.space(1.0))
             .rounded(theme.radius.panel)
             .bg(theme.card)
             .border_1()
             .border_color(theme.border)
-            .text_size(TEXT_BODY)
-            .line_height(LINE_BODY)
+            .text_size(typography.body)
+            .line_height(typography.body_line)
             .text_color(theme.foreground)
             .children(pinned)
             .child(scrolling(
@@ -1382,7 +1342,7 @@ pub struct DropdownMenu {
     id: ElementId,
     trigger: Option<Button>,
     items: ItemsBuilder,
-    align: Align,
+    placement: Placement,
     width: Option<Pixels>,
     max_height: Pixels,
     default_open: bool,
@@ -1394,7 +1354,7 @@ impl DropdownMenu {
             id: id.into(),
             trigger: None,
             items: Rc::new(|_, _| Vec::new()),
-            align: Align::Start,
+            placement: Placement::new(Side::Bottom, Align::Start),
             width: None,
             max_height: MENU_MAX_HEIGHT,
             default_open: false,
@@ -1411,8 +1371,13 @@ impl DropdownMenu {
         self
     }
 
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
     pub fn align(mut self, align: Align) -> Self {
-        self.align = align;
+        self.placement.align = align;
         self
     }
 
@@ -1452,7 +1417,7 @@ impl RenderOnce for DropdownMenu {
             let on_outside = dismiss(&state);
             trigger = trigger.attach(
                 attach(
-                    self.align,
+                    self.placement,
                     &state,
                     on_outside,
                     window,
@@ -1471,7 +1436,10 @@ impl RenderOnce for DropdownMenu {
                         );
                         match width {
                             Some(width) => div().w(width).child(panel).into_any_element(),
-                            None => panel,
+                            None => div()
+                                .min_w(state.read(cx).trigger_width().max(px(128.0)))
+                                .child(panel)
+                                .into_any_element(),
                         }
                     },
                 )
