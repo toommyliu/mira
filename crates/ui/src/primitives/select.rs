@@ -6,9 +6,9 @@ use gpui::{
 };
 
 use super::{
-    Button, Icon,
+    Align, Button, Icon, Placement, Side,
     menu::{
-        Align, MENU_MAX_HEIGHT, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
+        MENU_MAX_HEIGHT, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
         item_over_trigger, popup, presence, state, trigger_handlers, trigger_probe,
     },
 };
@@ -73,10 +73,11 @@ pub struct Select {
     selected: Option<usize>,
     placeholder: SharedString,
     width: Option<Pixels>,
-    align: Align,
+    placement: Placement,
     align_item: bool,
     default_open: bool,
     disabled: bool,
+    small: bool,
     on_select: Option<IndexHandler>,
 }
 
@@ -94,10 +95,11 @@ impl Select {
             selected,
             placeholder: "Choose".into(),
             width: Some(px(200.0)),
-            align: Align::Start,
-            align_item: false,
+            placement: Placement::new(Side::Bottom, Align::Center),
+            align_item: true,
             default_open: false,
             disabled: false,
+            small: false,
             on_select: None,
         }
     }
@@ -112,13 +114,23 @@ impl Select {
         self
     }
 
+    pub fn small(mut self) -> Self {
+        self.small = true;
+        self
+    }
+
     pub fn full_width(mut self) -> Self {
         self.width = None;
         self
     }
 
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
     pub fn align(mut self, align: Align) -> Self {
-        self.align = align;
+        self.placement.align = align;
         self
     }
 
@@ -156,6 +168,7 @@ impl RenderOnce for Select {
         let (press, keys) = trigger_handlers(&state, None, initial);
         let mut trigger = Button::new((self.id.clone(), "trigger"), self.label.clone())
             .combobox(value.clone())
+            .when(self.small, |button| button.size(super::button::Size::Small))
             .disabled(self.disabled)
             .end_slot(
                 div()
@@ -207,7 +220,7 @@ impl RenderOnce for Select {
                 item
             })
             .collect();
-        let min_width = state.read(cx).trigger_width();
+        let min_width = state.read(cx).trigger_width().max(px(128.0));
         let panel = |from, min_width, window: &mut Window| {
             div()
                 .min_w(min_width)
@@ -258,7 +271,7 @@ impl RenderOnce for Select {
             ),
             None => trigger.attach(
                 attach(
-                    self.align,
+                    self.placement,
                     &state,
                     dismiss(&state),
                     window,

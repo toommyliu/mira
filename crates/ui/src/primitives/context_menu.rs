@@ -96,7 +96,7 @@ impl RenderOnce for ContextMenu {
                 area.child(
                     deferred(
                         anchored()
-                            .position(position)
+                            .position(position + gpui::point(gpui::px(0.0), gpui::px(4.0)))
                             .snap_to_window_with_margin(WINDOW_MARGIN)
                             .child(
                                 div()

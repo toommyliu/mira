@@ -10,7 +10,7 @@ use super::{Icon, icon};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _,
     nav::{self, Axis, Step},
-    theme::{LINE_BODY, ROW, TEXT_BODY, TEXT_SMALL, tabular},
+    theme::tabular,
 };
 
 #[derive(Clone)]
@@ -100,6 +100,8 @@ impl Table {
 
 impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
@@ -116,12 +118,14 @@ impl RenderOnce for Table {
                 )
             })
             .collect();
+        let padding = theme.space(2.0);
+        let header_height = theme.layout.cell_header;
         let cell = move |column: &Column, header: bool| {
             div()
                 .flex()
                 .items_center()
-                .gap(px(4.0))
-                .px(px(10.0))
+                .gap(layout.space(1.0))
+                .px(padding)
                 .map(|cell| match column.width {
                     Some(width) => cell.flex_none().w(width),
                     None => cell.flex_1().min_w_0(),
@@ -129,7 +133,13 @@ impl RenderOnce for Table {
                 .when(column.numeric, |cell| {
                     cell.justify_end().font_features(tabular())
                 })
-                .when(header, |cell| cell.h(px(30.0)))
+                .map(|cell| {
+                    if header {
+                        cell.h(header_height)
+                    } else {
+                        cell.py(padding)
+                    }
+                })
         };
         div()
             .id(self.id.clone())
@@ -144,8 +154,8 @@ impl RenderOnce for Table {
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
-            .text_size(TEXT_BODY)
-            .line_height(LINE_BODY)
+            .text_size(typography.body)
+            .line_height(typography.body_line)
             .child(
                 div()
                     .id("header")
@@ -169,7 +179,7 @@ impl RenderOnce for Table {
                                     "Sorted descending"
                                 })
                             })
-                            .text_size(TEXT_SMALL)
+                            .text_size(typography.secondary)
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if sorted.is_some() {
                                 theme.foreground
@@ -231,11 +241,13 @@ impl RenderOnce for Table {
                             .aria_selected(current)
                             .when(current, |row| row.aria_active_descendant())
                             .flex()
-                            .h(ROW)
+                            .min_h(layout.control)
                             .items_center()
                             .when(index > 0, |row| row.border_t_1().border_color(theme.border))
-                            .when(current, |row| row.bg(theme.accent))
-                            .when(!current, |row| row.hover(|style| style.bg(theme.secondary)))
+                            .when(current, |row| row.bg(theme.muted))
+                            .when(!current, |row| {
+                                row.hover(|style| style.bg(theme.muted.opacity(0.5)))
+                            })
                             .when(current && ring, |row| {
                                 row.child(
                                     div()
@@ -249,7 +261,15 @@ impl RenderOnce for Table {
                             })
                             .relative()
                             .when_some(on_select, |row, on_select| {
-                                row.pointer_cursor(&theme).on_click(move |_, window, cx| {
+                                row.active(|style| {
+                                    style.bg(theme.pressed(
+                                        theme.card,
+                                        theme.muted,
+                                        theme.foreground,
+                                    ))
+                                })
+                                .pointer_cursor(&theme)
+                                .on_click(move |_, window, cx| {
                                     window.focus(&focus, cx);
                                     on_select(index, window, cx);
                                 })

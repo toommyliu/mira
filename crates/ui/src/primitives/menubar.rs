@@ -9,7 +9,7 @@ use gpui::{
 use super::{
     Button, MenuItem, PopoverClose,
     button::PressHandler,
-    menu::{self, Align, ItemsBuilder, MENU_MAX_HEIGHT, MenuState, PopupKind},
+    menu::{self, ItemsBuilder, MENU_MAX_HEIGHT, MenuState, PopupKind},
     popover::{self, Content},
 };
 use crate::{
@@ -367,7 +367,7 @@ fn render_entry(
         Panel::Menu(items) => {
             let items = items(window, cx);
             menu::attach(
-                Align::Start,
+                super::Placement::menubar(),
                 &state,
                 on_outside,
                 window,
@@ -390,10 +390,15 @@ fn render_entry(
         Panel::Popover(content) => {
             let close = PopoverClose::returning_focus(state.clone());
             let content = content(&close, window, cx);
-            let panel = popover::panel(&id, label, close, None, cx).child(content);
-            menu::attach(Align::Start, &state, on_outside, window, cx, |from, _| {
-                menu::fading(motion::arrive((id.clone(), "popover"), panel, from), shown)
-            })
+            let panel = popover::panel(&id, label, close, None, window, cx).child(content);
+            menu::attach(
+                super::Placement::menubar(),
+                &state,
+                on_outside,
+                window,
+                cx,
+                |from, _| menu::fading(motion::arrive((id.clone(), "popover"), panel, from), shown),
+            )
         }
     };
     trigger = trigger.attach(panel.into_any_element());

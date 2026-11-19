@@ -7,15 +7,15 @@ use gpui::{
 };
 
 use super::{
-    Button,
+    Align, Button, Placement, Side,
     menu::{self, MenuState},
+    placement::COLLISION_MARGIN,
 };
 use crate::{ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, motion, nav};
 
 pub(crate) type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
 
-const MIN_WIDTH: Pixels = px(200.0);
-const MAX_WIDTH: Pixels = px(420.0);
+pub(super) const POPOVER_WIDTH: Pixels = px(288.0);
 
 #[derive(Clone)]
 pub struct PopoverClose {
@@ -62,13 +62,16 @@ pub(crate) fn panel(
     label: SharedString,
     close: PopoverClose,
     width: Option<Pixels>,
+    window: &Window,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
+    let available = (window.viewport_size().width - COLLISION_MARGIN * 2.0).max(Pixels::ZERO);
     let focus = close.state.read(cx).focus();
     let (next, previous) = (focus.clone(), focus.clone());
     div()
         .id((id.clone(), "panel"))
+        .debug_selector(|| "popover-panel".into())
         .role(Role::Dialog)
         .aria_label(label)
         .occlude()
@@ -82,15 +85,15 @@ pub(crate) fn panel(
                 cx.stop_propagation();
             }
         })
+        .max_w(available)
         .map(|panel| match width {
             Some(width) => panel.w(width),
-            None => panel.min_w(MIN_WIDTH).max_w(MAX_WIDTH),
+            None => panel.min_w(POPOVER_WIDTH.min(available)),
         })
-        .p(px(12.0))
+        .p(theme.space(2.5))
         .rounded(theme.radius.panel)
         .bg(theme.popover)
-        .border_1()
-        .border_color(theme.border)
+        .text_color(theme.popover_foreground)
         .shadow(theme.popup_shadow())
 }
 
@@ -99,8 +102,8 @@ pub struct Popover {
     id: ElementId,
     trigger: Option<Button>,
     content: Content,
-    align: menu::Align,
-    width: Option<Pixels>,
+    placement: Placement,
+    width: Pixels,
     default_open: bool,
 }
 
@@ -110,8 +113,8 @@ impl Popover {
             id: id.into(),
             trigger: None,
             content: Rc::new(|_, _, _| div().into_any_element()),
-            align: menu::Align::Start,
-            width: None,
+            placement: Placement::new(Side::Bottom, Align::Center),
+            width: POPOVER_WIDTH,
             default_open: false,
         }
     }
@@ -130,12 +133,17 @@ impl Popover {
     }
 
     pub fn width(mut self, width: Pixels) -> Self {
-        self.width = Some(width);
+        self.width = width;
         self
     }
 
-    pub fn align(mut self, align: menu::Align) -> Self {
-        self.align = align;
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    pub fn align(mut self, align: Align) -> Self {
+        self.placement.align = align;
         self
     }
 
@@ -193,10 +201,10 @@ impl RenderOnce for Popover {
             return trigger;
         };
         let content = (self.content)(&closer, window, cx);
-        let panel = panel(&self.id, label, closer, self.width, cx).child(content);
+        let panel = panel(&self.id, label, closer, Some(self.width), window, cx).child(content);
         trigger = trigger.attach(
             menu::attach(
-                self.align,
+                self.placement,
                 &state,
                 menu::dismiss(&state),
                 window,

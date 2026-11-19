@@ -10,7 +10,7 @@ use super::{Icon, icon};
 use crate::{
     ActiveTheme as _, PointerCursor as _,
     nav::{self, Axis, Step},
-    theme::{ROW, TEXT_BODY, TEXT_SMALL, tabular},
+    theme::tabular,
 };
 
 #[derive(Clone)]
@@ -98,6 +98,8 @@ impl Tree {
 
 impl RenderOnce for Tree {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let state =
             window.use_keyed_state((self.id.clone(), "tree"), cx, |_, _| TreeState::default());
@@ -174,7 +176,7 @@ impl RenderOnce for Tree {
             })
             .flex()
             .flex_col()
-            .p(px(4.0))
+            .p(layout.space(1.0))
             .rounded(theme.radius.panel)
             .bg(theme.card)
             .border_1()
@@ -205,18 +207,23 @@ impl RenderOnce for Tree {
                     .when(lit, |item| item.aria_active_descendant())
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .h(ROW)
-                    .pl(px(6.0 + depth as f32 * 16.0))
-                    .pr(px(10.0))
+                    .gap(theme.space(2.0))
+                    .h(layout.control)
+                    .pl(theme.space(2.0 + depth as f32 * 4.0))
+                    .pr(theme.space(2.0))
                     .rounded(theme.radius.control)
                     .pointer_cursor(&theme)
-                    .when(lit, |item| item.bg(theme.accent))
+                    .when(lit, |item| item.bg(theme.muted))
                     .relative()
                     .when(lit && ring, |item| {
                         item.child(theme.focus_ring(theme.radius.control))
                     })
-                    .when(!lit, |item| item.hover(|style| style.bg(theme.secondary)))
+                    .active(|style| {
+                        style.bg(theme.pressed(theme.card, theme.muted, theme.foreground))
+                    })
+                    .when(!lit, |item| {
+                        item.hover(|style| style.bg(theme.muted.opacity(0.5)))
+                    })
                     .on_click(move |_, window, cx| {
                         window.focus(&focus, cx);
                         click_state.update(cx, |tree, cx| {
@@ -241,7 +248,7 @@ impl RenderOnce for Tree {
                         div()
                             .flex_1()
                             .truncate()
-                            .text_size(TEXT_BODY)
+                            .text_size(typography.body)
                             .text_color(theme.foreground)
                             .child(row.node.label.clone()),
                     )
@@ -249,7 +256,7 @@ impl RenderOnce for Tree {
                         item.child(
                             div()
                                 .flex_none()
-                                .text_size(TEXT_SMALL)
+                                .text_size(typography.secondary)
                                 .font_features(tabular())
                                 .text_color(theme.muted_foreground)
                                 .child(detail),
