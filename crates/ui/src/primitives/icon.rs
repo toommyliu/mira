@@ -1,7 +1,5 @@
 use gpui::{App, Hsla, IntoElement, RenderOnce, Styled as _, Svg, Window, px, svg};
 
-use crate::assets::{HEAVY, SIDEBAR, SIDEBAR_OPEN};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, IntoElement)]
 pub enum Icon {
     ArrowDown,
@@ -15,6 +13,14 @@ pub enum Icon {
     ChevronRight,
     ChevronUp,
     CircleAlert,
+    CircleDot,
+    FilePlus2,
+    Pencil,
+    OctagonX,
+    LoaderCircle,
+    Circle,
+    CircleStop,
+
     CircleCheck,
     Clock,
     Ellipsis,
@@ -35,7 +41,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    fn path(self) -> &'static str {
+    pub(super) fn path(self) -> &'static str {
         match self {
             Icon::ArrowDown => "icons/arrow-down.svg",
             Icon::ArrowDownToLine => "icons/arrow-down-to-line.svg",
@@ -47,6 +53,13 @@ impl Icon {
             Icon::ChevronDown => "icons/chevron-down.svg",
             Icon::ChevronRight => "icons/chevron-right.svg",
             Icon::ChevronUp => "icons/chevron-up.svg",
+            Icon::CircleDot => "icons/circle-dot.svg",
+            Icon::FilePlus2 => "icons/file-plus-2.svg",
+            Icon::Pencil => "icons/pencil.svg",
+            Icon::OctagonX => "icons/octagon-x.svg",
+            Icon::LoaderCircle => "icons/loader-circle.svg",
+            Icon::Circle => "icons/circle.svg",
+            Icon::CircleStop => "icons/circle-stop.svg",
             Icon::CircleAlert => "icons/circle-alert.svg",
             Icon::CircleCheck => "icons/circle-check.svg",
             Icon::Clock => "icons/clock.svg",
@@ -60,8 +73,8 @@ impl Icon {
             Icon::Plus => "icons/plus.svg",
             Icon::RotateCcw => "icons/rotate-ccw.svg",
             Icon::Search => "icons/search.svg",
-            Icon::Sidebar => SIDEBAR,
-            Icon::SidebarOpen => SIDEBAR_OPEN,
+            Icon::Sidebar => "icons/panel-left-open.svg",
+            Icon::SidebarOpen => "icons/panel-left-close.svg",
             Icon::Square => "icons/square.svg",
             Icon::TriangleAlert => "icons/triangle-alert.svg",
             Icon::X => "icons/x.svg",
@@ -80,19 +93,15 @@ impl Icon {
 }
 
 pub fn icon(icon: Icon, color: Hsla) -> Svg {
-    let svg = svg().path(icon.path()).flex_none().text_color(color);
-    match icon {
-        Icon::Sidebar | Icon::SidebarOpen => svg.w(px(18.0)).h(px(14.0)),
-        _ => svg.size(px(14.0)),
-    }
+    svg()
+        .path(icon.path())
+        .flex_none()
+        .size(px(14.0))
+        .text_color(color)
 }
 
 pub fn small_icon(icon: Icon, color: Hsla) -> Svg {
-    svg()
-        .path(format!("{HEAVY}{}", icon.path()))
-        .flex_none()
-        .size(px(10.0))
-        .text_color(color)
+    self::icon(icon, color).size(px(10.0))
 }
 
 impl RenderOnce for Icon {

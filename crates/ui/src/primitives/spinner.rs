@@ -4,7 +4,7 @@ use gpui::{
     svg,
 };
 
-use crate::{ActiveTheme as _, assets::SPINNER, motion};
+use crate::{ActiveTheme as _, motion};
 
 #[derive(IntoElement)]
 pub struct Spinner {
@@ -20,7 +20,7 @@ impl Spinner {
             id: id.into(),
             label: "Loading".into(),
             color: None,
-            size: px(14.0),
+            size: px(16.0),
         }
     }
 
@@ -44,7 +44,7 @@ impl RenderOnce for Spinner {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let color = self.color.unwrap_or(cx.theme().text);
         let ring = svg()
-            .path(SPINNER)
+            .path(super::Icon::LoaderCircle.path())
             .flex_none()
             .size(self.size)
             .text_color(color);
