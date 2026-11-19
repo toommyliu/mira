@@ -13,7 +13,7 @@ pub use assets::Assets;
 #[cfg(feature = "test-support")]
 pub use snapshot::{snapshot, snapshot_after, snapshot_with};
 pub use style::{StyledExt, h_flex, v_flex};
-pub use theme::{ActiveTheme, PointerCursor, Theme, Tone};
+pub use theme::{ActiveTheme, ColorToken, PointerCursor, Theme, Tone};
 
 use std::rc::Rc;
 

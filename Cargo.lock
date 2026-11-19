@@ -3986,6 +3986,7 @@ dependencies = [
  "gpui_apple",
  "gpui_platform",
  "mira-ui",
+ "serde",
  "unicode-segmentation",
 ]
 
