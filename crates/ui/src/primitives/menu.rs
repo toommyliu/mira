@@ -1023,6 +1023,10 @@ impl RenderOnce for OpenSubmenu {
             &self.state,
             theme,
         ));
+        let panel = div()
+            .relative()
+            .child(panel)
+            .child(theme.surface_ring(theme.radius.panel));
         deferred(positioner.child(motion::arrive(("submenu", index), panel, from)))
             .with_priority(super::layer::POPUP)
     }
@@ -1129,6 +1133,7 @@ pub(crate) fn popup(
         (id.clone(), "popup"),
         panel_shell((id.clone(), "panel"), None, theme)
             .max_h(max_height)
+            .child(theme.surface_ring(theme.radius.panel))
             .role(match kind {
                 PopupKind::Menu => Role::Menu,
                 PopupKind::ListBox => Role::ListBox,

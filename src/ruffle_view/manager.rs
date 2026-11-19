@@ -2096,7 +2096,7 @@ impl Manager {
                 } else {
                     card.border_color(gpui::transparent_black())
                         .bg(theme.card)
-                        .shadow(theme.surface_edge())
+                        .child(theme.surface_ring(theme.radius.panel))
                 }
             })
             .role(Role::CheckBox)
