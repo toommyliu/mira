@@ -25,6 +25,7 @@ pub struct Checkbox {
     state: CheckedState,
     label: SharedString,
     description: Option<SharedString>,
+    show_label: bool,
     disabled: bool,
     on_toggle: Option<ToggleHandler>,
 }
@@ -40,9 +41,15 @@ impl Checkbox {
             state,
             label: label.into(),
             description: None,
+            show_label: true,
             disabled: false,
             on_toggle: None,
         }
+    }
+
+    pub fn hide_label(mut self) -> Self {
+        self.show_label = false;
+        self
     }
 
     pub fn indicator(value: CheckedState, theme: &crate::Theme) -> gpui::Div {
@@ -139,7 +146,9 @@ impl RenderOnce for Checkbox {
                         ))
                     }),
             )
-            .child(caption(self.label, self.description, cx))
+            .when(self.show_label, |row| {
+                row.child(caption(self.label, self.description, cx))
+            })
             .when_some(
                 self.on_toggle.filter(|_| !self.disabled),
                 |row, on_toggle| row.on_click(move |_, window, cx| on_toggle(next, window, cx)),
