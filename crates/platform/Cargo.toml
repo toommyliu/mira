@@ -13,11 +13,11 @@ core-foundation-sys = "0.8.6"
 core-graphics = "0.24"
 core-text = "21"
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "94b0f28166665e8fd2f53ff6d268a14955c82269", package = "zed-font-kit", version = "0.14.1-zed", default-features = false, features = ["source"] }
-futures = "0.3"
+futures = "0.3.34"
 gpui.workspace = true
 gpui_macos = { workspace = true, features = ["font-kit"] }
 log = "0.4"
-objc2-core-foundation = { version = "0.3", features = ["std", "CFData", "CFDictionary", "CFString", "CFNumber", "CFBase", "CFCGTypes"] }
+objc2-core-foundation = { version = "=0.3.2", features = ["std", "CFData", "CFDictionary", "CFString", "CFNumber", "CFBase", "CFCGTypes"] }
 objc2-core-text = { version = "0.3.2", default-features = false, features = ["std", "CTFont", "CTFontDescriptor"] }
 parking_lot = "0.12.1"
 pathfinder_geometry = "0.5"
