@@ -165,20 +165,12 @@ impl Shortcut {
         Some(match self {
             Shortcut::LoadScript => "cmd-o",
             Shortcut::StartStopScript => "cmd-r",
-            Shortcut::AutoAttack => "cmd-e",
             Shortcut::Bank => "cmd-b",
-            Shortcut::Jump => "cmd-j",
             Shortcut::OptionsMenu => "cmd-shift-,",
             Shortcut::InfiniteRange => "alt-i",
             Shortcut::MinimalRendering => "cmd-l",
             Shortcut::Sidebar => "ctrl-cmd-s",
             Shortcut::GridView => "ctrl-cmd-g",
-            Shortcut::Accounts => "cmd-shift-a",
-            Shortcut::Scripts => "cmd-shift-s",
-            Shortcut::Environment => "cmd-shift-e",
-            Shortcut::Follower => "cmd-shift-f",
-            Shortcut::LoaderGrabber => "cmd-shift-l",
-            Shortcut::Packets => "cmd-shift-p",
             _ => return None,
         })
     }
@@ -428,7 +420,8 @@ mod tests {
         assert_eq!(saved.len(), Shortcut::ALL.len());
         assert_eq!(saved["startStopScript"], "cmd-k");
         assert_eq!(saved["bank"], serde_json::Value::Null);
-        assert_eq!(saved["jump"], "cmd-j");
+        assert_eq!(saved["loadScript"], "cmd-o");
+        assert_eq!(saved["jump"], serde_json::Value::Null);
         assert_eq!(saved["interfaceOnlyRendering"], serde_json::Value::Null);
         let loaded = deserialize(serde_json::Value::Object(saved.clone())).unwrap();
         assert_eq!(loaded, overrides);
