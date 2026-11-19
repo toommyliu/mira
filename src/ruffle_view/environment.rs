@@ -21,7 +21,7 @@ use mira_ui::{
 use super::{
     Client,
     client::CloseSession,
-    form::{choices_row, note, row, section},
+    form::{LABEL_WIDTH, choices_row, note, row, row_label, section, switch_row},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
@@ -840,7 +840,7 @@ impl Environment {
         [
             section(
                 "Drops",
-                "Picks up listed drops and any kind ticked below.",
+                "Picks up the drops you list.",
                 None,
                 switch.hide_label(),
                 theme,
@@ -1313,30 +1313,71 @@ fn unlisted_drops_policy(
         &'static str,
         fn(&mut drops::Config) -> &mut bool,
     );
-    let kinds: [Kind; 4] = [
-        ("drops-ac", "AC", |config| &mut config.accept_ac),
-        ("drops-ac-member", "Member-only AC", |config| {
-            &mut config.accept_ac_member_only
-        }),
-        ("drops-non-ac", "Non-AC", |config| &mut config.accept_non_ac),
-        ("drops-non-ac-member", "Member-only non-AC", |config| {
-            &mut config.accept_non_ac_member_only
-        }),
+    let rows: [(&str, [Kind; 2]); 2] = [
+        (
+            "Free",
+            [
+                ("drops-ac", "Free AC", |config| &mut config.accept_ac),
+                ("drops-non-ac", "Free non-AC", |config| {
+                    &mut config.accept_non_ac
+                }),
+            ],
+        ),
+        (
+            "Member-only",
+            [
+                ("drops-ac-member", "Member-only AC", |config| {
+                    &mut config.accept_ac_member_only
+                }),
+                ("drops-non-ac-member", "Member-only non-AC", |config| {
+                    &mut config.accept_non_ac_member_only
+                }),
+            ],
+        ),
     ];
+    let layout = theme.layout;
     let enabled = config.enabled;
-    let choices = div()
-        .grid()
-        .grid_cols_max_content(2)
-        .gap_x(theme.space(3.0))
-        .children(kinds.map(|(id, label, field)| {
-            let automation = automation.clone();
-            Checkbox::new(id, label, checked(*field(&mut config)))
-                .disabled(!enabled)
-                .on_toggle(move |on, _, _| {
-                    automation.update_drops(|state| *field(&mut state.config) = on);
-                })
-        }));
+    let axis = |text: &'static str| {
+        div()
+            .flex_none()
+            .text_color(theme.muted_foreground)
+            .when(!enabled, |axis| axis.opacity(DISABLED_OPACITY))
+            .child(text)
+    };
+    let cell = |content: AnyElement| h_flex().flex_1().min_w_0().justify_center().child(content);
+    let header = h_flex()
+        .gap(layout.space(2.0))
+        .child(
+            row_label("Unlisted drops", enabled)
+                .flex_none()
+                .w(LABEL_WIDTH),
+        )
+        .children(["AC", "Non-AC"].map(|kind| cell(axis(kind).into_any_element())));
+    let matrix = v_flex().child(header).children(rows.map(|(label, kinds)| {
+        h_flex()
+            .gap(layout.space(2.0))
+            .min_h(layout.control)
+            .child(axis(label).w(LABEL_WIDTH).pl(layout.space(3.0)))
+            .children(kinds.map(|(id, name, field)| {
+                let automation = automation.clone();
+                cell(
+                    Checkbox::new(id, name, checked(*field(&mut config)))
+                        .hide_label()
+                        .disabled(!enabled)
+                        .on_toggle(move |on, _, _| {
+                            automation.update_drops(|state| *field(&mut state.config) = on);
+                        })
+                        .into_any_element(),
+                )
+            }))
+    }));
+    let matrix = matrix.child(note(
+        "Also picks up drops of the ticked kinds.",
+        enabled,
+        theme,
+    ));
     let rejecting = automation.clone();
+    let reject = "Rejects every drop not picked up above.";
     v_flex()
         .id("unlisted-drops-policy")
         .debug_selector(|| "unlisted-drops-policy".into())
@@ -1345,15 +1386,21 @@ fn unlisted_drops_policy(
         .border_t_1()
         .border_color(theme.border)
         .pt(theme.space(3.0))
-        .gap(theme.space(1.0))
-        .child(choices_row(theme.layout, "Also pick up", enabled, choices))
+        .gap(theme.space(2.0))
+        .child(matrix)
         .child(
-            Switch::new("drops-reject", "Reject others", config.reject_others)
-                .description("Rejects every drop not picked up above.")
-                .disabled(!enabled)
-                .on_toggle(move |on, _, _| {
-                    rejecting.update_drops(|state| state.config.reject_others = on);
-                }),
+            v_flex()
+                .child(switch_row(
+                    layout,
+                    "Reject others",
+                    enabled,
+                    Switch::new("drops-reject", "Reject others", config.reject_others)
+                        .description(reject)
+                        .on_toggle(move |on, _, _| {
+                            rejecting.update_drops(|state| state.config.reject_others = on);
+                        }),
+                ))
+                .child(note(reject, enabled, theme).mt(layout.space(-0.5))),
         )
 }
 
