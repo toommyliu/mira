@@ -8,6 +8,7 @@ use crate::{ActiveTheme as _, StyledExt as _, h_flex, primitives::label::caption
 #[derive(IntoElement, Default)]
 pub struct Group {
     title: Option<SharedString>,
+    header_end: Option<AnyElement>,
     children: Vec<AnyElement>,
 }
 
@@ -18,6 +19,11 @@ impl Group {
 
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    pub fn header_end(mut self, element: impl IntoElement) -> Self {
+        self.header_end = Some(element.into_any_element());
         self
     }
 
@@ -48,14 +54,25 @@ impl RenderOnce for Group {
         let typography = theme.typography;
         v_flex()
             .gap(theme.space(2.0))
-            .when_some(self.title, |group, title| {
+            .when(self.title.is_some() || self.header_end.is_some(), |group| {
                 group.child(
-                    div()
+                    h_flex()
+                        .justify_between()
+                        .gap(theme.space(2.0))
                         .px(layout.space(3.0))
-                        .text_caption(typography)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.muted_foreground)
-                        .child(title),
+                        .child(
+                            div()
+                                .text_title(typography)
+                                .text_color(theme.foreground)
+                                .children(self.title),
+                        )
+                        .children(self.header_end.map(|end| {
+                            div()
+                                .text_caption(typography)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.muted_foreground)
+                                .child(end)
+                        })),
                 )
             })
             .child(
@@ -105,6 +122,7 @@ impl RenderOnce for FieldRow {
         let theme = cx.theme();
         let layout = theme.layout;
         let typography = theme.typography;
+        let caption = caption(self.label, self.description, cx);
         h_flex()
             .justify_between()
             .flex_wrap()
@@ -114,15 +132,11 @@ impl RenderOnce for FieldRow {
             .px(layout.space(3.0))
             .text_body(typography)
             .text_color(theme.foreground)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(120.0))
-                    .child(caption(self.label, self.description, cx)),
-            )
+            .child(div().flex_1().min_w(px(120.0)).child(caption))
             .child(
                 h_flex()
                     .flex_none()
+                    .ml_auto()
                     .gap(theme.space(2.0))
                     .children(self.children),
             )
