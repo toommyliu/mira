@@ -193,6 +193,7 @@ struct Settings {
     sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
+    font_smoothing: bool,
     font: Option<String>,
     mono_font: Option<String>,
     text_size: TextSize,
@@ -438,6 +439,7 @@ fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
 
 fn apply(cx: &mut App) {
     let settings = &cx.global::<Store>().settings;
+    mira_platform::set_font_smoothing(settings.font_smoothing);
     let theme = settings.theme(settings.variant(cx.window_appearance()));
     cx.set_global(theme);
     cx.refresh_windows();
@@ -1002,6 +1004,13 @@ impl SettingsWindow {
                     ),
                 ))
                 .row(Row::new(
+                    "Font smoothing",
+                    Some("Thicken text strokes, most of all for light text."),
+                    Switch::new("font-smoothing", "Font smoothing", settings.font_smoothing)
+                        .hide_label()
+                        .on_toggle(|on, _, cx| change(cx, |settings| settings.font_smoothing = on)),
+                ))
+                .row(Row::new(
                     "Use cursor pointers",
                     Some("Show a hand cursor over clickable controls."),
                     Switch::new(
@@ -1249,6 +1258,7 @@ mod tests {
         assert_eq!(Settings::load(&path).unwrap(), Settings::default());
         assert_eq!(Settings::default().appearance, Appearance::System);
         assert!(!Settings::default().pointer_cursors);
+        assert!(!Settings::default().font_smoothing);
         assert_eq!(Settings::default().start, Start::Client);
         assert!(!Settings::default().sidebar);
         let chosen = Settings {
@@ -1256,6 +1266,7 @@ mod tests {
             sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
+            font_smoothing: true,
             font: Some("Menlo".into()),
             mono_font: Some("Courier".into()),
             text_size: FontSize(15),

@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     let armies = army::Armies::new(documents.join("armies"));
     let scripts = documents.join("scripts");
     let types = data.join("types");
-    gpui_platform::application()
+    mira_platform::application()
         .with_assets(mira_ui::Assets)
         .run(move |cx| {
             // AppKit termination does not unwind main's stack.
