@@ -30,6 +30,7 @@ pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
+const PANEL_INSET: Pixels = px(4.0);
 pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -725,7 +726,7 @@ pub(crate) fn panel_shell(
             panel.max_h(height).overflow_y_scroll()
         })
         .min_w(px(128.0))
-        .p(theme.space(1.0))
+        .p(PANEL_INSET)
         .rounded(theme.radius.panel)
         .bg(theme.popover)
         .shadow(theme.popup_shadow())
@@ -1123,17 +1124,10 @@ pub(crate) fn popup(
         theme,
     );
     let rest = pinned.split_off(count);
-    let split = count > 0;
     let panel = motion::arrive(
         (id.clone(), "popup"),
-        panel_shell((id.clone(), "panel"), (!split).then_some(max_height), theme)
-            .map(|panel| {
-                if split {
-                    panel.max_h(max_height)
-                } else {
-                    panel.track_scroll(&rest_scroll)
-                }
-            })
+        panel_shell((id.clone(), "panel"), None, theme)
+            .max_h(max_height)
             .role(match kind {
                 PopupKind::Menu => Role::Menu,
                 PopupKind::ListBox => Role::ListBox,
@@ -1152,19 +1146,13 @@ pub(crate) fn popup(
                 cx.propagate();
             })
             .children(pinned)
-            .map(|panel| {
-                if split {
-                    panel.child(scrolling(
-                        ElementId::from((id.clone(), "rest")),
-                        max_height,
-                        false,
-                        rest,
-                        &rest_scroll,
-                    ))
-                } else {
-                    panel.children(rest)
-                }
-            }),
+            .child(scrolling(
+                ElementId::from((id.clone(), "rest")),
+                max_height,
+                false,
+                rest,
+                &rest_scroll,
+            )),
         from,
     );
     fading(panel, shown)
@@ -1184,6 +1172,7 @@ fn scrolling(
         .flex()
         .flex_col()
         .min_h_0()
+        .mr(-PANEL_INSET)
         .child(
             div()
                 .id(id.clone())
@@ -1192,7 +1181,11 @@ fn scrolling(
                 .min_h_0()
                 .max_h(height)
                 .when(fixed, |rest| rest.h(height))
-                .when(overflows, |rest| rest.pr(Scrollbar::GUTTER))
+                .pr(if overflows {
+                    Scrollbar::GUTTER + px(2.0)
+                } else {
+                    PANEL_INSET
+                })
                 .overflow_y_scroll()
                 .track_scroll(handle)
                 .children(rows),
@@ -1201,7 +1194,7 @@ fn scrolling(
             canvas(
                 move |_, window, _| {
                     if (measured.max_offset().y > Pixels::ZERO) != overflows {
-                        window.refresh();
+                        window.request_animation_frame();
                     }
                 },
                 |_, _, _, _| {},
@@ -1209,7 +1202,7 @@ fn scrolling(
             .absolute()
             .size_0(),
         )
-        .child(Scrollbar::new((id, "scrollbar"), handle.clone()))
+        .child(Scrollbar::new((id, "scrollbar"), handle.clone()).persistent())
 }
 
 #[derive(IntoElement)]
@@ -1282,7 +1275,7 @@ impl RenderOnce for MenuList {
             })
             .flex()
             .flex_col()
-            .p(theme.space(1.0))
+            .p(PANEL_INSET)
             .rounded(theme.radius.panel)
             .bg(theme.card)
             .border_1()
