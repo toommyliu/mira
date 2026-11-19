@@ -13,6 +13,8 @@ static class Compiler
 {
     private const string Version = "mira-skua-compile-4";
     private const string Include = "//cs_include ";
+    private const string Pruned = ".pruned-";
+    private static readonly TimeSpan Unused = TimeSpan.FromDays(7);
 
     private static readonly string[] CoreFiles = ["CoreBots.cs", "CoreFarms.cs", "CoreAdvanced.cs", "CoreStory.cs", "CoreDailies.cs"];
 
@@ -61,6 +63,7 @@ static class Compiler
             ? references
             : new Lazy<List<MetadataReference>>(() => [.. references.Value, MetadataReference.CreateFromFile(core.Assembly)]);
         var built = Build(cache, "Entry", closure, entryReferences, entry, core?.Key, closure[^1]);
+        Prune(cache);
         return new JsonObject
         {
             ["assembly"] = built.Assembly,
@@ -79,7 +82,10 @@ static class Compiler
         var assembly = Path.Combine(folder, name + ".dll");
         var className = Path.Combine(folder, "class.txt");
         if (File.Exists(assembly) && (entry is null || File.Exists(className)))
+        {
+            Directory.SetLastWriteTimeUtc(folder, DateTime.UtcNow);
             return new Built(key, assembly, entry is null ? null : File.ReadAllText(className), folder);
+        }
 
         var trees = sources.Select(source => CSharpSyntaxTree.ParseText(source.Text, Parsing, source.Path, Encoding.UTF8)).ToList();
         trees = Rewrite.Stubs(trees);
@@ -96,7 +102,7 @@ static class Compiler
             found = EntryClass(compilation, compilation.SyntaxTrees.First(tree => tree.FilePath == entry.Path))
                 ?? throw new Failure($"{entry.Path} has no class with ScriptMain(IScriptInterface).");
 
-        var staging = folder + ".tmp-" + Environment.ProcessId;
+        var staging = $"{folder}.tmp-{Guid.NewGuid():N}";
         Directory.CreateDirectory(staging);
         try
         {
@@ -123,6 +129,30 @@ static class Compiler
                 Directory.Delete(staging, recursive: true);
         }
         return new Built(key, assembly, found, folder);
+    }
+
+    private static void Prune(string cache)
+    {
+        var cutoff = DateTime.UtcNow - Unused;
+        try
+        {
+            foreach (var build in new DirectoryInfo(cache).EnumerateDirectories().Where(build => build.Name.Contains(Pruned) || build.LastWriteTimeUtc < cutoff).ToList())
+            {
+                var doomed = build.Name.Contains(Pruned) ? build.FullName : $"{build.FullName}{Pruned}{Guid.NewGuid():N}";
+                try
+                {
+                    if (doomed != build.FullName)
+                        build.MoveTo(doomed);
+                    Directory.Delete(doomed, recursive: true);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string? EntryClass(CSharpCompilation compilation, SyntaxTree tree)
