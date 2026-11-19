@@ -35,6 +35,12 @@ pub trait StyledExt: Styled + Sized {
             .line_height(typography.body_line)
             .font_weight(FontWeight::MEDIUM)
     }
+
+    fn text_heading(self, typography: crate::theme::Typography) -> Self {
+        self.text_size(typography.heading)
+            .line_height(typography.heading_line)
+            .font_weight(FontWeight::MEDIUM)
+    }
 }
 
 impl<T: Styled> StyledExt for T {}

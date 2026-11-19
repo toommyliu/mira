@@ -9,21 +9,22 @@ use std::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Global, Hsla,
     InteractiveElement as _, IntoElement, KeyBinding, Keystroke, Menu, MenuItem,
-    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    ParentElement as _, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, TitlebarOptions, Window, WindowAppearance, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, point, px, size,
+    WindowHandle, WindowOptions, actions, div, point, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme,
     components::{Disclosure, Empty, Group, ShortcutField},
     h_flex,
     primitives::{
-        Button, ColorPicker, Icon, Input, InputEvent, Numeric, Radio, RadioGroup, Scrollbar,
-        Select, Switch, Tab, Tabs,
+        Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
+        Scrollbar, Select, Switch, Tab, Tabs,
         button::{Size, Variant as ButtonVariant},
     },
     theme::Typography,
     theme::{UI_FONT, parse_hex, to_hex},
+    v_flex,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -235,6 +236,35 @@ impl Settings {
             Appearance::Dark => Variant::Dark,
             Appearance::System if Theme::for_window(window).dark_mode => Variant::Dark,
             Appearance::System => Variant::Light,
+        }
+    }
+
+    fn reset(&mut self, pane: Pane) {
+        let Settings {
+            appearance,
+            pointer_cursors,
+            font_smoothing,
+            font,
+            mono_font,
+            text_size,
+            mono_size,
+            colors,
+            shortcuts,
+            ..
+        } = Settings::default();
+        match pane {
+            Pane::General => {}
+            Pane::Appearance => {
+                self.appearance = appearance;
+                self.pointer_cursors = pointer_cursors;
+                self.font_smoothing = font_smoothing;
+                self.font = font;
+                self.mono_font = mono_font;
+                self.text_size = text_size;
+                self.mono_size = mono_size;
+                self.colors = colors;
+            }
+            Pane::Shortcuts => self.shortcuts = shortcuts,
         }
     }
 
@@ -666,6 +696,22 @@ impl Pane {
             Pane::Shortcuts => "Shortcuts",
         }
     }
+
+    fn changed(self, settings: &Settings) -> bool {
+        let mut reset = settings.clone();
+        reset.reset(self);
+        reset != *settings
+    }
+
+    fn reset_description(self) -> &'static str {
+        match self {
+            Pane::General => "",
+            Pane::Appearance => {
+                "Mode, colors, fonts, font sizes, font smoothing and cursor pointers go back to their defaults."
+            }
+            Pane::Shortcuts => "Every shortcut goes back to its default.",
+        }
+    }
 }
 
 struct Row {
@@ -751,6 +797,7 @@ struct SettingsWindow {
     mono_size: Entity<Input>,
     fonts: Rc<[SharedString]>,
     github_token: Entity<Input>,
+    resetting: Option<Pane>,
     _subscriptions: [Subscription; 4],
 }
 
@@ -809,6 +856,7 @@ impl SettingsWindow {
             scroll: ScrollHandle::new(),
             pane: Pane::General,
             advanced: false,
+            resetting: None,
             search,
             text_size,
             mono_size,
@@ -1113,6 +1161,49 @@ impl SettingsWindow {
         found
     }
 
+    fn reset(&mut self, pane: Pane, cx: &mut Context<Self>) {
+        self.resetting = None;
+        change(cx, |settings| settings.reset(pane));
+        if pane == Pane::Appearance {
+            for (input, size) in [
+                (&self.text_size, TextSize::default().0),
+                (&self.mono_size, MonoSize::default().0),
+            ] {
+                input.update(cx, |input, cx| input.set_text(size.to_string(), cx));
+            }
+        }
+        cx.notify();
+    }
+
+    fn reset_dialog(&self, cx: &mut Context<Self>) -> Dialog {
+        let pane = self.resetting.unwrap_or(self.pane);
+        let closing = cx.weak_entity();
+        Dialog::new(
+            "reset-page",
+            self.resetting.is_some(),
+            format!("Reset {}?", pane.label().to_lowercase()),
+        )
+        .alert()
+        .description(pane.reset_description())
+        .action(
+            Button::new("reset-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| {
+                this.resetting = None;
+                cx.notify();
+            })),
+        )
+        .action(
+            Button::new("reset-accept", "Reset")
+                .variant(ButtonVariant::Danger)
+                .on_click(cx.listener(move |this, _, _, cx| this.reset(pane, cx))),
+        )
+        .on_close(move |_, cx| {
+            let _ = closing.update(cx, |this, cx| {
+                this.resetting = None;
+                cx.notify();
+            });
+        })
+    }
+
     fn show(&mut self, pane: Pane, cx: &mut Context<Self>) {
         self.search.update(cx, |search, cx| {
             if !search.text().is_empty() {
@@ -1162,7 +1253,44 @@ impl Render for SettingsWindow {
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| this.show(Pane::ALL[index], cx));
         });
+        let changed = self.pane.changed(&cx.global::<Store>().settings);
+        let reset_dialog = self.reset_dialog(cx);
+        let confirm_reset = cx.listener(|this, _, _, cx| {
+            this.resetting = Some(this.pane);
+            cx.notify();
+        });
         let theme = cx.theme();
+        let title = if query.is_empty() {
+            self.pane.label()
+        } else {
+            "Results"
+        };
+        let header = h_flex()
+            .flex_none()
+            .pt(layout.space(4.0))
+            .w_full()
+            .max_w(px(600.0))
+            .mx_auto()
+            .px(layout.space(7.0))
+            .justify_between()
+            .child(
+                div()
+                    .id("page-heading")
+                    .role(Role::Heading)
+                    .aria_level(1)
+                    .aria_label(title)
+                    .text_heading(theme.typography)
+                    .child(title),
+            )
+            .when(query.is_empty() && self.pane != Pane::General, |header| {
+                header.child(
+                    Button::new("reset-page", "Reset to defaults…")
+                        .variant(ButtonVariant::Ghost)
+                        .size(Size::Small)
+                        .disabled(!changed)
+                        .on_click(confirm_reset),
+                )
+            });
         div()
             .flex()
             .flex_col()
@@ -1172,6 +1300,7 @@ impl Render for SettingsWindow {
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
             .child(mira_ui::nav::pointer_probe())
+            .child(reset_dialog)
             .child(
                 window_bar(window, cx)
                     .child(bar_title("Settings", cx))
@@ -1217,27 +1346,29 @@ impl Render for SettingsWindow {
                             ),
                     )
                     .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .id("settings")
-                                    .size_full()
-                                    .max_w(px(600.0))
-                                    .mx_auto()
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.scroll)
-                                    .flex()
-                                    .flex_col()
-                                    .gap(layout.space(4.0))
-                                    .px(layout.space(4.0))
-                                    .pt(layout.space(3.0))
-                                    .pb(layout.space(4.0))
-                                    .children(groups),
-                            )
-                            .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
+                        v_flex().flex_1().min_w_0().child(header).child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_h_0()
+                                .child(
+                                    div()
+                                        .id("settings")
+                                        .size_full()
+                                        .max_w(px(600.0))
+                                        .mx_auto()
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.scroll)
+                                        .flex()
+                                        .flex_col()
+                                        .gap(layout.space(4.0))
+                                        .px(layout.space(4.0))
+                                        .pt(layout.space(3.0))
+                                        .pb(layout.space(4.0))
+                                        .children(groups),
+                                )
+                                .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
+                        ),
                     ),
             )
     }
@@ -1376,6 +1507,103 @@ mod tests {
     }
 
     #[gpui::test]
+    fn resetting_a_page_restores_only_that_pages_settings(cx: &mut gpui::TestAppContext) {
+        let path = std::env::temp_dir().join(format!(
+            "mira-settings-reset-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let chosen = Settings {
+            start: Start::Manager,
+            appearance: Appearance::Dark,
+            pointer_cursors: true,
+            font_smoothing: true,
+            font: Some("Menlo".into()),
+            mono_font: Some("Courier".into()),
+            text_size: FontSize(15),
+            mono_size: FontSize(12),
+            colors: Colors {
+                light: BTreeMap::new(),
+                dark: BTreeMap::from([(ColorToken::Accent, Hex(parse_hex("#3B82F6").unwrap()))]),
+            },
+            script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
+            shortcuts: Overrides::from([(Shortcut::Bank, Some("cmd-k".into()))]),
+            ..Settings::default()
+        };
+        chosen.save(&path).unwrap();
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            init(path.clone(), |_| {}, cx);
+            packages::init(
+                std::env::temp_dir().join("mira-settings-reset-packages"),
+                std::env::temp_dir().join("mira-settings-reset-token"),
+                cx,
+            );
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(cx));
+        let settings = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| cx.global::<Store>().settings.clone())
+        };
+        assert!(Pane::Appearance.changed(&settings(cx)));
+        assert!(!Pane::General.changed(&settings(cx)));
+
+        view.update(cx, |this, cx| this.reset(Pane::Appearance, cx));
+        cx.run_until_parked();
+        let expected = Settings {
+            start: Start::Manager,
+            script_folders: chosen.script_folders.clone(),
+            shortcuts: chosen.shortcuts.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(settings(cx), expected);
+        assert_eq!(Settings::load(&path).unwrap(), expected);
+        let field = |input: fn(&SettingsWindow) -> &Entity<Input>,
+                     cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| input(view.read(cx)).read(cx).text().to_owned())
+        };
+        assert_eq!(field(|this| &this.text_size, cx), "13");
+        assert_eq!(field(|this| &this.mono_size, cx), "11");
+        assert!(!Pane::Appearance.changed(&settings(cx)));
+        assert!(Pane::Shortcuts.changed(&settings(cx)));
+
+        view.update(cx, |this, cx| {
+            this.pane = Pane::Shortcuts;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let root = cx.update(|_, cx| view.read(cx).focus.clone());
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus(&root, cx);
+        });
+        cx.simulate_keystrokes("tab tab tab");
+        cx.run_until_parked();
+        let button = cx.update(|window, cx| window.focused(cx)).unwrap();
+        view.update(cx, |this, cx| {
+            this.resetting = Some(Pane::Shortcuts);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.reset(Pane::Shortcuts, cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert!(
+            cx.update(|window, cx| window.focused(cx).is_some_and(|focus| focus != button)),
+            "Tab moves on once the reset button is disabled"
+        );
+        assert_eq!(
+            settings(cx),
+            Settings {
+                shortcuts: Overrides::new(),
+                ..expected
+            }
+        );
+        assert!(!Pane::Shortcuts.changed(&settings(cx)));
+        fs::remove_file(path).ok();
+    }
+
+    #[gpui::test]
     fn a_recorded_shortcut_is_saved_and_bound_and_a_taken_one_is_not(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1480,6 +1708,13 @@ mod tests {
                 "",
             ),
             (
+                "settings-reset",
+                SETTINGS_HEIGHT,
+                Pane::Appearance,
+                edited.clone(),
+                "",
+            ),
+            (
                 "settings-min",
                 SETTINGS_MIN_HEIGHT,
                 Pane::Appearance,
@@ -1519,6 +1754,7 @@ mod tests {
                         let mut settings = SettingsWindow::new(cx);
                         settings.pane = pane;
                         settings.advanced = pane == Pane::Appearance;
+                        settings.resetting = (name == "settings-reset").then_some(pane);
                         settings
                             .search
                             .update(cx, |search, cx| search.set_text(query, cx));

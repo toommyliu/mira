@@ -402,8 +402,8 @@ impl RenderOnce for Button {
                 button.aria_expanded(expanded)
             })
             .when(self.busy, |button| button.aria_description("Working"))
-            .when(!self.disabled, |button| {
-                button.track_focus(&focus.clone().tab_stop(true))
+            .when(!self.disabled || focus.is_focused(window), |button| {
+                button.track_focus(&focus.clone().tab_stop(!self.disabled))
             })
             .relative()
             .flex_none()
