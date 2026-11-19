@@ -1,0 +1,4 @@
+https://github.com/auqw/Skua
+5a4c2911766a46a485cef9a795d831213d7477dc
+
+api/ is Skua.AS3/skua/src/skua/api, unchanged. Main.as and module/ModalMC.as are Mira's stand-ins for the two things api/ uses outside itself.

@@ -1,0 +1,10 @@
+https://github.com/auqw/Skua
+5a4c2911766a46a485cef9a795d831213d7477dc
+
+Skua.Core.Interfaces, Skua.Core.Models and Skua.Core.Utils are the .cs sources of those projects, unchanged.
+skua/contracts builds them. Its ClientFileSources.cs replaces Models/ClientFileSources.cs so Skua's folder is MIRA_SKUA_DIR.
+Skua.Core.Skills holds Skua.Core/Skills/AdvancedSkillCommand.cs and AdvancedSkillProvider.cs, unchanged; skua/Bot builds them.
+skua/Bot/bindings.json comes from `node scripts/skua-bindings.ts <Skua checkout>`.
+as3/src/skua/api is Skua.AS3/skua/src/skua/api at the same commit.
+
+To bump: copy the three projects' .cs files, the two skill files and as3 api/ from the new commit, rerun scripts/skua-bindings.ts, then scripts/build-skua.
