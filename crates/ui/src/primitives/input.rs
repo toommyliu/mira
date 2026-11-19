@@ -880,19 +880,19 @@ impl Render for Input {
                     .pl(px(8.0))
                     .pr(px(if clearable || self.password { 2.0 } else { 8.0 }))
                     .rounded(radius)
-                    .bg(theme.fill)
+                    .bg(theme.secondary)
                     .border_1()
                     .border_color(match (self.invalid, self.pill) {
-                        (true, _) => theme.danger,
-                        (false, true) => theme.fill,
+                        (true, _) => theme.destructive,
+                        (false, true) => theme.secondary,
                         (false, false) => theme.border,
                     })
             })
             .when(focused, |field| {
                 let color = if self.invalid {
-                    theme.danger
+                    theme.destructive
                 } else {
-                    theme.focus
+                    theme.ring
                 };
                 if self.bare {
                     field.child(
@@ -911,15 +911,17 @@ impl Render for Input {
             .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
             .line_height(LINE_BODY)
             .text_color(if self.disabled {
-                theme.text_disabled
+                theme
+                    .muted_foreground
+                    .opacity(crate::theme::DISABLED_OPACITY)
             } else {
-                theme.text
+                theme.foreground
             })
             .when(self.numeric.is_some(), |field| {
                 field.font_features(tabular())
             })
             .when(self.search, |field| {
-                field.child(icon(Icon::Search, theme.text_tertiary).mr(px(2.0)))
+                field.child(icon(Icon::Search, theme.muted_foreground).mr(px(2.0)))
             })
             .child(
                 div()
@@ -931,7 +933,7 @@ impl Render for Input {
                 field.child(
                     div()
                         .flex_none()
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child(suffix),
                 )
             })
@@ -1026,9 +1028,11 @@ impl gpui::Element for TextElement {
         let style = window.text_style();
         let (text, color) = if field.content.is_empty() {
             let color = if field.disabled {
-                theme.text_disabled
+                theme
+                    .muted_foreground
+                    .opacity(crate::theme::DISABLED_OPACITY)
             } else {
-                theme.text_tertiary
+                theme.muted_foreground
             };
             (field.placeholder.clone(), color)
         } else {
@@ -1108,7 +1112,7 @@ impl gpui::Element for TextElement {
                         point(bounds.left() + caret_x, bounds.top() + px(1.0)),
                         size(CARET_WIDTH, bounds.size.height - px(2.0)),
                     ),
-                    theme.text,
+                    theme.foreground,
                 )),
             )
         } else {
@@ -1125,7 +1129,7 @@ impl gpui::Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    theme.focus.opacity(0.35),
+                    theme.ring.opacity(0.35),
                 )),
                 None,
             )

@@ -1,9 +1,5 @@
-use gpui::{Div, FontWeight, Styled, div};
-
-use crate::theme::{
-    LINE_BODY, LINE_CAPTION, LINE_DISPLAY, LINE_SMALL, LINE_TITLE, TEXT_BODY, TEXT_CAPTION,
-    TEXT_DISPLAY, TEXT_SMALL, TEXT_TITLE,
-};
+use crate::Theme;
+use gpui::{Div, FontWeight, IntoElement, ParentElement as _, Pixels, Styled, div, px};
 
 pub fn h_flex() -> Div {
     div().flex().flex_row().items_center()
@@ -14,29 +10,108 @@ pub fn v_flex() -> Div {
 }
 
 pub trait StyledExt: Styled + Sized {
-    fn text_caption(self) -> Self {
-        self.text_size(TEXT_CAPTION).line_height(LINE_CAPTION)
+    fn window_surface(self, theme: &Theme) -> Self {
+        self.window_text(theme).bg(theme.background)
     }
 
-    fn text_small(self) -> Self {
-        self.text_size(TEXT_SMALL).line_height(LINE_SMALL)
+    fn window_text(self, theme: &Theme) -> Self {
+        self.font_family(theme.font_family.clone())
+            .text_body(theme.typography)
+            .text_color(theme.foreground)
     }
 
-    fn text_body(self) -> Self {
-        self.text_size(TEXT_BODY).line_height(LINE_BODY)
+    fn text_caption(self, typography: crate::theme::Typography) -> Self {
+        self.text_size(typography.secondary)
+            .line_height(typography.secondary_line)
     }
 
-    fn text_title(self) -> Self {
-        self.text_size(TEXT_TITLE)
-            .line_height(LINE_TITLE)
-            .font_weight(FontWeight::SEMIBOLD)
+    fn text_body(self, typography: crate::theme::Typography) -> Self {
+        self.text_size(typography.body)
+            .line_height(typography.body_line)
     }
 
-    fn text_display(self) -> Self {
-        self.text_size(TEXT_DISPLAY)
-            .line_height(LINE_DISPLAY)
-            .font_weight(FontWeight::SEMIBOLD)
+    fn text_title(self, typography: crate::theme::Typography) -> Self {
+        self.text_size(typography.body)
+            .line_height(typography.body_line)
+            .font_weight(FontWeight::MEDIUM)
     }
 }
 
 impl<T: Styled> StyledExt for T {}
+
+impl Theme {
+    pub fn toolbar(&self) -> Div {
+        h_flex()
+            .flex_none()
+            .min_h(self.layout.toolbar)
+            .px(self.space(3.0))
+            .py(self.space(1.0))
+            .gap(self.space(2.0))
+            .border_b_1()
+            .border_color(self.border)
+    }
+
+    pub fn footer(&self) -> Div {
+        h_flex()
+            .flex_none()
+            .min_h(self.layout.toolbar)
+            .px(self.space(4.0))
+            .py(self.space(1.5))
+            .gap(self.space(2.0))
+            .border_t_1()
+            .border_color(self.border)
+    }
+
+    pub fn sidebar_pane(&self) -> Div {
+        v_flex()
+            .flex_none()
+            .w(self.layout.sidebar)
+            .min_h_0()
+            .bg(self.sidebar)
+            .text_color(self.sidebar_foreground)
+            .border_r_1()
+            .border_color(self.sidebar_border)
+    }
+
+    pub fn inspector_pane(&self) -> Div {
+        v_flex()
+            .flex_none()
+            .min_h_0()
+            .w(self.layout.inspector)
+            .bg(self.background)
+            .border_l_1()
+            .border_color(self.border)
+    }
+
+    pub fn form_columns(
+        &self,
+        width: Pixels,
+        first: impl IntoElement,
+        second: impl IntoElement,
+    ) -> Div {
+        let inset = self.space(4.0);
+        if width >= self.layout.split_forms {
+            h_flex()
+                .items_start()
+                .min_h_full()
+                .child(div().flex_1().min_w_0().p(inset).child(first))
+                .child(div().self_stretch().w(px(1.0)).bg(self.border))
+                .child(div().flex_1().min_w_0().p(inset).child(second))
+        } else {
+            v_flex()
+                .p(inset)
+                .gap(inset)
+                .child(first)
+                .child(div().h(px(1.0)).bg(self.border))
+                .child(second)
+        }
+    }
+
+    pub fn account_columns(&self, pane: Pixels) -> usize {
+        let gap = self.space(2.0);
+        let inner = pane - self.space(3.0) * 2.0;
+        (f32::from(inner + gap) / f32::from(self.layout.card_min + gap))
+            .floor()
+            .clamp(1.0, 6.0) as usize
+    }
+}

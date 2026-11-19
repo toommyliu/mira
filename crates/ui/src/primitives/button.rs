@@ -324,64 +324,64 @@ impl RenderOnce for Button {
         let lit = self.selected == Some(true) || self.expanded == Some(true);
         let (bg, hover, active, fg, border) = match self.variant {
             Variant::Primary => (
-                theme.inverse,
-                theme.inverse_hover,
-                theme.inverse_hover,
-                theme.on_inverse,
+                theme.primary,
+                theme.primary.opacity(0.8),
+                theme.primary.opacity(0.8),
+                theme.primary_foreground,
                 None,
             ),
             Variant::Secondary => (
-                if lit { theme.fill_pressed } else { theme.fill },
-                theme.fill_hover,
-                theme.fill_pressed,
-                theme.text,
+                if lit { theme.muted } else { theme.secondary },
+                theme.muted,
+                theme.muted,
+                theme.foreground,
                 Some(theme.border),
             ),
             Variant::Outline => (
                 if lit {
-                    theme.fill_pressed
+                    theme.muted
                 } else {
                     gpui::transparent_black()
                 },
-                theme.fill_hover,
-                theme.fill_pressed,
-                theme.text,
+                theme.muted,
+                theme.muted,
+                theme.foreground,
                 Some(theme.border),
             ),
             Variant::Ghost => (
                 if lit {
-                    theme.selected
+                    theme.accent
                 } else {
                     gpui::transparent_black()
                 },
-                theme.fill_hover,
-                theme.fill_pressed,
+                theme.muted,
+                theme.muted,
                 if lit {
-                    theme.text
+                    theme.foreground
                 } else {
-                    theme.text_secondary
+                    theme.muted_foreground
                 },
                 None,
             ),
             Variant::Danger => (
-                theme.danger,
-                theme.danger_hover,
-                theme.danger_hover,
-                theme.on_danger,
+                theme.destructive,
+                theme.destructive.opacity(0.2),
+                theme.destructive.opacity(0.2),
+                theme.destructive,
                 None,
             ),
         };
         let divider = fg.opacity(0.2);
         let fg = match (self.disabled, self.joined) {
             (false, _) => fg,
-            (true, None) => theme.text_disabled,
+            (true, None) => theme.muted_foreground.opacity(DISABLED_OPACITY),
             (true, Some(_)) => fg.opacity(DISABLED_OPACITY),
         };
         let bg = if self.disabled
             && self.joined.is_none()
             && matches!(self.variant, Variant::Primary | Variant::Danger)
         {
-            theme.fill
+            theme.secondary
         } else {
             bg
         };
@@ -463,7 +463,7 @@ impl RenderOnce for Button {
                     {
                         Vec::new()
                     } else {
-                        theme.edge()
+                        theme.surface_edge()
                     },
                 }
                 .render((self.id.clone(), "face"), window, cx),
@@ -511,7 +511,7 @@ impl RenderOnce for Button {
                         .absolute()
                         .inset_0()
                         .border_2()
-                        .border_color(theme.focus)
+                        .border_color(theme.ring)
                         .child(nav::reveal_probe()),
                 })
             });

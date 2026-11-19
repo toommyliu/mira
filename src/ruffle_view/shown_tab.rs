@@ -167,7 +167,7 @@ fn tab_menu(
                 .flex_shrink(1.0)
                 .min_w_0()
                 .when(pinned, |trigger| {
-                    trigger.start_slot(icon(Icon::Pin, theme.accent_text).with_transformation(
+                    trigger.start_slot(icon(Icon::Pin, theme.foreground).with_transformation(
                         Transformation::rotate(radians(std::f32::consts::FRAC_PI_4)),
                     ))
                 })
@@ -176,7 +176,7 @@ fn tab_menu(
                         .min_w_0()
                         .max_w(px(180.0))
                         .truncate()
-                        .text_color(theme.text)
+                        .text_color(theme.foreground)
                         .child(shown),
                 )
                 .end_slot(Icon::ChevronDown),
@@ -283,9 +283,9 @@ mod tests {
                 .default_open(matches!(target, Target::Pinned(_)));
             div()
                 .size_full()
-                .bg(theme.base)
-                .text_color(theme.text)
-                .font_family(mira_ui::theme::SYSTEM_SANS)
+                .bg(theme.background)
+                .text_color(theme.foreground)
+                .font_family(mira_ui::theme::UI_FONT)
                 .text_size(TEXT_BODY)
                 .child(title_bar(tool, Some(menu), window, cx))
         }

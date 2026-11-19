@@ -198,7 +198,7 @@ impl RenderOnce for Dialog {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme.backdrop)
+                        .bg(gpui::black().opacity(0.80))
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             if let Some(close) = &backdrop_close {
                                 close(window, cx);
@@ -243,11 +243,11 @@ impl RenderOnce for Dialog {
                                 .max_h(viewport.height - WINDOW_MARGIN * 2.0)
                                 .p(PADDING)
                                 .rounded(theme.radius.dialog)
-                                .bg(theme.overlay)
-                                .text_color(theme.text)
+                                .bg(theme.popover)
+                                .text_color(theme.foreground)
                                 .border_1()
                                 .border_color(theme.border)
-                                .shadow(theme.floating())
+                                .shadow(theme.popup_shadow())
                                 .child(
                                     div()
                                         .flex()
@@ -294,7 +294,7 @@ impl RenderOnce for Dialog {
                                                 div()
                                                     .text_size(TEXT_BODY)
                                                     .line_height(LINE_BODY)
-                                                    .text_color(theme.text_secondary)
+                                                    .text_color(theme.muted_foreground)
                                                     .child(description),
                                             )
                                         }),

@@ -217,9 +217,9 @@ impl Render {
     ) -> Stateful<Div> {
         let theme = &self.theme;
         let quiet = if current {
-            theme.text_secondary
+            theme.muted_foreground
         } else {
-            theme.text_tertiary
+            theme.muted_foreground
         };
         base.flex()
             .flex_none()
@@ -227,20 +227,20 @@ impl Render {
             .gap(px(8.0))
             .px(px(8.0))
             .py(px(6.0))
-            .rounded(theme.radius.item)
+            .rounded(theme.radius.control)
             .group(GROUP)
-            .text_body()
+            .text_body(theme.typography)
             .text_color(if current {
-                theme.text
+                theme.foreground
             } else {
-                theme.text_secondary
+                theme.muted_foreground
             })
-            .when(current, |tab| tab.bg(theme.selected))
+            .when(current, |tab| tab.bg(theme.accent))
             .when(!current && pose == Pose::Rest, |tab| {
-                tab.hover(|style| style.bg(theme.fill_hover))
+                tab.hover(|style| style.bg(theme.muted))
             })
             .when(current && self.ring, |tab| {
-                tab.child(theme.focus_ring(theme.radius.item))
+                tab.child(theme.focus_ring(theme.radius.control))
             })
             .when_some(tab.start, |row, start| {
                 row.child(h_flex().flex_none().h(crate::theme::LINE_BODY).child(start))
@@ -257,7 +257,7 @@ impl Render {
                         body.child(
                             div()
                                 .truncate()
-                                .text_small()
+                                .text_caption(theme.typography)
                                 .text_color(quiet)
                                 .child(description),
                         )
@@ -271,7 +271,7 @@ impl Render {
                     h_flex()
                         .flex_none()
                         .h(crate::theme::LINE_BODY)
-                        .text_small()
+                        .text_caption(theme.typography)
                         .text_color(quiet)
                         .child(end),
                 )
@@ -299,15 +299,15 @@ impl Render {
             .items_center()
             .gap(px(6.0))
             .h(px(30.0))
-            .text_body()
+            .text_body(theme.typography)
             .font_weight(FontWeight::MEDIUM)
             .text_color(if current {
-                theme.text
+                theme.foreground
             } else {
-                theme.text_tertiary
+                theme.muted_foreground
             })
             .when(!current, |tab| {
-                tab.hover(|style| style.text_color(theme.text_secondary))
+                tab.hover(|style| style.text_color(theme.muted_foreground))
             })
             .when_some(tab.start, |row, start| row.child(start))
             .child(
@@ -328,8 +328,8 @@ impl Render {
             .when_some(tab.end, |row, end| {
                 row.child(
                     div()
-                        .text_small()
-                        .text_color(theme.text_tertiary)
+                        .text_caption(theme.typography)
+                        .text_color(theme.muted_foreground)
                         .child(end),
                 )
             })
@@ -342,7 +342,7 @@ impl Render {
                         .bottom(px(-1.0))
                         .h(px(2.0))
                         .rounded_full()
-                        .bg(theme.text),
+                        .bg(theme.foreground),
                 )
             })
     }
@@ -411,7 +411,7 @@ impl RenderOnce for Tabs {
                 } else {
                     list.gap(px(16.0))
                         .border_b_1()
-                        .border_color(render.theme.hairline)
+                        .border_color(render.theme.border)
                 }
             });
         match self.on_reorder {

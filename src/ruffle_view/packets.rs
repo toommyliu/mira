@@ -718,7 +718,7 @@ impl Packets {
             .px(px(12.0))
             .gap(px(8.0))
             .border_b_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(capture)
             .child(div().flex_1().min_w_0().child(self.search.clone()))
             .child(
@@ -782,7 +782,7 @@ impl Packets {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme.surface)
+                .bg(theme.card)
                 .child(Empty::new(title, body))
                 .into_any_element();
         }
@@ -868,8 +868,8 @@ impl Packets {
             .pr(px(6.0))
             .gap(px(8.0))
             .border_b_1()
-            .border_color(theme.hairline)
-            .text_small()
+            .border_color(theme.border)
+            .text_caption(theme.typography)
             .child(
                 div()
                     .flex_none()
@@ -881,7 +881,7 @@ impl Packets {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(theme.text_tertiary)
+                    .text_color(theme.muted_foreground)
                     .child(clock(packet.at)),
             )
             .child(
@@ -919,8 +919,8 @@ impl Packets {
         v_flex()
             .flex_none()
             .min_h_0()
-            .bg(theme.surface)
-            .border_color(theme.hairline)
+            .bg(theme.card)
+            .border_color(theme.border)
             .map(|panel| {
                 if side {
                     panel.w(PANEL_WIDTH).border_l_1()
@@ -940,7 +940,7 @@ impl Packets {
                     .font_family(SYSTEM_MONO)
                     .text_size(TEXT_CAPTION)
                     .line_height(px(17.0))
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .child(text),
             )
     }
@@ -954,14 +954,14 @@ impl Packets {
             .px(px(12.0))
             .py(px(10.0))
             .border_t_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(
                 h_flex()
                     .gap(px(8.0))
                     .child(
                         div()
                             .flex_none()
-                            .text_color(theme.text_secondary)
+                            .text_color(theme.muted_foreground)
                             .child("Send to"),
                     )
                     .child(
@@ -1039,7 +1039,7 @@ impl Packets {
             .px(px(12.0))
             .gap(px(12.0))
             .border_b_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(switch)
             .child(
                 div()
@@ -1049,28 +1049,28 @@ impl Packets {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_small()
+                    .text_caption(theme.typography)
                     .text_color(status_color)
                     .child(status),
             )
             .child(
                 div()
                     .flex_none()
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .child("Send to"),
             )
             .child(target)
             .child(
                 div()
                     .flex_none()
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .child("Every"),
             )
             .child(delay);
         let list = if settings.packets.is_empty() {
             div()
-                .text_small()
-                .text_color(theme.text_tertiary)
+                .text_caption(theme.typography)
+                .text_color(theme.muted_foreground)
                 .child(
                     "The queue is empty. Add a packet below, or right-click an outbound packet in the log.",
                 )
@@ -1097,10 +1097,11 @@ impl Packets {
         packets: Vec<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let typography = theme.typography;
         let packets: Rc<[String]> = packets.into();
         let (queued, editing) = (self.queued, self.editing);
-        let quiet = theme.text_tertiary;
-        let accent = theme.accent_text;
+        let quiet = theme.muted_foreground;
+        let accent = theme.foreground;
         let this = cx.weak_entity();
         let rows = {
             let this = this.clone();
@@ -1110,7 +1111,7 @@ impl Packets {
                     .start_slot(
                         div()
                             .min_w(px(14.0))
-                            .text_small()
+                            .text_caption(typography)
                             .text_color(quiet)
                             .child((index + 1).to_string()),
                     )
@@ -1201,7 +1202,7 @@ impl Packets {
             .child(note_line(
                 theme,
                 self.add_problem
-                    .map(|problem| (problem.message().into(), theme.danger_text)),
+                    .map(|problem| (problem.message().into(), theme.destructive)),
             ))
     }
 }
@@ -1233,13 +1234,13 @@ fn row_actions(this: &WeakEntity<Packets>, index: usize) -> Div {
 fn note_line(theme: &Theme, status: Option<(SharedString, Hsla)>) -> Div {
     h_flex()
         .gap(px(12.0))
-        .text_small()
+        .text_caption(theme.typography)
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(theme.text_tertiary)
+                .text_color(theme.muted_foreground)
                 .child(PLACEHOLDERS),
         )
         .when_some(status, |line, (text, color)| {
@@ -1311,7 +1312,7 @@ fn queue_status(
         _ if !settings.enabled => {
             return (
                 "Sends each packet in order, then starts over.".into(),
-                theme.text_tertiary,
+                theme.muted_foreground,
             );
         }
         Status::Sent { index, count } => (
@@ -1398,9 +1399,9 @@ impl Render for Packets {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(FOCUS_SCOPE)
             .id("packets")
             .track_focus(&self.focus)

@@ -51,12 +51,14 @@ impl RenderOnce for Empty {
                 div()
                     .map(|title| {
                         if self.compact {
-                            title.text_body().font_weight(FontWeight::MEDIUM)
+                            title
+                                .text_body(theme.typography)
+                                .font_weight(FontWeight::MEDIUM)
                         } else {
-                            title.text_title()
+                            title.text_title(theme.typography)
                         }
                     })
-                    .text_color(theme.text)
+                    .text_color(theme.foreground)
                     .child(self.title),
             )
             .child(
@@ -65,7 +67,7 @@ impl RenderOnce for Empty {
                     .text_center()
                     .text_size(TEXT_BODY)
                     .line_height(LINE_BODY)
-                    .text_color(theme.text_secondary)
+                    .text_color(theme.muted_foreground)
                     .child(self.body),
             )
             .when(!self.actions.is_empty(), |empty| {

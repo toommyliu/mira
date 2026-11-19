@@ -42,7 +42,7 @@ impl Spinner {
 
 impl RenderOnce for Spinner {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let color = self.color.unwrap_or(cx.theme().text);
+        let color = self.color.unwrap_or(cx.theme().foreground);
         let ring = svg()
             .path(super::Icon::LoaderCircle.path())
             .flex_none()

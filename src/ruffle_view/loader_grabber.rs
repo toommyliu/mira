@@ -128,9 +128,9 @@ impl Outcome {
 
     fn color(&self, theme: &Theme) -> Hsla {
         if self.failed {
-            theme.danger_text
+            theme.destructive
         } else {
-            theme.accent_text
+            theme.foreground
         }
     }
 }
@@ -721,8 +721,8 @@ impl LoaderGrabber {
             .and_then(|loader| loader.problem.clone())
             .map(|problem| {
                 div()
-                    .text_small()
-                    .text_color(theme.danger_text)
+                    .text_caption(theme.typography)
+                    .text_color(theme.destructive)
                     .child(problem)
             });
         let taking = self.taking.is_some();
@@ -752,7 +752,7 @@ impl LoaderGrabber {
             .px(px(16.0))
             .py(px(10.0))
             .border_b_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(
                 h_flex()
                     .gap(px(8.0))
@@ -840,7 +840,7 @@ impl LoaderGrabber {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_small()
+                    .text_caption(theme.typography)
                     .text_color(outcome.color(theme))
                     .child(outcome.text.clone())
             }))
@@ -948,7 +948,7 @@ impl LoaderGrabber {
         let (heading, color) = match (&self.problem, &self.snapshot) {
             (Some(Problem::Failed(error)), _) => (
                 SharedString::from(format!("Couldn't refresh: {error}")),
-                theme.danger_text,
+                theme.destructive,
             ),
             (
                 _,
@@ -956,8 +956,8 @@ impl LoaderGrabber {
                     heading: Some(heading),
                     ..
                 }),
-            ) => (heading.clone().into(), theme.text_secondary),
-            _ => ("Name".into(), theme.text_tertiary),
+            ) => (heading.clone().into(), theme.muted_foreground),
+            _ => ("Name".into(), theme.muted_foreground),
         };
         let [meta, id] = self.source.columns();
         h_flex()
@@ -966,8 +966,8 @@ impl LoaderGrabber {
             .gap(px(8.0))
             .pl(px(13.0))
             .pr(px(9.0) + Scrollbar::GUTTER)
-            .text_small()
-            .text_color(theme.text_tertiary)
+            .text_caption(theme.typography)
+            .text_color(theme.muted_foreground)
             .child(
                 div()
                     .flex_1()
@@ -987,7 +987,7 @@ impl LoaderGrabber {
             .w(INSPECTOR)
             .min_h_0()
             .border_l_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(
                 div()
                     .id("grab-inspector")
@@ -1012,8 +1012,8 @@ impl LoaderGrabber {
             return div()
                 .py(px(32.0))
                 .text_center()
-                .text_small()
-                .text_color(theme.text_tertiary)
+                .text_caption(theme.typography)
+                .text_color(theme.muted_foreground)
                 .when(pickable, |note| {
                     note.child("Pick something to see its details and actions.")
                 })
@@ -1046,7 +1046,7 @@ impl LoaderGrabber {
                 div()
                     .max_w_full()
                     .truncate()
-                    .text_small()
+                    .text_caption(theme.typography)
                     .text_color(outcome.color(theme))
                     .child(outcome.text.clone())
             });
@@ -1165,7 +1165,7 @@ impl LoaderGrabber {
         let small = |text: String, color: Hsla| {
             div()
                 .flex_none()
-                .text_small()
+                .text_caption(theme.typography)
                 .font_features(tabular())
                 .text_color(color)
                 .child(text)
@@ -1176,9 +1176,9 @@ impl LoaderGrabber {
             .h(ROW)
             .mx(px(-4.0))
             .px(px(4.0))
-            .rounded(theme.radius.item)
+            .rounded(theme.radius.control)
             .pointer_cursor(theme)
-            .hover(|style| style.bg(theme.fill))
+            .hover(|style| style.bg(theme.secondary))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_details(key, cx)))
             .child(
                 Button::icon(
@@ -1207,17 +1207,17 @@ impl LoaderGrabber {
                         } else {
                             format!("×{}", line.quantity)
                         };
-                        name.child(small(amount, theme.text_tertiary))
+                        name.child(small(amount, theme.muted_foreground))
                     }),
             )
             .children(
                 line.item_id
-                    .map(|item_id| small(item_id.to_string(), theme.text_tertiary)),
+                    .map(|item_id| small(item_id.to_string(), theme.muted_foreground)),
             )
             .child(
                 small(
                     line.chance.map(percent).unwrap_or_default(),
-                    theme.text_secondary,
+                    theme.muted_foreground,
                 )
                 .min_w(px(32.0))
                 .text_right(),
@@ -1284,9 +1284,9 @@ impl LoaderGrabber {
                 .children(detail(line).map(|text| {
                     div()
                         .flex_none()
-                        .text_small()
+                        .text_caption(theme.typography)
                         .font_features(tabular())
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child(text)
                 }))
                 .child(
@@ -1294,7 +1294,7 @@ impl LoaderGrabber {
                         .flex_none()
                         .min_w(px(32.0))
                         .text_right()
-                        .text_small()
+                        .text_caption(theme.typography)
                         .font_features(tabular())
                         .text_color(color)
                         .child(amount),
@@ -1353,8 +1353,8 @@ fn line(entry: &Entry, theme: &Theme) -> ListItem {
                     row.child(
                         div()
                             .flex_none()
-                            .text_small()
-                            .text_color(theme.text_tertiary)
+                            .text_caption(theme.typography)
+                            .text_color(theme.muted_foreground)
                             .child(tags),
                     )
                 }),
@@ -1367,7 +1367,7 @@ fn line(entry: &Entry, theme: &Theme) -> ListItem {
                         .w(META)
                         .text_right()
                         .truncate()
-                        .when(entry.here, |meta| meta.text_color(theme.accent_text))
+                        .when(entry.here, |meta| meta.text_color(theme.foreground))
                         .child(entry.meta.clone()),
                 )
                 .child(div().w(ID).text_right().child(entry.id.clone())),
@@ -1378,13 +1378,13 @@ fn amount(theme: &Theme, line: &Line) -> (String, Hsla) {
     let held = line.held.total();
     if line.needed {
         let color = if held >= line.quantity {
-            theme.accent_text
+            theme.foreground
         } else {
-            theme.text_secondary
+            theme.muted_foreground
         };
         (format!("{held}/{}", line.quantity), color)
     } else {
-        (format!("×{}", line.quantity), theme.text_secondary)
+        (format!("×{}", line.quantity), theme.muted_foreground)
     }
 }
 
@@ -1413,12 +1413,12 @@ fn facts(theme: &Theme, facts: &[(&'static str, String)]) -> Div {
             h_flex()
                 .items_start()
                 .gap(px(12.0))
-                .text_small()
+                .text_caption(theme.typography)
                 .child(
                     div()
                         .flex_none()
                         .w(LABEL_WIDTH)
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child(*label),
                 )
                 .child(
@@ -1434,17 +1434,17 @@ fn facts(theme: &Theme, facts: &[(&'static str, String)]) -> Div {
 fn caption(theme: &Theme, title: &'static str) -> Div {
     v_flex().gap(px(4.0)).child(
         div()
-            .text_small()
+            .text_caption(theme.typography)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_secondary)
+            .text_color(theme.muted_foreground)
             .child(title),
     )
 }
 
 fn quiet(theme: &Theme, text: &'static str) -> Div {
     div()
-        .text_small()
-        .text_color(theme.text_tertiary)
+        .text_caption(theme.typography)
+        .text_color(theme.muted_foreground)
         .child(text)
 }
 
@@ -1492,7 +1492,7 @@ impl Render for LoaderGrabber {
                 .max_w(px(360.0))
                 .pr(px(16.0))
                 .truncate()
-                .text_small()
+                .text_caption(theme.typography)
                 .text_color(outcome.color(&theme))
                 .child(outcome.text.clone())
         }));
@@ -1519,9 +1519,9 @@ impl Render for LoaderGrabber {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(FOCUS_SCOPE)
             .id("loader-grabber")
             .track_focus(&self.focus)

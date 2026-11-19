@@ -205,14 +205,14 @@ fn popup(
                     .py(px(4.0))
                     .px(px(8.0))
                     .rounded(theme.radius.control)
-                    .bg(theme.overlay)
+                    .bg(theme.popover)
                     .border_1()
                     .border_color(theme.border)
-                    .shadow(theme.floating())
+                    .shadow(theme.popup_shadow())
                     .text_size(TEXT_SMALL)
                     .line_height(LINE_SMALL)
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.foreground)
                     .whitespace_nowrap()
                     .child(label),
             ),

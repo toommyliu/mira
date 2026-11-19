@@ -14,8 +14,8 @@ pub(super) const LABEL_WIDTH: Pixels = px(96.0);
 
 pub(super) fn note(text: impl Into<SharedString>, enabled: bool, theme: &Theme) -> Div {
     div()
-        .text_small()
-        .text_color(theme.text_tertiary)
+        .text_caption(theme.typography)
+        .text_color(theme.muted_foreground)
         .when(!enabled, |note| note.opacity(DISABLED_OPACITY))
         .child(text.into())
 }
@@ -50,7 +50,7 @@ pub(super) fn section(
                             .aria_label(text.clone())
                             .min_w_0()
                             .truncate()
-                            .text_small()
+                            .text_caption(theme.typography)
                             .text_color(color)
                             .child(text),
                     )

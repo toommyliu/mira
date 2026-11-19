@@ -268,8 +268,8 @@ impl Render for ScriptDialogs {
             .when(overflowing, |scroller| {
                 scroller.min_h(LINE_BODY * 2.0).pr(Scrollbar::GUTTER)
             })
-            .text_body()
-            .text_color(theme.text_secondary)
+            .text_body(theme.typography)
+            .text_color(theme.muted_foreground)
             .child(message);
         let prompt = match (&self.prompt, request) {
             (Some(prompt), DialogRequest::Prompt { .. }) => Some(prompt.input.clone()),
@@ -295,9 +295,9 @@ impl Render for ScriptDialogs {
         let hidden_below = self.scroll.max_offset().y - scrolled;
         let fade = |toward_top: bool| {
             let (from, to) = if toward_top {
-                (theme.overlay, theme.overlay.opacity(0.0))
+                (theme.popover, theme.popover.opacity(0.0))
             } else {
-                (theme.overlay.opacity(0.0), theme.overlay)
+                (theme.popover.opacity(0.0), theme.popover)
             };
             div()
                 .absolute()
@@ -398,7 +398,7 @@ mod tests {
     };
     use mira_ui::{
         FOCUS_SCOPE,
-        theme::{SYSTEM_SANS, TEXT_BODY},
+        theme::{TEXT_BODY, UI_FONT},
     };
     use serde_json::{Value as Json, json};
 
@@ -416,9 +416,9 @@ mod tests {
                 .key_context(FOCUS_SCOPE)
                 .track_focus(&self.focus)
                 .size_full()
-                .bg(theme.base)
-                .text_color(theme.text)
-                .font_family(SYSTEM_SANS)
+                .bg(theme.background)
+                .text_color(theme.foreground)
+                .font_family(UI_FONT)
                 .text_size(TEXT_BODY)
                 .child(self.dialogs.clone())
         }

@@ -67,7 +67,7 @@ impl RenderOnce for Field {
             .text_size(TEXT_SMALL)
             .line_height(LINE_SMALL)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .child(self.label)
             .children(self.end);
         div()
@@ -87,8 +87,8 @@ impl RenderOnce for Field {
                 }
             })
             .map(|field| match (self.error, self.description) {
-                (Some(error), _) => field.child(note(error, theme.danger_text)),
-                (None, Some(description)) => field.child(note(description, theme.text_tertiary)),
+                (Some(error), _) => field.child(note(error, theme.destructive)),
+                (None, Some(description)) => field.child(note(description, theme.muted_foreground)),
                 (None, None) => field,
             })
     }

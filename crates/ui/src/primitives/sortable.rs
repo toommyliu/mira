@@ -411,9 +411,9 @@ impl RenderOnce for Sortable {
                         div()
                             .w(size.width)
                             .h(size.height)
-                            .rounded(theme.radius.item)
-                            .bg(theme.overlay)
-                            .shadow(theme.floating())
+                            .rounded(theme.radius.control)
+                            .bg(theme.popover)
+                            .shadow(theme.popup_shadow())
                             .child(item((index, Pose::Lifted), window, cx)),
                     ),
                 )

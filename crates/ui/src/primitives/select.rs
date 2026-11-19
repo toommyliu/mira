@@ -159,7 +159,7 @@ impl RenderOnce for Select {
             .disabled(self.disabled)
             .end_slot(
                 div()
-                    .text_color(theme.text_tertiary)
+                    .text_color(theme.muted_foreground)
                     .child(Icon::ChevronDown),
             )
             .child(
@@ -167,7 +167,9 @@ impl RenderOnce for Select {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .when(value.is_none(), |text| text.text_color(theme.text_tertiary))
+                    .when(value.is_none(), |text| {
+                        text.text_color(theme.muted_foreground)
+                    })
                     .child(value.unwrap_or(self.placeholder)),
             )
             .font_weight(gpui::FontWeight::NORMAL)
