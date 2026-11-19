@@ -1,9 +1,9 @@
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Render, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
-    actions, div, prelude::FluentBuilder as _, px, size,
+    Render, Role, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle,
+    WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
@@ -11,7 +11,7 @@ use mira_ui::{
     h_flex,
     primitives::{
         Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input, InputEvent,
-        MenuItem, Switch,
+        MenuItem, Scrollbar, Switch,
         button::{Size, Variant},
     },
     theme::{DISABLED_OPACITY, RING_ROOM, tabular},
@@ -21,7 +21,7 @@ use mira_ui::{
 use super::{
     Client,
     client::CloseSession,
-    form::{note, row, row_label, section},
+    form::{choices_row, note, row, section},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
@@ -39,7 +39,7 @@ use crate::{
 
 actions!(mira, [OpenEnvironment]);
 
-const WIDTH: f32 = 760.0;
+const WIDTH: f32 = 800.0;
 const HEIGHT: f32 = 600.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 280.0;
@@ -241,6 +241,8 @@ pub(crate) struct Environment {
     fetch: Fetch,
     pickup: Pickup,
     confirm: Option<Confirm>,
+    scroll: ScrollHandle,
+    columns: [ScrollHandle; 2],
     _subscriptions: Vec<Subscription>,
 }
 
@@ -293,6 +295,8 @@ impl Environment {
             fetch: Fetch::Idle,
             pickup: Pickup::Idle,
             confirm: None,
+            scroll: ScrollHandle::new(),
+            columns: [ScrollHandle::new(), ScrollHandle::new()],
             _subscriptions: subscriptions,
         };
         environment.show(cx);
@@ -593,9 +597,9 @@ impl Environment {
         list: List,
         enabled: bool,
         note: Div,
-        chips: Option<AnyElement>,
+        chips: bool,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let layout = cx.theme().layout;
         let input = self.input(list).clone();
         input.update(cx, |input, cx| input.set_disabled(!enabled, cx));
@@ -607,10 +611,11 @@ impl Environment {
                 }
             });
         v_flex()
-            .gap(layout.space(2.5))
+            .gap(layout.space(1.5))
+            .when(chips, |field| field.mb(layout.space(0.5)))
             .child(row(layout, list.label(), enabled, typed))
-            .child(note.mt(layout.space(-1.0)))
-            .children(chips)
+            .child(note)
+            .into_any_element()
     }
 
     fn clear_button(&self, list: List, cx: &mut Context<Self>) -> Button {
@@ -714,7 +719,13 @@ impl Environment {
         }
     }
 
-    fn drops(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+    fn drops(
+        &self,
+        theme: &Theme,
+        automation: &Automation,
+        split: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let layout = theme.layout;
         let typography = theme.typography;
         let state = automation.drops();
@@ -731,6 +742,7 @@ impl Environment {
                 self.refocus(List::Drops, cx),
             );
             Chips::new("drops", "Drops", state.items.iter().map(item_label))
+                .scrollable(split)
                 .disabled(!on)
                 .marked(
                     Icon::Bell,
@@ -769,6 +781,7 @@ impl Environment {
                     refocus(left.items.is_empty(), window, cx);
                 })
                 .end_slot(self.clear_button(List::Drops, cx))
+                .into_any_element()
         });
         let from_quests: Vec<String> = automation
             .quest_items()
@@ -781,71 +794,74 @@ impl Environment {
         let derived = (!from_quests.is_empty()).then(|| {
             let marking = automation.clone();
             let names = from_quests.clone();
-            v_flex()
-                .gap(layout.space(1.5))
-                .child(
-                    div()
-                        .text_caption(typography)
-                        .text_color(theme.muted_foreground)
-                        .when(!on, |caption| caption.opacity(DISABLED_OPACITY))
-                        .child("From your quests"),
-                )
-                .child(
-                    Chips::new(
-                        "quest-drops",
-                        "From your quests",
-                        from_quests
-                            .iter()
-                            .map(|name| SharedString::from(name.clone())),
-                    )
-                    .disabled(!on)
-                    .marked(
-                        Icon::Bell,
-                        Icon::BellRing,
-                        "Beep",
-                        from_quests
-                            .iter()
-                            .map(|name| state.rings(&ItemQuery::Name(name.clone()))),
-                    )
-                    .on_mark(move |index, on, _, _| {
-                        if let Some(name) = names.get(index) {
-                            marking.update_drops(|state| {
-                                state.set_sound(&ItemQuery::Name(name.clone()), on)
-                            });
-                        }
-                    }),
-                )
-        });
-        let chips = match (listed, derived) {
-            (None, None) => None,
-            (listed, derived) => Some(
-                v_flex()
-                    .gap(layout.space(2.5))
-                    .children(listed)
-                    .children(derived)
+            [
+                div()
+                    .when(listed.is_some(), |caption| caption.mt(layout.space(0.5)))
+                    .mb(layout.space(-0.5))
+                    .text_caption(typography)
+                    .text_color(theme.muted_foreground)
+                    .when(!on, |caption| caption.opacity(DISABLED_OPACITY))
+                    .child("From your quests")
                     .into_any_element(),
-            ),
-        };
-        v_flex()
-            .gap(layout.space(2.0))
-            .child(section(
+                Chips::new(
+                    "quest-drops",
+                    "From your quests",
+                    from_quests
+                        .iter()
+                        .map(|name| SharedString::from(name.clone())),
+                )
+                .scrollable(split)
+                .disabled(!on)
+                .marked(
+                    Icon::Bell,
+                    Icon::BellRing,
+                    "Beep",
+                    from_quests
+                        .iter()
+                        .map(|name| state.rings(&ItemQuery::Name(name.clone()))),
+                )
+                .on_mark(move |index, on, _, _| {
+                    if let Some(name) = names.get(index) {
+                        marking.update_drops(|state| {
+                            state.set_sound(&ItemQuery::Name(name.clone()), on)
+                        });
+                    }
+                })
+                .into_any_element(),
+            ]
+        });
+        let field = self.list_field(
+            List::Drops,
+            on,
+            note(List::Drops.note(), on, theme),
+            listed.is_some() || derived.is_some(),
+            cx,
+        );
+        [
+            section(
                 "Drops",
                 "Picks up listed drops and any kind ticked below.",
                 None,
                 switch.hide_label(),
                 theme,
-            ))
-            .child(self.list_field(
-                List::Drops,
-                on,
-                note(List::Drops.note(), on, theme),
-                chips,
-                cx,
-            ))
-            .child(unlisted_drops_policy(theme, automation, state.config))
+            )
+            .into_any_element(),
+            field,
+        ]
+        .into_iter()
+        .chain(listed)
+        .chain(derived.into_iter().flatten())
+        .chain([unlisted_drops_policy(theme, automation, state.config).into_any_element()])
+        .collect()
     }
 
-    fn quests(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+    fn quests(
+        &self,
+        theme: &Theme,
+        automation: &Automation,
+        split: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let layout = theme.layout;
         let typography = theme.typography;
         let state = automation.quests();
@@ -858,6 +874,7 @@ impl Environment {
             let (removing, refocus) = (automation.clone(), self.refocus(List::Quests, cx));
             let editing = cx.weak_entity();
             Chips::new("quests", "Quests", state.quests.iter().map(quest_label))
+                .scrollable(split)
                 .disabled(!on)
                 .on_edit(move |index, text, _, cx| {
                     let _ = editing.update(cx, |this, cx| this.edit_quest(index, text, cx));
@@ -906,25 +923,31 @@ impl Environment {
             }));
         let status = matches!(self.pickup, Pickup::Checking { .. })
             .then(|| ("Checking drops…".into(), theme.muted_foreground));
-        v_flex()
-            .gap(layout.space(2.0))
-            .child(section(
+        let field = self.list_field(List::Quests, on, message, chips.is_some(), cx);
+        [
+            section(
                 "Quests",
                 "Accepts listed quests and turns them in when done.",
                 status,
                 switch.hide_label(),
                 theme,
-            ))
-            .child(self.list_field(List::Quests, on, message, chips, cx))
-            .child(
-                v_flex()
-                    .gap(layout.space(1.0))
-                    .child(row_label("Also pick up", on))
-                    .child(pickups),
             )
+            .into_any_element(),
+            field,
+        ]
+        .into_iter()
+        .chain(chips)
+        .chain([choices_row(layout, "Also pick up", on, pickups).into_any_element()])
+        .collect()
     }
 
-    fn boosts(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
+    fn boosts(
+        &self,
+        theme: &Theme,
+        automation: &Automation,
+        split: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let layout = theme.layout;
         let state = automation.boosts();
         let on = state.config.enabled;
@@ -954,6 +977,7 @@ impl Environment {
                 self.refocus(List::Boosts, cx),
             );
             Chips::new("boosts", "Boosts", state.items.iter().map(item_label))
+                .scrollable(split)
                 .disabled(!on)
                 .on_edit(move |index, text, _, _| {
                     editing.update_boosts(|state| {
@@ -971,9 +995,15 @@ impl Environment {
                 .end_slot(self.clear_button(List::Boosts, cx))
                 .into_any_element()
         });
-        v_flex()
-            .gap(layout.space(2.0))
-            .child(section(
+        let field = self.list_field(
+            List::Boosts,
+            on,
+            note(List::Boosts.note(), on, theme),
+            chips.is_some(),
+            cx,
+        );
+        [
+            section(
                 "Boosts",
                 "Uses one of each kind when it runs out.",
                 status,
@@ -982,14 +1012,13 @@ impl Environment {
                     .child(fetch)
                     .child(switch.hide_label()),
                 theme,
-            ))
-            .child(self.list_field(
-                List::Boosts,
-                on,
-                note(List::Boosts.note(), on, theme),
-                chips,
-                cx,
-            ))
+            )
+            .into_any_element(),
+            field,
+        ]
+        .into_iter()
+        .chain(chips)
+        .collect()
     }
 
     fn body(
@@ -999,13 +1028,61 @@ impl Environment {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let drops = self.drops(theme, automation, cx);
-        let others = v_flex()
-            .gap(theme.space(4.0))
-            .child(self.quests(theme, automation, cx))
-            .child(div().h(px(1.0)).bg(theme.border))
-            .child(self.boosts(theme, automation, cx));
-        theme.form_columns(window.viewport_size().width, drops, others)
+        let width = window.viewport_size().width;
+        let split = width >= theme.layout.split_forms;
+        let column = |id: &'static str, scroll: &ScrollHandle, children: Vec<AnyElement>| {
+            let content = v_flex().gap(theme.space(2.0));
+            if !split {
+                return content.children(children).into_any_element();
+            }
+            div()
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    content
+                        .id(id)
+                        .flex_1()
+                        .min_h_0()
+                        .p(theme.space(4.0))
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .child(mira_ui::nav::pane_start(scroll.clone()))
+                        .children(children)
+                        .child(mira_ui::nav::pane_end()),
+                )
+                .child(
+                    Scrollbar::new(
+                        SharedString::from(format!("{id}-scrollbar")),
+                        scroll.clone(),
+                    )
+                    .persistent(),
+                )
+                .into_any_element()
+        };
+        let [first, second] = &self.columns;
+        let drops = column(
+            "drops-column",
+            first,
+            self.drops(theme, automation, split, cx),
+        );
+        let divider = div()
+            .flex_none()
+            .my(theme.space(2.0))
+            .h(px(1.0))
+            .bg(theme.border)
+            .into_any_element();
+        let mut others = self.quests(theme, automation, split, cx);
+        others.push(divider);
+        others.extend(self.boosts(theme, automation, split, cx));
+        let others = column("others-column", second, others);
+        if split {
+            theme.fill_columns(drops, others)
+        } else {
+            theme.form_columns(width, drops, others)
+        }
     }
 
     fn fetch_dialog(&self, theme: &Theme, cx: &mut Context<Self>) -> Dialog {
@@ -1260,17 +1337,16 @@ fn unlisted_drops_policy(
                 })
         }));
     let rejecting = automation.clone();
-    let title = "Unlisted drops policy";
     v_flex()
         .id("unlisted-drops-policy")
+        .debug_selector(|| "unlisted-drops-policy".into())
         .role(Role::Group)
-        .aria_label(title)
+        .aria_label("Unlisted drops policy")
         .border_t_1()
         .border_color(theme.border)
         .pt(theme.space(3.0))
         .gap(theme.space(1.0))
-        .child(row_label(title, enabled))
-        .child(choices)
+        .child(choices_row(theme.layout, "Also pick up", enabled, choices))
         .child(
             Switch::new("drops-reject", "Reject others", config.reject_others)
                 .description("Rejects every drop not picked up above.")
@@ -1444,6 +1520,7 @@ fn checked(on: bool) -> CheckedState {
 
 impl Render for Environment {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        mira_ui::nav::set_scroll_root(&self.scroll, window, cx);
         let theme = cx.theme().clone();
         let tabs = self.client.read(cx).views().len();
         let header = shown_tab::header(
@@ -1486,11 +1563,23 @@ impl Render for Environment {
             )))
             .child(
                 div()
-                    .id("environment-body")
+                    .relative()
+                    .flex()
+                    .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(body),
+                    .child(
+                        v_flex()
+                            .id("environment-body")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(body),
+                    )
+                    .child(
+                        Scrollbar::new("environment-scrollbar", self.scroll.clone()).persistent(),
+                    ),
             )
             .child(self.fetch_dialog(&theme, cx))
             .child(self.pickup_dialog(&theme, cx))
@@ -1693,6 +1782,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_long_drop_list_scrolls_in_place_and_shows_the_chip_you_reach_or_add(
+        cx: &mut TestAppContext,
+    ) {
+        let (environment, automation, cx) = open(cx);
+        let names: Vec<String> = (1..=40).map(|n| format!("Legion Token {n}")).collect();
+        automation.update_drops(|state| register_items(&mut state.items, items(&names.join(","))));
+        environment.update(cx, |_, cx| cx.notify());
+        cx.simulate_resize(size(px(WIDTH), px(HEIGHT)));
+        cx.run_until_parked();
+        let policy = cx.debug_bounds("unlisted-drops-policy").expect("policy");
+        assert!(
+            policy.bottom() <= px(HEIGHT),
+            "policy ends at {:?}",
+            policy.bottom()
+        );
+        let last = |cx: &mut VisualTestContext| cx.debug_bounds("chip-39").expect("last chip");
+        assert!(last(cx).top() > policy.top());
+
+        focus(&environment, List::Drops, cx);
+        for keys in ["tab", "cmd-right"] {
+            press(cx, keys);
+        }
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        assert!(
+            last(cx).bottom() <= policy.top(),
+            "last chip ends at {:?}, policy starts at {:?}",
+            last(cx).bottom(),
+            policy.top()
+        );
+
+        press(cx, "cmd-left");
+        focus(&environment, List::Drops, cx);
+        typed(cx, "Void Aura");
+        press(cx, "enter");
+        let added = cx.debug_bounds("chip-40").expect("added chip");
+        assert!(
+            added.bottom() <= policy.top(),
+            "added chip ends at {:?}, policy starts at {:?}",
+            added.bottom(),
+            policy.top()
+        );
+    }
+
+    #[gpui::test]
     fn confirming_waiting_drops_holds_the_unticked_ones_and_applies_the_change(
         cx: &mut TestAppContext,
     ) {
@@ -1812,15 +1946,31 @@ mod tests {
 
     #[test]
     fn snapshot_unlisted_drops_policy() {
-        for (name, width, height) in [
-            ("environment-drops", WIDTH, HEIGHT),
-            ("environment-drops-split", 560.0, HEIGHT),
-            ("environment-drops-min", MIN_WIDTH, MIN_HEIGHT),
+        let few =
+            "Tainted Gem, Dark Crystal Shard, Essence of the Undead Legion Champion of Doomwood";
+        let many = format!(
+            "{few}, {}",
+            (1..=40)
+                .map(|n| format!("Legion Token {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for (name, width, height, listed) in [
+            ("environment-drops", WIDTH, HEIGHT, few),
+            ("environment-drops-many", WIDTH, HEIGHT, many.as_str()),
+            (
+                "environment-drops-many-short",
+                WIDTH,
+                MIN_HEIGHT,
+                many.as_str(),
+            ),
+            ("environment-drops-split", 560.0, HEIGHT, few),
+            ("environment-drops-min", MIN_WIDTH, MIN_HEIGHT, few),
         ] {
             snapshot_form(name, width, height, |environment| {
                 let automation = Automation::default();
                 automation.update_drops(|state| {
-                    register_items(&mut state.items, items("Tainted Gem, Dark Crystal Shard"));
+                    register_items(&mut state.items, items(listed));
                     state.set_sound(&ItemQuery::Name("Tainted Gem".into()), true);
                     state.config.accept_ac_member_only = true;
                     state.config.accept_non_ac_member_only = true;
