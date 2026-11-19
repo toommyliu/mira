@@ -8,7 +8,7 @@ use gpui::{
 use super::{
     Align, Button, Icon, Placement, Side,
     menu::{
-        MENU_MAX_HEIGHT, MenuItem, PopupKind, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
+        MenuItem, PopupKind, SELECT_MAX_HEIGHT, WINDOW_MARGIN, attach, dismiss, dismiss_probe,
         item_over_trigger, popup, presence, state, trigger_handlers, trigger_probe,
     },
 };
@@ -221,15 +221,15 @@ impl RenderOnce for Select {
             })
             .collect();
         let min_width = state.read(cx).trigger_width().max(px(128.0));
-        let panel = |from, min_width, window: &mut Window| {
+        let panel = |from, width, window: &mut Window| {
             div()
-                .min_w(min_width)
+                .w(width)
                 .child(popup(
                     &self.id,
                     self.label.clone(),
                     items,
                     PopupKind::ListBox,
-                    MENU_MAX_HEIGHT,
+                    SELECT_MAX_HEIGHT,
                     from,
                     &state,
                     window,
