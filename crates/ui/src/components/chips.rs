@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, ElementId, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Pixels,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Toggled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, ClickEvent, CursorStyle, ElementId, Entity, FocusHandle,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Toggled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -256,7 +256,13 @@ impl Chip {
                             .child(input),
                     )
                 }
-                None => chip.child(label.clone()),
+                None => chip.child(
+                    div()
+                        .when(self.on_edit.is_some(), |label| {
+                            label.cursor(CursorStyle::IBeam)
+                        })
+                        .child(label.clone()),
+                ),
             })
             .when(self.removable, |chip| {
                 chip.child(
