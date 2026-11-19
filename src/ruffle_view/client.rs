@@ -926,13 +926,13 @@ impl Client {
                     .pr(layout.space(2.0))
                     .child(drag_area().flex_1())
                     .child(
-                        Button::icon("new-session", Icon::Plus, "New tab")
-                            .size(Size::Small)
-                            .on_click(cx.listener(|this, _, window, cx| {
+                        bar_icon_button("new-session", Icon::Plus, "New tab").on_click(
+                            cx.listener(|this, _, window, cx| {
                                 if let Err(error) = this.open_session(None, window, cx) {
                                     tracing::error!(%error, "couldn't open a session");
                                 }
-                            })),
+                            }),
+                        ),
                     )
                     .child(self.grid_toggle(cx)),
             )
@@ -984,8 +984,7 @@ impl Client {
             .top((cx.theme().layout.chrome - layout.control_sm) / 2.0)
             .occlude()
             .child(
-                Button::icon("sidebar-toggle", glyph, label)
-                    .size(Size::Small)
+                bar_icon_button("sidebar-toggle", glyph, label)
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
             )
     }
@@ -1003,8 +1002,7 @@ impl Client {
             Layout::Single => ("Grid view", Icon::LayoutGrid),
             Layout::Grid => ("Single view", Icon::Square),
         };
-        Button::icon("grid", glyph, label)
-            .size(Size::Small)
+        bar_icon_button("grid", glyph, label)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_grid(window, cx)))
     }
 
@@ -1159,6 +1157,12 @@ pub(super) fn reveal_tab(scroll: &ScrollHandle, index: usize, count: usize) {
     } else {
         scroll.scroll_to_item(index);
     }
+}
+
+fn bar_icon_button(id: &'static str, glyph: Icon, label: &'static str) -> Button {
+    Button::icon(id, glyph, label)
+        .size(Size::Small)
+        .icon_size(px(14.0))
 }
 
 fn traffic_lights_inset(window: &Window) -> Pixels {
