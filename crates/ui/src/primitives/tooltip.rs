@@ -2,8 +2,8 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, ElementId, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, PathBuilder, Pixels, RenderOnce, SharedString, Size, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, deferred, div, point,
+    MouseButton, ParentElement as _, Pixels, RenderOnce, SharedString, Size, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, deferred, div,
     prelude::FluentBuilder as _, px,
 };
 
@@ -58,7 +58,7 @@ impl RenderOnce for Tooltip {
             self.placement,
             window,
             cx,
-            move |at, from, theme| panel(self.label, at, from, theme),
+            move |_, from, theme| panel(self.label, from, theme),
         )
     }
 }
@@ -119,7 +119,7 @@ pub fn attach(
         Placement::new(Side::Top, Align::Center),
         window,
         cx,
-        move |at, from, theme| panel(label, at, from, theme),
+        move |_, from, theme| panel(label, from, theme),
     )
 }
 
@@ -205,54 +205,16 @@ pub(crate) fn hover<E: IntoElement>(
         })
 }
 
-fn panel(
-    label: SharedString,
-    target: Bounds<Pixels>,
-    from: From,
-    theme: &Theme,
-) -> impl IntoElement + use<> {
-    let color = theme.foreground;
+fn panel(label: SharedString, from: From, theme: &Theme) -> impl IntoElement + use<> {
     let panel = div()
-        .relative()
         .max_w(px(320.0))
         .py(theme.space(1.5))
         .px(theme.space(3.0))
         .rounded(theme.radius.control)
-        .bg(color)
+        .bg(theme.foreground)
         .text_color(theme.background)
         .text_size(theme.typography.body)
         .line_height(theme.typography.secondary_line)
-        .child(label)
-        .child(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let center = target.center();
-                    let (along, low, high) = match from {
-                        From::Above | From::Below => (center.x, bounds.left(), bounds.right()),
-                        From::Left | From::Right => (center.y, bounds.top(), bounds.bottom()),
-                    };
-                    let inset = px(8.0).min((high - low) / 2.0);
-                    let tip = along.clamp(low + inset, high - inset);
-                    let vertex = |along: f32, depth: f32| match from {
-                        From::Above => point(tip + px(along), bounds.top() - px(depth)),
-                        From::Below => point(tip + px(along), bounds.bottom() + px(depth)),
-                        From::Left => point(bounds.left() - px(depth), tip + px(along)),
-                        From::Right => point(bounds.right() + px(depth), tip + px(along)),
-                    };
-                    let mut path = PathBuilder::fill();
-                    path.move_to(vertex(-7.0, -1.0));
-                    path.line_to(vertex(-1.4, 4.6));
-                    path.curve_to(vertex(1.4, 4.6), vertex(0.0, 6.0));
-                    path.line_to(vertex(7.0, -1.0));
-                    path.close();
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, color);
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
-        );
+        .child(label);
     crate::motion::arrive_for("tooltip-enter", panel, from, crate::motion::TRAVEL)
 }
