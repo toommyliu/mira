@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    App, Bounds, ClipboardItem, Context, CursorStyle, Div, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId,
     InteractiveElement as _, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement as _, Pixels, Point, Render, Role,
@@ -964,7 +964,8 @@ impl Render for Input {
             .when(self.password, |field| {
                 let entity = cx.entity();
                 let revealed = self.revealed;
-                field.child(
+                field.child(trailing(
+                    &self.focus,
                     Button::icon(
                         "reveal",
                         if revealed { Icon::EyeOff } else { Icon::Eye },
@@ -981,11 +982,12 @@ impl Render for Input {
                             window.focus(&field.focus, cx);
                         })
                     }),
-                )
+                ))
             })
             .when(clearable, |field| {
                 let entity = cx.entity();
-                field.child(
+                field.child(trailing(
+                    &self.focus,
                     Button::icon("clear", Icon::X, "Clear search")
                         .size(Size::Small)
                         .on_click(move |_, window, cx| {
@@ -994,9 +996,20 @@ impl Render for Input {
                                 window.focus(&field.focus, cx);
                             })
                         }),
-                )
+                ))
             })
     }
+}
+
+fn trailing(field: &FocusHandle, button: Button) -> Div {
+    let field = field.clone();
+    div()
+        .flex_none()
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.focus(&field, cx);
+            cx.stop_propagation();
+        })
+        .child(button)
 }
 
 const CARET_WIDTH: Pixels = px(1.5);
