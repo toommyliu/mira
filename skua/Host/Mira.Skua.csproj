@@ -11,5 +11,6 @@
     <ProjectReference Include="../Protocol/Mira.Skua.Protocol.csproj" />
     <ProjectReference Include="../Bot/Mira.Skua.Bot.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <InternalsVisibleTo Include="Mira.Skua.Tests" />
   </ItemGroup>
 </Project>

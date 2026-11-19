@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Bot/Mira.Skua.Bot.csproj" />
+    <ProjectReference Include="../Host/Mira.Skua.csproj" />
     <ProjectReference Include="../Protocol/Mira.Skua.Protocol.csproj" />
     <PackageReference Include="xunit.v3" Version="4.0.3" />
     <Using Include="Xunit" />
