@@ -867,3 +867,60 @@ fn snapshot_chip_editing() {
         render,
     );
 }
+#[test]
+fn snapshot_long_select_scrolls() {
+    use gpui::{Keystroke, PlatformInput, ScrollDelta, ScrollEvent, point};
+
+    let paths = mira_ui::snapshot_with(
+        "select-long",
+        size(px(320.0), px(360.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    Select::new(
+                        "font",
+                        "Font",
+                        (0..40)
+                            .map(|index| {
+                                gpui::SharedString::from(if index % 3 == 1 {
+                                    format!("Hiragino Kaku Gothic ProN W{index}")
+                                } else {
+                                    format!("Font family {index}")
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                        Some(0),
+                    )
+                    .width(px(176.0))
+                    .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            for key in ["tab", "enter"] {
+                cx.update_window(owner, |_, window, cx| {
+                    window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                })
+                .unwrap();
+                cx.run_until_parked();
+            }
+            hover(cx, owner, 90.0, 200.0);
+            cx.update_window(owner, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::Scroll(ScrollEvent {
+                        position: point(px(90.0), px(200.0)),
+                        delta: ScrollDelta::Pixels(point(px(0.0), px(-200.0))),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.refresh();
+            })
+            .unwrap();
+            cx.run_until_parked();
+        },
+    );
+    assert!(paths.iter().all(|path| path.exists()));
+}

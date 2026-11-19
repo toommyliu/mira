@@ -30,6 +30,7 @@ pub(crate) type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>>;
 
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
+pub(crate) const SELECT_MAX_HEIGHT: Pixels = px(288.0);
 const PANEL_INSET: Pixels = px(4.0);
 pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
@@ -278,7 +279,7 @@ pub(crate) fn item_over_trigger(
     let layout = cx.theme().layout;
     let inset = layout.space(1.0);
     let height = inset * 2.0 + layout.control * count as f32;
-    if height > MENU_MAX_HEIGHT {
+    if height > SELECT_MAX_HEIGHT {
         return None;
     }
     let trigger = state.read(cx).trigger_bounds.get();
