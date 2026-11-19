@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, ElementId, Entity, FocusHandle, Focusable as _,
-    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Pixels,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Pixels,
     RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TextRun, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    Toggled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -19,12 +19,11 @@ type MarkHandler = Rc<dyn Fn(usize, bool, &mut Window, &mut App)>;
 type EditHandler = Rc<dyn Fn(usize, String, &mut Window, &mut App)>;
 
 const SLOT: Pixels = px(16.0);
-const EDIT_PADDING: Pixels = px(30.0);
-const EDIT_MIN: Pixels = px(64.0);
 
 #[derive(Clone)]
 struct Marks {
-    icon: Icon,
+    off: Icon,
+    on: Icon,
     label: SharedString,
     marked: Rc<[bool]>,
 }
@@ -51,7 +50,6 @@ pub struct Chips {
     label: SharedString,
     items: Rc<[SharedString]>,
     disabled: bool,
-    quiet: bool,
     marks: Option<Marks>,
     end: Option<AnyElement>,
     on_remove: Option<IndexHandler>,
@@ -71,7 +69,6 @@ impl Chips {
             label: label.into(),
             items: items.into_iter().collect(),
             disabled: false,
-            quiet: false,
             marks: None,
             end: None,
             on_remove: None,
@@ -83,11 +80,6 @@ impl Chips {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    pub fn quiet(mut self) -> Self {
-        self.quiet = true;
         self
     }
 
@@ -108,12 +100,14 @@ impl Chips {
 
     pub fn marked(
         mut self,
-        icon: Icon,
+        off: Icon,
+        on: Icon,
         label: impl Into<SharedString>,
         marked: impl IntoIterator<Item = bool>,
     ) -> Self {
         self.marks = Some(Marks {
-            icon,
+            off,
+            on,
             label: label.into(),
             marked: marked.into_iter().collect(),
         });
@@ -137,7 +131,6 @@ struct Chip {
     current: Option<usize>,
     ring: bool,
     dimmed: bool,
-    quiet: bool,
     removable: bool,
     focus: FocusHandle,
     selection: Entity<usize>,
@@ -149,69 +142,23 @@ struct Chip {
 }
 
 impl Chip {
-    fn render(&self, index: usize, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn render(&self, index: usize, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
+        let label = self.items[index].clone();
+        let current = self.current == Some(index);
         let editor = self
             .editing
             .read(cx)
             .as_ref()
             .filter(|editor| editor.index == index)
             .map(|editor| editor.input.clone());
-        match editor {
-            Some(input) => self.render_editor(input, window, cx),
-            None => self.render_chip(index, cx),
-        }
-    }
-
-    fn render_editor(&self, input: Entity<Input>, window: &mut Window, cx: &mut App) -> AnyElement {
-        let typography = cx.theme().typography;
-        let text: SharedString = input.read(cx).text().to_owned().into();
-        let style = window.text_style();
-        let run = TextRun {
-            len: text.len(),
-            font: style.font(),
-            color: Hsla::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let width = window
-            .text_system()
-            .shape_line(text, typography.secondary, &[run], None)
-            .width;
-        let (editing, focus) = (self.editing.downgrade(), self.focus.clone());
-        div()
-            .w((width + EDIT_PADDING).max(EDIT_MIN))
-            .child(input)
-            .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    finish(&editing, false, Some(&focus), window, cx);
-                    cx.stop_propagation();
-                }
-            })
-            .into_any_element()
-    }
-
-    fn render_chip(&self, index: usize, cx: &App) -> AnyElement {
-        let theme = cx.theme();
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let label = self.items[index].clone();
-        let current = self.current == Some(index);
+        let editing = editor.is_some();
         let marked = self.marks.as_ref().is_some_and(|marks| marks.at(index));
         let fill = theme.muted_foreground.opacity(0.1);
         let text = theme.foreground;
-        let quiet = if self.quiet {
-            theme.muted_foreground
-        } else {
-            text
-        };
-        let (focus, selection, editing) = (
-            self.focus.clone(),
-            self.selection.clone(),
-            self.editing.clone(),
-        );
-        let on_edit = self.on_edit.clone();
-        let editable_label = label.clone();
+        let radius = layout.chip / 2.0;
         h_flex()
             .id(index)
             .role(Role::ListBoxOption)
@@ -225,30 +172,39 @@ impl Chip {
             })
             .relative()
             .when(self.dimmed, |chip| chip.opacity(DISABLED_OPACITY))
-            .h(theme.layout.chip)
-            .px(theme.space(1.5))
+            .h(layout.chip)
+            .pl(layout.space(if self.marks.is_some() { 1.0 } else { 2.5 }))
+            .pr(layout.space(if self.removable { 1.0 } else { 2.5 }))
             .gap(layout.space(1.0))
-            .rounded(theme.radius.tag)
+            .rounded(radius)
             .bg(fill)
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_caption(typography)
+            .text_body(typography)
             .text_color(text)
-            .on_click(move |event: &ClickEvent, window, cx| {
-                select(&selection, index, cx);
-                window.focus(&focus, cx);
-                if event.click_count() >= 2
-                    && let Some(on_edit) = &on_edit
-                {
-                    edit(
-                        &editing,
-                        index,
-                        editable_label.clone(),
-                        &focus,
-                        on_edit.clone(),
-                        window,
-                        cx,
-                    );
-                }
+            .when(!editing, |chip| {
+                let (focus, selection, editing) = (
+                    self.focus.clone(),
+                    self.selection.clone(),
+                    self.editing.clone(),
+                );
+                let (on_edit, label) = (self.on_edit.clone(), label.clone());
+                chip.on_click(move |event: &ClickEvent, window, cx| {
+                    select(&selection, index, cx);
+                    window.focus(&focus, cx);
+                    if event.click_count() >= 2
+                        && let Some(on_edit) = &on_edit
+                    {
+                        edit(
+                            &editing,
+                            index,
+                            label.clone(),
+                            &focus,
+                            on_edit.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                })
             })
             .when_some(self.marks.clone(), |chip, marks| {
                 let toggle = self.on_mark.clone();
@@ -257,12 +213,24 @@ impl Chip {
                         .id("mark")
                         .role(Role::Button)
                         .aria_label(marks.label.clone())
+                        .aria_toggled(if marked {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
                         .flex()
                         .items_center()
                         .justify_center()
                         .size(SLOT)
                         .rounded_full()
-                        .child(icon(marks.icon, if marked { text } else { quiet }).size(px(12.0)))
+                        .child(
+                            if marked {
+                                icon(marks.on, text)
+                            } else {
+                                icon(marks.off, theme.muted_foreground)
+                            }
+                            .size(px(12.0)),
+                        )
                         .when_some(toggle, |bell, toggle| {
                             bell.pointer_cursor(theme)
                                 .hover(|style| style.bg(theme.ghost_hover()))
@@ -273,7 +241,23 @@ impl Chip {
                         }),
                 )
             })
-            .child(label.clone())
+            .map(|chip| match editor {
+                Some(input) => {
+                    let (editing, focus) = (self.editing.downgrade(), self.focus.clone());
+                    chip.child(
+                        div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "escape" {
+                                    finish(&editing, false, Some(&focus), window, cx);
+                                    cx.stop_propagation();
+                                }
+                            })
+                            .child(input),
+                    )
+                }
+                None => chip.child(label.clone()),
+            })
             .when(self.removable, |chip| {
                 chip.child(
                     div()
@@ -285,7 +269,7 @@ impl Chip {
                         .justify_center()
                         .size(SLOT)
                         .rounded_full()
-                        .child(small_icon(Icon::X, quiet))
+                        .child(small_icon(Icon::X, text))
                         .when_some(self.on_remove.clone(), |button, remove| {
                             button
                                 .pointer_cursor(theme)
@@ -297,8 +281,8 @@ impl Chip {
                         }),
                 )
             })
-            .when(current && self.ring, |chip| {
-                chip.child(theme.focus_ring(theme.radius.tag))
+            .when(editing || current && self.ring, |chip| {
+                chip.child(theme.focus_ring(radius))
             })
             .into_any_element()
     }
@@ -320,11 +304,7 @@ fn edit(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let input = cx.new(|cx| {
-        Input::new(SharedString::from(format!("Edit {label}")), cx)
-            .small()
-            .pill()
-    });
+    let input = cx.new(|cx| Input::new(SharedString::from(format!("Edit {label}")), cx).inline());
     input.update(cx, |input, cx| input.set_text(label.clone(), cx));
     let (submitted, blurred) = (editing.downgrade(), editing.downgrade());
     let list = list.clone();
@@ -402,7 +382,6 @@ impl RenderOnce for Chips {
             current,
             ring: interactive && nav::keyboard_focused(&focus, window, cx),
             dimmed: !interactive,
-            quiet: self.quiet,
             removable,
             focus: focus.clone(),
             selection: selection.clone(),
@@ -467,14 +446,14 @@ impl RenderOnce for Chips {
             .role(Role::ListBox)
             .aria_label(self.label)
             .flex_wrap()
-            .gap(layout.space(1.5))
+            .gap(layout.space(2.0))
             .when(interactive, |list| {
                 list.track_focus(&focus.tab_stop(true)).on_key_down(keys)
             });
         match on_reorder {
             Some(reorder) => h_flex()
                 .flex_wrap()
-                .gap(layout.space(1.5))
+                .gap(layout.space(2.0))
                 .child(Sortable::new(
                     list,
                     Flow::Wrap,
@@ -482,7 +461,7 @@ impl RenderOnce for Chips {
                         .iter()
                         .map(|item| ElementId::Name(item.clone()))
                         .collect::<Vec<_>>(),
-                    move |(index, _), window, cx| chip.render(index, window, cx),
+                    move |(index, _), _, cx| chip.render(index, cx),
                     move |from, to, window, cx| {
                         reorder(from, to, window, cx);
                         select(&selection, to, cx);
@@ -491,9 +470,8 @@ impl RenderOnce for Chips {
                 .children(self.end)
                 .into_any_element(),
             None => {
-                let chips: Vec<AnyElement> = (0..count)
-                    .map(|index| chip.render(index, window, cx))
-                    .collect();
+                let chips: Vec<AnyElement> =
+                    (0..count).map(|index| chip.render(index, cx)).collect();
                 list.children(chips).children(self.end).into_any_element()
             }
         }
