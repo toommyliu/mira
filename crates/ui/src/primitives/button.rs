@@ -75,6 +75,7 @@ pub struct Button {
     id: ElementId,
     label: SharedString,
     icon: Option<Icon>,
+    icon_size: Option<Pixels>,
     start: Option<AnyElement>,
     end: Option<AnyElement>,
     children: Vec<AnyElement>,
@@ -102,6 +103,7 @@ impl Button {
             id: id.into(),
             label: label.into(),
             icon: None,
+            icon_size: None,
             start: None,
             end: None,
             children: Vec::new(),
@@ -130,6 +132,11 @@ impl Button {
         button.variant = Variant::Ghost;
         button.tooltip = (icon != Icon::X).then(|| button.label.clone());
         button
+    }
+
+    pub fn icon_size(mut self, size: Pixels) -> Self {
+        self.icon_size = Some(size);
+        self
     }
 
     pub fn start_slot(mut self, element: impl IntoElement) -> Self {
@@ -321,6 +328,7 @@ impl RenderOnce for Button {
         let has_end = self.end.is_some();
         let height = self.size.height(theme.layout);
         let icon_only = self.icon.is_some() && self.children.is_empty();
+        let icon_size = self.icon_size.unwrap_or(self.size.icon_size());
         let tip = self.tooltip.clone();
         let describe = tip.clone().filter(|tip| *tip != self.label);
         let content = h_flex()
@@ -342,7 +350,7 @@ impl RenderOnce for Button {
                 content.child(h_flex().flex_none().child(start))
             })
             .map(|content| match (self.icon, self.children.is_empty()) {
-                (Some(glyph), true) => content.child(icon(glyph, fg).size(self.size.icon_size())),
+                (Some(glyph), true) => content.child(icon(glyph, fg).size(icon_size)),
                 (_, true) => content.child(div().truncate().child(self.label.clone())),
                 (_, false) => content.children(self.children),
             })
@@ -350,9 +358,9 @@ impl RenderOnce for Button {
                 content.child(
                     div()
                         .flex_none()
-                        .w(self.size.icon_size())
+                        .w(icon_size)
                         .when(self.selected == Some(true), |mark| {
-                            mark.child(icon(Icon::Check, fg).size(self.size.icon_size()))
+                            mark.child(icon(Icon::Check, fg).size(icon_size))
                         }),
                 )
             })
