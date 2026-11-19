@@ -1,10 +1,10 @@
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{Child, ExitStatus, Stdio},
     sync::{Mutex, TryLockError},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -14,6 +14,7 @@ use super::super::inputs::{Definition, Field, Kind};
 use crate::packages::SKUA_FOLDER;
 
 const POLL: Duration = Duration::from_millis(25);
+const TIMEOUT: Duration = Duration::from_secs(120);
 const LISTED_DIAGNOSTICS: usize = 8;
 const OUTSIDE: &str = "Skua scripts run from the Skua scripts package.";
 
@@ -65,22 +66,7 @@ pub(crate) fn compile(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Compil
         .map_err(|error| Halt::Failed(super::not_started(&error)))?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if stopped() => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Halt::Stopped);
-            }
-            Ok(None) => thread::sleep(POLL),
-            Err(error) => {
-                return Err(Halt::Failed(format!(
-                    "Lost track of the Skua compiler: {error}."
-                )));
-            }
-        }
-    };
+    let status = finish(&mut child, stopped, Instant::now() + TIMEOUT)?;
     let stdout = stdout.join().unwrap_or_default();
     let stderr = stderr.join().unwrap_or_default();
     if !status.success() {
@@ -95,6 +81,37 @@ pub(crate) fn describe(
 ) -> Result<Option<Definition>, Halt> {
     let definition = compile(entry, stopped)?.definition;
     Ok((!definition.fields().is_empty()).then_some(definition))
+}
+
+fn finish(
+    child: &mut Child,
+    stopped: &dyn Fn() -> bool,
+    deadline: Instant,
+) -> Result<ExitStatus, Halt> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if stopped() || Instant::now() >= deadline => {
+                let halt = if stopped() {
+                    Halt::Stopped
+                } else {
+                    Halt::Failed(format!(
+                        "The Skua compiler didn't finish within {} seconds.",
+                        TIMEOUT.as_secs()
+                    ))
+                };
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(halt);
+            }
+            Ok(None) => thread::sleep(POLL),
+            Err(error) => {
+                return Err(Halt::Failed(format!(
+                    "Lost track of the Skua compiler: {error}."
+                )));
+            }
+        }
+    }
 }
 
 fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<String> {
@@ -328,6 +345,20 @@ mod tests {
             finished.recv_timeout(Duration::from_secs(2)),
             Ok(Err(Halt::Stopped))
         );
+    }
+
+    #[test]
+    fn a_compiler_that_never_finishes_is_killed_at_the_deadline() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let halt = finish(&mut child, &|| false, started + Duration::from_millis(100));
+        assert!(matches!(halt, Err(Halt::Failed(_))), "{halt:?}");
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[test]
