@@ -249,7 +249,7 @@ impl RenderOnce for Dialog {
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.popover)
                                 .text_color(theme.popover_foreground)
-                                .shadow(theme.surface_edge())
+                                .child(theme.surface_ring(theme.radius.dialog))
                                 .child(
                                     div()
                                         .flex()

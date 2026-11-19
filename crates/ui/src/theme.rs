@@ -290,16 +290,17 @@ impl Theme {
             .border_color(color)
             .child(crate::nav::reveal_probe())
     }
-    pub fn surface_edge(&self) -> Vec<BoxShadow> {
-        vec![shadow(self.foreground.opacity(0.1), 0.0, 0.0, 1.0)]
+    pub fn surface_ring(&self, radius: Pixels) -> Div {
+        div()
+            .absolute()
+            .inset(px(-1.0))
+            .rounded(radius + px(1.0))
+            .border_1()
+            .border_color(self.foreground.opacity(0.1))
     }
     pub fn popup_shadow(&self) -> Vec<BoxShadow> {
         let black = gpui::black().opacity(0.1);
-        vec![
-            shadow(self.foreground.opacity(0.1), 0.0, 0.0, 1.0),
-            shadow(black, 4.0, 6.0, -1.0),
-            shadow(black, 2.0, 4.0, -2.0),
-        ]
+        vec![shadow(black, 4.0, 6.0, -1.0), shadow(black, 2.0, 4.0, -2.0)]
     }
     pub fn large_shadow(&self) -> Vec<BoxShadow> {
         let black = gpui::black().opacity(0.1);

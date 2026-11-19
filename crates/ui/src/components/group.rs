@@ -62,7 +62,7 @@ impl RenderOnce for Group {
                 v_flex()
                     .rounded(theme.radius.panel)
                     .bg(theme.card)
-                    .shadow(theme.surface_edge())
+                    .child(theme.surface_ring(theme.radius.panel))
                     .children(self.children.into_iter().enumerate().map(|(index, row)| {
                         div()
                             .when(index > 0, |row| row.border_t_1().border_color(theme.border))
