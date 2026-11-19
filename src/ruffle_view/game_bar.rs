@@ -51,8 +51,6 @@ actions!(
     ]
 );
 
-pub(crate) const BAR_HEIGHT: Pixels = px(38.0);
-
 const LAST_SERVER: &str = "Last server";
 const MAX_NUMBER: u32 = 999;
 const MAX_TEXT: usize = 32;

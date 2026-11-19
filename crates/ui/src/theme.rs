@@ -17,15 +17,6 @@ pub const CONTROL_MD: Pixels = px(28.0);
 pub const CONTROL_LG: Pixels = px(32.0);
 pub const RING_ROOM: Pixels = px(3.0);
 
-pub const TEXT_SMALL: Pixels = px(12.0);
-pub const TEXT_TITLE: Pixels = px(15.0);
-pub const TEXT_DISPLAY: Pixels = px(22.0);
-pub const LINE_SMALL: Pixels = px(16.0);
-pub const LINE_TITLE: Pixels = px(20.0);
-pub const LINE_DISPLAY: Pixels = px(28.0);
-pub const ROW: Pixels = px(26.0);
-pub const PANEL_INSET: Pixels = px(4.0);
-
 #[derive(Clone, Copy)]
 pub struct Typography {
     pub body: Pixels,

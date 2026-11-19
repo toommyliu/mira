@@ -1,3 +1,4 @@
+use mira_ui::StyledExt as _;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -25,10 +26,10 @@ use mira_ui::{
     components::format_keystroke,
     h_flex,
     primitives::{
-        Button, HoverCard, Icon, Kbd, MenuItem, Tab as TabItem, Tabs,
+        Align, Button, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem, Tabs,
         button::{Size, Variant},
     },
-    theme::{CONTROL_SM, LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
+    theme::CONTROL_SM,
 };
 
 use crate::{
@@ -56,7 +57,6 @@ actions!(
 #[action(namespace = mira, no_json)]
 struct SelectSession(usize);
 
-pub(super) const SIDEBAR_WIDTH: Pixels = px(208.0);
 const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
@@ -161,6 +161,36 @@ struct SessionTab {
     hint: Option<usize>,
 }
 
+impl SessionTab {
+    fn tab(&self, theme: &Theme, active: bool) -> TabItem {
+        let face = tab_face(theme, &self.title, self.glance.clone(), active, self.hint);
+        let mut tab = TabItem::new(self.title.clone()).child(face);
+        if let Some(glance) = &self.glance {
+            tab = tab.description(glance.label.clone());
+        }
+        let Details {
+            server,
+            script,
+            error,
+        } = &self.details;
+        if server.is_none() && script.is_none() && error.is_none() {
+            return tab;
+        }
+        let mut card = HoverCard::new(("tab-card", self.number), self.title.clone())
+            .placement(Placement::new(Side::Right, Align::Start));
+        if let Some(server) = server {
+            card = card.row("Server", server.clone(), Tone::Neutral);
+        }
+        if let Some(script) = script {
+            card = card.row("Script", script.clone(), Tone::Neutral);
+        }
+        if let Some(error) = error {
+            card = card.row("Error", error.clone(), Tone::Danger);
+        }
+        tab.hover_card(card)
+    }
+}
+
 type OpenTool = fn(Entity<Client>, Target, &mut App);
 
 fn tool_menu(client: &WeakEntity<Client>, view: EntityId, title: &SharedString) -> Vec<MenuItem> {
@@ -182,27 +212,6 @@ fn tool_menu(client: &WeakEntity<Client>, view: EntityId, title: &SharedString) 
         .collect()
 }
 
-fn tab_card(
-    id: impl Into<gpui::ElementId>,
-    title: SharedString,
-    details: Details,
-) -> Option<HoverCard> {
-    if details.server.is_none() && details.script.is_none() && details.error.is_none() {
-        return None;
-    }
-    let mut card = HoverCard::new(id, title);
-    if let Some(server) = details.server {
-        card = card.row("Server", server, Tone::Neutral);
-    }
-    if let Some(script) = details.script {
-        card = card.row("Script", script, Tone::Neutral);
-    }
-    if let Some(error) = details.error {
-        card = card.row("Error", error, Tone::Danger);
-    }
-    Some(card)
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Single,
@@ -216,10 +225,10 @@ enum Sidebar {
 }
 
 impl Sidebar {
-    fn width(self) -> Pixels {
+    fn width(self, theme: &Theme) -> Pixels {
         match self {
             Sidebar::Hidden => px(0.0),
-            Sidebar::Full => SIDEBAR_WIDTH,
+            Sidebar::Full => theme.layout.sidebar,
         }
     }
 }
@@ -316,12 +325,12 @@ impl Client {
             cx,
         )?;
         let window_size = window.viewport_size();
-        let left = self.sidebar.width();
+        let left = self.sidebar.width(cx.theme());
         let player = Bounds::new(
-            point(left, super::BAR_HEIGHT),
+            point(left, cx.theme().layout.chrome),
             gpui::size(
                 (window_size.width - left).max(px(1.0)),
-                (window_size.height - super::BAR_HEIGHT).max(px(1.0)),
+                (window_size.height - cx.theme().layout.chrome).max(px(1.0)),
             ),
         );
         let inset = bar_inset(window, left);
@@ -742,6 +751,8 @@ impl Client {
     }
 
     fn status(&mut self, window: &mut Window, cx: &mut App) -> Option<impl IntoElement + use<>> {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let status = self.status.as_ref()?;
         let opacity = match status.left {
             None => 1.0,
@@ -765,7 +776,7 @@ impl Client {
         };
         let text = window
             .text_system()
-            .shape_line(status.text.clone(), TEXT_BODY, &[run], None)
+            .shape_line(status.text.clone(), typography.body, &[run], None)
             .width;
         let width = mira_ui::motion::glide(
             ("hotkey-status-width", status.shown),
@@ -783,14 +794,14 @@ impl Client {
             .w(px(width))
             .max_w_full()
             .px(STATUS_PADDING)
-            .py(px(8.0))
+            .py(layout.space(2.0))
             .rounded(theme.radius.panel)
             .bg(theme.popover)
             .border_1()
             .border_color(theme.border)
             .shadow(theme.popup_shadow())
-            .text_size(TEXT_BODY)
-            .line_height(LINE_BODY)
+            .text_size(typography.body)
+            .line_height(typography.body_line)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.foreground)
             .text_center()
@@ -800,11 +811,11 @@ impl Client {
         Some(
             h_flex()
                 .absolute()
-                .top(super::BAR_HEIGHT + px(12.0))
+                .top(cx.theme().layout.chrome + px(12.0))
                 .left_0()
                 .right_0()
                 .justify_center()
-                .px(px(12.0))
+                .px(layout.space(3.0))
                 .opacity(opacity)
                 .child(mira_ui::motion::fade(
                     ("hotkey-status-shown", status.shown),
@@ -846,6 +857,7 @@ impl Client {
 
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
         let shortcuts = self.shortcut_tabs();
         let rows: Rc<[SessionTab]> = self
             .sessions
@@ -873,27 +885,7 @@ impl Client {
         let face_theme = theme.clone();
         let tabs = Tabs::new("sessions", "Tabs", rows.len(), move |index| {
             let row = &rows[index];
-            let face = tab_face(
-                &face_theme,
-                &row.title,
-                row.glance.clone(),
-                index == active,
-                row.hint,
-            );
-            let tab = TabItem::new(row.title.clone());
-            let tab = match &row.glance {
-                Some(glance) => tab.description(glance.label.clone()),
-                None => tab,
-            };
-            let tab = match tab_card(
-                ("tab-card", row.number),
-                row.title.clone(),
-                row.details.clone(),
-            ) {
-                Some(card) => tab.child(card.child(face)),
-                None => tab.child(face),
-            };
-            let tab = tab.menu({
+            let tab = row.tab(&face_theme, index == active).menu({
                 let client = client.clone();
                 let (view, title) = (row.view, row.title.clone());
                 move |_, _| tool_menu(&client, view, &title)
@@ -921,25 +913,17 @@ impl Client {
                 .update(cx, |client, cx| client.move_session(from, to, cx))
                 .ok();
         });
-        div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .w(SIDEBAR_WIDTH)
+        theme
+            .sidebar_pane()
             .h_full()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.border)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(px(2.0))
-                    .h(super::BAR_HEIGHT)
-                    .pr(px(8.0))
+                    .gap(layout.space(0.5))
+                    .h(cx.theme().layout.chrome)
+                    .pr(layout.space(2.0))
                     .child(drag_area().flex_1())
                     .child(
                         Button::icon("new-session", Icon::Plus, "New tab")
@@ -955,7 +939,7 @@ impl Client {
             .child(div().flex_none().child(tabs))
             .child(drag_area().flex_1())
             .child(
-                div().flex_none().p(px(8.0)).child(
+                div().flex_none().p(layout.space(2.0)).child(
                     Button::new("accounts", "Accounts")
                         .variant(Variant::Ghost)
                         .w_full()
@@ -985,6 +969,7 @@ impl Client {
     }
 
     fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = cx.theme().layout;
         let label = match self.sidebar {
             Sidebar::Hidden => "Show sidebar",
             Sidebar::Full => "Hide sidebar",
@@ -996,7 +981,7 @@ impl Client {
         div()
             .absolute()
             .left(traffic_lights_inset(window))
-            .top((super::BAR_HEIGHT - CONTROL_SM) / 2.0)
+            .top((cx.theme().layout.chrome - layout.control_sm) / 2.0)
             .occlude()
             .child(
                 Button::icon("sidebar-toggle", glyph, label)
@@ -1038,7 +1023,11 @@ impl Client {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .border_color(theme.background)
+            .border_color(if index == self.active {
+                theme.foreground
+            } else {
+                theme.border
+            })
             .when(column > 0, |tile| tile.border_l_1())
             .when(column + 1 < columns, |tile| tile.border_r_1())
             .when(row > 0, |tile| tile.border_t_1())
@@ -1086,6 +1075,8 @@ impl Client {
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
         div()
             .flex()
             .flex_col()
@@ -1093,15 +1084,15 @@ impl Client {
             .w_full()
             .items_center()
             .justify_center()
-            .gap(px(6.0))
+            .gap(layout.space(1.5))
             .bg(theme.background)
-            .text_size(TEXT_BODY)
+            .text_size(typography.body)
             .text_color(theme.muted_foreground)
             .child("No tabs are open.")
             .child(
                 Button::new("open-session", "New tab")
                     .variant(Variant::Outline)
-                    .mt(px(8.0))
+                    .mt(layout.space(2.0))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Err(error) = this.open_session(None, window, cx) {
                             tracing::error!(%error, "couldn't open a session");
@@ -1118,23 +1109,25 @@ pub(super) fn tab_face(
     active: bool,
     hint: Option<usize>,
 ) -> impl IntoElement {
+    let layout = theme.layout;
+    let typography = theme.typography;
     div()
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap(layout.space(1.0))
         .flex_1()
         .min_w_0()
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
-                .h(LINE_BODY)
+                .gap(layout.space(2.0))
+                .h(typography.body_line)
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .line_height(LINE_BODY)
+                        .line_height(typography.body_line)
                         .truncate()
                         .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
                         .child(label.clone()),
@@ -1143,10 +1136,10 @@ pub(super) fn tab_face(
         )
         .child(
             div()
-                .h(LINE_SMALL)
+                .h(typography.secondary_line)
                 .truncate()
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
                 .children(glance.map(|glance| {
                     div()
                         .text_color(match glance.tone {
@@ -1194,12 +1187,13 @@ pub(crate) fn drag_area() -> gpui::Div {
 
 pub(crate) fn bar(cx: &App) -> gpui::Div {
     let theme = cx.theme();
+    let layout = theme.layout;
     div()
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(2.0))
-        .h(super::BAR_HEIGHT)
+        .gap(layout.space(0.5))
+        .h(cx.theme().layout.chrome)
         .pr(BAR_PADDING)
         .bg(theme.background)
         .border_b_1()
@@ -1211,22 +1205,25 @@ pub(crate) fn window_bar(window: &Window, cx: &App) -> gpui::Div {
 }
 
 pub(crate) fn bar_title(title: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    let layout = cx.theme().layout;
+    let typography = cx.theme().typography;
     drag_area()
         .flex_none()
         .flex()
         .items_center()
-        .px(px(8.0))
-        .text_size(TEXT_BODY)
-        .line_height(LINE_BODY)
+        .px(layout.space(2.0))
+        .text_size(typography.body)
+        .line_height(typography.body_line)
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(cx.theme().muted_foreground)
         .child(title.into())
 }
 
 pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
+    let layout = cx.theme().layout;
     div()
         .flex_none()
-        .mx(px(4.0))
+        .mx(layout.space(1.0))
         .w(px(1.0))
         .h(px(16.0))
         .bg(cx.theme().border)
@@ -1234,14 +1231,12 @@ pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
 
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = bar_inset(window, self.sidebar.width());
+        let inset = bar_inset(window, self.sidebar.width(cx.theme()));
         for session in &self.sessions {
             if session.view.read(cx).bar_inset != inset {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
             }
         }
-        let (bar_background, bar_border) = (cx.theme().background, cx.theme().border);
-        let game_bar = !self.sessions.is_empty();
         let body = if self.sessions.is_empty() {
             self.empty(cx).into_any_element()
         } else if self.layout == Layout::Grid {
@@ -1266,7 +1261,21 @@ impl Render for Client {
                 .child(self.sessions[self.active].view.clone())
                 .into_any_element()
         };
+        self.frame(body, window, cx)
+    }
+}
+
+impl Client {
+    fn frame(
+        &mut self,
+        body: impl IntoElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let (bar_background, bar_border) = (cx.theme().background, cx.theme().border);
+        let show_empty_bar = self.sidebar == Sidebar::Hidden && self.sessions.is_empty();
         div()
+            .window_text(cx.theme())
             .id("client")
             .role(Role::Group)
             .track_focus(&self.focus)
@@ -1314,12 +1323,12 @@ impl Render for Client {
                     .relative()
                     .min_w_0()
                     .h_full()
-                    .when(self.sidebar == Sidebar::Hidden && !game_bar, |column| {
+                    .when(show_empty_bar, |column| {
                         column.child(
                             drag_area()
                                 .flex_none()
                                 .w_full()
-                                .h(super::BAR_HEIGHT)
+                                .h(cx.theme().layout.chrome)
                                 .bg(bar_background)
                                 .border_b_1()
                                 .border_color(bar_border),
@@ -1441,6 +1450,123 @@ mod tests {
         ) {
             assert!(path.exists(), "{} was not written", path.display());
         }
+    }
+
+    #[test]
+    fn session_hover_card_opens_beside_the_whole_row() {
+        struct Sessions;
+
+        impl Render for Sessions {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme().clone();
+                let row = SessionTab {
+                    view: cx.entity_id(),
+                    number: 1,
+                    title: "Artix".into(),
+                    glance: Some(Glance {
+                        label: "Twig".into(),
+                        tone: Tone::Neutral,
+                    }),
+                    details: Details {
+                        server: Some("Twig".into()),
+                        script: None,
+                        error: None,
+                    },
+                    hint: None,
+                };
+                div()
+                    .size_full()
+                    .window_text(&theme)
+                    .bg(gpui::black())
+                    .child(
+                        div()
+                            .w(theme.layout.sidebar)
+                            .h_full()
+                            .bg(theme.sidebar)
+                            .child(
+                                Tabs::new("sessions", "Tabs", 1, move |_| {
+                                    row.tab(&theme, true)
+                                        .menu(|_, _| Vec::new())
+                                        .on_close(|_, _| {})
+                                })
+                                .vertical()
+                                .on_reorder(|_, _, _, _| {}),
+                            ),
+                    )
+            }
+        }
+
+        mira_ui::snapshot_with(
+            "session-hover-card",
+            gpui::size(px(600.0), px(150.0)),
+            |_, cx| cx.new(|_| Sessions),
+            |cx, owner| {
+                let before = cx.capture_screenshot(owner).unwrap();
+                cx.update_window(owner, |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position: point(px(42.0), px(24.0)),
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.refresh();
+                })
+                .unwrap();
+                cx.run_until_parked();
+                let after = cx.capture_screenshot(owner).unwrap();
+                let scale = before.width() / 600;
+                let point = |x, y| (x * scale, y * scale);
+                let (x, y) = point(260, 17);
+                assert_ne!(
+                    before.get_pixel(x, y),
+                    after.get_pixel(x, y),
+                    "card alongside the row top"
+                );
+                let (x, y) = point(190, 33);
+                assert_eq!(
+                    before.get_pixel(x, y),
+                    after.get_pixel(x, y),
+                    "row stays uncovered"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn native_player_shows_through_the_client_while_chrome_stays_opaque() {
+        struct PlayerFrame(Entity<Client>);
+
+        impl Render for PlayerFrame {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let frame = self.0.update(cx, |client, cx| {
+                    let body = div().flex_1().child(bar(cx));
+                    client.frame(body, window, cx)
+                });
+                div().size_full().bg(gpui::rgb(0xff00ff)).child(frame)
+            }
+        }
+
+        let folder = std::env::temp_dir().join("mira-player-frame-snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        mira_ui::snapshot_with(
+            "native-player-frame",
+            gpui::size(px(960.0), px(588.0)),
+            |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, _| client.sidebar = Sidebar::Full);
+                cx.new(|_| PlayerFrame(client))
+            },
+            |cx, window| {
+                let image = cx.capture_screenshot(window).unwrap();
+                let (w, h) = image.dimensions();
+                let player = [255, 0, 255, 255];
+                assert_eq!(image.get_pixel(w / 2, h / 2).0, player, "stage");
+                assert_ne!(image.get_pixel(w / 12, h / 2).0, player, "sidebar");
+                assert_ne!(image.get_pixel(w / 2, h / 32).0, player, "game bar");
+            },
+        );
     }
 
     #[test]

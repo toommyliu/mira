@@ -51,7 +51,6 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, Theme,
     primitives::{Button, Spinner, button::Variant},
-    theme::{TEXT_BODY, TEXT_SMALL, TEXT_TITLE},
 };
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
@@ -66,7 +65,7 @@ pub(crate) use client::{
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
 pub(crate) use game_bar::{
-    BAR_HEIGHT, GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
+    GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
     ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
 };
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
@@ -669,6 +668,7 @@ enum Loading {
 }
 
 fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
+    let typography = theme.typography;
     let label: gpui::SharedString = match loading {
         Loading::Percent(percent) => format!("Loading {percent}%").into(),
         Loading::Started | Loading::Done => "Loading".into(),
@@ -681,7 +681,7 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(14.0))
+        .gap(theme.space(4.0))
         .bg(theme.background)
         .child(
             Spinner::new("loading-spinner")
@@ -690,7 +690,7 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
         )
         .child(
             div()
-                .text_size(TEXT_SMALL)
+                .text_size(typography.secondary)
                 .text_color(theme.muted_foreground)
                 .child(label),
         )
@@ -698,6 +698,8 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
 
 fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
     let theme = cx.theme();
+    let layout = theme.layout;
+    let typography = theme.typography;
     div()
         .id("minimal-rendering")
         .absolute()
@@ -707,14 +709,14 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(6.0))
+        .gap(layout.space(1.5))
         .bg(theme.background)
-        .text_size(TEXT_BODY)
+        .text_size(typography.body)
         .text_color(theme.foreground)
         .child(
             div()
-                .text_size(TEXT_TITLE)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_size(typography.body)
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .child("Minimal rendering"),
         )
         .child(
@@ -725,7 +727,7 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         .child(
             Button::new("resume-rendering", "Resume rendering")
                 .variant(Variant::Outline)
-                .mt(px(8.0))
+                .mt(layout.space(2.0))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.change_game_settings(|settings| settings.rendering.resume(), cx)
                 })),
@@ -779,6 +781,7 @@ impl Render for RuffleView {
                     &self.stats_placement,
                     self.player_bounds,
                     cx.entity(),
+                    cx.theme(),
                 ))
             });
         div()
