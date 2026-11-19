@@ -11,7 +11,7 @@ use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, h_flex,
     nav::{self, Axis, Step},
     primitives::{Flow, Icon, Input, InputEvent, Sortable, icon, small_icon},
-    theme::{CONTROL_SM, DISABLED_OPACITY, TEXT_SMALL},
+    theme::DISABLED_OPACITY,
 };
 
 type ReorderHandler = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
@@ -163,6 +163,7 @@ impl Chip {
     }
 
     fn render_editor(&self, input: Entity<Input>, window: &mut Window, cx: &mut App) -> AnyElement {
+        let typography = cx.theme().typography;
         let text: SharedString = input.read(cx).text().to_owned().into();
         let style = window.text_style();
         let run = TextRun {
@@ -175,7 +176,7 @@ impl Chip {
         };
         let width = window
             .text_system()
-            .shape_line(text, TEXT_SMALL, &[run], None)
+            .shape_line(text, typography.secondary, &[run], None)
             .width;
         let (editing, focus) = (self.editing.downgrade(), self.focus.clone());
         div()
@@ -192,30 +193,17 @@ impl Chip {
 
     fn render_chip(&self, index: usize, cx: &App) -> AnyElement {
         let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let label = self.items[index].clone();
         let current = self.current == Some(index);
         let marked = self.marks.as_ref().is_some_and(|marks| marks.at(index));
-        let (fill, edge, text, quiet) = if marked {
-            (
-                theme.primary.opacity(0.05),
-                theme.primary.opacity(0.35),
-                theme.foreground,
-                theme.foreground,
-            )
-        } else if self.quiet {
-            (
-                Hsla::transparent_black(),
-                theme.border,
-                theme.muted_foreground,
-                theme.muted_foreground,
-            )
+        let fill = theme.muted_foreground.opacity(0.1);
+        let text = theme.foreground;
+        let quiet = if self.quiet {
+            theme.muted_foreground
         } else {
-            (
-                theme.secondary,
-                theme.border,
-                theme.foreground,
-                theme.muted_foreground,
-            )
+            text
         };
         let (focus, selection, editing) = (
             self.focus.clone(),
@@ -237,15 +225,13 @@ impl Chip {
             })
             .relative()
             .when(self.dimmed, |chip| chip.opacity(DISABLED_OPACITY))
-            .h(CONTROL_SM)
-            .pl(px(if self.marks.is_some() { 5.0 } else { 9.0 }))
-            .pr(px(if self.removable { 3.0 } else { 9.0 }))
-            .gap(px(4.0))
-            .rounded_full()
+            .h(theme.layout.chip)
+            .px(theme.space(1.5))
+            .gap(layout.space(1.0))
+            .rounded(theme.radius.tag)
             .bg(fill)
-            .border_1()
-            .border_color(edge)
-            .text_caption(theme.typography)
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_caption(typography)
             .text_color(text)
             .on_click(move |event: &ClickEvent, window, cx| {
                 select(&selection, index, cx);
@@ -279,7 +265,7 @@ impl Chip {
                         .child(icon(marks.icon, if marked { text } else { quiet }).size(px(12.0)))
                         .when_some(toggle, |bell, toggle| {
                             bell.pointer_cursor(theme)
-                                .hover(|style| style.bg(theme.muted))
+                                .hover(|style| style.bg(theme.ghost_hover()))
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     toggle(index, !marked, window, cx);
@@ -303,7 +289,7 @@ impl Chip {
                         .when_some(self.on_remove.clone(), |button, remove| {
                             button
                                 .pointer_cursor(theme)
-                                .hover(|style| style.bg(theme.muted))
+                                .hover(|style| style.bg(theme.ghost_hover()))
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     remove(index, window, cx);
@@ -312,7 +298,7 @@ impl Chip {
                 )
             })
             .when(current && self.ring, |chip| {
-                chip.child(theme.ring_around(theme.ring, CONTROL_SM / 2.0, px(1.0)))
+                chip.child(theme.focus_ring(theme.radius.tag))
             })
             .into_any_element()
     }
@@ -395,6 +381,7 @@ fn finish(
 
 impl RenderOnce for Chips {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let selection = window.use_keyed_state((self.id.clone(), "selected"), cx, |_, _| 0);
         let editing: Editing =
@@ -480,14 +467,14 @@ impl RenderOnce for Chips {
             .role(Role::ListBox)
             .aria_label(self.label)
             .flex_wrap()
-            .gap(px(6.0))
+            .gap(layout.space(1.5))
             .when(interactive, |list| {
                 list.track_focus(&focus.tab_stop(true)).on_key_down(keys)
             });
         match on_reorder {
             Some(reorder) => h_flex()
                 .flex_wrap()
-                .gap(px(6.0))
+                .gap(layout.space(1.5))
                 .child(Sortable::new(
                     list,
                     Flow::Wrap,

@@ -1,12 +1,9 @@
 use gpui::{
     AnyElement, App, FontWeight, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
-use crate::{
-    ActiveTheme as _, h_flex,
-    theme::{LINE_SMALL, TEXT_SMALL},
-};
+use crate::{ActiveTheme as _, h_flex};
 
 #[derive(IntoElement)]
 pub struct Field {
@@ -54,18 +51,20 @@ impl Field {
 impl RenderOnce for Field {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let note = |text: SharedString, color| {
             div()
-                .text_size(TEXT_SMALL)
-                .line_height(LINE_SMALL)
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
                 .text_color(color)
                 .child(text)
         };
         let label = h_flex()
             .justify_between()
-            .gap(px(8.0))
-            .text_size(TEXT_SMALL)
-            .line_height(LINE_SMALL)
+            .gap(layout.space(2.0))
+            .text_size(typography.body)
+            .line_height(typography.body_line)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.foreground)
             .child(self.label)
@@ -73,19 +72,20 @@ impl RenderOnce for Field {
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
-            .map(|field| {
+            .gap(layout.space(0.5))
+            .child(div().flex().flex_col().gap(layout.space(2.0)).map(|field| {
                 if self.inline {
                     field.child(
                         h_flex()
-                            .gap(px(8.0))
-                            .child(label.flex_1().min_w_0())
+                            .gap(layout.space(2.0))
+                            .flex_wrap()
+                            .child(label.flex_1().min_w(gpui::px(96.0)))
                             .child(div().flex_none().child(self.control)),
                     )
                 } else {
                     field.child(label).child(self.control)
                 }
-            })
+            }))
             .map(|field| match (self.error, self.description) {
                 (Some(error), _) => field.child(note(error, theme.destructive)),
                 (None, Some(description)) => field.child(note(description, theme.muted_foreground)),

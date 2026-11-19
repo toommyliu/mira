@@ -10,14 +10,15 @@ use super::label::{ToggleHandler, caption, labelled};
 use crate::{ActiveTheme as _, motion, theme::mix};
 
 const TRACK_W: f32 = 28.0;
-const TRACK_H: f32 = 16.0;
-const THUMB: f32 = 12.0;
+const TRACK_H: f32 = 16.6;
+const THUMB: f32 = 14.0;
 const DRAG: Pixels = px(6.0);
 
 #[derive(IntoElement)]
 pub struct Switch {
     id: ElementId,
     on: bool,
+    small: bool,
     label: SharedString,
     description: Option<SharedString>,
     show_label: bool,
@@ -30,6 +31,7 @@ impl Switch {
         Self {
             id: id.into(),
             on,
+            small: false,
             label: label.into(),
             description: None,
             show_label: true,
@@ -40,6 +42,11 @@ impl Switch {
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
         self
     }
 
@@ -68,7 +75,6 @@ impl RenderOnce for Switch {
             cx,
         );
         let theme = cx.theme().clone();
-        let track = mix(theme.input, theme.primary, t);
         let on = self.on;
         let (row, ring) = labelled(
             self.id.clone(),
@@ -78,7 +84,6 @@ impl RenderOnce for Switch {
             window,
             cx,
         );
-        let travel = (TRACK_W - THUMB - 4.0) * t;
         let drag_start = window
             .use_keyed_state((self.id.clone(), "drag"), cx, |_, _| {
                 Rc::new(Cell::new(None))
@@ -86,25 +91,24 @@ impl RenderOnce for Switch {
             .read(cx)
             .clone();
         row.role(Role::Switch)
+            .group("switch")
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
             .child(
-                div()
-                    .flex_none()
-                    .mt(px(1.0))
-                    .w(px(TRACK_W))
-                    .h(px(TRACK_H))
-                    .p(px(2.0))
-                    .rounded_full()
-                    .bg(track)
-                    .when(ring, |control| control.child(theme.focus_ring(px(8.0))))
-                    .child(
-                        div()
-                            .ml(px(travel))
-                            .size(px(THUMB))
-                            .rounded_full()
-                            .bg(theme.background)
-                            .shadow(theme.surface_edge()),
-                    ),
+                track(self.small, t, &theme)
+                    .id("track")
+                    .mt(px((20.0 - if self.small { 14.0 } else { TRACK_H }) / 2.0))
+                    .when(!self.disabled, |control| {
+                        control
+                            .group_hover("switch", |style| style.border_color(theme.ring))
+                            .group_active("switch", |style| style.border_color(theme.foreground))
+                    })
+                    .when(ring, |control| {
+                        control.border_color(theme.ring).child(theme.ring_around(
+                            theme.ring,
+                            px(TRACK_H / 2.0),
+                            px(1.0),
+                        ))
+                    }),
             )
             .when(self.show_label, |row| {
                 row.child(caption(self.label, self.description, cx))
@@ -146,6 +150,38 @@ impl RenderOnce for Switch {
                 },
             )
     }
+}
+
+pub(super) fn track(small: bool, t: f32, theme: &crate::Theme) -> gpui::Div {
+    let (w, h, thumb) = if small {
+        (24.0, 14.0, 12.0)
+    } else {
+        (TRACK_W, TRACK_H, THUMB)
+    };
+    let off = theme.input.opacity(if theme.dark_mode { 0.8 } else { 1.0 });
+    div()
+        .relative()
+        .flex_none()
+        .flex()
+        .items_center()
+        .w(px(w))
+        .h(px(h))
+        .rounded_full()
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .bg(mix(off, theme.primary, t))
+        .child(
+            div()
+                .flex_none()
+                .size(px(thumb))
+                .rounded_full()
+                .ml(px((w - thumb - 2.0) * t))
+                .bg(if theme.dark_mode {
+                    mix(theme.foreground, theme.primary_foreground, t)
+                } else {
+                    theme.background
+                }),
+        )
 }
 
 fn dragged_to(start: Pixels, end: Pixels) -> Option<bool> {

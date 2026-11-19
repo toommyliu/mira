@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::{ActiveTheme as _, motion};
 
-const INSET: Pixels = px(3.0);
+const INSET: Pixels = px(1.0);
 const MIN_THUMB: Pixels = px(24.0);
 const HOLD: Duration = Duration::from_millis(1000);
 const FADE: Duration = Duration::from_millis(200);
@@ -56,7 +56,7 @@ pub struct Scrollbar {
 }
 
 impl Scrollbar {
-    pub const GUTTER: Pixels = px(12.0);
+    pub const GUTTER: Pixels = px(10.0);
 
     pub fn new(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
         Self {
@@ -164,8 +164,8 @@ impl RenderOnce for Scrollbar {
                     .w(Self::GUTTER - INSET * 2.0)
                     .h(thumb)
                     .rounded_full()
-                    .bg(theme.foreground.opacity(if dragging { 0.36 } else { 0.2 }))
-                    .hover(|style| style.bg(theme.foreground.opacity(0.32)))
+                    .bg(if dragging { theme.ring } else { theme.border })
+                    .hover(|style| style.bg(theme.ring))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         grab.drag
                             .set(Some((event.position.y, grab_handle.offset().y)));

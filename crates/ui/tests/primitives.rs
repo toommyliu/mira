@@ -1051,7 +1051,7 @@ fn switch_description_wraps_inside_a_narrow_container(cx: &mut TestAppContext) {
     cx.update(mira_ui::init);
     let (_, cx) = cx.add_window_view(|_, _| NarrowSwitch);
     cx.run_until_parked();
-    let one_line = gpui::px(6.0) + mira_ui::theme::LINE_BODY + mira_ui::theme::LINE_SMALL;
+    let one_line = gpui::px(6.0) + mira_ui::theme::LINE_BODY + mira_ui::theme::LINE_CAPTION;
     assert!(cx.debug_bounds("switch").unwrap().size.height > one_line);
 }
 
@@ -1082,6 +1082,57 @@ fn pushing_a_toast_redraws_the_window_that_shows_the_stack(cx: &mut TestAppConte
     });
     cx.run_until_parked();
     assert!(renders.get() > before);
+}
+
+struct ThemedToolbar;
+
+impl Render for ThemedToolbar {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::ActiveTheme as _;
+        let action = |name: &'static str| {
+            div()
+                .flex()
+                .debug_selector(move || name.into())
+                .child(Button::new(name, name))
+        };
+        div().size_full().flex().flex_col().child(
+            cx.theme()
+                .toolbar()
+                .debug_selector(|| "tools".into())
+                .child(action("first"))
+                .child(action("second")),
+        )
+    }
+}
+
+#[gpui::test]
+fn a_runtime_theme_changes_the_toolbar_and_its_controls_together(cx: &mut TestAppContext) {
+    use gpui::px;
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| ThemedToolbar);
+    cx.run_until_parked();
+    let sizes = |cx: &mut VisualTestContext| {
+        let bar = cx.debug_bounds("tools").unwrap();
+        let first = cx.debug_bounds("first").unwrap();
+        let second = cx.debug_bounds("second").unwrap();
+        (
+            bar.size.height,
+            first.size.height,
+            first.left() - bar.left(),
+            second.left() - first.right(),
+        )
+    };
+    assert_eq!(sizes(cx), (px(40.0), px(28.0), px(12.0), px(8.0)));
+    cx.update(|_, cx| {
+        let mut theme = mira_ui::Theme::dark();
+        theme.layout.unit = px(6.0);
+        theme.layout.control = px(36.0);
+        theme.layout.toolbar = px(56.0);
+        cx.set_global(theme);
+        cx.refresh_windows();
+    });
+    cx.run_until_parked();
+    assert_eq!(sizes(cx), (px(56.0), px(36.0), px(18.0), px(12.0)));
 }
 
 struct Loot;

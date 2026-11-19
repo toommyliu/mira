@@ -32,6 +32,7 @@ impl StatusLabel {
 impl RenderOnce for StatusLabel {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let typography = theme.typography;
         let text = match self.activity {
             Activity::Idle | Activity::Stopped => theme.muted_foreground,
             Activity::Running | Activity::Waiting => theme.foreground,
@@ -43,7 +44,7 @@ impl RenderOnce for StatusLabel {
             .aria_label(self.label.clone())
             .flex_none()
             .gap(px(7.0))
-            .text_body(theme.typography)
+            .text_body(typography)
             .text_color(text)
             .child(StatusDot::new((self.id.clone(), "dot"), self.activity))
             .child(div().min_w_0().child(self.label))

@@ -1,14 +1,11 @@
 use gpui::{
     AnyElement, App, ElementId, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
 use super::{Icon, icon};
-use crate::{
-    ActiveTheme as _, Tone,
-    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
-};
+use crate::{ActiveTheme as _, Tone};
 
 #[derive(IntoElement)]
 pub struct Alert {
@@ -29,7 +26,7 @@ impl Alert {
                 Tone::Neutral | Tone::Accent => Icon::Info,
                 Tone::Success => Icon::CircleCheck,
                 Tone::Warning => Icon::TriangleAlert,
-                Tone::Danger => Icon::CircleAlert,
+                Tone::Danger => Icon::OctagonX,
             },
             title: title.into(),
             body: None,
@@ -56,7 +53,9 @@ impl Alert {
 impl RenderOnce for Alert {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let (solid, soft, text) = theme.tone(self.tone);
+        let layout = theme.layout;
+        let typography = theme.typography;
+        let (solid, _, text) = theme.tone(self.tone);
         div()
             .id(self.id)
             .role(if self.tone == Tone::Danger {
@@ -70,40 +69,37 @@ impl RenderOnce for Alert {
             })
             .flex()
             .items_center()
-            .gap(px(16.0))
-            .py(px(10.0))
-            .px(px(14.0))
+            .gap(layout.space(4.0))
+            .py(theme.space(1.5))
+            .px(theme.space(2.0))
             .rounded(theme.radius.panel)
-            .bg(if self.tone == Tone::Neutral {
-                theme.secondary
-            } else {
-                soft
-            })
+            .bg(theme.card)
             .border_1()
-            .border_color(if self.tone == Tone::Neutral {
-                theme.border
-            } else {
-                solid.opacity(0.35)
-            })
+            .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_w_0()
                     .items_start()
-                    .gap(px(10.0))
-                    .child(div().flex_none().mt(px(2.0)).child(icon(self.icon, solid)))
+                    .gap(theme.space(2.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .mt(layout.space(0.5))
+                            .child(icon(self.icon, solid)),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .gap(px(2.0))
+                            .gap(layout.space(0.5))
                             .child(
                                 div()
-                                    .text_size(TEXT_BODY)
-                                    .line_height(LINE_BODY)
+                                    .text_size(typography.body)
+                                    .line_height(typography.body_line)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if self.tone == Tone::Neutral {
                                         theme.foreground
@@ -115,8 +111,8 @@ impl RenderOnce for Alert {
                             .when_some(self.body, |column, body| {
                                 column.child(
                                     div()
-                                        .text_size(TEXT_SMALL)
-                                        .line_height(LINE_SMALL)
+                                        .text_size(typography.secondary)
+                                        .line_height(typography.secondary_line)
                                         .text_color(theme.muted_foreground)
                                         .child(body),
                                 )
