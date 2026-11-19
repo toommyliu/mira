@@ -892,6 +892,35 @@ fn snapshot_radio_previews_focused() {
 }
 
 #[test]
+fn snapshot_disclosure_hover() {
+    let paths = mira_ui::snapshot_with(
+        "disclosure-hover",
+        size(px(240.0), px(90.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(mira_ui::components::Disclosure::new(
+                            "hovered", "Advanced", false,
+                        ))
+                        .child(mira_ui::components::Disclosure::new(
+                            "rest", "Advanced", true,
+                        ))
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| hover(cx, owner, 30.0, 28.0),
+    );
+    assert!(paths.iter().all(|path| path.exists()));
+}
+
+#[test]
 fn snapshot_long_select_scrolls() {
     use gpui::{Keystroke, PlatformInput, ScrollDelta, ScrollEvent, point};
 
