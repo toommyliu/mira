@@ -32,7 +32,7 @@ public sealed class Inventory(Game game, IFlashUtil flash, Paths paths, Func<ISc
     public void EquipUsableItem(InventoryItem? item)
     {
         if (item is not null)
-            game.Request("inventory", "use", new { query = new { itemId = item.ID } });
+            EquipItem(item.ID);
     }
 
     public bool ToBank(InventoryItem item) =>
