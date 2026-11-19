@@ -2,21 +2,10 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, SharedString};
 
-pub(crate) const HEAVY: &str = "heavy/";
-pub(crate) const SIDEBAR: &str = "icons/sidebar.svg";
-pub(crate) const SIDEBAR_OPEN: &str = "icons/sidebar-open.svg";
-pub(crate) const SPINNER: &str = "icons/spinner.svg";
-const STROKE: &str = "stroke-width=\"2.25\"";
-const HEAVY_STROKE: &str = "stroke-width=\"3\"";
-
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        let (path, stroke) = match path.strip_prefix(HEAVY) {
-            Some(path) => (path, HEAVY_STROKE),
-            None => (path, STROKE),
-        };
         let icon = match path {
             "icons/arrow-down.svg" => include_str!("../assets/icons/lucide/arrow-down.svg"),
             "icons/arrow-down-to-line.svg" => {
@@ -48,14 +37,22 @@ impl AssetSource for Assets {
                 include_str!("../assets/icons/lucide/triangle-alert.svg")
             }
             "icons/x.svg" => include_str!("../assets/icons/lucide/x.svg"),
-            SIDEBAR => include_str!("../assets/icons/sidebar.svg"),
-            SIDEBAR_OPEN => include_str!("../assets/icons/sidebar-open.svg"),
-            SPINNER => include_str!("../assets/icons/spinner.svg"),
+            "icons/circle-dot.svg" => include_str!("../assets/icons/lucide/circle-dot.svg"),
+            "icons/file-plus-2.svg" => include_str!("../assets/icons/lucide/file-plus-2.svg"),
+            "icons/pencil.svg" => include_str!("../assets/icons/lucide/pencil.svg"),
+            "icons/octagon-x.svg" => include_str!("../assets/icons/lucide/octagon-x.svg"),
+            "icons/loader-circle.svg" => include_str!("../assets/icons/lucide/loader-circle.svg"),
+            "icons/circle.svg" => include_str!("../assets/icons/lucide/circle.svg"),
+            "icons/circle-stop.svg" => include_str!("../assets/icons/lucide/circle-stop.svg"),
+            "icons/panel-left-open.svg" => {
+                include_str!("../assets/icons/lucide/panel-left-open.svg")
+            }
+            "icons/panel-left-close.svg" => {
+                include_str!("../assets/icons/lucide/panel-left-close.svg")
+            }
             _ => return Ok(None),
         };
-        Ok(Some(Cow::Owned(
-            icon.replace("stroke-width=\"2\"", stroke).into_bytes(),
-        )))
+        Ok(Some(Cow::Borrowed(icon.as_bytes())))
     }
 
     fn list(&self, _: &str) -> anyhow::Result<Vec<SharedString>> {

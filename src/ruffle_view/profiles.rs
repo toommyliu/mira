@@ -17,7 +17,7 @@ use mira_ui::{
     h_flex,
     nav::{Axis, Step},
     primitives::{
-        Align, Button, Dialog, Dot, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
+        Align, Button, Dialog, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
         MenuItem, Numeric, Scrollbar, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
     },
@@ -971,7 +971,14 @@ impl Editor {
                         .items(menu),
                 );
             } else if !current && let Some(tone) = mark {
-                tab = tab.end_slot(Dot::new(*tone));
+                tab = tab.end_slot({
+                    let (icon, label) = match tone {
+                        Tone::Accent => (Icon::FilePlus2, "New draft"),
+                        Tone::Warning => (Icon::Pencil, "Unsaved changes"),
+                        _ => (Icon::OctagonX, "Invalid draft"),
+                    };
+                    mira_ui::primitives::StatusMark::new(icon, label, *tone)
+                });
             }
             tab
         })
