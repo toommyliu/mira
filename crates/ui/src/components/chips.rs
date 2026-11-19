@@ -161,6 +161,7 @@ impl Chip {
         let radius = layout.chip / 2.0;
         h_flex()
             .id(index)
+            .debug_selector(move || format!("chip-{index}"))
             .role(Role::ListBoxOption)
             .aria_label(label.clone())
             .aria_selected(current)
@@ -173,6 +174,7 @@ impl Chip {
             .relative()
             .when(self.dimmed, |chip| chip.opacity(DISABLED_OPACITY))
             .h(layout.chip)
+            .max_w_full()
             .pl(layout.space(if self.marks.is_some() { 1.0 } else { 2.5 }))
             .pr(layout.space(if self.removable { 1.0 } else { 2.5 }))
             .gap(layout.space(1.0))
@@ -221,6 +223,7 @@ impl Chip {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .flex_none()
                         .size(SLOT)
                         .rounded_full()
                         .child(
@@ -258,6 +261,8 @@ impl Chip {
                 }
                 None => chip.child(
                     div()
+                        .min_w_0()
+                        .truncate()
                         .when(self.on_edit.is_some(), |label| {
                             label.cursor(CursorStyle::IBeam)
                         })
@@ -273,6 +278,7 @@ impl Chip {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .flex_none()
                         .size(SLOT)
                         .rounded_full()
                         .child(small_icon(Icon::X, text))
