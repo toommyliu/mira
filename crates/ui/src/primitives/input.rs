@@ -1152,7 +1152,7 @@ impl gpui::Element for TextElement {
                         point(bounds.left() + caret_x, bounds.top() + px(1.0)),
                         size(CARET_WIDTH, bounds.size.height - px(2.0)),
                     ),
-                    theme.foreground,
+                    window.text_style().color,
                 )),
             )
         } else {
