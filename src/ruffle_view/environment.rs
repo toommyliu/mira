@@ -10,7 +10,8 @@ use mira_ui::{
     components::{Chips, Empty},
     h_flex,
     primitives::{
-        Button, Checkbox, CheckedState, Dialog, Icon, Input, InputEvent, Switch,
+        Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input, InputEvent,
+        MenuItem, Switch,
         button::{Size, Variant},
     },
     theme::{DISABLED_OPACITY, RING_ROOM, tabular},
@@ -620,6 +621,70 @@ impl Environment {
                 this.confirm = Some(Confirm::Clear(list));
                 cx.notify();
             }))
+    }
+
+    fn bulk_actions(
+        &self,
+        can_copy: bool,
+        can_clear: bool,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Div {
+        let layout = cx.theme().layout;
+        let actions = [
+            (
+                "copy-to-all",
+                "Copy to all tabs…",
+                Confirm::CopyToAll,
+                can_copy,
+            ),
+            ("clear-all", "Clear all…", Confirm::ClearAll, can_clear),
+        ];
+        let view = cx.weak_entity();
+        let request = move |action| {
+            let view = view.clone();
+            move |_: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |env, cx| {
+                    env.confirm = Some(action);
+                    cx.notify();
+                });
+            }
+        };
+        let row = h_flex()
+            .debug_selector(|| "environment-actions".into())
+            .flex_none()
+            .gap(layout.space(1.0));
+        if window.viewport_size().width < layout.split_forms {
+            return row.child(
+                DropdownMenu::new("environment-bulk-menu")
+                    .align(Align::End)
+                    .trigger(
+                        Button::icon("bulk-actions", Icon::Ellipsis, "Environment actions")
+                            .size(Size::Small)
+                            .disabled(!can_copy && !can_clear),
+                    )
+                    .items(move |_, _| {
+                        actions
+                            .map(|(_, label, action, enabled)| {
+                                MenuItem::action(label, request(action)).disabled(!enabled)
+                            })
+                            .into()
+                    }),
+            );
+        }
+        row.children(actions.map(|(id, label, action, enabled)| {
+            let request = request(action);
+            Button::new(id, label)
+                .size(Size::Small)
+                .disabled(!enabled)
+                .when(action == Confirm::CopyToAll, |button| {
+                    button.tooltip("Give every other tab this tab's lists and rules")
+                })
+                .when(action == Confirm::ClearAll, |button| {
+                    button.variant(Variant::Ghost)
+                })
+                .on_click(move |_, window, cx| request(window, cx))
+        }))
     }
 
     fn edit_quest(&mut self, index: usize, text: String, cx: &mut Context<Self>) {
@@ -1412,7 +1477,12 @@ impl Render for Environment {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
-            .child(header)
+            .child(header.child(self.bulk_actions(
+                automation.is_some() && tabs >= 2,
+                clearable,
+                window,
+                cx,
+            )))
             .child(
                 div()
                     .id("environment-body")
@@ -1420,31 +1490,6 @@ impl Render for Environment {
                     .min_h_0()
                     .overflow_y_scroll()
                     .child(body),
-            )
-            .child(
-                theme
-                    .footer()
-                    .child(
-                        Button::new("copy-to-all", "Copy to all tabs…")
-                            .size(Size::Small)
-                            .disabled(automation.is_none() || tabs < 2)
-                            .tooltip("Give every other tab this tab's lists and rules")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm = Some(Confirm::CopyToAll);
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("clear-all", "Clear all…")
-                            .size(Size::Small)
-                            .variant(Variant::Ghost)
-                            .disabled(!clearable)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm = Some(Confirm::ClearAll);
-                                cx.notify();
-                            })),
-                    ),
             )
             .child(self.fetch_dialog(&theme, cx))
             .child(self.pickup_dialog(&theme, cx))
@@ -1582,11 +1627,51 @@ mod tests {
         });
         cx.update(|window, cx| window.focus(&root, cx));
         cx.run_until_parked();
-        for keys in ["shift-tab", "shift-tab", "enter", "tab", "enter"] {
+        press(cx, "shift-tab");
+        press(cx, "enter");
+        assert_eq!(
+            environment.read_with(cx, |env, _| env.confirm),
+            Some(Confirm::Clear(List::Boosts))
+        );
+        for keys in ["tab", "enter"] {
             press(cx, keys);
         }
         assert!(automation.boosts().items.is_empty());
         assert!(!automation.boosts().config.enabled);
+    }
+
+    #[gpui::test]
+    fn clear_all_in_the_title_bar_requires_confirmation_at_both_widths(cx: &mut TestAppContext) {
+        for width in [WIDTH, MIN_WIDTH] {
+            let (environment, automation, cx) = open(cx);
+            automation.update_drops(|state| register_items(&mut state.items, items("Tainted Gem")));
+            environment.update(cx, |_, cx| cx.notify());
+            cx.simulate_resize(size(px(width), px(HEIGHT)));
+            cx.run_until_parked();
+            let actions = cx
+                .debug_bounds("environment-actions")
+                .expect("title bar actions");
+            let layout = cx.update(|_, cx| cx.theme().layout);
+            assert!(actions.bottom() <= layout.chrome);
+            assert!(px(width) - actions.right() <= layout.space(2.0));
+            cx.simulate_click(
+                gpui::point(actions.right() - layout.space(3.0), actions.center().y),
+                gpui::Modifiers::none(),
+            );
+            cx.run_until_parked();
+            if px(width) < layout.split_forms {
+                press(cx, "down");
+                press(cx, "enter");
+            }
+            assert_eq!(
+                environment.read_with(cx, |env, _| env.confirm),
+                Some(Confirm::ClearAll),
+                "Clear all at {width} px with actions at {actions:?}"
+            );
+            press(cx, "escape");
+            assert!(environment.read_with(cx, |env, _| env.confirm.is_none()));
+            assert_eq!(automation.drops().items, items("Tainted Gem"));
+        }
     }
 
     #[gpui::test]
