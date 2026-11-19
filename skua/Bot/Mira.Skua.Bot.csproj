@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Core/Skua.Core.csproj" />
+    <ProjectReference Include="../Protocol/Mira.Skua.Protocol.csproj" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <InternalsVisibleTo Include="Mira.Skua.Tests" />
+  </ItemGroup>
+</Project>

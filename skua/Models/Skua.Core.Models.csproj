@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Nullable>annotations</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <WeaverConfiguration>
+      <Weavers>
+        <Caseless />
+      </Weavers>
+    </WeaverConfiguration>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../vendor/Skua/Skua.Core.Models/**/*.cs" Exclude="../vendor/Skua/Skua.Core.Models/bin/**;../vendor/Skua/Skua.Core.Models/obj/**;../vendor/Skua/Skua.Core.Models/ClientFileSources.cs" />
+    <Compile Include="ClientFileSources.cs" />
+    <PackageReference Include="Caseless.Fody" Version="1.9.1" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <ProjectReference Include="../Utils/Skua.Core.Utils.csproj" />
+  </ItemGroup>
+</Project>

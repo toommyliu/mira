@@ -71,7 +71,21 @@ fn main() -> anyhow::Result<()> {
             account_settings::init(data.join("account-settings"), cx);
             combat_profiles::init(data.join("combat-profiles.json"), cx);
             script_inputs::init(data.join("script-inputs.json"), cx);
-            packages::init(documents.join("packages"), data.join("github-token"), cx);
+            packages::init(
+                documents.join("packages"),
+                documents.join("skua"),
+                data.join("github-token"),
+                cx,
+            );
+            scripting::init_skua(scripting::SkuaSetup {
+                runner: packages::resources()
+                    .unwrap_or_default()
+                    .join("skua/Mira.Skua.dll"),
+                home: documents.join("skua"),
+                cache: dirs::cache_dir()
+                    .unwrap_or_else(|| data.clone())
+                    .join("Mira/skua"),
+            });
             packages::start(cx);
             updates::start(cx);
             let installed = types.clone();

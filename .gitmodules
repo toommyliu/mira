@@ -1,0 +1,5 @@
+[submodule "skua/vendor/Skua"]
+	path = skua/vendor/Skua
+	url = https://github.com/auqw/Skua
+	shallow = true
+	ignore = untracked

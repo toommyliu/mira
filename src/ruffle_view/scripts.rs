@@ -4,6 +4,10 @@ use std::{
     fs, io, iter,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -20,9 +24,9 @@ use mira_ui::{
     components::{Disclosure, Empty},
     h_flex,
     primitives::{
-        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
+        Alert, Align, Badge, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
-        Tab, Tabs, Toaster, VirtualList,
+        Tab, Tabs, VirtualList,
         button::{Size, Variant},
         icon,
     },
@@ -49,9 +53,7 @@ use crate::{
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
-    scripting::{
-        self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
-    },
+    scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
     settings, shortcuts,
 };
 
@@ -87,7 +89,6 @@ struct Entry {
 impl Entry {
     fn matches(&self, query: &str) -> bool {
         self.name.to_lowercase().contains(query)
-            || file_name(&self.path).to_lowercase().contains(query)
             || self
                 .folder
                 .as_ref()
@@ -103,6 +104,18 @@ enum SourceKind {
         description: Option<SharedString>,
         origin: Option<Origin>,
     },
+    Skua {
+        origin: Option<Origin>,
+    },
+}
+
+impl SourceKind {
+    fn origin(&self) -> Option<&Origin> {
+        match self {
+            SourceKind::Folder => None,
+            SourceKind::Package { origin, .. } | SourceKind::Skua { origin } => origin.as_ref(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,7 +198,7 @@ fn library_rows(library: &Library, query: &str, scope: Scope) -> Vec<Row> {
     rows
 }
 
-fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
+fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path, skua: &Path) -> Library {
     let mut library = Library::default();
     match scan(built_in) {
         Ok(entries) => library.entries = entries,
@@ -221,7 +234,53 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
     for (source, scripts) in package_roots(packages).into_iter().filter_map(package) {
         library.add(source, scripts);
     }
+    if let Some((source, scripts)) = skua_package(skua.to_owned()) {
+        library.add(source, scripts);
+    }
     library
+}
+
+fn skua_package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
+    let (origin, problem) = match packages::origin(&root) {
+        Ok(None) => return None,
+        Ok(origin) => (origin, None),
+        Err(problem) => (None, Some(SharedString::from(problem))),
+    };
+    let scripts = skua_entries(&root);
+    let source = Source {
+        root,
+        name: "Skua scripts".into(),
+        kind: SourceKind::Skua { origin },
+        problem,
+        scripts: 0,
+    };
+    Some((source, scripts))
+}
+
+fn skua_entries(root: &Path) -> io::Result<Vec<Entry>> {
+    let mut entries: Vec<Entry> = packages::skua_listed(root)?
+        .into_iter()
+        .filter_map(|relative| {
+            let path = root.join(relative.as_str());
+            let (folder, name) = match relative.split_last()? {
+                (folder, name) if folder.is_root() => (None, name.to_owned()),
+                (folder, name) => (Some(folder.to_string().into()), name.to_owned()),
+            };
+            Some(Entry {
+                path,
+                name: name.into(),
+                folder,
+                source: None,
+            })
+        })
+        .collect();
+    entries.sort_by_cached_key(|entry| {
+        (
+            entry.folder.as_deref().unwrap_or_default().to_lowercase(),
+            entry.name.to_lowercase(),
+        )
+    });
+    Ok(entries)
 }
 
 fn package_roots(packages: &Path) -> Vec<PathBuf> {
@@ -323,12 +382,8 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
                 .ok()
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .map(|folder| folder.display().to_string().into());
-            let name = fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| scripting::display_name(&path, &text))
-                .unwrap_or_else(|| name.to_owned());
             entries.push(Entry {
-                name: name.into(),
+                name: name.to_owned().into(),
                 folder,
                 path,
                 source: None,
@@ -382,6 +437,7 @@ struct SourceRow {
     scripts: Option<usize>,
     release: Option<(&'static str, SharedString)>,
     state: Option<SourceState>,
+    experimental: bool,
 }
 
 fn release(kind: &SourceKind) -> Option<(&'static str, SharedString)> {
@@ -390,11 +446,9 @@ fn release(kind: &SourceKind) -> Option<(&'static str, SharedString)> {
             version: Some(version),
             ..
         } => Some(("Version", version.clone())),
-        SourceKind::Package {
-            origin: Some(origin),
-            ..
-        } => Some(("Commit", origin.commit.clone().into())),
-        _ => None,
+        _ => kind
+            .origin()
+            .map(|origin| ("Commit", origin.commit.clone().into())),
     }
 }
 
@@ -541,6 +595,7 @@ pub(super) struct ScriptsWindow {
     shown: Option<ShownTab>,
     folder: PathBuf,
     packages: PathBuf,
+    skua: PathBuf,
     types: PathBuf,
     library: Option<Library>,
     scanning: Option<Task<()>>,
@@ -555,13 +610,14 @@ pub(super) struct ScriptsWindow {
     forms: HashMap<FormKey, Form>,
     generation: u64,
     loading: HashMap<FormKey, Task<()>>,
+    describing: Arc<AtomicU64>,
+    probes: HashMap<EntryId, Arc<AtomicBool>>,
     waiting: Option<(PathBuf, Instant, Task<()>)>,
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
     error_cursor: Option<usize>,
     source_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
-    toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 6],
 }
@@ -574,7 +630,6 @@ enum FormKey {
 
 struct Form {
     generation: u64,
-    meta: Meta,
     state: FormState,
 }
 
@@ -607,13 +662,12 @@ impl ScriptsWindow {
                 .search()
         });
         let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
-        let toasts = Toaster::new(window, cx);
-        let package_dialogs = cx.new(|cx| PackageDialogs::new(toasts.clone(), cx));
+        let package_dialogs = cx.new(|cx| PackageDialogs::new(cx));
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
-                if let PackageEvent::Installed(dir) = event {
-                    this.set_page(Page::Library(Some(this.packages.join(dir))), cx);
+                if let PackageEvent::Installed(root) = event {
+                    this.set_page(Page::Library(Some(root.clone())), cx);
                 }
                 this.generation += 1;
                 this.rescan(cx);
@@ -659,6 +713,7 @@ impl ScriptsWindow {
             tab,
             shown: None,
             packages: folder.with_file_name("packages"),
+            skua: packages::packages(cx).read(cx).skua_scripts(),
             folder,
             types,
             library: None,
@@ -674,13 +729,14 @@ impl ScriptsWindow {
             forms: HashMap::new(),
             generation: 0,
             loading: HashMap::new(),
+            describing: Arc::default(),
+            probes: HashMap::new(),
             waiting: None,
             displayed: None,
             detail_scroll: ScrollHandle::new(),
             error_cursor: None,
             source_scroll: ScrollHandle::new(),
             package_dialogs,
-            toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
         };
@@ -789,9 +845,10 @@ impl ScriptsWindow {
         let built_in = self.folder.clone();
         let added = settings::script_folders(cx).to_vec();
         let packages = self.packages.clone();
+        let skua = self.skua.clone();
         let types = self.types.clone();
         let scanned = cx.background_spawn(async move {
-            let library = scan_all(&built_in, &added, &packages);
+            let library = scan_all(&built_in, &added, &packages, &skua);
             let packages = library
                 .sources
                 .iter()
@@ -805,10 +862,6 @@ impl ScriptsWindow {
             let scanned = scanned.await;
             let _ = this.update(cx, |this, cx| {
                 let first = this.library.is_none();
-                let kept = match this.rows(cx).get(this.selected) {
-                    Some(Row::Script(entry)) => Some(entry.path.clone()),
-                    _ => None,
-                };
                 this.library = Some(scanned);
                 if this.scope(cx).is_none() {
                     this.page = Page::Library(None);
@@ -817,12 +870,7 @@ impl ScriptsWindow {
                     this.select_last_run(cx);
                 }
                 let rows = this.rows(cx);
-                if let Some(index) = kept.and_then(|path| {
-                    rows.iter()
-                        .position(|row| matches!(row, Row::Script(entry) if entry.path == path))
-                }) {
-                    this.selected = index;
-                } else if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
+                if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
                     this.selected = first_script(&rows);
                 }
                 cx.notify();
@@ -1010,6 +1058,7 @@ impl ScriptsWindow {
             }),
             release: None,
             state: None,
+            experimental: false,
         };
         let packages = packages::packages(cx).read(cx);
         let (folders, installed): (Vec<&Source>, Vec<&Source>) = library
@@ -1019,7 +1068,9 @@ impl ScriptsWindow {
         let row = |source: &Source| {
             let status = match source.kind {
                 SourceKind::Folder => None,
-                SourceKind::Package { .. } => packages.status(&dir_name(&source.root)),
+                SourceKind::Package { .. } | SourceKind::Skua { .. } => {
+                    packages.status(&source.root)
+                }
             };
             let state = match (&source.problem, status) {
                 (Some(problem), _) => Some(SourceState::Problem(problem.clone())),
@@ -1035,12 +1086,13 @@ impl ScriptsWindow {
                 qualifier: None,
                 description: match &source.kind {
                     SourceKind::Package { description, .. } => description.clone(),
-                    SourceKind::Folder => None,
+                    SourceKind::Folder | SourceKind::Skua { .. } => None,
                 },
                 path: home_relative(&source.root),
                 scripts: source.problem.is_none().then_some(source.scripts),
                 release: release(&source.kind),
                 state,
+                experimental: matches!(source.kind, SourceKind::Skua { .. }),
             }
         };
         let qualify = |mut rows: Vec<SourceRow>, segments: fn(&Path) -> Vec<String>| {
@@ -1074,26 +1126,26 @@ impl ScriptsWindow {
         let Some(source) = source else {
             return Vec::new();
         };
-        let SourceKind::Package { origin, .. } = &source.kind else {
+        if source.kind == SourceKind::Folder {
             let this = this.clone();
             let root = root.to_owned();
             return vec![MenuItem::action("Remove from library", move |_, cx| {
                 let _ = this.update(cx, |this, cx| this.remove_folder(&root, cx));
             })];
-        };
+        }
         let mut items = Vec::new();
-        if let Some(origin) = origin {
+        if let Some(origin) = source.kind.origin() {
             let url = origin.url.clone();
             items.push(MenuItem::action("Open on GitHub", move |_, cx| {
                 cx.open_url(&url);
             }));
         }
         let dialogs = self.package_dialogs.clone();
-        let (dir, name) = (dir_name(&source.root), source.name.clone());
+        let (root, name) = (source.root.clone(), source.name.clone());
         items.push(
             MenuItem::action("Uninstall…", move |_, cx| {
                 dialogs.update(cx, |dialogs, cx| {
-                    dialogs.open_uninstall(dir.clone(), name.clone(), cx)
+                    dialogs.open_uninstall(root.clone(), name.clone(), cx)
                 });
             })
             .disabled(packages::packages(cx).read(cx).activity().is_some()),
@@ -1122,19 +1174,12 @@ impl ScriptsWindow {
             .iter()
             .flat_map(|library| &library.sources)
             .filter_map(|source| {
-                let SourceKind::Package {
-                    origin: Some(origin),
-                    ..
-                } = &source.kind
-                else {
-                    return None;
-                };
-                let dir = dir_name(&source.root);
-                let Some(Status::Available(to)) = state.status(&dir) else {
+                let origin = source.kind.origin()?;
+                let Some(Status::Available(to)) = state.status(&source.root) else {
                     return None;
                 };
                 Some(Pending {
-                    dir,
+                    root: source.root.clone(),
                     name: source.name.clone(),
                     from: origin.commit.clone().into(),
                     to: to.short().to_owned().into(),
@@ -1183,15 +1228,10 @@ impl ScriptsWindow {
                 .into_any_element();
         }
         let installed = self.library.as_ref().is_some_and(|library| {
-            library.sources.iter().any(|source| {
-                matches!(
-                    source.kind,
-                    SourceKind::Package {
-                        origin: Some(_),
-                        ..
-                    }
-                )
-            })
+            library
+                .sources
+                .iter()
+                .any(|source| source.kind.origin().is_some())
         });
         let dialogs = self.package_dialogs.clone();
         Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
@@ -1235,7 +1275,6 @@ impl ScriptsWindow {
                 let this = toggles.clone();
                 h_flex()
                     .flex_none()
-                    .h(layout.control)
                     .justify_between()
                     .pl(layout.space(4.0))
                     .pr(layout.space(2.0))
@@ -1255,10 +1294,6 @@ impl ScriptsWindow {
             .packages_open
             .then(|| self.source_list("packages", "Packages", installed, theme, cx));
         let busy = packages::packages(cx).read(cx).activity().is_some();
-        let installing = matches!(
-            packages::packages(cx).read(cx).activity(),
-            Some(packages::Activity::Installing)
-        );
         let dialogs = self.package_dialogs.clone();
         let sources = v_flex()
             .child(
@@ -1289,7 +1324,6 @@ impl ScriptsWindow {
                         .child(
                             Button::icon("install-package", Icon::Plus, "Install package")
                                 .size(Size::Small)
-                                .busy(installing)
                                 .disabled(busy)
                                 .on_click(move |_, window, cx| {
                                     dialogs
@@ -1324,12 +1358,10 @@ impl ScriptsWindow {
                     .flex()
                     .flex_col()
                     .min_h_0()
-                    .my(-RING_ROOM)
                     .child(
                         div()
                             .id("sources")
                             .min_h_0()
-                            .py(RING_ROOM)
                             .overflow_y_scroll()
                             .track_scroll(&self.source_scroll)
                             .child(sources),
@@ -1361,8 +1393,8 @@ impl ScriptsWindow {
             .chain(installed)
             .find(|row| row.root == root)?;
         let state = packages::packages(cx).read(cx);
-        let dir = dir_name(&row.root);
-        let updating = matches!(state.activity(), Some(packages::Activity::Updating(updating)) if *updating == dir);
+        let target = row.root.clone();
+        let updating = matches!(state.activity(), Some(packages::Activity::Updating(updating)) if *updating == target);
         let busy = state.activity().is_some();
         let update = matches!(
             row.state,
@@ -1377,7 +1409,7 @@ impl ScriptsWindow {
                 .disabled(busy)
                 .on_click(move |_, _, cx| {
                     dialogs.update(cx, |dialogs, cx| {
-                        dialogs.update(dir.clone(), name.clone(), false, cx)
+                        dialogs.update(target.clone(), name.clone(), false, cx)
                     })
                 })
         });
@@ -1441,15 +1473,21 @@ impl ScriptsWindow {
                         .min_h(layout.control_sm)
                         .gap(layout.space(2.0))
                         .child(
-                            div()
-                                .id("source-title")
-                                .role(gpui::Role::Heading)
-                                .aria_level(1)
+                            h_flex()
                                 .flex_1()
                                 .min_w_0()
-                                .truncate()
-                                .text_title(typography)
-                                .child(row.name.clone()),
+                                .gap(layout.space(2.0))
+                                .child(
+                                    div()
+                                        .id("source-title")
+                                        .role(gpui::Role::Heading)
+                                        .aria_level(1)
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_title(typography)
+                                        .child(row.name.clone()),
+                                )
+                                .when(row.experimental, |title| title.child(experimental_badge())),
                         )
                         .children(update)
                         .children(show)
@@ -1558,6 +1596,9 @@ impl ScriptsWindow {
             return;
         }
         let script = path.to_owned();
+        if scripting::is_skua(&script) {
+            return self.describe_skua(key, script, cx);
+        }
         let read = cx.background_spawn(async move {
             let display = file_name(&script);
             let text = fs::read_to_string(&script).map_err(|error| {
@@ -1568,7 +1609,7 @@ impl ScriptsWindow {
             })?;
             scripting::extract(&display, &script, &text).map_err(|error| match error {
                 ExtractError::Syntax(message) => ("This script has a syntax error", message),
-                ExtractError::Meta(message) => ("This script's meta is invalid", message),
+                ExtractError::Inputs(message) => ("This script's inputs are invalid", message),
             })
         });
         let generation = self.generation;
@@ -1592,6 +1633,55 @@ impl ScriptsWindow {
             });
             self.waiting = Some((path.clone(), Instant::now(), wake));
         }
+        self.loading.insert(key, task);
+    }
+
+    fn describe_skua(&mut self, key: FormKey, script: PathBuf, cx: &mut Context<Self>) {
+        let (preview, removed) = match &key {
+            FormKey::Script(_) => {
+                let turn = self.describing.fetch_add(1, Ordering::SeqCst) + 1;
+                (Some((turn, self.describing.clone())), None)
+            }
+            FormKey::Entry(id) => {
+                let removed = Arc::new(AtomicBool::new(false));
+                self.probes.insert(*id, removed.clone());
+                (None, Some(removed))
+            }
+        };
+        let read = cx.background_spawn(async move {
+            scripting::describe_skua(&script, &|| {
+                preview
+                    .as_ref()
+                    .is_some_and(|(turn, latest)| latest.load(Ordering::SeqCst) != *turn)
+                    || removed
+                        .as_ref()
+                        .is_some_and(|removed| removed.load(Ordering::SeqCst))
+            })
+        });
+        let generation = self.generation;
+        let task = cx.spawn({
+            let key = key.clone();
+            async move |this, cx| {
+                let read = read.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading.remove(&key);
+                    if let FormKey::Entry(id) = &key {
+                        this.probes.remove(id);
+                    }
+                    match read {
+                        Err(scripting::SkuaHalt::Stopped) => {}
+                        Err(scripting::SkuaHalt::Failed(message)) => this.loaded(
+                            key,
+                            generation,
+                            Err(("This Skua script can't start", message)),
+                            cx,
+                        ),
+                        Ok(definition) => this.loaded(key, generation, Ok(definition), cx),
+                    }
+                    cx.notify();
+                });
+            }
+        });
         self.loading.insert(key, task);
     }
 
@@ -1629,22 +1719,14 @@ impl ScriptsWindow {
         &mut self,
         key: FormKey,
         generation: u64,
-        read: Result<Declared, (&'static str, String)>,
+        read: Result<Option<Definition>, (&'static str, String)>,
         cx: &mut Context<Self>,
     ) {
-        let (meta, read) = match read {
-            Ok(Declared { meta, inputs }) => (
-                meta,
-                inputs.map_err(|message| ("This script's inputs are invalid", message)),
-            ),
-            Err(broken) => (Meta::default(), Err(broken)),
-        };
         if let Some(form) = self.forms.get_mut(&key)
             && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
             && definition == read
         {
             form.generation = generation;
-            form.meta = meta;
             return;
         }
         let state = match read {
@@ -1707,14 +1789,7 @@ impl ScriptsWindow {
             ) => Some(values(definition, drafts)),
             _ => None,
         };
-        self.forms.insert(
-            key.clone(),
-            Form {
-                generation,
-                meta,
-                state,
-            },
-        );
+        self.forms.insert(key.clone(), Form { generation, state });
         if let Some(edited) = checked {
             self.store_entry(&key, edited, cx);
         }
@@ -2045,8 +2120,27 @@ impl ScriptsWindow {
                             .into_any_element(),
                         _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
                     };
+                    let starts_group = field.group.is_some()
+                        && definition
+                            .fields()
+                            .get(index.wrapping_sub(1))
+                            .map(|previous| &previous.group)
+                            != Some(&field.group);
                     v_flex()
                         .gap(layout.space(1.0))
+                        .when_some(
+                            field.group.clone().filter(|_| starts_group),
+                            |column, group| {
+                                column.child(
+                                    div()
+                                        .pt(layout.space(2.0))
+                                        .text_caption(theme.typography)
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.muted_foreground)
+                                        .child(group),
+                                )
+                            },
+                        )
                         .child(control)
                         .map(|column| match (error(field, draft), &field.description) {
                             (Some(problem), _) => column
@@ -2166,20 +2260,10 @@ impl ScriptsWindow {
         let entry = entry?;
         let errors = self.input_errors(&entry.path, cx);
         let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
-        let key = FormKey::Script(entry.path.clone());
-        let meta = self.forms.get(&key).map(|form| &form.meta);
-        let name = meta
-            .and_then(|meta| meta.name.clone())
-            .map_or_else(|| entry.name.clone(), SharedString::from);
-        let description = meta
-            .and_then(|meta| meta.description.clone())
-            .map(|description| muted(theme, description).into_any_element());
         Some(Detail {
-            heading: heading(theme, name, home_relative(&entry.path), None).into_any_element(),
-            body: description
-                .into_iter()
-                .chain(self.inputs(theme, &key, cx))
-                .collect(),
+            heading: heading(theme, entry.name.clone(), home_relative(&entry.path), None)
+                .into_any_element(),
+            body: self.inputs(theme, &FormKey::Script(entry.path.clone()), cx),
             bar,
         })
     }
@@ -2197,13 +2281,6 @@ impl ScriptsWindow {
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
-        let meta = self.forms.get(&key).map(|form| &form.meta);
-        let name = meta
-            .and_then(|meta| meta.name.clone())
-            .unwrap_or_else(|| file_name(&queued.script));
-        let description = meta
-            .and_then(|meta| meta.description.clone())
-            .map(|description| muted(theme, description).into_any_element());
         let body = match self.forms.get(&key).map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
@@ -2229,7 +2306,7 @@ impl ScriptsWindow {
         Some(Detail {
             heading: heading(
                 theme,
-                name.into(),
+                file_name(&queued.script).into(),
                 home_relative(&queued.script),
                 Some(
                     Button::new("queued-remove", "Remove")
@@ -2241,13 +2318,13 @@ impl ScriptsWindow {
                 ),
             )
             .into_any_element(),
-            body: description
-                .into_iter()
-                .chain(failed.map(|message| {
+            body: failed
+                .map(|message| {
                     Alert::new("queued-failed", Tone::Danger, "Failed")
                         .body(message)
                         .into_any_element()
-                }))
+                })
+                .into_iter()
                 .chain(body)
                 .collect(),
             bar: None,
@@ -2268,11 +2345,10 @@ impl ScriptsWindow {
         let rows: Rc<[QueueRow]> = queue
             .iter()
             .map(|queued| {
-                let form = self.forms.get(&FormKey::Entry(queued.id));
-                let name = form
-                    .and_then(|form| form.meta.name.clone())
-                    .unwrap_or_else(|| file_name(&queued.script));
-                let form = form.map(|form| &form.state);
+                let form = self
+                    .forms
+                    .get(&FormKey::Entry(queued.id))
+                    .map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
                         Some(FormState::Broken { .. }) => Some("Can't start".into()),
@@ -2300,7 +2376,7 @@ impl ScriptsWindow {
                     None => text_width,
                 };
                 QueueRow {
-                    name: name.into(),
+                    name: file_name(&queued.script).into(),
                     folder: fit_path_to(&folder, room, window, theme),
                     meta,
                 }
@@ -2405,10 +2481,10 @@ impl ScriptsWindow {
                         })),
                 )
             }
-            (Some(problem), SourceKind::Package { .. }) => {
+            (Some(problem), SourceKind::Package { .. } | SourceKind::Skua { .. }) => {
                 Empty::new(format!("Can't load {}", source.name), problem.clone())
             }
-            (None, SourceKind::Package { .. }) => {
+            (None, SourceKind::Package { .. } | SourceKind::Skua { .. }) => {
                 Empty::new("No scripts here", "This package has no scripts.")
             }
             (None, SourceKind::Folder) => folder_empty(root.clone(), cx),
@@ -2428,23 +2504,35 @@ impl ScriptsWindow {
             .chain(installed)
             .filter_map(|row| Some((row.root, row.qualifier?)))
             .collect();
-        let headings: Rc<[(SharedString, Option<SharedString>)]> = library
+        let headings: Rc<[(SharedString, Option<SharedString>, bool)]> = library
             .sources
             .iter()
-            .map(|source| (source.name.clone(), qualified.get(&source.root).cloned()))
+            .map(|source| {
+                (
+                    source.name.clone(),
+                    qualified.get(&source.root).cloned(),
+                    matches!(source.kind, SourceKind::Skua { .. }),
+                )
+            })
             .collect();
+        let gap = cx.theme().layout.space(1.0);
         let count = rows.len();
         let this = cx.entity().downgrade();
         let that = this.clone();
         VirtualList::new("scripts", "Scripts", count, move |index| {
             match &rows[index] {
                 Row::Source(source) => {
-                    let (name, qualifier) = &headings[*source];
-                    match qualifier {
-                        Some(qualifier) => {
-                            ListItem::header(name.clone()).end_slot(qualifier.clone())
-                        }
-                        None => ListItem::header(name.clone()),
+                    let (name, qualifier, experimental) = &headings[*source];
+                    let header = ListItem::header(name.clone());
+                    match (qualifier, experimental) {
+                        (_, true) => header.end_slot(
+                            h_flex()
+                                .gap(gap)
+                                .children(qualifier.clone())
+                                .child(experimental_badge()),
+                        ),
+                        (Some(qualifier), false) => header.end_slot(qualifier.clone()),
+                        (None, false) => header,
                     }
                 }
                 Row::Script(entry) => match &entry.folder {
@@ -2484,6 +2572,10 @@ fn first_script(rows: &[Row]) -> usize {
     rows.iter()
         .position(|row| matches!(row, Row::Script(_)))
         .unwrap_or(0)
+}
+
+fn experimental_badge() -> Badge {
+    Badge::new("Experimental").tone(Tone::Warning)
 }
 
 fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
@@ -2540,6 +2632,15 @@ fn caption_width(text: &str, window: &Window, theme: &Theme) -> Pixels {
         .width
 }
 
+impl Drop for ScriptsWindow {
+    fn drop(&mut self) {
+        self.describing.fetch_add(1, Ordering::SeqCst);
+        for removed in self.probes.values() {
+            removed.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 impl Render for ScriptsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -2563,6 +2664,13 @@ impl Render for ScriptsWindow {
         self.forms.retain(|key, _| match key {
             FormKey::Script(_) => true,
             FormKey::Entry(id) => queued.contains(id),
+        });
+        self.probes.retain(|id, removed| {
+            let kept = queued.contains(id);
+            if !kept {
+                removed.store(true, Ordering::SeqCst);
+            }
+            kept
         });
         let page = self.shown_page(cx);
         if page == Page::Queue {
@@ -2742,9 +2850,7 @@ impl Render for ScriptsWindow {
                 "Script logs",
                 "Coming soon. Until then, script output goes to mira.log.",
             )),
-        }
-        .relative()
-        .child(Toaster::layer(&self.toasts, window, cx));
+        };
         let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
         let footer =
             match page {
@@ -2930,13 +3036,13 @@ fn heading(
         .children(action)
 }
 
-fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
+fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
     let typography = theme.typography;
     div()
         .text_size(typography.body)
         .line_height(typography.body_line)
         .text_color(theme.muted_foreground)
-        .child(text.into())
+        .child(text)
 }
 
 struct QueueRow {
@@ -3052,12 +3158,13 @@ mod tests {
         let missing = temp.join("unplugged");
         let authoring = temp.join("authoring");
         let packages = temp.join("packages");
-        assert_eq!(scan_all(&built_in, &[], &packages), Library::default());
+        let skua = temp.join("skua/Scripts");
+        assert_eq!(
+            scan_all(&built_in, &[], &packages, &skua),
+            Library::default()
+        );
         for (file, contents) in [
-            (
-                "scripts/zeta.ts",
-                "export const meta = { name: \"Alchemy\" } satisfies Meta;",
-            ),
+            ("scripts/zeta.ts", ""),
             ("scripts/Alpha.js", ""),
             ("scripts/notes.txt", ""),
             ("scripts/types.d.ts", ""),
@@ -3065,7 +3172,7 @@ mod tests {
             ("scripts/farming/hunt.ts", ""),
             ("scripts/node_modules/lib/index.js", ""),
             ("scripts/.git/hook.js", ""),
-            ("community/daily.ts", "export const meta = { name: 5 };"),
+            ("community/daily.ts", ""),
             ("community/bosses/dage.ts", ""),
             (
                 "authoring/package.json",
@@ -3093,6 +3200,14 @@ mod tests {
             ("packages/npm/package.json", r#"{"name":"left-pad"}"#),
             ("packages/npm/scripts/pad.ts", ""),
             ("packages/not-a-package/loose.ts", ""),
+            ("skua/Scripts/.mira-install.json", RECEIPT),
+            (
+                "skua/Scripts/scripts.json",
+                r#"[{"name":"null","path":"CoreBots.cs"},{"name":"Free Daily Boost","path":"Dailies/FreeDailyBoost.cs"},{"name":"Gone","path":"Gone.cs"},{"name":"Escape","path":"../outside.cs"}]"#,
+            ),
+            ("skua/Scripts/CoreBots.cs", ""),
+            ("skua/Scripts/Dailies/FreeDailyBoost.cs", ""),
+            ("skua/outside.cs", ""),
         ] {
             let path = temp.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -3102,6 +3217,7 @@ mod tests {
             &built_in,
             &[community.clone(), missing.clone(), authoring.clone()],
             &packages,
+            &skua,
         );
         let listed: Vec<(Option<usize>, Option<&str>, &str)> = library
             .entries
@@ -3111,14 +3227,15 @@ mod tests {
         assert_eq!(
             listed,
             [
-                (None, None, "Alchemy"),
                 (None, None, "Alpha.js"),
+                (None, None, "zeta.ts"),
                 (None, Some("farming"), "daily.mts"),
                 (None, Some("farming"), "hunt.ts"),
                 (Some(0), None, "daily.ts"),
                 (Some(0), Some("bosses"), "dage.ts"),
                 (Some(2), None, "draft.ts"),
                 (Some(4), None, "spin.ts"),
+                (Some(8), Some("Dailies"), "FreeDailyBoost.cs"),
             ]
         );
         let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
@@ -3176,6 +3293,7 @@ mod tests {
                     ),
                     0
                 ),
+                (skua.as_path(), "Skua scripts", None, 1),
             ]
         );
         for index in [3, 5, 7] {
@@ -3215,10 +3333,7 @@ mod tests {
         let library = Library {
             entries: vec![
                 entry("daily.ts", None, None),
-                Entry {
-                    name: "Frogzard hunt".into(),
-                    ..entry("hunt.ts", None, None)
-                },
+                entry("hunt.ts", None, None),
                 entry("daily.ts", Some("weekly"), Some(0)),
                 entry("dage.ts", None, Some(0)),
                 entry("spin.ts", None, Some(1)),
@@ -3239,7 +3354,7 @@ mod tests {
             names(""),
             [
                 "daily.ts",
-                "Frogzard hunt",
+                "hunt.ts",
                 "[community]",
                 "daily.ts",
                 "dage.ts",
@@ -3250,10 +3365,8 @@ mod tests {
         assert_eq!(names("daily"), ["daily.ts", "[community]", "daily.ts"]);
         assert_eq!(names("dailies"), ["[dailies]", "spin.ts"]);
         assert_eq!(names("weekly"), ["[community]", "daily.ts"]);
-        assert_eq!(names("frogzard"), ["Frogzard hunt"]);
-        assert_eq!(names("hunt.ts"), ["Frogzard hunt"]);
         assert!(names("zzz").is_empty());
-        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "Frogzard hunt"]);
+        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "hunt.ts"]);
         assert_eq!(names_in("", Scope::Source(0)), ["daily.ts", "dage.ts"]);
         assert_eq!(names_in("", Scope::Source(1)), ["spin.ts"]);
     }
@@ -3326,6 +3439,9 @@ mod tests {
         let receipt = format!(
             r#"{{"repository":1,"owner":"toommyliu","repo":"mira","path":"script-packages/dailies","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
         );
+        let skua_receipt = format!(
+            r#"{{"repository":2,"owner":"auqw","repo":"Scripts","path":"","branch":"Skua","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
+        );
         for (file, contents) in [
             ("scripts/hunt.ts", ""),
             ("scripts/bosses/dage.ts", ""),
@@ -3350,6 +3466,12 @@ mod tests {
                 "packages/future/package.json",
                 r#"{"name":"Future","mira":{"requires":"9.0.0"}}"#,
             ),
+            ("skua/Scripts/.mira-install.json", skua_receipt.as_str()),
+            (
+                "skua/Scripts/scripts.json",
+                r#"[{"name":"Free Daily Boost","path":"Dailies/FreeDailyBoost.cs"}]"#,
+            ),
+            ("skua/Scripts/Dailies/FreeDailyBoost.cs", ""),
         ] {
             let path = temp.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -3361,10 +3483,15 @@ mod tests {
             crate::settings::add_script_folder(temp.join("community"), cx);
             crate::settings::add_script_folder(temp.join("unplugged"), cx);
             crate::settings::add_script_folder(temp.join("backup/scripts"), cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::packages::packages(cx).update(cx, |packages, _| {
                 packages.mark(
-                    "toommyliu-mira-dailies",
+                    temp.join("packages/toommyliu-mira-dailies"),
                     Status::Available(
                         crate::packages::Sha::parse(&("9a8b7c6".to_owned() + &"0".repeat(33)))
                             .unwrap(),
@@ -3408,67 +3535,6 @@ mod tests {
                     })
                 }),
             ),
-            (
-                "scripts-sources-packages-focused",
-                Box::new({
-                    let middle = 218;
-                    let collapse = pointer(
-                        gpui::point(px(40.0), px(middle as f32)),
-                        Some(gpui::MouseButton::Left),
-                    );
-                    move |cx, window| {
-                        update_scripts(cx, window, |scripts, cx| {
-                            scripts.folders_open = false;
-                            cx.notify();
-                        });
-                        collapse(cx, window);
-                        update_scripts(cx, window, |scripts, _| {
-                            assert!(!scripts.packages_open, "the click collapses Packages")
-                        });
-                        for key in ["shift-tab", "tab"] {
-                            cx.update_window(window, |_, window, cx| {
-                                window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
-                            })
-                            .unwrap();
-                            cx.run_until_parked();
-                        }
-                        let image = cx.capture_screenshot(window).unwrap();
-                        let scale = image.width() / WIDTH as u32;
-                        let middle = middle * scale;
-                        let row: Vec<_> = (0..image.width())
-                            .map(|x| *image.get_pixel(x, middle))
-                            .collect();
-                        let background = row[0];
-                        let edge = row
-                            .iter()
-                            .position(|pixel| *pixel != background)
-                            .expect("the focus ring around Packages");
-                        let ring = row[edge + scale as usize];
-                        let inside = edge
-                            + row[edge..]
-                                .iter()
-                                .position(|pixel| *pixel == background)
-                                .unwrap();
-                        let gap = row[inside..]
-                            .iter()
-                            .position(|pixel| *pixel != background)
-                            .unwrap();
-                        assert!(
-                            gap >= 3 * scale as usize,
-                            "the focus ring touches the Packages label"
-                        );
-                        let column = edge as u32 + 30 * scale;
-                        let stroke = |rows: std::ops::Range<u32>| {
-                            rows.filter(|&y| *image.get_pixel(column, y) == ring)
-                                .count()
-                        };
-                        let above = stroke(middle - 16 * scale..middle);
-                        let below = stroke(middle..middle + 16 * scale);
-                        assert!(above > 0, "the focus ring has no top edge");
-                        assert_eq!(above, below, "the sidebar clips the focus ring");
-                    }
-                }),
-            ),
             ("scripts-sources", Box::new(|_, _| {})),
             (
                 "scripts-source-actions",
@@ -3498,9 +3564,10 @@ mod tests {
             ),
             ("scripts-source-folder", select(temp.join("community"))),
             ("scripts-source-default", select(temp.join("scripts"))),
+            ("scripts-source-skua", select(temp.join("skua/Scripts"))),
             (
                 "scripts-updates-card",
-                Box::new(pointer(gpui::point(px(159.0), px(341.0)), None)),
+                Box::new(pointer(gpui::point(px(159.0), px(335.0)), None)),
             ),
         ];
         for (name, interact) in shots {
@@ -3522,6 +3589,107 @@ mod tests {
             }
         }
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    struct SkuaInputs(Entity<ScriptsWindow>, FormKey);
+
+    impl Render for SkuaInputs {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let key = self.1.clone();
+            let inputs = self
+                .0
+                .update(cx, |scripts, cx| scripts.inputs(&theme, &key, cx));
+            div()
+                .size_full()
+                .window_surface(&theme)
+                .p(theme.space(4.0))
+                .child(
+                    v_flex()
+                        .w(theme.layout.inspector)
+                        .gap(theme.space(2.0))
+                        .children(inputs),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_skua_inputs() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-skua-inputs-{:x}", u64::from_ne_bytes(random)));
+        let field = |key: &str, group: Option<&str>, label: &str, kind: Kind| scripting::Field {
+            key: key.into(),
+            group: group.map(Into::into),
+            label: label.into(),
+            description: None,
+            kind,
+        };
+        let definition = Definition::new(vec![
+            field(
+                "BoostReward",
+                None,
+                "Choose Your Daily Boost Reward",
+                Kind::Select {
+                    options: vec!["LowestQuantOwned".into(), "EXP".into(), "Gold".into()],
+                    default: Some("LowestQuantOwned".into()),
+                },
+            ),
+            field(
+                "Generic:mode",
+                Some("Generic"),
+                "Mode",
+                Kind::Select {
+                    options: vec!["Farm".into(), "Buy".into()],
+                    default: Some("Farm".into()),
+                },
+            ),
+            field(
+                "Select:Sword",
+                Some("Select"),
+                "Abyssal Sword",
+                Kind::Boolean { default: true },
+            ),
+            field(
+                "Select:Helm",
+                Some("Select"),
+                "Abyssal Helm",
+                Kind::Boolean { default: false },
+            ),
+        ]);
+        let size = gpui::size(px(360.0), px(320.0));
+        for written in mira_ui::snapshot("scripts-skua-inputs", size, move |window, cx| {
+            let temp = temp.clone();
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::script_inputs::init(temp.join("script-inputs.json"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            let key = FormKey::Script(temp.join("skua/Scripts/Dailies/FreeDailyBoost.cs"));
+            let scripts = cx.new(|cx| {
+                let client = Client::empty_for_tests(&temp, cx);
+                ScriptsWindow::new(
+                    client,
+                    temp.join("scripts"),
+                    temp.join("types"),
+                    Target::Selected,
+                    window,
+                    cx,
+                )
+            });
+            let shown = key.clone();
+            let definition = definition.clone();
+            scripts.update(cx, |scripts, cx| {
+                scripts.loaded(shown, 0, Ok(Some(definition)), cx)
+            });
+            cx.new(|_| SkuaInputs(scripts, key))
+        }) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 
     struct OptionsPanels {
@@ -3575,7 +3743,12 @@ mod tests {
         for written in mira_ui::snapshot("scripts-options", size, move |window, cx| {
             let temp = temp.clone();
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             let scripts = cx.new(|cx| {
                 let client = Client::empty_for_tests(&temp, cx);
                 ScriptsWindow::new(
@@ -3631,7 +3804,12 @@ mod tests {
         let size = gpui::size(px(size.0), px(size.1));
         let build = |window: &mut Window, cx: &mut App| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             cx.new(|cx| {
                 let client = Client::empty_for_tests(&temp, cx);
@@ -3662,7 +3840,7 @@ mod tests {
         ("scripts/legion/daily-quests/ultras/temple.ts", ""),
         (
             "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
-            r#"export const meta = { name: "Void Highlord farm" };"#,
+            "",
         ),
         (
             "packages/community/package.json",
@@ -3711,43 +3889,6 @@ mod tests {
             NESTED,
             |scripts| scripts.page = Page::Library(Some(scripts.packages.join("community"))),
         );
-    }
-
-    #[test]
-    fn snapshot_toasts_in_the_pane() {
-        use mira_ui::primitives::Toast;
-
-        for (name, toast) in [
-            (
-                "scripts-toast-installing-min",
-                Toast::new("Installing package…").loading(),
-            ),
-            (
-                "scripts-toast-installed-min",
-                Toast::new("Installed Dailies").tone(Tone::Success),
-            ),
-            (
-                "scripts-toast-failed-min",
-                Toast::new("Couldn't install package")
-                    .body(
-                        "Couldn't find o/missing. If it's private, add a GitHub token in Settings.",
-                    )
-                    .tone(Tone::Danger),
-            ),
-        ] {
-            snapshot_window_with(
-                name,
-                (MIN_WIDTH, MIN_HEIGHT),
-                "Alt 1",
-                NESTED,
-                |_| {},
-                move |cx, window| {
-                    update_scripts(cx, window, |scripts, cx| {
-                        Toaster::push(&scripts.toasts, toast.clone(), cx);
-                    })
-                },
-            );
-        }
     }
 
     #[test]
@@ -3910,7 +4051,12 @@ mod tests {
             let size = gpui::size(px(width), px(height));
             for written in mira_ui::snapshot(name, size, |window, cx| {
                 crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-                crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+                crate::packages::init(
+                    temp.join("packages"),
+                    temp.join("skua"),
+                    temp.join("github-token"),
+                    cx,
+                );
                 crate::script_inputs::init(temp.join("inputs.json"), cx);
                 let scripts = cx.new(|cx| {
                     let client = Client::empty_for_tests(&temp, cx);
@@ -3934,66 +4080,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_package_appearing_above_the_selection_keeps_it(cx: &mut gpui::TestAppContext) {
-        let mut random = [0; 8];
-        getrandom::getrandom(&mut random).unwrap();
-        let temp =
-            std::env::temp_dir().join(format!("mira-rescan-{:x}", u64::from_ne_bytes(random)));
-        let write = |file: &str, contents: &str| {
-            let path = temp.join(file);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, contents).unwrap();
-        };
-        write("scripts/hunt.ts", "");
-        write("packages/zeta/package.json", r#"{"name":"Zeta","mira":{}}"#);
-        write("packages/zeta/scripts/spin.ts", "");
-        cx.update(mira_ui::init);
-        let (scripts, cx) = cx.add_window_view(|window, cx| {
-            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
-            crate::script_inputs::init(temp.join("inputs.json"), cx);
-            let client = Client::empty_for_tests(&temp, cx);
-            ScriptsWindow::new(
-                client,
-                temp.join("scripts"),
-                temp.join("types"),
-                Target::Selected,
-                window,
-                cx,
-            )
-        });
-        cx.run_until_parked();
-        let spin = temp.join("packages/zeta/scripts/spin.ts");
-        scripts.update(cx, |scripts, cx| {
-            let rows = scripts.rows(cx);
-            scripts.selected = rows
-                .iter()
-                .position(|row| matches!(row, Row::Script(entry) if entry.path == spin))
-                .unwrap();
-        });
-
-        write(
-            "packages/alpha/package.json",
-            r#"{"name":"Alpha","mira":{}}"#,
-        );
-        write("packages/alpha/scripts/daily.ts", "");
-        let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
-        dialogs.update(cx, |_, cx| cx.emit(PackageEvent::Changed));
-        cx.run_until_parked();
-        let daily = temp.join("packages/alpha/scripts/daily.ts");
-        scripts.read_with(cx, |scripts, cx| {
-            assert!(
-                scripts
-                    .rows(cx)
-                    .iter()
-                    .any(|row| matches!(row, Row::Script(entry) if entry.path == daily))
-            );
-            assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
-        });
-        fs::remove_dir_all(temp).unwrap();
-    }
-
-    #[gpui::test]
     fn installing_a_package_selects_its_first_script(cx: &mut gpui::TestAppContext) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
@@ -4008,7 +4094,12 @@ mod tests {
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             let client = Client::empty_for_tests(&temp, cx);
             ScriptsWindow::new(
@@ -4034,7 +4125,7 @@ mod tests {
         write("packages/dailies/scripts/wheel.ts", "");
         let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
         dialogs.update(cx, |_, cx| {
-            cx.emit(PackageEvent::Installed("dailies".into()))
+            cx.emit(PackageEvent::Installed(temp.join("packages/dailies")))
         });
         cx.run_until_parked();
         assert_eq!(
@@ -4064,7 +4155,12 @@ mod tests {
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             let client = Client::empty_for_tests(&temp, cx);
             ScriptsWindow::new(
@@ -4125,7 +4221,12 @@ mod tests {
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             let client = Client::empty_for_tests(&temp, cx);
             ScriptsWindow::new(
@@ -4194,7 +4295,12 @@ mod tests {
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             window.activate_window();
             let client = Client::empty_for_tests(&temp, cx);

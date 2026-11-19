@@ -12,7 +12,7 @@ use super::{
     feeds::{self, Feeds},
     house, http, inventory, packets, player, players, quests,
     runtime::Command,
-    script, shops, world,
+    script, shops, skua, world,
 };
 use crate::{
     army::Armies,
@@ -54,6 +54,8 @@ pub(crate) enum Request {
     Feeds(feeds::Request),
     Http(http::Request),
     Script(script::Request),
+    #[serde(skip)]
+    Skua(skua::Request),
 }
 
 pub(crate) type Reply = Result<serde_json::Value, CallError>;
@@ -218,6 +220,13 @@ async fn serve(
         Request::Feeds(request) => feeds::serve(feeds, request).await,
         Request::Http(request) => Ok(http::serve(&state.http, request).await),
         Request::Script(request) => Ok(script::serve(request).await),
+        Request::Skua(request) => skua::serve(
+            bridge,
+            bridge.loaded(),
+            |wants| bridge.subscribe(wants),
+            feeds,
+            request,
+        ),
         Request::Player(request) => {
             player::serve(
                 bridge,

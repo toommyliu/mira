@@ -496,6 +496,8 @@ export function renderRust(bridge: Bridge): string {
     "",
     "use super::{DecodeError, Value, arg, decode};",
     "",
+    `pub(crate) const EXPORTS: &[&str] = &[${bridge.exports.map((entry) => JSON.stringify(entry.name)).join(", ")}];`,
+    "",
     renderRustEvents(bridge.events),
     "",
     modules.join("\n\n"),
