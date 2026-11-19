@@ -38,6 +38,7 @@ struct Confirm {
 }
 
 pub(super) struct PackageDialogs {
+    pub(super) toasts: Entity<Toaster>,
     install: Option<Install>,
     confirm: Option<Confirm>,
     _packages: Subscription,
@@ -45,20 +46,28 @@ pub(super) struct PackageDialogs {
 
 impl EventEmitter<PackageEvent> for PackageDialogs {}
 
-fn toast(title: impl Into<SharedString>, tone: Tone, body: Option<String>, cx: &mut gpui::App) {
-    let toast = Toast::new(title).tone(tone);
-    Toaster::push(
-        match body {
-            Some(body) => toast.body(body),
-            None => toast,
-        },
-        cx,
-    );
-}
-
 impl PackageDialogs {
-    pub(super) fn new(cx: &mut Context<Self>) -> Self {
+    fn toast(
+        &self,
+        title: impl Into<SharedString>,
+        tone: Tone,
+        body: Option<String>,
+        cx: &mut gpui::App,
+    ) {
+        let toast = Toast::new(title).tone(tone);
+        Toaster::push(
+            &self.toasts,
+            match body {
+                Some(body) => toast.body(body),
+                None => toast,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
+            toasts: Toaster::new(window, cx),
             install: None,
             confirm: None,
             _packages: cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
@@ -134,7 +143,7 @@ impl PackageDialogs {
                 }
                 Err(Failure::AlreadyInstalled(dir)) => {
                     this.close_install(cx);
-                    toast("Already installed", Tone::Neutral, None, cx);
+                    this.toast("Already installed", Tone::Neutral, None, cx);
                     cx.emit(PackageEvent::Installed(dir));
                 }
                 Err(Failure::Other(message)) => {
@@ -164,17 +173,17 @@ impl PackageDialogs {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(Updated::Current) => {
-                        toast(format!("{name} is up to date"), Tone::Neutral, None, cx);
+                        this.toast(format!("{name} is up to date"), Tone::Neutral, None, cx);
                     }
                     Ok(Updated::Edited(edits)) => {
                         this.confirm = Some(Confirm { dir, name, edits });
                     }
                     Ok(Updated::Replaced) => {
-                        toast(format!("Updated {name}"), Tone::Success, None, cx);
+                        this.toast(format!("Updated {name}"), Tone::Success, None, cx);
                         cx.emit(PackageEvent::Changed);
                     }
                     Err(message) => {
-                        toast(
+                        this.toast(
                             format!("Couldn't update {name}"),
                             Tone::Danger,
                             Some(message),
@@ -192,9 +201,9 @@ impl PackageDialogs {
         let task = packages::packages(cx).update(cx, |packages, cx| packages.remove(dir, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |_, cx| match result {
+            let _ = this.update(cx, |this, cx| match result {
                 Ok(()) => {
-                    toast(
+                    this.toast(
                         format!("Moved {name} to the Trash"),
                         Tone::Neutral,
                         None,
@@ -203,7 +212,7 @@ impl PackageDialogs {
                     cx.emit(PackageEvent::Changed);
                 }
                 Err(message) => {
-                    toast(
+                    this.toast(
                         format!("Couldn't remove {name}"),
                         Tone::Danger,
                         Some(message),
@@ -217,10 +226,10 @@ impl PackageDialogs {
 
     pub(super) fn check(&mut self, cx: &mut Context<Self>) {
         let task = packages::packages(cx).update(cx, |packages, cx| packages.check(false, cx));
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             let result = task.await;
-            cx.update(|cx| match result {
-                Ok(Checked { failed, .. }) if failed > 0 => toast(
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Checked { failed, .. }) if failed > 0 => this.toast(
                     if failed == 1 {
                         "Couldn't check 1 package".to_owned()
                     } else {
@@ -231,13 +240,13 @@ impl PackageDialogs {
                     cx,
                 ),
                 Ok(Checked { available: 0, .. }) => {
-                    toast("Your packages are up to date", Tone::Neutral, None, cx);
+                    this.toast("Your packages are up to date", Tone::Neutral, None, cx);
                 }
                 Ok(Checked { available: 1, .. }) => {
-                    toast("1 update available", Tone::Accent, None, cx);
+                    this.toast("1 update available", Tone::Accent, None, cx);
                 }
                 Ok(Checked { available, .. }) => {
-                    toast(
+                    this.toast(
                         format!("{available} updates available"),
                         Tone::Accent,
                         None,
@@ -245,14 +254,14 @@ impl PackageDialogs {
                     );
                 }
                 Err(message) => {
-                    toast(
+                    this.toast(
                         "Couldn't check for updates",
                         Tone::Danger,
                         Some(message),
                         cx,
                     );
                 }
-            })
+            });
         })
         .detach();
     }
@@ -279,6 +288,8 @@ fn edit_lines(edits: &Edits) -> Vec<String> {
 impl Render for PackageDialogs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let installing = matches!(
             packages::packages(cx).read(cx).activity(),
             Some(Activity::Installing)
@@ -287,15 +298,15 @@ impl Render for PackageDialogs {
         let install = self.install.as_ref().map(|install| {
             let label = |text: &'static str| {
                 div()
-                    .text_caption(theme.typography)
+                    .text_caption(typography)
                     .text_color(theme.muted_foreground)
                     .child(text)
             };
             v_flex()
-                .gap(px(12.0))
+                .gap(layout.space(3.0))
                 .child(
                     v_flex()
-                        .gap(px(4.0))
+                        .gap(layout.space(1.0))
                         .child(label("GitHub link"))
                         .child(install.link.clone())
                         .child(note(
@@ -306,7 +317,7 @@ impl Render for PackageDialogs {
                 )
                 .child(
                     v_flex()
-                        .gap(px(4.0))
+                        .gap(layout.space(1.0))
                         .child(label("Branch"))
                         .child(install.branch.clone()),
                 )
@@ -318,14 +329,14 @@ impl Render for PackageDialogs {
                 .when(!install.recommended.is_empty(), |body| {
                     body.child(
                         v_flex()
-                            .gap(px(6.0))
-                            .pt(px(4.0))
+                            .gap(layout.space(1.5))
+                            .pt(layout.space(1.0))
                             .child(label("Recommended"))
                             .children(install.recommended.iter().enumerate().map(
                                 |(index, recommended)| {
                                     let chosen = recommended.clone();
                                     h_flex()
-                                        .gap(px(12.0))
+                                        .gap(layout.space(3.0))
                                         .child(
                                             v_flex()
                                                 .flex_1()
@@ -365,10 +376,10 @@ impl Render for PackageDialogs {
             .is_some_and(|install| !install.link.read(cx).text().trim().is_empty());
         let confirm = self.confirm.as_ref().map(|confirm| {
             v_flex()
-                .gap(px(2.0))
+                .gap(layout.space(0.5))
                 .children(edit_lines(&confirm.edits).into_iter().map(|line| {
                     div()
-                        .text_caption(theme.typography)
+                        .text_caption(typography)
                         .truncate()
                         .text_color(theme.muted_foreground)
                         .child(line)
@@ -457,7 +468,7 @@ mod tests {
             let scratch = std::env::temp_dir().join(format!("mira-{name}"));
             packages::init(scratch.join("packages"), scratch.join("token"), cx);
             cx.new(|cx| {
-                let mut dialogs = PackageDialogs::new(cx);
+                let mut dialogs = PackageDialogs::new(window, cx);
                 prepare(&mut dialogs, window, cx);
                 dialogs
             })

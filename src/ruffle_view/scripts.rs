@@ -483,7 +483,7 @@ impl ScriptsWindow {
                 .search()
         });
         let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
-        let package_dialogs = cx.new(PackageDialogs::new);
+        let package_dialogs = cx.new(|cx| PackageDialogs::new(window, cx));
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
@@ -2236,7 +2236,11 @@ impl Render for ScriptsWindow {
             .child(body)
             .child(footer)
             .child(self.package_dialogs.clone())
-            .child(Toaster::layer(window, cx))
+            .child(Toaster::layer(
+                &self.package_dialogs.read(cx).toasts.clone(),
+                window,
+                cx,
+            ))
     }
 }
 

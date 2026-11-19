@@ -19,8 +19,6 @@ use std::rc::Rc;
 
 use gpui::{App, KeyBinding, Window, actions};
 
-use primitives::Toaster;
-
 pub(crate) type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 pub const FOCUS_SCOPE: &str = "FocusScope";
@@ -30,7 +28,6 @@ actions!(ui, [FocusNext, FocusPrevious]);
 pub fn init(cx: &mut App) {
     register_fonts(cx.text_system());
     cx.set_global(Theme::for_window(cx.window_appearance()));
-    Toaster::init(cx);
     nav::track_input(cx);
     primitives::input::bind_keys(cx);
     cx.bind_keys([
