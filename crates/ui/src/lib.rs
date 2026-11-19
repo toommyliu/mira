@@ -57,12 +57,10 @@ fn move_focus(backwards: bool, cx: &mut App) {
 }
 
 fn register_fonts(system: &gpui::TextSystem) {
+    let inter = include_bytes!("../assets/fonts/Inter.ttf");
     system
-        .add_fonts(vec![
-            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Inter.ttf")),
-            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/Inter-Medium.ttf")),
-        ])
-        .expect("register bundled Inter faces");
+        .add_fonts(vec![std::borrow::Cow::Borrowed(inter)])
+        .expect("register bundled Inter");
 }
 
 #[cfg(test)]
@@ -70,7 +68,7 @@ mod tests {
     #[test]
     fn bundled_inter_shapes_regular_and_medium_at_their_native_widths() {
         use gpui::PlatformTextSystem as _;
-        let platform = std::sync::Arc::new(gpui_apple::AppleTextSystem::new());
+        let platform = std::sync::Arc::new(mira_platform::AppleTextSystem::new());
         let system = gpui::TextSystem::new(platform.clone());
         super::register_fonts(&system);
         let sample = "Accounts and combat profiles";
@@ -95,5 +93,47 @@ mod tests {
                 weight.0
             );
         }
+    }
+
+    #[test]
+    fn font_smoothing_thickens_light_text_most_and_off_draws_every_color_alike() {
+        use gpui::PlatformTextSystem as _;
+        let platform = std::sync::Arc::new(mira_platform::AppleTextSystem::new());
+        let system = gpui::TextSystem::new(platform.clone());
+        super::register_fonts(&system);
+        let font_id = system.resolve_font(&gpui::font(crate::theme::UI_FONT));
+        let glyph_id = platform
+            .glyph_for_char(font_id, 'a')
+            .expect("Inter has an a");
+        let ink = |color: gpui::Hsla| -> u64 {
+            let params = gpui::RenderGlyphParams {
+                font_id,
+                glyph_id,
+                font_size: crate::theme::TEXT_BODY,
+                subpixel_variant: gpui::Point::default(),
+                scale_factor: 2.0,
+                is_emoji: false,
+                subpixel_rendering: false,
+                dilation: platform.glyph_dilation_for_color(color),
+            };
+            let bounds = platform.glyph_raster_bounds(&params).expect("measure a");
+            let (_, mask) = platform.rasterize_glyph(&params, bounds).expect("draw a");
+            mask.iter().map(|&alpha| u64::from(alpha)).sum()
+        };
+
+        mira_platform::set_font_smoothing(true);
+        let (smoothed_light, smoothed_dark) = (ink(gpui::white()), ink(gpui::black()));
+        mira_platform::set_font_smoothing(false);
+        let (plain_light, plain_dark) = (ink(gpui::white()), ink(gpui::black()));
+
+        assert_eq!(plain_light, plain_dark);
+        assert!(
+            smoothed_dark > plain_dark,
+            "{smoothed_dark} should exceed {plain_dark}"
+        );
+        assert!(
+            smoothed_light > smoothed_dark,
+            "{smoothed_light} should exceed {smoothed_dark}"
+        );
     }
 }
