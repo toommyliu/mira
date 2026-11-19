@@ -98,9 +98,14 @@ impl RenderOnce for Switch {
                     .id("track")
                     .mt(px((20.0 - if self.small { 14.0 } else { TRACK_H }) / 2.0))
                     .when(!self.disabled, |control| {
-                        control
-                            .group_hover("switch", |style| style.border_color(theme.ring))
-                            .group_active("switch", |style| style.border_color(theme.foreground))
+                        let (fill, ink) = if on {
+                            (theme.primary, theme.primary_foreground)
+                        } else {
+                            (off_fill(&theme), theme.foreground)
+                        };
+                        control.group_active("switch", |style| {
+                            style.bg(theme.pressed(theme.background, fill, ink))
+                        })
                     })
                     .when(ring, |control| {
                         control.border_color(theme.ring).child(theme.ring_around(
@@ -158,7 +163,6 @@ pub(super) fn track(small: bool, t: f32, theme: &crate::Theme) -> gpui::Div {
     } else {
         (TRACK_W, TRACK_H, THUMB)
     };
-    let off = theme.input.opacity(if theme.dark_mode { 0.8 } else { 1.0 });
     div()
         .relative()
         .flex_none()
@@ -169,7 +173,7 @@ pub(super) fn track(small: bool, t: f32, theme: &crate::Theme) -> gpui::Div {
         .rounded_full()
         .border_1()
         .border_color(gpui::transparent_black())
-        .bg(mix(off, theme.primary, t))
+        .bg(mix(off_fill(theme), theme.primary, t))
         .child(
             div()
                 .flex_none()
@@ -182,6 +186,10 @@ pub(super) fn track(small: bool, t: f32, theme: &crate::Theme) -> gpui::Div {
                     theme.background
                 }),
         )
+}
+
+fn off_fill(theme: &crate::Theme) -> gpui::Hsla {
+    theme.input.opacity(if theme.dark_mode { 0.8 } else { 1.0 })
 }
 
 fn dragged_to(start: Pixels, end: Pixels) -> Option<bool> {

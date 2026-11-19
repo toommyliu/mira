@@ -80,10 +80,28 @@ fn scene_after_keys(
     }
 }
 
-#[test]
-fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
+fn hover(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
     use gpui::{MouseMoveEvent, PlatformInput, point};
 
+    for nudge in [0.0, 1.0] {
+        cx.update_window(owner, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(x + nudge), px(y)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.refresh();
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.capture_screenshot(owner).unwrap();
+    }
+}
+
+#[test]
+fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
     mira_ui::snapshot_with(
         "checkbox-hover",
         size(px(160.0), px(104.0)),
@@ -104,18 +122,7 @@ fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
             )
         },
         |cx, owner| {
-            cx.update_window(owner, |_, window, cx| {
-                window.dispatch_event(
-                    PlatformInput::MouseMove(MouseMoveEvent {
-                        position: point(px(24.0), px(30.0)),
-                        ..Default::default()
-                    }),
-                    cx,
-                );
-                window.refresh();
-            })
-            .unwrap();
-            cx.run_until_parked();
+            hover(cx, owner, 24.0, 30.0);
             let image = cx.capture_screenshot(owner).unwrap();
             let scale = image.width() / 160;
             let pixel = |x, y| image.get_pixel(x * scale, y * scale);
@@ -140,6 +147,38 @@ fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
             );
         },
     );
+}
+
+#[test]
+fn hovered_switch_has_no_edge_line() {
+    for (name, on, edge, inside) in [
+        ("switch-hover-on", true, 16, 22),
+        ("switch-hover-off", false, 43, 40),
+    ] {
+        mira_ui::snapshot_with(
+            name,
+            size(px(160.0), px(52.0)),
+            move |window, cx| {
+                Scene::open(
+                    move |_, _| {
+                        Switch::new("relogin", "Auto relogin", on)
+                            .on_toggle(|_, _, _| {})
+                            .into_any_element()
+                    },
+                    window,
+                    cx,
+                )
+            },
+            |cx, owner| {
+                hover(cx, owner, 30.0, 30.0);
+                let image = cx.capture_screenshot(owner).unwrap();
+                let scale = image.width() / 160;
+                let border = image.get_pixel(edge * scale + scale / 2 * u32::from(on), 30 * scale);
+                let fill = image.get_pixel(inside * scale, 30 * scale);
+                assert_eq!(border, fill, "{name} edge and fill");
+            },
+        );
+    }
 }
 
 #[test]
