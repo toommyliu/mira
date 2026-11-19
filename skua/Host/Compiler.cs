@@ -45,7 +45,7 @@ static class Compiler
         return 0;
     }
 
-    private static JsonObject Compile(string scripts, string cache, string entry)
+    internal static JsonObject Compile(string scripts, string cache, string entry)
     {
         var files = new Files(scripts);
         var closure = files.Closure(files.Find(entry) ?? throw new Failure($"Couldn't find {entry} in the Skua scripts."));
@@ -166,7 +166,7 @@ static class Compiler
         catch (Exception error)
         {
             Console.Error.WriteLine($"Couldn't read the script's options: {error}");
-            options = new JsonObject { ["fields"] = new JsonArray() };
+            return new JsonObject { ["fields"] = new JsonArray() };
         }
         finally
         {
