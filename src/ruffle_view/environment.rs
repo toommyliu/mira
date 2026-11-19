@@ -1,9 +1,9 @@
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    Render, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
@@ -20,7 +20,7 @@ use mira_ui::{
 use super::{
     Client,
     client::CloseSession,
-    form::{LABEL_WIDTH, note, row, row_label, section, switch_row},
+    form::{note, row, row_label, section},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
@@ -45,7 +45,6 @@ const MIN_HEIGHT: f32 = 280.0;
 
 const MAX_LIST: usize = 1024;
 
-type Setting<C> = (&'static str, &'static str, fn(&mut C) -> &mut bool);
 type Answer<T> = async_channel::Receiver<Result<T, CallError>>;
 
 struct Open(WindowHandle<Environment>);
@@ -761,31 +760,6 @@ impl Environment {
                     .into_any_element(),
             ),
         };
-        let kinds: [Setting<drops::Config>; 4] = [
-            ("drops-ac", "AC", |config| &mut config.accept_ac),
-            ("drops-ac-member", "Member-only AC", |config| {
-                &mut config.accept_ac_member_only
-            }),
-            ("drops-non-ac", "Non-AC", |config| &mut config.accept_non_ac),
-            ("drops-non-ac-member", "Member-only non-AC", |config| {
-                &mut config.accept_non_ac_member_only
-            }),
-        ];
-        let kinds = v_flex().children(kinds.into_iter().map(|(id, label, setting)| {
-            let automation = automation.clone();
-            h_flex().min_h(layout.control).child(
-                Checkbox::new(id, label, checked(*setting(&mut state.config.clone())))
-                    .disabled(!on)
-                    .on_toggle(move |on, _, _| {
-                        automation.update_drops(|state| *setting(&mut state.config) = on);
-                    }),
-            )
-        }));
-        let rejecting = automation.clone();
-        let reject = Switch::new("drops-reject", "Reject others", state.config.reject_others)
-            .on_toggle(move |on, _, _| {
-                rejecting.update_drops(|state| state.config.reject_others = on);
-            });
         v_flex()
             .gap(layout.space(2.0))
             .child(section(
@@ -802,28 +776,7 @@ impl Environment {
                 chips,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .items_start()
-                    .gap(layout.space(3.0))
-                    .child(
-                        h_flex()
-                            .flex_none()
-                            .w(LABEL_WIDTH)
-                            .min_h(layout.control)
-                            .child(row_label("Also pick up", on)),
-                    )
-                    .child(div().flex_1().min_w_0().child(kinds)),
-            )
-            .child(
-                v_flex()
-                    .gap(layout.space(2.5))
-                    .child(switch_row(layout, "Reject others", on, reject))
-                    .child(
-                        note("Rejects every drop not picked up above.", on, theme)
-                            .mt(layout.space(-1.0)),
-                    ),
-            )
+            .child(unlisted_drops_policy(theme, automation, state.config))
     }
 
     fn quests(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
@@ -863,28 +816,27 @@ impl Environment {
             None => note(List::Quests.note(), on, theme),
         };
         let settled = matches!(self.pickup, Pickup::Idle);
-        let pickups = h_flex()
-            .gap(layout.space(3.0))
+        let pickups = div()
+            .grid()
+            .grid_cols_max_content(2)
+            .gap_x(layout.space(3.0))
             .children(Taken::ALL.into_iter().map(|taken| {
                 let (automation, this) = (automation.clone(), cx.weak_entity());
-                div().flex_1().min_w_0().child(
-                    Checkbox::new(
-                        ("quests-take", taken as usize),
-                        taken.label(),
-                        checked(*taken.flag(&mut state.config.clone())),
-                    )
-                    .disabled(!on || !settled)
-                    .on_toggle(move |on, _, cx| {
-                        if on {
-                            let _ = this.update(cx, |this, cx| {
-                                this.change_quests(QuestChange::Take(taken), cx)
-                            });
-                        } else {
-                            automation
-                                .update_quests(|state| *taken.flag(&mut state.config) = false);
-                        }
-                    }),
+                Checkbox::new(
+                    ("quests-take", taken as usize),
+                    taken.label(),
+                    checked(*taken.flag(&mut state.config.clone())),
                 )
+                .disabled(!on || !settled)
+                .on_toggle(move |on, _, cx| {
+                    if on {
+                        let _ = this.update(cx, |this, cx| {
+                            this.change_quests(QuestChange::Take(taken), cx)
+                        });
+                    } else {
+                        automation.update_quests(|state| *taken.flag(&mut state.config) = false);
+                    }
+                })
             }));
         let status = matches!(self.pickup, Pickup::Checking { .. })
             .then(|| ("Checking drops…".into(), theme.muted_foreground));
@@ -898,7 +850,12 @@ impl Environment {
                 theme,
             ))
             .child(self.list_field(List::Quests, on, message, chips, cx))
-            .child(row(layout, "Also pick up", on, pickups))
+            .child(
+                v_flex()
+                    .gap(layout.space(1.0))
+                    .child(row_label("Also pick up", on))
+                    .child(pickups),
+            )
     }
 
     fn boosts(&self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
@@ -1201,6 +1158,61 @@ impl Environment {
                 });
             })
     }
+}
+
+fn unlisted_drops_policy(
+    theme: &Theme,
+    automation: &Automation,
+    mut config: drops::Config,
+) -> Stateful<Div> {
+    type Kind = (
+        &'static str,
+        &'static str,
+        fn(&mut drops::Config) -> &mut bool,
+    );
+    let kinds: [Kind; 4] = [
+        ("drops-ac", "AC", |config| &mut config.accept_ac),
+        ("drops-ac-member", "Member-only AC", |config| {
+            &mut config.accept_ac_member_only
+        }),
+        ("drops-non-ac", "Non-AC", |config| &mut config.accept_non_ac),
+        ("drops-non-ac-member", "Member-only non-AC", |config| {
+            &mut config.accept_non_ac_member_only
+        }),
+    ];
+    let enabled = config.enabled;
+    let choices = div()
+        .grid()
+        .grid_cols_max_content(2)
+        .gap_x(theme.space(3.0))
+        .children(kinds.map(|(id, label, field)| {
+            let automation = automation.clone();
+            Checkbox::new(id, label, checked(*field(&mut config)))
+                .disabled(!enabled)
+                .on_toggle(move |on, _, _| {
+                    automation.update_drops(|state| *field(&mut state.config) = on);
+                })
+        }));
+    let rejecting = automation.clone();
+    let title = "Unlisted drops policy";
+    v_flex()
+        .id("unlisted-drops-policy")
+        .role(Role::Group)
+        .aria_label(title)
+        .border_t_1()
+        .border_color(theme.border)
+        .pt(theme.space(3.0))
+        .gap(theme.space(1.0))
+        .child(row_label(title, enabled))
+        .child(choices)
+        .child(
+            Switch::new("drops-reject", "Reject others", config.reject_others)
+                .description("Rejects every drop not picked up above.")
+                .disabled(!enabled)
+                .on_toggle(move |on, _, _| {
+                    rejecting.update_drops(|state| state.config.reject_others = on);
+                }),
+        )
 }
 
 fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme: &Theme) -> Div {
@@ -1674,18 +1686,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn snapshot_no_tabs() {
+    fn snapshot_form(name: &str, width: f32, height: f32, configure: impl Fn(&mut Environment)) {
         let folder = std::env::temp_dir().join(format!("mira-environment-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        let size = gpui::size(px(WIDTH), px(360.0));
-        for written in mira_ui::snapshot("environment-no-tabs", size, move |window, cx| {
+        let size = size(px(width), px(height));
+        for written in mira_ui::snapshot(name, size, move |window, cx| {
             cx.new(|cx| {
                 let client = Client::empty_for_tests(&folder, cx);
-                Environment::new(client, Target::Selected, window, cx)
+                let mut environment = Environment::new(client, Target::Selected, window, cx);
+                configure(&mut environment);
+                environment
             })
         }) {
             assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_no_tabs() {
+        snapshot_form("environment-no-tabs", WIDTH, 360.0, |_| {});
+    }
+
+    #[test]
+    fn snapshot_unlisted_drops_policy() {
+        for (name, width, height) in [
+            ("environment-drops", WIDTH, HEIGHT),
+            ("environment-drops-split", 560.0, HEIGHT),
+            ("environment-drops-min", MIN_WIDTH, MIN_HEIGHT),
+        ] {
+            snapshot_form(name, width, height, |environment| {
+                let automation = Automation::default();
+                automation.update_drops(|state| {
+                    register_items(&mut state.items, items("Tainted Gem, Dark Crystal Shard"));
+                    state.config.accept_ac_member_only = true;
+                    state.config.accept_non_ac_member_only = true;
+                });
+                environment.shown = Some(ShownTab::fake("Legion farming session", automation));
+            });
         }
     }
 
