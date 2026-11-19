@@ -19,21 +19,22 @@ use super::{
     Client, Login, ScriptPhase, ScriptState, Summary, Updated,
     account::file_name,
     account_card::{Face, Fix, Line, Mood, Presence, Show, face},
-    client::{CloseSession, SIDEBAR_WIDTH, bar_title, drag_area, window_bar},
+    client::{CloseSession, bar_title, drag_area, window_bar},
     form::note,
     scripts::{fit_path_to, home_relative},
 };
+use mira_ui::primitives::{Checkbox, CheckedState};
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
     components::Empty,
     h_flex,
     primitives::{
         Alert, Badge, Button, ContextMenu, Dialog, DropdownMenu, Field, Icon, Input, InputEvent,
-        MenuItem, MenuList, Scrollbar, Spinner, Tab, Tabs, Tooltip,
+        MenuItem, MenuList, Scrollbar, Spinner, Tab, Tabs, ToggleGroup, ToggleItem, Tooltip,
         button::{Size, Variant},
         small_icon,
     },
-    theme::{LINE_SMALL, TEXT_BODY, TEXT_SMALL, tabular},
+    theme::tabular,
     v_flex,
 };
 
@@ -59,9 +60,7 @@ type Pick = Rc<dyn Fn(&mut Manager, Option<PathBuf>, &mut Context<Manager>)>;
 
 const CONTEXT: &str = "Accounts";
 const MAX_FIELD: usize = 64;
-const CARD_WIDTH: f32 = 248.0;
 const CARD_LINES: usize = 3;
-const CARD_PATH_WIDTH: gpui::Pixels = px(CARD_WIDTH - 24.0);
 const RECENT_LIMIT: usize = 8;
 const SCRIPT_MENU_WIDTH: gpui::Pixels = px(260.0);
 const SCRIPT_PATH_WIDTH: gpui::Pixels = px(186.0);
@@ -114,7 +113,11 @@ pub(crate) fn open(
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let manager = cx.new(|cx| Manager::new(game, client, path, device, window, cx));
+        let manager = cx.new(|cx| {
+            let mut manager = Manager::new(game, client, path, device, window, cx);
+            manager.check_servers(cx);
+            manager
+        });
         let focus = manager.read(cx).focus.clone();
         window.focus(&focus, cx);
         manager
@@ -228,6 +231,8 @@ fn server_items(
 }
 
 fn server_stats(server: &net::Server, theme: &Theme) -> gpui::Div {
+    let layout = theme.layout;
+    let typography = theme.typography;
     let (players, color) = if !server.online {
         (SharedString::from("Offline"), theme.muted_foreground)
     } else {
@@ -241,9 +246,9 @@ fn server_stats(server: &net::Server, theme: &Theme) -> gpui::Div {
         )
     };
     h_flex()
-        .gap(px(10.0))
-        .ml(px(16.0))
-        .text_size(TEXT_SMALL)
+        .gap(layout.space(2.5))
+        .ml(layout.space(4.0))
+        .text_size(typography.secondary)
         .font_features(tabular())
         .when(server.members, |stats| stats.child(Badge::new("Member")))
         .child(div().text_color(color).child(players))
@@ -528,7 +533,7 @@ impl Manager {
                 }
             }),
         ];
-        let mut manager = Self {
+        Self {
             window: game,
             client,
             accounts: Accounts::open(path).map_err(Into::into),
@@ -552,9 +557,7 @@ impl Manager {
             grid_scroll: ScrollHandle::new(),
             focus,
             _subscriptions: subscriptions,
-        };
-        manager.check_servers(cx);
-        manager
+        }
     }
 
     fn check_servers(&mut self, cx: &mut Context<Self>) {
@@ -1370,26 +1373,6 @@ impl Manager {
     }
 }
 
-fn selection_box(theme: &Theme, checked: bool) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(14.0))
-        .rounded(theme.radius.tag)
-        .border_1()
-        .map(|mark| {
-            if checked {
-                mark.border_color(theme.primary)
-                    .bg(theme.primary)
-                    .child(small_icon(Icon::Check, theme.primary_foreground))
-            } else {
-                mark.border_color(theme.border).bg(theme.secondary)
-            }
-        })
-}
-
 fn plan_line(setup: &Setup, id: &AccountId, presence: &Presence) -> Option<Line> {
     let current = match presence {
         Presence::Open(Summary {
@@ -1619,52 +1602,47 @@ impl Manager {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let count = |show: Show| faces.iter().filter(|face| face.shown_in(show)).count();
-        let problems = count(Show::Problems);
-        let pills = [
-            (Show::All, "show-all", "All", Tone::Neutral),
-            (Show::Running, "show-running", "Running", Tone::Neutral),
-            (
-                Show::Problems,
-                "show-problems",
-                "Problems",
-                if problems > 0 {
-                    Tone::Danger
-                } else {
-                    Tone::Neutral
-                },
-            ),
-            (Show::NotOpen, "show-not-open", "Not open", Tone::Neutral),
-        ]
-        .map(|(show, id, label, tone)| {
-            Button::new(id, label)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .text_size(TEXT_SMALL)
-                .pressed(self.show == show)
-                .end_slot(Badge::new(count(show).to_string()).tone(tone))
-                .on_click(cx.listener(move |this, _, _, cx| this.set_show(show, cx)))
+        let layout = cx.theme().layout;
+        let filters = [
+            (Show::All, "All"),
+            (Show::Running, "Running"),
+            (Show::Problems, "Problems"),
+            (Show::NotOpen, "Not open"),
+        ];
+        let items = filters.map(|(show, label)| {
+            let count = faces.iter().filter(|face| face.shown_in(show)).count();
+            let tone = if show == Show::Problems && count > 0 {
+                Tone::Danger
+            } else {
+                Tone::Neutral
+            };
+            ToggleItem::new(label).end_slot(Badge::new(count.to_string()).tone(tone))
         });
+        let selected = filters
+            .iter()
+            .position(|(show, _)| *show == self.show)
+            .unwrap_or(0);
+        let owner = cx.weak_entity();
+        let pills = ToggleGroup::new("account-filters", "Account status", items, selected)
+            .small()
+            .on_select(move |index, _, cx| {
+                let _ = owner.update(cx, |manager, cx| manager.set_show(filters[index].0, cx));
+            });
         window_bar(window, cx)
             .child(bar_title("Accounts", cx))
             .child(drag_area().flex_1().h_full())
-            .child(
-                h_flex()
-                    .flex_none()
-                    .gap(px(2.0))
-                    .mr(px(6.0))
-                    .children(pills),
-            )
+            .child(h_flex().flex_none().mr(layout.space(1.5)).child(pills))
             .child(
                 div()
-                    .flex_none()
+                    .min_w(px(120.0))
                     .w(px(200.0))
-                    .mr(px(6.0))
+                    .mr(layout.space(1.5))
                     .child(self.filter.clone()),
             )
     }
 
     fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = theme.layout;
         let typography = theme.typography;
         let accounts = self.account_list();
         let setups = self
@@ -1751,23 +1729,17 @@ impl Manager {
             }
         });
         let empty = rows.is_empty();
-        v_flex()
-            .flex_none()
-            .w(SIDEBAR_WIDTH)
+        theme
+            .sidebar_pane()
             .h_full()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.border)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
-            .pt(px(8.0))
+            .pt(layout.space(2.0))
             .child(all)
             .child(
                 div()
                     .flex_none()
-                    .h(px(28.0))
-                    .mt(px(8.0))
-                    .px(px(14.0))
+                    .h(layout.control_lg)
+                    .mt(layout.space(2.0))
+                    .px(layout.space(2.0))
                     .flex()
                     .items_center()
                     .text_caption(typography)
@@ -1784,7 +1756,7 @@ impl Manager {
             .when(empty, |sidebar| {
                 sidebar.child(
                     div()
-                        .px(px(14.0))
+                        .px(layout.space(2.0))
                         .text_caption(typography)
                         .text_color(theme.muted_foreground)
                         .child("None yet."),
@@ -1792,7 +1764,7 @@ impl Manager {
             })
             .child(drag_area().flex_1())
             .child(
-                div().flex_none().p(px(8.0)).child(
+                div().flex_none().p(layout.space(2.0)).child(
                     Button::new("new-setup", "New setup")
                         .variant(Variant::Ghost)
                         .w_full()
@@ -1817,11 +1789,13 @@ impl Manager {
         scripts: &[PathBuf],
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let (title, summary, actions) = match self.setup().cloned() {
             None => (
                 div()
                     .truncate()
-                    .text_body(theme.typography)
+                    .text_body(typography)
                     .font_weight(FontWeight::MEDIUM)
                     .child("All accounts")
                     .into_any_element(),
@@ -1868,7 +1842,7 @@ impl Manager {
                     .filter(|renaming| renaming.setup == setup.name);
                 let name_slot = match renaming {
                     Some(renaming) => div()
-                        .flex_none()
+                        .min_w(px(120.0))
                         .w(px(280.0))
                         .font_weight(FontWeight::MEDIUM)
                         .on_action(cx.listener(|this, _: &ClearSelection, window, cx| {
@@ -1881,7 +1855,7 @@ impl Manager {
                         div()
                             .id("setup-title")
                             .truncate()
-                            .text_body(theme.typography)
+                            .text_body(typography)
                             .font_weight(FontWeight::MEDIUM)
                             .cursor(gpui::CursorStyle::IBeam)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1893,13 +1867,13 @@ impl Manager {
                 };
                 let title = h_flex()
                     .min_w_0()
-                    .gap(px(8.0))
+                    .gap(layout.space(2.0))
                     .child(name_slot)
                     .child(note(parts.join(" · "), true, theme).flex_none())
                     .into_any_element();
                 let summary = match renaming.and_then(|renaming| renaming.error.clone()) {
                     Some(error) => div()
-                        .text_caption(theme.typography)
+                        .text_caption(typography)
                         .text_color(theme.destructive)
                         .child(error)
                         .into_any_element(),
@@ -1918,7 +1892,6 @@ impl Manager {
                                 Button::new("setup-script-trigger", label)
                                     .variant(Variant::Ghost)
                                     .size(Size::XSmall)
-                                    .text_size(TEXT_SMALL)
                                     .text_color(theme.foreground)
                                     .when_some(setup.script.as_deref(), |button, script| {
                                         button.tooltip(home_relative(script))
@@ -1940,13 +1913,13 @@ impl Manager {
                             });
                         h_flex()
                             .min_w_0()
-                            .gap(px(2.0))
+                            .gap(layout.space(0.5))
                             .child(note("Runs", true, theme).flex_none())
-                            .child(h_flex().h(LINE_SMALL).child(script_menu))
+                            .child(h_flex().h(typography.secondary_line).child(script_menu))
                             .child(note("on", true, theme).flex_none())
                             .child(
                                 h_flex()
-                                    .h(LINE_SMALL)
+                                    .h(typography.secondary_line)
                                     .child(self.setup_server_menu(&setup, cx)),
                             )
                             .into_any_element()
@@ -1964,7 +1937,6 @@ impl Manager {
                             Button::new("setup-accounts-trigger", "Accounts")
                                 .variant(Variant::Ghost)
                                 .size(Size::Small)
-                                .text_size(TEXT_BODY)
                                 .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
                         )
                         .items(move |_, _| {
@@ -1991,7 +1963,6 @@ impl Manager {
                         Button::new("retry-failed", "Retry failed")
                             .variant(Variant::Ghost)
                             .size(Size::Small)
-                            .text_size(TEXT_BODY)
                             .on_click(cx.listener(|this, _, _, cx| this.retry_failed(cx)))
                             .into_any_element(),
                     );
@@ -2009,15 +1980,15 @@ impl Manager {
         };
         h_flex()
             .flex_none()
-            .gap(px(8.0))
-            .px(px(12.0))
-            .pt(px(12.0))
-            .pb(px(4.0))
+            .gap(layout.space(2.0))
+            .px(layout.space(3.0))
+            .pt(layout.space(3.0))
+            .pb(layout.space(1.0))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(2.0))
+                    .gap(layout.space(0.5))
                     .child(title)
                     .child(summary),
             )
@@ -2046,7 +2017,6 @@ impl Manager {
                 Button::new("setup-server-trigger", label)
                     .variant(Variant::Ghost)
                     .size(Size::XSmall)
-                    .text_size(TEXT_SMALL)
                     .text_color(theme.foreground)
                     .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
             )
@@ -2070,6 +2040,8 @@ impl Manager {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let id = account.id();
         let checked = self.checked.contains(&id);
         let focused = self.cursor.as_ref() == Some(&id)
@@ -2079,7 +2051,7 @@ impl Manager {
             div()
                 .min_w_0()
                 .truncate()
-                .text_caption(theme.typography)
+                .text_caption(typography)
                 .text_color(color(theme, line.mood))
                 .child(line.text.clone())
         };
@@ -2091,7 +2063,7 @@ impl Manager {
             div()
                 .id(SharedString::from(format!("fix-{}", account.username)))
                 .flex_none()
-                .text_caption(theme.typography)
+                .text_caption(typography)
                 .text_color(theme.foreground)
                 .underline()
                 .cursor_pointer()
@@ -2109,19 +2081,22 @@ impl Manager {
             .id(SharedString::from(format!("account-{}", account.username)))
             .relative()
             .h_full()
-            .gap(px(3.0))
+            .gap(layout.space(1.0))
             .min_w_0()
-            .px(px(12.0))
-            .pt(px(10.0))
-            .pb(px(11.0))
-            .rounded(px(8.0))
+            .px(layout.space(3.0))
+            .py(theme.space(3.0))
+            .rounded(theme.radius.panel)
             .border_1()
             .map(|card| {
                 if checked {
                     card.border_color(theme.primary)
-                        .bg(theme.primary.opacity(0.08))
+                        .bg(theme
+                            .primary
+                            .opacity(if theme.dark_mode { 0.1 } else { 0.05 }))
                 } else {
-                    card.border_color(theme.border).bg(theme.card)
+                    card.border_color(gpui::transparent_black())
+                        .bg(theme.card)
+                        .shadow(theme.surface_edge())
                 }
             })
             .role(Role::CheckBox)
@@ -2143,27 +2118,34 @@ impl Manager {
             }))
             .child(
                 h_flex()
-                    .gap(px(8.0))
+                    .gap(layout.space(2.0))
                     .min_w_0()
-                    .mb(px(2.0))
+                    .mb(layout.space(0.5))
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap(px(8.0))
-                            .child(selection_box(theme, checked))
+                            .gap(layout.space(2.0))
+                            .child(Checkbox::indicator(
+                                if checked {
+                                    CheckedState::Checked
+                                } else {
+                                    CheckedState::Unchecked
+                                },
+                                theme,
+                            ))
                             .child(
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(FontWeight::MEDIUM)
                                     .child(account.name.clone()),
                             ),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_caption(theme.typography)
+                            .text_caption(typography)
                             .text_color(color(theme, face.state.mood))
                             .child(face.state.text.clone()),
                     ),
@@ -2173,7 +2155,7 @@ impl Manager {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_caption(theme.typography)
+                    .text_caption(typography)
                     .text_color(theme.muted_foreground)
                     .child(who)
             }))
@@ -2184,7 +2166,12 @@ impl Manager {
                         .child(
                             Tooltip::new(
                                 SharedString::from(format!("note-{}", account.username)),
-                                fit_path_to(&path, CARD_PATH_WIDTH, window, theme),
+                                fit_path_to(
+                                    &path,
+                                    theme.layout.card_min - theme.space(6.0),
+                                    window,
+                                    theme,
+                                ),
                                 line(note),
                             )
                             .align_start(),
@@ -2192,15 +2179,15 @@ impl Manager {
                         .into_any_element(),
                     (fix, _) => h_flex()
                         .min_w_0()
-                        .gap(px(6.0))
+                        .gap(layout.space(1.5))
                         .child(line(note).flex_shrink(1.0))
                         .children(fix)
                         .into_any_element(),
                 }
             }))
-            .children((face.lines()..CARD_LINES).map(|_| div().h(LINE_SMALL)))
+            .children((face.lines()..CARD_LINES).map(|_| div().h(typography.secondary_line)))
             .when(focused, |card| {
-                card.child(theme.ring_around(theme.ring, px(8.0), px(1.0)))
+                card.child(theme.ring_around(theme.ring, theme.radius.panel, px(1.0)))
             });
         ContextMenu::new(
             SharedString::from(format!("account-menu-{}", account.username)),
@@ -2233,11 +2220,12 @@ impl Manager {
         scripts: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = theme.layout;
         let count = selected.len();
         let separator = || {
             div()
                 .flex_none()
-                .mx(px(4.0))
+                .mx(layout.space(1.0))
                 .w(px(1.0))
                 .h(px(16.0))
                 .bg(theme.border)
@@ -2250,7 +2238,6 @@ impl Manager {
             Button::new(id, label)
                 .variant(Variant::Ghost)
                 .size(Size::Small)
-                .text_size(TEXT_BODY)
                 .on_click(cx.listener(move |this, _, _, cx| run(this, targets.clone(), cx)))
         };
         let this = cx.weak_entity();
@@ -2265,8 +2252,7 @@ impl Manager {
             .trigger(
                 Button::new("run-selected-trigger", "Run script…")
                     .variant(Variant::Ghost)
-                    .size(Size::Small)
-                    .text_size(TEXT_BODY),
+                    .size(Size::Small),
             )
             .items(move |window, cx| {
                 script_items(&this, &scripts, None, window, cx.theme(), run.clone())
@@ -2276,7 +2262,6 @@ impl Manager {
             Button::new(id, label)
                 .variant(Variant::Ghost)
                 .size(Size::Small)
-                .text_size(TEXT_BODY)
                 .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground))
         };
         let targets = selected.clone();
@@ -2349,52 +2334,30 @@ impl Manager {
                 vec![script.into_any_element()]
             }
         };
-        div()
-            .absolute()
-            .bottom(px(14.0))
-            .left(SIDEBAR_WIDTH)
-            .right_0()
-            .px(px(12.0))
-            .flex()
-            .justify_center()
+        theme
+            .footer()
+            .flex_wrap()
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_center()
-                    .gap_x(px(4.0))
-                    .gap_y(px(2.0))
-                    .p(px(4.0))
-                    .rounded(theme.radius.panel)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow(theme.popup_shadow())
+                h_flex()
+                    .gap(layout.space(0.5))
                     .child(
-                        h_flex()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .pl(px(8.0))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(format!("{count} selected")),
-                            )
-                            .child(
-                                Button::icon("clear-selection", Icon::X, "Clear selection")
-                                    .size(Size::Small)
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.clear_selection(cx)),
-                                    ),
-                            )
-                            .child(separator())
-                            .child(bulk("launch-selected", "Launch", Manager::launch, cx))
-                            .child(run_menu)
-                            .child(bulk("stop-selected", "Stop", Manager::stop, cx))
-                            .child(bulk("close-selected", "Close", Manager::close, cx)),
+                        div()
+                            .pl(layout.space(2.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(format!("{count} selected")),
                     )
-                    .child(h_flex().gap(px(2.0)).children(setup_controls)),
+                    .child(
+                        Button::icon("clear-selection", Icon::X, "Clear selection")
+                            .size(Size::Small)
+                            .on_click(cx.listener(|this, _, _, cx| this.clear_selection(cx))),
+                    )
+                    .child(separator())
+                    .child(bulk("launch-selected", "Launch", Manager::launch, cx))
+                    .child(run_menu)
+                    .child(bulk("stop-selected", "Stop", Manager::stop, cx))
+                    .child(bulk("close-selected", "Close", Manager::close, cx)),
             )
+            .child(h_flex().gap(layout.space(0.5)).children(setup_controls))
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2408,6 +2371,8 @@ impl Manager {
     }
 
     fn form(&self, theme: &Theme, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let (username, password, other) = match form.error.clone() {
             Some(Problem::Username(message)) => (Some(message), None, None),
             Some(Problem::Password(message)) => (None, Some(message), None),
@@ -2417,7 +2382,7 @@ impl Manager {
         let login = v_flex()
             .flex_none()
             .w(px(232.0))
-            .gap(px(16.0))
+            .gap(layout.space(4.0))
             .child(Field::new("Username", form.username.clone()).error(username))
             .child(Field::new("Password", form.password.clone()).error(password))
             .child(
@@ -2430,18 +2395,20 @@ impl Manager {
             )
             .children(other.map(|error| {
                 div()
-                    .text_size(TEXT_SMALL)
+                    .text_size(typography.secondary)
                     .text_color(theme.destructive)
                     .child(error)
             }));
-        let body = h_flex().items_start().gap(px(24.0)).child(login).child(
-            div().flex_1().min_w_0().child(self.server_list(
+        let body = h_flex()
+            .items_start()
+            .gap(layout.space(6.0))
+            .child(login)
+            .child(div().flex_1().min_w_0().child(self.server_list(
                 "server",
                 Some(form.server.as_deref()),
                 false,
                 cx,
-            )),
-        );
+            )));
         let close = cx.listener(|this, _: &(), _, cx| this.close_form(cx));
         Dialog::new(
             "account-form",
@@ -2472,12 +2439,14 @@ impl Manager {
         bulk: &Bulk,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let typography = theme.typography;
         let title = match bulk.ids.len() {
             1 => "Edit 1 account".to_owned(),
             count => format!("Edit {count} accounts"),
         };
         let body = v_flex()
-            .gap(px(12.0))
+            .gap(layout.space(3.0))
             .child(self.server_list(
                 "bulk-server",
                 bulk.change.server.as_ref().map(Option::as_deref),
@@ -2486,7 +2455,7 @@ impl Manager {
             ))
             .children(bulk.error.clone().map(|error| {
                 div()
-                    .text_size(TEXT_SMALL)
+                    .text_size(typography.secondary)
                     .text_color(theme.destructive)
                     .child(error)
             }));
@@ -2515,6 +2484,8 @@ impl Manager {
         bulk: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let this = cx.weak_entity();
         let pick: PickServer = Rc::new(move |server, _, cx| {
             this.update(cx, |manager, cx| {
@@ -2536,21 +2507,23 @@ impl Manager {
         )
         .description(self.servers.note())
         .end_slot(
-            h_flex().h(LINE_SMALL).child(match self.servers.check {
-                Check::Idle | Check::Running => div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(mira_ui::theme::CONTROL_XS)
-                    .child(Spinner::new("refresh-servers").color(cx.theme().muted_foreground))
-                    .into_any_element(),
-                _ => Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
-                    .variant(Variant::Ghost)
-                    .size(Size::XSmall)
-                    .disabled(!self.servers.ready())
-                    .on_click(cx.listener(|this, _, _, cx| this.check_servers(cx)))
-                    .into_any_element(),
-            }),
+            h_flex()
+                .h(typography.secondary_line)
+                .child(match self.servers.check {
+                    Check::Idle | Check::Running => div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(layout.control_xs)
+                        .child(Spinner::new("refresh-servers").color(cx.theme().muted_foreground))
+                        .into_any_element(),
+                    _ => Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
+                        .variant(Variant::Ghost)
+                        .size(Size::XSmall)
+                        .disabled(!self.servers.ready())
+                        .on_click(cx.listener(|this, _, _, cx| this.check_servers(cx)))
+                        .into_any_element(),
+                }),
         )
     }
 
@@ -2705,6 +2678,7 @@ fn setup_menu(this: &WeakEntity<Manager>, name: &str) -> Vec<MenuItem> {
 impl Render for Manager {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
         if let View::Setup(name) = &self.view
             && self.setup().is_none()
         {
@@ -2723,8 +2697,7 @@ impl Render for Manager {
         let sidebar = self.sidebar(&theme, cx);
         let selected = self.checked_accounts();
         let scripts = self.recent_scripts(cx);
-        let width = f32::from(window.viewport_size().width) - f32::from(SIDEBAR_WIDTH);
-        self.columns = ((width - 16.0) / CARD_WIDTH).floor().clamp(1.0, 6.0) as usize;
+        self.columns = theme.account_columns(window.viewport_size().width - theme.layout.sidebar);
         mira_ui::nav::set_scroll_root(&self.grid_scroll, window, cx);
         let content = match &self.accounts {
             Err(error) => div()
@@ -2732,7 +2705,7 @@ impl Render for Manager {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .px(px(24.0))
+                .px(layout.space(6.0))
                 .text_color(theme.destructive)
                 .child(format!("Mira couldn't load your accounts: {error}"))
                 .into_any_element(),
@@ -2797,10 +2770,10 @@ impl Render for Manager {
                                 .grid()
                                 .grid_cols(self.columns as u16)
                                 .content_start()
-                                .gap(px(8.0))
-                                .px(px(12.0))
-                                .pt(px(8.0))
-                                .pb(px(if selected.is_empty() { 12.0 } else { 64.0 }))
+                                .gap(layout.space(2.0))
+                                .px(layout.space(3.0))
+                                .pt(layout.space(2.0))
+                                .pb(theme.space(3.0))
                                 .children(cards),
                         )
                         .child(Scrollbar::new(
@@ -2815,11 +2788,11 @@ impl Render for Manager {
                     .min_h_0()
                     .child(header)
                     .children(self.notice.clone().map(|notice| {
-                        div().flex_none().px(px(12.0)).pt(px(8.0)).child(Alert::new(
-                            "notice",
-                            Tone::Danger,
-                            notice,
-                        ))
+                        div()
+                            .flex_none()
+                            .px(layout.space(3.0))
+                            .pt(layout.space(2.0))
+                            .child(Alert::new("notice", Tone::Danger, notice))
                     }))
                     .child(grid)
                     .into_any_element()
@@ -2841,9 +2814,7 @@ impl Render for Manager {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
-            .text_size(TEXT_BODY)
-            .text_color(theme.foreground)
+            .window_surface(&theme)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("accounts")
             .role(Role::Group)
@@ -2867,14 +2838,15 @@ impl Render for Manager {
             .child(mira_ui::nav::pointer_probe())
             .child(title_bar)
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(sidebar)
-                    .child(content),
+                div().flex().flex_1().min_h_0().child(sidebar).child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(content)
+                        .children(selection_bar),
+                ),
             )
-            .children(selection_bar)
             .children(form)
             .children(bulk)
             .children(confirmation)
@@ -2884,6 +2856,62 @@ impl Render for Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_selected_accounts_at_opening_and_minimum_size() {
+        let dir = std::env::temp_dir().join(format!("mira-account-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let accounts: Vec<_> = (1..=20)
+            .map(|index| {
+                serde_json::json!({
+                    "name": format!("Battleon party member {index}"),
+                    "username": format!("member{index}"), "password":""
+                })
+            })
+            .collect();
+        let path = dir.join("accounts.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"accounts":accounts,"setups":[]})).unwrap(),
+        )
+        .unwrap();
+        for (name, w, h) in [
+            ("accounts-selected-min", 720.0, 420.0),
+            ("accounts-selected", 1000.0, 600.0),
+        ] {
+            for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
+                crate::settings::init(dir.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&dir, cx);
+                let game = cx
+                    .open_window(Default::default(), |_, _| client.clone())
+                    .unwrap();
+                cx.new(|cx| {
+                    let mut manager = Manager::new(
+                        game,
+                        client,
+                        path.clone(),
+                        HeaderValue::from_static("test"),
+                        window,
+                        cx,
+                    );
+                    manager.checked.extend(
+                        manager
+                            .accounts
+                            .as_ref()
+                            .unwrap()
+                            .list()
+                            .iter()
+                            .take(3)
+                            .map(Account::id),
+                    );
+                    manager
+                })
+            }) {
+                assert!(written.exists());
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn with_script(entry: &str, phase: ScriptPhase) -> Presence {
         Presence::Open(Summary {
