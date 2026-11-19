@@ -74,7 +74,6 @@ pub struct Select {
     placeholder: SharedString,
     width: Option<Pixels>,
     placement: Placement,
-    align_item: bool,
     default_open: bool,
     disabled: bool,
     small: bool,
@@ -96,7 +95,6 @@ impl Select {
             placeholder: "Choose".into(),
             width: Some(px(200.0)),
             placement: Placement::new(Side::Bottom, Align::Center),
-            align_item: true,
             default_open: false,
             disabled: false,
             small: false,
@@ -131,11 +129,6 @@ impl Select {
 
     pub fn align(mut self, align: Align) -> Self {
         self.placement.align = align;
-        self
-    }
-
-    pub fn align_item_with_trigger(mut self) -> Self {
-        self.align_item = true;
         self
     }
 
@@ -238,9 +231,8 @@ impl RenderOnce for Select {
                 .into_any_element()
         };
         let over = if is_open {
-            let over = selected
-                .filter(|_| self.align_item)
-                .and_then(|index| item_over_trigger(index, count, &state, window, cx));
+            let over =
+                selected.and_then(|index| item_over_trigger(index, count, &state, window, cx));
             state.read(cx).item_offset.set(over);
             over
         } else {

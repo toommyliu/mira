@@ -706,12 +706,22 @@ impl Render for Shortcut {
             .track_focus(&self.focus)
             .size_full()
             .child(
-                mira_ui::components::ShortcutField::new("hotkey", "Hotkey", None)
-                    .on_change(move |keystroke, _, _| recorded.set(keystroke)),
+                mira_ui::components::ShortcutField::new("hotkey", "Hotkey", None).on_change(
+                    move |keystroke, _, _| {
+                        if keystroke == Keystroke::parse("cmd-q").ok() {
+                            return Err("Used by Quit".into());
+                        }
+                        recorded.set(keystroke);
+                        Ok(())
+                    },
+                ),
             )
             .child(
                 mira_ui::components::ShortcutField::new("next-hotkey", "Next hotkey", None)
-                    .on_change(move |keystroke, _, _| next.set(keystroke)),
+                    .on_change(move |keystroke, _, _| {
+                        next.set(keystroke);
+                        Ok(())
+                    }),
             )
     }
 }
@@ -2195,5 +2205,110 @@ fn tabbing_past_a_selected_preview_reveals_the_next_control(cx: &mut TestAppCont
     assert!(
         offset < gpui::px(0.0),
         "the button below the fold stayed hidden"
+    );
+}
+
+#[gpui::test]
+fn a_shortcut_field_started_by_a_click_hands_keys_back_when_done(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    let fired = Rc::new(Cell::new(false));
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.bind_keys([gpui::KeyBinding::new("cmd-w", CloseWindow, None)]);
+        let fired = fired.clone();
+        cx.on_action(move |_: &CloseWindow, _| fired.set(true));
+    });
+    let recorded = Rc::new(Cell::new(Some(Keystroke::parse("cmd-w").unwrap())));
+    let next = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Shortcut {
+            focus,
+            recorded: recorded.clone(),
+            next: next.clone(),
+        }
+    });
+    cx.run_until_parked();
+    cx.simulate_click(point(px(20.0), px(12.0)), Modifiers::none());
+    cx.run_until_parked();
+    press(cx, "backspace");
+    assert_eq!(recorded.take(), None);
+    press(cx, "cmd-w");
+    assert!(
+        fired.get(),
+        "the app's shortcut stopped working after clearing"
+    );
+    press(cx, "tab");
+    press(cx, "cmd-j");
+    assert_eq!(
+        next.take(),
+        Some(Keystroke::parse("cmd-j").unwrap()),
+        "tab should reach the next field after a click-started clear"
+    );
+}
+
+#[gpui::test]
+fn a_rejected_shortcut_keeps_recording_until_a_free_one_is_pressed(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let recorded = Rc::new(Cell::new(None));
+    let next = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Shortcut {
+            focus,
+            recorded: recorded.clone(),
+            next: next.clone(),
+        }
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    press(cx, "cmd-q");
+    assert_eq!(recorded.take(), None);
+    for key in ["a", "enter", "left"] {
+        press(cx, key);
+        assert!(
+            cx.debug_bounds("shortcut-error").is_some(),
+            "{key} cleared the rejection while recording"
+        );
+    }
+    press(cx, "cmd-k");
+    assert_eq!(
+        recorded.take(),
+        Some(Keystroke::parse("cmd-k").unwrap()),
+        "the field stopped recording after a rejected shortcut"
+    );
+}
+
+#[gpui::test]
+fn a_keyboard_restart_after_a_click_shows_its_ring_when_done(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    cx.update(mira_ui::init);
+    let recorded = Rc::new(Cell::new(None));
+    let next = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Shortcut {
+            focus,
+            recorded: recorded.clone(),
+            next: next.clone(),
+        }
+    });
+    cx.run_until_parked();
+    cx.simulate_click(point(px(20.0), px(12.0)), Modifiers::none());
+    cx.run_until_parked();
+    press(cx, "cmd-k");
+    assert!(cx.debug_bounds("shortcut-ring").is_none());
+    press(cx, "enter");
+    press(cx, "cmd-j");
+    assert_eq!(recorded.take(), Some(Keystroke::parse("cmd-j").unwrap()));
+    assert!(
+        cx.debug_bounds("shortcut-ring").is_some(),
+        "a recording restarted from the keyboard hid its ring"
     );
 }
