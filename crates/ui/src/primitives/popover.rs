@@ -95,6 +95,7 @@ pub(crate) fn panel(
         .bg(theme.popover)
         .text_color(theme.popover_foreground)
         .shadow(theme.popup_shadow())
+        .child(theme.surface_ring(theme.radius.panel))
 }
 
 #[derive(IntoElement)]

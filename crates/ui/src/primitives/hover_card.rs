@@ -96,6 +96,7 @@ fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
         .rounded(theme.radius.panel)
         .bg(theme.popover)
         .shadow(theme.popup_shadow())
+        .child(theme.surface_ring(theme.radius.panel))
         .child(
             div()
                 .mb(layout.space(0.5))

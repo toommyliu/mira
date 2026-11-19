@@ -800,14 +800,14 @@ impl Client {
             .border_1()
             .border_color(theme.border)
             .shadow(theme.popup_shadow())
+            .child(theme.surface_ring(theme.radius.panel))
             .text_size(typography.body)
             .line_height(typography.body_line)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.foreground)
             .text_center()
             .whitespace_nowrap()
-            .overflow_hidden()
-            .child(status.text.clone());
+            .child(div().overflow_hidden().child(status.text.clone()));
         Some(
             h_flex()
                 .absolute()
