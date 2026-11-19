@@ -8,7 +8,7 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, Tone,
     primitives::{
-        Button, Dot, DropdownMenu, Icon, MenuItem,
+        Button, DropdownMenu, Icon, MenuItem,
         button::{Size, Variant},
         icon,
     },
@@ -202,7 +202,11 @@ fn tab_menu(
                     choose(Target::Pinned(*id)),
                 );
                 if selected == Some(*id) {
-                    item.end_slot(Dot::new(Tone::Accent))
+                    item.end_slot(mira_ui::primitives::StatusMark::new(
+                        Icon::CircleDot,
+                        "Active tab",
+                        Tone::Accent,
+                    ))
                 } else {
                     item
                 }

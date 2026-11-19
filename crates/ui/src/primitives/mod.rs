@@ -47,7 +47,7 @@ pub use button::Button;
 pub use checkbox::{Checkbox, CheckedState};
 pub use context_menu::ContextMenu;
 pub use dialog::Dialog;
-pub use dot::{Activity, Dot, StatusDot};
+pub use dot::{Activity, Dot, StatusDot, StatusMark};
 pub use field::Field;
 pub use hover_card::HoverCard;
 pub use icon::{Icon, icon, small_icon};
