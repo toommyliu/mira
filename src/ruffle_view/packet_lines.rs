@@ -10,7 +10,6 @@ use mira_ui::{
     ActiveTheme as _, PointerCursor as _, Theme, Tone,
     nav::{self, Axis, Step},
     primitives::{ContextMenu, Icon, MenuItem, Scrollbar, icon},
-    theme::SYSTEM_MONO,
 };
 
 const ID: &str = "packet-lines";
@@ -182,8 +181,8 @@ impl RenderOnce for PacketLines {
                         .gap(layout.space(3.0))
                         .h(ROW_HEIGHT)
                         .px(layout.space(3.0))
-                        .font_family(SYSTEM_MONO)
-                        .text_size(typography.secondary)
+                        .font_family(theme.mono_family.clone())
+                        .text_size(typography.mono)
                         .line_height(px(17.0))
                         .whitespace_nowrap()
                         .overflow_hidden()

@@ -4,7 +4,7 @@ use gpui::{
     PathBuilder, Pixels, Point, Size, StatefulInteractiveElement as _, Styled as _, Window,
     anchored, canvas, div, fill, point, px, size,
 };
-use mira_ui::{Theme, theme::SYSTEM_MONO};
+use mira_ui::Theme;
 
 use crate::ruffle::stats::{GRAPH_SAMPLES, Report, Timing};
 
@@ -62,9 +62,9 @@ pub(super) fn overlay(
         .w(px(GRAPH_WIDTH + 16.0))
         .bg(theme.popover)
         .text_color(theme.foreground)
-        .text_size(typography.secondary)
+        .text_size(typography.mono)
         .line_height(typography.secondary_line)
-        .font_family(SYSTEM_MONO).font_features(mira_ui::theme::tabular())
+        .font_family(theme.mono_family.clone()).font_features(mira_ui::theme::tabular())
         .flex()
         .flex_col()
         .child(div().flex().justify_between().child("Metal").child(format!("[{}×{}]", report.width, report.height)))

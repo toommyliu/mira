@@ -19,7 +19,6 @@ use mira_ui::{
         Numeric, Switch, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
     },
-    theme::SYSTEM_MONO,
     v_flex,
 };
 
@@ -926,8 +925,8 @@ impl Packets {
                     .overflow_y_scroll()
                     .px(layout.space(3.0))
                     .py(layout.space(2.0))
-                    .font_family(SYSTEM_MONO)
-                    .text_size(typography.secondary)
+                    .font_family(theme.mono_family.clone())
+                    .text_size(typography.mono)
                     .line_height(px(17.0))
                     .text_color(theme.muted_foreground)
                     .child(text),
@@ -1087,6 +1086,7 @@ impl Packets {
         let (queued, editing) = (self.queued, self.editing);
         let quiet = theme.muted_foreground;
         let accent = theme.foreground;
+        let mono = theme.mono_family.clone();
         let this = cx.weak_entity();
         let rows = {
             let this = this.clone();
@@ -1103,8 +1103,8 @@ impl Packets {
                     .child(
                         div()
                             .truncate()
-                            .font_family(SYSTEM_MONO)
-                            .text_size(typography.secondary)
+                            .font_family(mono.clone())
+                            .text_size(typography.mono)
                             .child(packets[index].clone()),
                     );
                 if editing == Some(index) {
