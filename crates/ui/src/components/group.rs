@@ -50,23 +50,21 @@ impl RenderOnce for Group {
                 group.child(
                     div()
                         .px(px(12.0))
-                        .text_small()
+                        .text_caption(theme.typography)
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_secondary)
+                        .text_color(theme.muted_foreground)
                         .child(title),
                 )
             })
             .child(
                 v_flex()
                     .rounded(theme.radius.panel)
-                    .bg(theme.surface)
+                    .bg(theme.card)
                     .border_1()
-                    .border_color(theme.hairline)
+                    .border_color(theme.border)
                     .children(self.children.into_iter().enumerate().map(|(index, row)| {
                         div()
-                            .when(index > 0, |row| {
-                                row.border_t_1().border_color(theme.hairline)
-                            })
+                            .when(index > 0, |row| row.border_t_1().border_color(theme.border))
                             .child(row)
                     })),
             )
@@ -110,8 +108,8 @@ impl RenderOnce for FieldRow {
             .min_h(px(34.0))
             .py(px(6.0))
             .px(px(12.0))
-            .text_body()
-            .text_color(theme.text)
+            .text_body(theme.typography)
+            .text_color(theme.foreground)
             .child(
                 div()
                     .flex_1()

@@ -612,17 +612,17 @@ impl ScriptsWindow {
 
     fn status(&self, theme: &Theme, cx: &App) -> (SharedString, Hsla) {
         if self.shown.is_none() {
-            return ("No tabs open".into(), theme.text_tertiary);
+            return ("No tabs open".into(), theme.muted_foreground);
         }
         let Some(view) = self.view() else {
-            return ("Nothing running".into(), theme.text_tertiary);
+            return ("Nothing running".into(), theme.muted_foreground);
         };
         let script = &view.read(cx).script;
         match script.status() {
-            Some(text) if script.running() => (text.into(), theme.accent_text),
-            Some(text) if script.failed() => (text.into(), theme.danger_text),
-            Some(text) => (text.into(), theme.text_tertiary),
-            None => ("Nothing running".into(), theme.text_tertiary),
+            Some(text) if script.running() => (text.into(), theme.foreground),
+            Some(text) if script.failed() => (text.into(), theme.destructive),
+            Some(text) => (text.into(), theme.muted_foreground),
+            None => ("Nothing running".into(), theme.muted_foreground),
         }
     }
 
@@ -872,7 +872,7 @@ impl ScriptsWindow {
                         .pressed(self.filter.is_some())
                         .end_slot(
                             div()
-                                .text_color(theme.text_tertiary)
+                                .text_color(theme.muted_foreground)
                                 .child(Icon::ChevronDown),
                         ),
                 )
@@ -1632,7 +1632,7 @@ impl ScriptsWindow {
                     v_flex().gap(px(4.0)).child(control).map(|column| {
                         match (error(field, draft), &field.description) {
                             (Some(problem), _) => column
-                                .child(note(problem, true, theme).text_color(theme.danger_text)),
+                                .child(note(problem, true, theme).text_color(theme.destructive)),
                             (None, Some(description)) => {
                                 column.child(note(description.clone(), true, theme))
                             }
@@ -1769,11 +1769,11 @@ impl ScriptsWindow {
                         }) if values(definition, drafts).is_none() => Some("Needs inputs".into()),
                         _ => None,
                     }
-                    .map(|meta| (meta, theme.text_tertiary)),
-                    queue::State::Running { .. } => Some(("Running".into(), theme.accent_text)),
+                    .map(|meta| (meta, theme.muted_foreground)),
+                    queue::State::Running { .. } => Some(("Running".into(), theme.foreground)),
                     queue::State::Ended { outcome, took } => Some((
                         format!("{} · {}", ended(outcome), duration(*took)).into(),
-                        theme.text_tertiary,
+                        theme.muted_foreground,
                     )),
                 };
                 QueueRow {
@@ -1821,7 +1821,7 @@ impl ScriptsWindow {
                         .text_size(TEXT_BODY)
                         .line_height(LINE_BODY)
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_color(theme.foreground)
                         .child("No scripts yet"),
                 )
                 .child(format!(
@@ -2143,7 +2143,7 @@ impl Render for ScriptsWindow {
             .px(PADDING)
             .py(px(10.0))
             .border_t_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(self.options_popover(cx));
         let footer = match self.pane {
             Pane::Library => footer
@@ -2214,9 +2214,9 @@ impl Render for ScriptsWindow {
         };
         v_flex()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("scripts")
             .track_focus(&self.focus)
@@ -2264,7 +2264,7 @@ fn heading(
                         .truncate()
                         .text_size(TEXT_SMALL)
                         .line_height(LINE_SMALL)
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child(detail),
                 ),
         )
@@ -2277,12 +2277,12 @@ fn empty_frame(theme: &Theme) -> gpui::Div {
         .gap(px(10.0))
         .p(px(12.0))
         .rounded(theme.radius.panel)
-        .bg(theme.surface)
+        .bg(theme.card)
         .border_1()
-        .border_color(theme.hairline)
+        .border_color(theme.border)
         .text_size(TEXT_SMALL)
         .line_height(LINE_SMALL)
-        .text_color(theme.text_secondary)
+        .text_color(theme.muted_foreground)
 }
 
 fn key_hint(keys: &'static str) -> impl IntoElement {
@@ -2293,7 +2293,7 @@ fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
     div()
         .text_size(TEXT_BODY)
         .line_height(LINE_BODY)
-        .text_color(theme.text_tertiary)
+        .text_color(theme.muted_foreground)
         .child(text)
 }
 
@@ -2383,7 +2383,7 @@ fn options_panel(
                     &theme,
                 )),
         )
-        .child(div().h(px(1.0)).my(px(4.0)).bg(theme.hairline))
+        .child(div().h(px(1.0)).my(px(4.0)).bg(theme.border))
         .child(
             v_flex()
                 .gap(px(4.0))
@@ -2653,7 +2653,7 @@ mod tests {
                 .default_open(true);
             div()
                 .size_full()
-                .bg(cx.theme().base)
+                .bg(cx.theme().background)
                 .p(px(16.0))
                 .child(div().w(px(140.0)).child(menu))
         }
@@ -2735,7 +2735,7 @@ mod tests {
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().overlay)
+                    .bg(cx.theme().popover)
                     .child(options_panel(this.clone(), options, room.clone(), cx))
             };
             let pinned = ScriptOptions {
@@ -2753,7 +2753,7 @@ mod tests {
                 .items_start()
                 .gap(px(16.0))
                 .p(px(16.0))
-                .bg(cx.theme().base)
+                .bg(cx.theme().background)
                 .child(panel(Some(pinned), cx))
                 .child(panel(Some(public), cx))
                 .child(panel(None, cx))

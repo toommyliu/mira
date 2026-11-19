@@ -71,12 +71,12 @@ impl RenderOnce for Progress {
                     .justify_between()
                     .text_size(TEXT_SMALL)
                     .line_height(LINE_SMALL)
-                    .child(div().text_color(theme.text).child(self.label))
+                    .child(div().text_color(theme.foreground).child(self.label))
                     .when_some(self.detail, |row, detail| {
                         row.child(
                             div()
                                 .font_features(tabular())
-                                .text_color(theme.text_tertiary)
+                                .text_color(theme.muted_foreground)
                                 .child(detail),
                         )
                     }),
@@ -88,11 +88,11 @@ impl RenderOnce for Progress {
                             .h_full()
                             .w(relative(fraction))
                             .rounded_full()
-                            .bg(theme.accent),
+                            .bg(theme.primary),
                     )
                     .into_any_element(),
                 None if reduce => track
-                    .child(div().h_full().w_full().bg(theme.accent.opacity(0.5)))
+                    .child(div().h_full().w_full().bg(theme.primary.opacity(0.5)))
                     .into_any_element(),
                 None => track
                     .child(motion::sweep(
@@ -103,7 +103,7 @@ impl RenderOnce for Progress {
                             .bottom_0()
                             .w(relative(0.3))
                             .rounded_full()
-                            .bg(theme.accent),
+                            .bg(theme.primary),
                         |bar, t| bar.left(relative(-0.3 + 1.3 * t)),
                     ))
                     .into_any_element(),

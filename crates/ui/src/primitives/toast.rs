@@ -14,7 +14,7 @@ use gpui::{
 use super::{Button, Icon, button::Size};
 use crate::{
     ActiveTheme as _, Tone, motion, nav,
-    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL, mix},
+    theme::{LINE_BODY, LINE_SMALL, TEXT_BODY, TEXT_SMALL},
 };
 
 const LINGER: Duration = Duration::from_secs(5);
@@ -359,15 +359,7 @@ impl Toaster {
             let depth = at;
             let height = own + (scaled(front, depth) - own) * tucked;
             let content = 1.0 - tucked;
-            let bg = if expanded {
-                theme.overlay
-            } else {
-                mix(
-                    theme.overlay,
-                    gpui::black(),
-                    theme.stack_tint * depth as f32,
-                )
-            };
+            let bg = theme.popover;
             let measured = heights.clone();
             cards.push(
                 div()
@@ -473,7 +465,7 @@ fn card(
         .bg(bg)
         .border_1()
         .border_color(theme.border)
-        .shadow(theme.floating())
+        .shadow(theme.popup_shadow())
         .when(content > 0.0, |card| {
             card.child(
                 div()
@@ -496,7 +488,7 @@ fn card(
                                     .line_height(LINE_BODY)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if toast.tone == Tone::Neutral {
-                                        theme.text
+                                        theme.foreground
                                     } else {
                                         tone_text
                                     })
@@ -507,7 +499,7 @@ fn card(
                                     div()
                                         .text_size(TEXT_SMALL)
                                         .line_height(LINE_SMALL)
-                                        .text_color(theme.text_secondary)
+                                        .text_color(theme.muted_foreground)
                                         .child(body),
                                 )
                             }),

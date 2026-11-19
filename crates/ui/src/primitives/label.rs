@@ -40,7 +40,7 @@ pub(crate) fn labelled(
         .py(px(3.0))
         .text_size(TEXT_BODY)
         .line_height(LINE_BODY)
-        .text_color(theme.text)
+        .text_color(theme.foreground)
         .when(disabled, |row| row.opacity(DISABLED_OPACITY));
     (row, ring)
 }
@@ -73,9 +73,9 @@ pub(crate) fn caption_with(
                     .text_size(TEXT_SMALL)
                     .line_height(LINE_SMALL)
                     .text_color(if invalid {
-                        theme.danger_text
+                        theme.destructive
                     } else {
-                        theme.text_tertiary
+                        theme.muted_foreground
                     })
                     .child(description),
             )

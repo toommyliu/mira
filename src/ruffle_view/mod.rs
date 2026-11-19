@@ -682,7 +682,7 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap(px(14.0))
-        .bg(theme.base)
+        .bg(theme.background)
         .child(
             Spinner::new("loading-spinner")
                 .label(label.clone())
@@ -691,7 +691,7 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
         .child(
             div()
                 .text_size(TEXT_SMALL)
-                .text_color(theme.text_secondary)
+                .text_color(theme.muted_foreground)
                 .child(label),
         )
 }
@@ -708,9 +708,9 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap(px(6.0))
-        .bg(theme.base)
+        .bg(theme.background)
         .text_size(TEXT_BODY)
-        .text_color(theme.text)
+        .text_color(theme.foreground)
         .child(
             div()
                 .text_size(TEXT_TITLE)
@@ -719,7 +719,7 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         )
         .child(
             div()
-                .text_color(theme.text_secondary)
+                .text_color(theme.muted_foreground)
                 .child("The game and scripts keep running while using fewer resources."),
         )
         .child(
@@ -751,8 +751,8 @@ impl Render for RuffleView {
             .w_full()
             .when_some(self.error.clone(), |view, error| {
                 let theme = cx.theme();
-                view.bg(theme.base)
-                    .text_color(theme.text)
+                view.bg(theme.background)
+                    .text_color(theme.foreground)
                     .child(format!("Couldn't start AQW: {error}"))
             })
             .track_focus(&self.focus)

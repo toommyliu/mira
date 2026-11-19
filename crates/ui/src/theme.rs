@@ -5,57 +5,124 @@ use gpui::{
 
 pub const DISABLED_OPACITY: f32 = 0.5;
 pub const UI_FONT: &str = "Inter";
-
-pub const TEXT_CAPTION: Pixels = px(11.0);
-pub const TEXT_SMALL: Pixels = px(12.0);
-pub const TEXT_BODY: Pixels = px(13.0);
-pub const TEXT_TITLE: Pixels = px(15.0);
-pub const TEXT_DISPLAY: Pixels = px(22.0);
-
-pub const LINE_CAPTION: Pixels = px(14.0);
-pub const LINE_SMALL: Pixels = px(16.0);
-pub const LINE_BODY: Pixels = px(18.0);
-pub const LINE_TITLE: Pixels = px(20.0);
-pub const LINE_DISPLAY: Pixels = px(28.0);
-
-pub const SYSTEM_SANS: &str = ".SystemUIFont";
 pub const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
 
+pub const TEXT_BODY: Pixels = px(13.0);
+pub const TEXT_CAPTION: Pixels = px(11.0);
+pub const LINE_BODY: Pixels = px(20.0);
+pub const LINE_CAPTION: Pixels = px(16.0);
 pub const CONTROL_XS: Pixels = px(20.0);
-pub const CONTROL_SM: Pixels = px(22.0);
-pub const CONTROL_MD: Pixels = px(26.0);
+pub const CONTROL_SM: Pixels = px(24.0);
+pub const CONTROL_MD: Pixels = px(28.0);
+pub const CONTROL_LG: Pixels = px(32.0);
+pub const RING_ROOM: Pixels = px(3.0);
+
+pub const TEXT_SMALL: Pixels = px(12.0);
+pub const TEXT_TITLE: Pixels = px(15.0);
+pub const TEXT_DISPLAY: Pixels = px(22.0);
+pub const LINE_SMALL: Pixels = px(16.0);
+pub const LINE_TITLE: Pixels = px(20.0);
+pub const LINE_DISPLAY: Pixels = px(28.0);
 pub const ROW: Pixels = px(26.0);
+pub const PANEL_INSET: Pixels = px(4.0);
+
+#[derive(Clone, Copy)]
+pub struct Typography {
+    pub body: Pixels,
+    pub secondary: Pixels,
+    pub body_line: Pixels,
+    pub secondary_line: Pixels,
+}
+
+impl Default for Typography {
+    fn default() -> Self {
+        Self {
+            body: TEXT_BODY,
+            secondary: TEXT_CAPTION,
+            body_line: LINE_BODY,
+            secondary_line: LINE_CAPTION,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Layout {
+    pub unit: Pixels,
+    pub control_xs: Pixels,
+    pub control_sm: Pixels,
+    pub control: Pixels,
+    pub control_lg: Pixels,
+    pub cell_header: Pixels,
+    pub check: Pixels,
+    pub check_mark: Pixels,
+    pub chip: Pixels,
+    pub track: Pixels,
+    pub thumb: Pixels,
+    pub chrome: Pixels,
+    pub toolbar: Pixels,
+    pub sidebar: Pixels,
+    pub inspector: Pixels,
+    pub compact_overlay: Pixels,
+    pub overlay_max_width: Pixels,
+    pub split_forms: Pixels,
+    pub split_packets: Pixels,
+    pub card_min: Pixels,
+    pub script_list_max: Pixels,
+}
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            unit: px(4.0),
+            control_xs: CONTROL_XS,
+            control_sm: CONTROL_SM,
+            control: CONTROL_MD,
+            control_lg: CONTROL_LG,
+            cell_header: px(40.0),
+            check: px(16.0),
+            check_mark: px(13.0),
+            chip: px(19.0),
+            track: px(4.0),
+            thumb: px(12.0),
+            chrome: px(38.0),
+            toolbar: px(40.0),
+            sidebar: px(208.0),
+            inspector: px(340.0),
+            compact_overlay: px(640.0),
+            overlay_max_width: px(384.0),
+            split_forms: px(560.0),
+            split_packets: px(760.0),
+            card_min: px(240.0),
+            script_list_max: px(288.0),
+        }
+    }
+}
+impl Layout {
+    pub fn space(&self, units: f32) -> Pixels {
+        self.unit * units
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Radii {
+    pub xs: Pixels,
     pub tag: Pixels,
-    pub item: Pixels,
+    pub small: Pixels,
     pub control: Pixels,
     pub panel: Pixels,
     pub dialog: Pixels,
 }
-
 impl Radii {
     pub fn scaled(scale: f32) -> Self {
-        let panel = px(8.0) * scale;
         Self {
+            xs: px(2.0) * scale,
             tag: px(4.0) * scale,
-            item: (px(4.0) * scale).min(Self::inside(panel, PANEL_INSET)),
-            control: px(6.0) * scale,
-            panel,
-            dialog: px(12.0) * scale,
+            small: px(6.0) * scale,
+            control: px(8.0) * scale,
+            panel: px(10.0) * scale,
+            dialog: px(14.0) * scale,
         }
     }
-
-    pub fn inside(outer: Pixels, inset: Pixels) -> Pixels {
-        (outer - inset).max(Pixels::ZERO)
-    }
 }
-pub const PANEL_INSET: Pixels = px(4.0);
-
-pub const FOCUS_RING: Pixels = px(2.0);
-pub const FOCUS_GAP: Pixels = px(2.0);
-pub const RING_ROOM: Pixels = px(6.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
@@ -68,247 +135,200 @@ pub enum Tone {
 
 #[derive(Clone)]
 pub struct Theme {
+    pub dark_mode: bool,
+    pub font_family: gpui::SharedString,
+    pub typography: Typography,
+    pub layout: Layout,
     pub radius: Radii,
-    pub base: Hsla,
-    pub well: Hsla,
-    pub surface: Hsla,
-    pub overlay: Hsla,
-    pub fill: Hsla,
-    pub fill_hover: Hsla,
-    pub fill_pressed: Hsla,
-    pub selected: Hsla,
-    pub hairline: Hsla,
-    pub border: Hsla,
-    pub border_strong: Hsla,
-    pub text: Hsla,
-    pub text_secondary: Hsla,
-    pub text_tertiary: Hsla,
-    pub text_disabled: Hsla,
-    pub inverse: Hsla,
-    pub inverse_hover: Hsla,
-    pub on_inverse: Hsla,
-    pub knob: Hsla,
-    pub thumb: Hsla,
-    pub accent: Hsla,
-    pub accent_soft: Hsla,
-    pub accent_text: Hsla,
-    pub success: Hsla,
-    pub success_soft: Hsla,
-    pub success_text: Hsla,
-    pub warning: Hsla,
-    pub warning_soft: Hsla,
-    pub warning_text: Hsla,
-    pub danger: Hsla,
-    pub danger_hover: Hsla,
-    pub danger_soft: Hsla,
-    pub danger_text: Hsla,
-    pub on_danger: Hsla,
-    pub focus: Hsla,
-    pub backdrop: Hsla,
     pub pointer_cursor: bool,
-    pub stack_tint: f32,
-    shadow_alpha: f32,
+    pub background: Hsla,
+    pub foreground: Hsla,
+    pub card: Hsla,
+    pub card_foreground: Hsla,
+    pub popover: Hsla,
+    pub popover_foreground: Hsla,
+    pub primary: Hsla,
+    pub primary_foreground: Hsla,
+    pub secondary: Hsla,
+    pub secondary_foreground: Hsla,
+    pub muted: Hsla,
+    pub muted_foreground: Hsla,
+    pub accent: Hsla,
+    pub accent_foreground: Hsla,
+    pub destructive: Hsla,
+    pub border: Hsla,
+    pub input: Hsla,
+    pub ring: Hsla,
+    pub sidebar: Hsla,
+    pub sidebar_foreground: Hsla,
+    pub sidebar_primary: Hsla,
+    pub sidebar_primary_foreground: Hsla,
+    pub sidebar_accent: Hsla,
+    pub sidebar_accent_foreground: Hsla,
+    pub sidebar_border: Hsla,
+    pub sidebar_ring: Hsla,
+    pub chart: [Hsla; 5],
 }
-
 impl Global for Theme {}
 
 impl Theme {
-    pub fn dark() -> Self {
-        let ink = |alpha| oklch(0.97, 0.004, 265.0, alpha);
-        let gray = |lightness| oklch(lightness, 0.003, 265.0, 1.0);
-        let raised = |lightness| oklch(lightness, 0.006, 286.0, 1.0);
-        let muted = |lightness, chroma| oklch(lightness, chroma, 262.0, 1.0);
-        Self {
-            radius: Radii::scaled(1.0),
-            base: gray(0.172),
-            well: gray(0.139),
-            surface: gray(0.194),
-            overlay: raised(0.228),
-            fill: ink(0.045),
-            fill_hover: ink(0.07),
-            fill_pressed: ink(0.11),
-            selected: ink(0.085),
-            hairline: ink(0.06),
-            border: ink(0.1),
-            border_strong: ink(0.17),
-            text: oklch(0.955, 0.002, 265.0, 1.0),
-            text_secondary: muted(0.84, 0.014),
-            text_tertiary: muted(0.66, 0.014),
-            text_disabled: muted(0.5, 0.012),
-            inverse: raised(0.922),
-            inverse_hover: raised(0.985),
-            on_inverse: gray(0.172),
-            knob: oklch(0.97, 0.002, 265.0, 1.0),
-            thumb: raised(0.28),
-            accent: oklch(0.623, 0.2, 279.0, 1.0),
-            accent_soft: oklch(0.623, 0.2, 279.0, 0.16),
-            accent_text: oklch(0.75, 0.12, 278.0, 1.0),
-            success: oklch(0.72, 0.16, 150.0, 1.0),
-            success_soft: oklch(0.72, 0.16, 150.0, 0.14),
-            success_text: oklch(0.8, 0.13, 150.0, 1.0),
-            warning: oklch(0.8, 0.15, 78.0, 1.0),
-            warning_soft: oklch(0.8, 0.15, 78.0, 0.12),
-            warning_text: oklch(0.85, 0.12, 84.0, 1.0),
-            danger: oklch(0.575, 0.19, 24.0, 1.0),
-            danger_hover: oklch(0.62, 0.19, 24.0, 1.0),
-            danger_soft: oklch(0.65, 0.19, 24.0, 0.14),
-            danger_text: oklch(0.74, 0.14, 24.0, 1.0),
-            on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: muted(0.66, 0.014),
-            backdrop: oklch(0.05, 0.0, 0.0, 0.6),
-            pointer_cursor: false,
-            stack_tint: 0.06,
-            shadow_alpha: 0.5,
-        }
-    }
-
     pub fn light() -> Self {
-        let ink = |alpha| oklch(0.25, 0.01, 270.0, alpha);
-        let gray = |lightness, chroma| oklch(lightness, chroma, 265.0, 1.0);
-        let text = |lightness, chroma, hue| oklch(lightness, chroma, hue, 1.0);
+        Self::preset(false)
+    }
+    pub fn dark() -> Self {
+        Self::preset(true)
+    }
+    fn preset(dark: bool) -> Self {
+        let gray = |l| oklch(l, 0.0, 0.0, 1.0);
+        let pair = |l, d| gray(if dark { d } else { l });
+        let foreground = pair(0.145, 0.985);
+        let primary = pair(0.205, 0.922);
+        let secondary = pair(0.97, 0.269);
+        let secondary_foreground = pair(0.205, 0.985);
+        let border = if dark {
+            gray(1.0).opacity(0.10)
+        } else {
+            gray(0.922)
+        };
+        let ring = pair(0.708, 0.556);
         Self {
+            dark_mode: dark,
+            font_family: UI_FONT.into(),
+            typography: Typography::default(),
+            layout: Layout::default(),
             radius: Radii::scaled(1.0),
-            base: gray(0.968, 0.003),
-            well: gray(0.945, 0.003),
-            surface: gray(0.985, 0.002),
-            overlay: gray(0.992, 0.002),
-            fill: ink(0.04),
-            fill_hover: ink(0.065),
-            fill_pressed: ink(0.1),
-            selected: ink(0.075),
-            hairline: ink(0.07),
-            border: ink(0.12),
-            border_strong: ink(0.22),
-            text: text(0.29, 0.012, 270.0),
-            text_secondary: text(0.4, 0.014, 262.0),
-            text_tertiary: text(0.54, 0.012, 285.0),
-            text_disabled: text(0.68, 0.008, 285.0),
-            inverse: text(0.29, 0.012, 270.0),
-            inverse_hover: text(0.24, 0.012, 270.0),
-            on_inverse: gray(0.985, 0.002),
-            knob: gray(0.995, 0.001),
-            thumb: gray(0.995, 0.001),
-            accent: oklch(0.6, 0.2, 280.0, 1.0),
-            accent_soft: oklch(0.6, 0.2, 280.0, 0.1),
-            accent_text: oklch(0.5, 0.2, 278.0, 1.0),
-            success: oklch(0.62, 0.15, 150.0, 1.0),
-            success_soft: oklch(0.62, 0.15, 150.0, 0.12),
-            success_text: oklch(0.48, 0.12, 150.0, 1.0),
-            warning: oklch(0.75, 0.16, 70.0, 1.0),
-            warning_soft: oklch(0.75, 0.15, 75.0, 0.16),
-            warning_text: oklch(0.5, 0.11, 65.0, 1.0),
-            danger: oklch(0.57, 0.2, 25.0, 1.0),
-            danger_hover: oklch(0.52, 0.19, 25.0, 1.0),
-            danger_soft: oklch(0.6, 0.2, 25.0, 0.1),
-            danger_text: oklch(0.51, 0.18, 25.0, 1.0),
-            on_danger: oklch(0.99, 0.0, 0.0, 1.0),
-            focus: text(0.56, 0.012, 262.0),
-            backdrop: ink(0.28),
             pointer_cursor: false,
-            stack_tint: 0.01,
-            shadow_alpha: 0.16,
+            background: pair(1.0, 0.145),
+            foreground,
+            card: pair(1.0, 0.205),
+            card_foreground: foreground,
+            popover: pair(1.0, 0.205),
+            popover_foreground: foreground,
+            primary,
+            primary_foreground: pair(0.985, 0.205),
+            secondary,
+            secondary_foreground,
+            muted: secondary,
+            muted_foreground: pair(0.556, 0.708),
+            accent: secondary,
+            accent_foreground: secondary_foreground,
+            destructive: if dark {
+                oklch(0.704, 0.191, 22.216, 1.0)
+            } else {
+                oklch(0.577, 0.245, 27.325, 1.0)
+            },
+            border,
+            input: if dark {
+                gray(1.0).opacity(0.15)
+            } else {
+                border
+            },
+            ring,
+            sidebar: pair(0.985, 0.205),
+            sidebar_foreground: foreground,
+            sidebar_primary: if dark {
+                oklch(0.488, 0.243, 264.376, 1.0)
+            } else {
+                primary
+            },
+            sidebar_primary_foreground: gray(0.985),
+            sidebar_accent: secondary,
+            sidebar_accent_foreground: secondary_foreground,
+            sidebar_border: border,
+            sidebar_ring: ring,
+            chart: [0.87, 0.556, 0.439, 0.371, 0.269].map(gray),
         }
     }
-
     pub fn for_window(appearance: WindowAppearance) -> Self {
-        match appearance {
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
-        }
+        Self::preset(matches!(
+            appearance,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        ))
     }
-
+    pub fn space(&self, units: f32) -> Pixels {
+        self.layout.space(units)
+    }
+    pub fn input_fill(&self) -> Hsla {
+        self.input.opacity(if self.dark_mode { 0.3 } else { 0.2 })
+    }
+    pub fn outline_fill(&self) -> Hsla {
+        self.input.opacity(if self.dark_mode { 0.3 } else { 0.0 })
+    }
+    pub fn ghost_hover(&self) -> Hsla {
+        self.muted.opacity(if self.dark_mode { 0.5 } else { 1.0 })
+    }
+    pub fn destructive_fill(&self) -> Hsla {
+        self.destructive
+            .opacity(if self.dark_mode { 0.2 } else { 0.1 })
+    }
+    pub fn invalid_halo(&self) -> Hsla {
+        self.destructive
+            .opacity(if self.dark_mode { 0.4 } else { 0.2 })
+    }
+    pub fn invalid_border(&self) -> Hsla {
+        self.destructive
+            .opacity(if self.dark_mode { 0.5 } else { 1.0 })
+    }
+    pub fn pressed(&self, surface: Hsla, hover: Hsla, ink: Hsla) -> Hsla {
+        perceptual_mix(surface.blend(hover), ink, 0.1)
+    }
     pub fn tone(&self, tone: Tone) -> (Hsla, Hsla, Hsla) {
         match tone {
-            Tone::Neutral => (self.text_tertiary, self.fill, self.text_secondary),
-            Tone::Accent => (self.accent, self.accent_soft, self.accent_text),
-            Tone::Success => (self.success, self.success_soft, self.success_text),
-            Tone::Warning => (self.warning, self.warning_soft, self.warning_text),
-            Tone::Danger => (self.danger, self.danger_soft, self.danger_text),
+            Tone::Neutral => (
+                self.muted_foreground,
+                self.secondary,
+                self.secondary_foreground,
+            ),
+            Tone::Success => (self.foreground, self.secondary, self.secondary_foreground),
+            Tone::Accent | Tone::Warning => (self.foreground, self.input_fill(), self.foreground),
+            Tone::Danger => (self.destructive, self.destructive_fill(), self.destructive),
         }
     }
-
     pub fn focus_ring(&self, radius: Pixels) -> Div {
-        self.ring_around(self.focus, radius, Pixels::ZERO)
+        self.ring_around(self.ring, radius, Pixels::ZERO)
     }
-
     pub fn ring_around(&self, color: Hsla, radius: Pixels, border: Pixels) -> Div {
-        let outset = FOCUS_GAP + FOCUS_RING;
+        self.halo(color.opacity(0.30), radius, border, px(2.0))
+    }
+    pub fn halo(&self, color: Hsla, radius: Pixels, border: Pixels, width: Pixels) -> Div {
         div()
             .absolute()
-            .top(-outset - border)
-            .left(-outset - border)
-            .right(-outset - border)
-            .bottom(-outset - border)
-            .rounded(if radius > Pixels::ZERO {
-                radius + outset
-            } else {
-                Pixels::ZERO
-            })
-            .border_2()
+            .inset(-border - width)
+            .rounded(radius + width)
+            .border(width)
             .border_color(color)
             .child(crate::nav::reveal_probe())
     }
-
-    pub fn raised(&self) -> Vec<BoxShadow> {
-        vec![shadow(
-            oklch(0.0, 0.0, 0.0, self.shadow_alpha * 0.35),
-            1.0,
-            1.0,
-            px(0.0),
-        )]
+    pub fn surface_edge(&self) -> Vec<BoxShadow> {
+        vec![shadow(self.foreground.opacity(0.1), 0.0, 0.0, 1.0)]
     }
-
-    pub fn edge(&self) -> Vec<BoxShadow> {
-        let dark = self.base.l < 0.5;
-        vec![BoxShadow {
-            color: if dark {
-                oklch(1.0, 0.0, 0.0, 0.05)
-            } else {
-                oklch(0.0, 0.0, 0.0, 0.04)
-            },
-            offset: point(px(0.0), px(if dark { 1.0 } else { -1.0 })),
-            blur_radius: px(0.0),
-            spread_radius: px(0.0),
-            inset: true,
-        }]
-    }
-
-    pub fn floating(&self) -> Vec<BoxShadow> {
+    pub fn popup_shadow(&self) -> Vec<BoxShadow> {
+        let black = gpui::black().opacity(0.1);
         vec![
-            shadow(
-                oklch(0.0, 0.0, 0.0, self.shadow_alpha * 1.4),
-                16.0,
-                20.0,
-                px(-12.0),
-            ),
-            shadow(
-                oklch(0.0, 0.0, 0.0, self.shadow_alpha * 0.6),
-                2.0,
-                3.0,
-                px(0.0),
-            ),
-            BoxShadow {
-                color: oklch(1.0, 0.0, 0.0, 0.07),
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(0.0),
-                spread_radius: px(0.0),
-                inset: true,
-            },
+            shadow(self.foreground.opacity(0.1), 0.0, 0.0, 1.0),
+            shadow(black, 4.0, 6.0, -1.0),
+            shadow(black, 2.0, 4.0, -2.0),
+        ]
+    }
+    pub fn large_shadow(&self) -> Vec<BoxShadow> {
+        let black = gpui::black().opacity(0.1);
+        vec![
+            shadow(black, 10.0, 15.0, -3.0),
+            shadow(black, 4.0, 6.0, -4.0),
         ]
     }
 }
 
-// GPUI's blur radius is the Gaussian sigma, half of a CSS blur value.
-fn shadow(color: Hsla, y: f32, blur: f32, spread: Pixels) -> BoxShadow {
+// The Metal renderer takes Gaussian sigma; the design recipes specify CSS blur.
+fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
     BoxShadow {
         color,
         offset: point(px(0.0), px(y)),
-        blur_radius: px(blur),
-        spread_radius: spread,
+        blur_radius: px(blur * 0.5),
+        spread_radius: px(spread),
         inset: false,
     }
 }
-
 pub fn oklch(l: f32, c: f32, h: f32, alpha: f32) -> Hsla {
     let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
@@ -367,4 +387,40 @@ pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
 
 pub fn tabular() -> gpui::FontFeatures {
     gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]))
+}
+
+pub fn perceptual_mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    fn polar(color: Hsla) -> (f32, f32, f32) {
+        let rgb = color.to_rgb();
+        let linear = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (r, g, b) = (linear(rgb.r), linear(rgb.g), linear(rgb.b));
+        let l = (0.41222146 * r + 0.53633255 * g + 0.051445995 * b).cbrt();
+        let m = (0.2119035 * r + 0.6806995 * g + 0.10739696 * b).cbrt();
+        let s = (0.08830246 * r + 0.28171885 * g + 0.6299787 * b).cbrt();
+        let lightness = 0.21045426 * l + 0.7936178 * m - 0.004072047 * s;
+        let a = 1.9779985 * l - 2.4285922 * m + 0.4505937 * s;
+        let b = 0.025904037 * l + 0.78277177 * m - 0.80867577 * s;
+        (lightness, a.hypot(b), b.atan2(a).to_degrees())
+    }
+    let (l, c, mut h) = polar(from);
+    let (l2, c2, mut h2) = polar(to);
+    if c < 0.00001 {
+        h = h2;
+    }
+    if c2 < 0.00001 {
+        h2 = h;
+    }
+    let hue = (h2 - h + 180.0).rem_euclid(360.0) - 180.0;
+    oklch(
+        l + (l2 - l) * t,
+        c + (c2 - c) * t,
+        h + hue * t,
+        from.a + (to.a - from.a) * t,
+    )
 }

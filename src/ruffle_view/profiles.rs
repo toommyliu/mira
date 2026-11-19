@@ -1000,11 +1000,11 @@ impl Editor {
             .flex_none()
             .w(SIDEBAR_WIDTH)
             .h_full()
-            .bg(theme.well)
+            .bg(theme.sidebar)
             .border_r_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .child(
                 div()
                     .flex_none()
@@ -1026,8 +1026,8 @@ impl Editor {
                 div()
                     .px(px(12.0))
                     .py(px(8.0))
-                    .text_small()
-                    .text_color(theme.text_secondary)
+                    .text_caption(theme.typography)
+                    .text_color(theme.muted_foreground)
                     .child(text)
             }))
             .child(
@@ -1048,8 +1048,8 @@ impl Editor {
                     div()
                         .flex_none()
                         .p(px(12.0))
-                        .text_small()
-                        .text_color(theme.warning_text)
+                        .text_caption(theme.typography)
+                        .text_color(theme.foreground)
                         .child(if issues == 1 {
                             "1 saved profile couldn't be read, so it's left out.".to_owned()
                         } else {
@@ -1069,7 +1069,7 @@ impl Editor {
                                 .flex_1()
                                 .justify_between()
                                 .child("New profile")
-                                .child(div().text_color(theme.text_tertiary).child("⌘N")),
+                                .child(div().text_color(theme.muted_foreground).child("⌘N")),
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
                 ),
@@ -1229,7 +1229,7 @@ impl Editor {
         let unsaved = draft.and_then(|draft| draft.unsaved(&self.library));
         let note = draft.and_then(|draft| draft.name_note(&self.library));
         let status = match (&self.problem, note, unsaved) {
-            (Some(problem), _, _) => Some((SharedString::from(problem.clone()), theme.danger_text)),
+            (Some(problem), _, _) => Some((SharedString::from(problem.clone()), theme.destructive)),
             (None, Some((note, tone)), _) => Some((note.into(), theme.tone(tone).2)),
             (None, None, Some((text, tone))) => Some((text.into(), theme.tone(tone).2)),
             (None, None, None) => None,
@@ -1256,7 +1256,7 @@ impl Editor {
                     .max_w(STATUS_WIDTH)
                     .mr(px(6.0))
                     .truncate()
-                    .text_small()
+                    .text_caption(theme.typography)
                     .text_color(color)
                     .child(text)
             }))
@@ -1471,8 +1471,8 @@ impl Editor {
                                                 .items_center()
                                                 .h(CONTROL_SM)
                                                 .w(CONJUNCTION_WIDTH)
-                                                .text_small()
-                                                .text_color(theme.text_tertiary)
+                                                .text_caption(theme.typography)
+                                                .text_color(theme.muted_foreground)
                                                 .child(if index == 0 { "If" } else { "and" }),
                                         )
                                         .child(div().flex_1().min_w_0().child(row))
@@ -1515,9 +1515,9 @@ fn empty_box(theme: &Theme, text: &'static str) -> Div {
         .py(px(8.0))
         .rounded(theme.radius.panel)
         .border_1()
-        .border_color(theme.hairline)
-        .text_small()
-        .text_color(theme.text_tertiary)
+        .border_color(theme.border)
+        .text_caption(theme.typography)
+        .text_color(theme.muted_foreground)
         .child(text)
 }
 
@@ -1592,7 +1592,7 @@ fn condition_editor(
                             .child(condition.subject.label())
                             .child(mira_ui::primitives::icon(
                                 Icon::ChevronDown,
-                                theme.text_tertiary,
+                                theme.muted_foreground,
                             )),
                     ),
             )
@@ -1738,7 +1738,7 @@ impl Render for Editor {
             .w(INSPECTOR_WIDTH)
             .h_full()
             .border_l_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .child(self.inspector(&theme, cx))
             .child(Scrollbar::new(
                 "inspector-scrollbar",
@@ -1752,9 +1752,9 @@ impl Render for Editor {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("combat-profiles")
             .track_focus(&self.focus)
@@ -1895,7 +1895,7 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .font_family(mira_ui::theme::SYSTEM_SANS)
+                .font_family(mira_ui::theme::UI_FONT)
                 .child(self.0.clone())
         }
     }

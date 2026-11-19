@@ -717,8 +717,8 @@ impl Environment {
                 .gap(px(6.0))
                 .child(
                     div()
-                        .text_caption()
-                        .text_color(theme.text_tertiary)
+                        .text_caption(theme.typography)
+                        .text_color(theme.muted_foreground)
                         .when(!on, |caption| caption.opacity(DISABLED_OPACITY))
                         .child("From your quests"),
                 )
@@ -849,8 +849,8 @@ impl Environment {
         });
         let message = match &self.unreadable {
             Some(unreadable) => div()
-                .text_small()
-                .text_color(theme.danger_text)
+                .text_caption(theme.typography)
+                .text_color(theme.destructive)
                 .child(unreadable.reason.clone()),
             None => note(List::Quests.note(), on, theme),
         };
@@ -879,7 +879,7 @@ impl Environment {
                 )
             }));
         let status = matches!(self.pickup, Pickup::Checking { .. })
-            .then(|| ("Checking drops…".into(), theme.text_tertiary));
+            .then(|| ("Checking drops…".into(), theme.muted_foreground));
         v_flex()
             .gap(px(8.0))
             .child(section(
@@ -971,21 +971,21 @@ impl Environment {
         let others = v_flex()
             .gap(px(14.0))
             .child(self.quests(theme, automation, cx))
-            .child(div().h(px(1.0)).bg(theme.hairline))
+            .child(div().h(px(1.0)).bg(theme.border))
             .child(self.boosts(theme, automation, cx));
         if window.viewport_size().width >= COLUMNS_FROM {
             h_flex()
                 .items_start()
                 .min_h_full()
                 .child(div().flex_1().min_w_0().p(px(16.0)).child(drops))
-                .child(div().self_stretch().w(px(1.0)).bg(theme.hairline))
+                .child(div().self_stretch().w(px(1.0)).bg(theme.border))
                 .child(div().flex_1().min_w_0().p(px(16.0)).child(others))
         } else {
             v_flex()
                 .gap(px(14.0))
                 .p(px(16.0))
                 .child(drops)
-                .child(div().h(px(1.0)).bg(theme.hairline))
+                .child(div().h(px(1.0)).bg(theme.border))
                 .child(others)
         }
     }
@@ -1006,9 +1006,9 @@ impl Environment {
                 rows = rows.child(
                     div()
                         .when(index > 0, |kind| kind.pt(px(8.0)))
-                        .text_caption()
+                        .text_caption(theme.typography)
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_tertiary)
+                        .text_color(theme.muted_foreground)
                         .child(kind_name(owned.kind)),
                 );
             }
@@ -1215,8 +1215,8 @@ fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme:
                 div()
                     .flex_none()
                     .w(px(48.0))
-                    .text_small()
-                    .text_color(theme.text_tertiary)
+                    .text_caption(theme.typography)
+                    .text_color(theme.muted_foreground)
                     .child(tag),
             )
         })
@@ -1225,9 +1225,9 @@ fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme:
                 .flex_none()
                 .w(px(40.0))
                 .text_right()
-                .text_small()
+                .text_caption(theme.typography)
                 .font_features(tabular())
-                .text_color(theme.text_tertiary)
+                .text_color(theme.muted_foreground)
                 .child(format!("×{quantity}")),
         )
 }
@@ -1394,9 +1394,9 @@ impl Render for Environment {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .key_context(FOCUS_SCOPE)
             .id("environment")
             .track_focus(&self.focus)
@@ -1418,7 +1418,7 @@ impl Render for Environment {
                     .px(px(16.0))
                     .py(px(10.0))
                     .border_t_1()
-                    .border_color(theme.hairline)
+                    .border_color(theme.border)
                     .child(
                         Button::new("copy-to-all", "Copy to all tabs…")
                             .size(Size::Small)

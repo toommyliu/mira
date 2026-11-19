@@ -176,9 +176,9 @@ impl RenderOnce for Tree {
             .flex_col()
             .p(px(4.0))
             .rounded(theme.radius.panel)
-            .bg(theme.surface)
+            .bg(theme.card)
             .border_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .children(visible.iter().enumerate().map(|(index, row)| {
                 let depth = row.path.len() - 1;
                 let branch = !row.node.children.is_empty();
@@ -209,14 +209,14 @@ impl RenderOnce for Tree {
                     .h(ROW)
                     .pl(px(6.0 + depth as f32 * 16.0))
                     .pr(px(10.0))
-                    .rounded(theme.radius.item)
+                    .rounded(theme.radius.control)
                     .pointer_cursor(&theme)
-                    .when(lit, |item| item.bg(theme.selected))
+                    .when(lit, |item| item.bg(theme.accent))
                     .relative()
                     .when(lit && ring, |item| {
-                        item.child(theme.focus_ring(theme.radius.item))
+                        item.child(theme.focus_ring(theme.radius.control))
                     })
-                    .when(!lit, |item| item.hover(|style| style.bg(theme.fill)))
+                    .when(!lit, |item| item.hover(|style| style.bg(theme.secondary)))
                     .on_click(move |_, window, cx| {
                         window.focus(&focus, cx);
                         click_state.update(cx, |tree, cx| {
@@ -234,7 +234,7 @@ impl RenderOnce for Tree {
                             } else {
                                 Icon::ChevronRight
                             },
-                            theme.text_tertiary,
+                            theme.muted_foreground,
                         ))
                     }))
                     .child(
@@ -242,7 +242,7 @@ impl RenderOnce for Tree {
                             .flex_1()
                             .truncate()
                             .text_size(TEXT_BODY)
-                            .text_color(theme.text)
+                            .text_color(theme.foreground)
                             .child(row.node.label.clone()),
                     )
                     .when_some(row.node.detail.clone(), |item, detail| {
@@ -251,7 +251,7 @@ impl RenderOnce for Tree {
                                 .flex_none()
                                 .text_size(TEXT_SMALL)
                                 .font_features(tabular())
-                                .text_color(theme.text_tertiary)
+                                .text_color(theme.muted_foreground)
                                 .child(detail),
                         )
                     })

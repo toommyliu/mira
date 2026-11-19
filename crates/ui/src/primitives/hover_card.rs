@@ -91,10 +91,10 @@ fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
                     .px(px(12.0))
                     .py(px(10.0))
                     .rounded(theme.radius.panel)
-                    .bg(theme.overlay)
+                    .bg(theme.popover)
                     .border_1()
                     .border_color(theme.border)
-                    .shadow(theme.floating())
+                    .shadow(theme.popup_shadow())
                     .child(
                         div()
                             .mb(px(2.0))
@@ -102,7 +102,7 @@ fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
                             .text_size(TEXT_BODY)
                             .line_height(LINE_BODY)
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.foreground)
                             .child(card.title),
                     )
                     .children(card.rows.into_iter().map(|(label, text, tone)| {
@@ -115,7 +115,7 @@ fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
                                 div()
                                     .flex_none()
                                     .w(px(44.0))
-                                    .text_color(theme.text_tertiary)
+                                    .text_color(theme.muted_foreground)
                                     .child(label),
                             )
                             .child(
@@ -125,7 +125,7 @@ fn popup(card: Card, trigger: Bounds<Pixels>, cx: &App) -> AnyElement {
                                     .line_clamp(MAX_LINES)
                                     .text_ellipsis()
                                     .text_color(match tone {
-                                        Tone::Neutral => theme.text,
+                                        Tone::Neutral => theme.foreground,
                                         tone => theme.tone(tone).2,
                                     })
                                     .child(text),

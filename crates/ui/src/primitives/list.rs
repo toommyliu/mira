@@ -170,9 +170,9 @@ impl Options {
                     header.pt(px(if index == 0 { 4.0 } else { 10.0 }))
                 }
             })
-            .text_caption()
+            .text_caption(self.theme.typography)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(self.theme.text_tertiary)
+            .text_color(self.theme.muted_foreground)
             .when_some(item.start, |header, start| header.child(start))
             .child(div().flex_1().min_w_0().truncate().child(item.label))
             .when_some(item.end, |header, end| header.child(end))
@@ -186,9 +186,9 @@ impl Options {
         let on_activate = self.on_activate.clone();
         let disabled = item.disabled;
         let quiet = if current {
-            theme.text_secondary
+            theme.muted_foreground
         } else {
-            theme.text_tertiary
+            theme.muted_foreground
         };
         h_flex()
             .id(index)
@@ -208,19 +208,21 @@ impl Options {
             .min_h(ROW)
             .px(px(8.0))
             .py(px(4.0))
-            .rounded(theme.radius.item)
-            .text_body()
+            .rounded(theme.radius.control)
+            .text_body(theme.typography)
             .text_color(if disabled {
-                theme.text_disabled
+                theme
+                    .muted_foreground
+                    .opacity(crate::theme::DISABLED_OPACITY)
             } else {
-                theme.text
+                theme.foreground
             })
-            .when(current, |row| row.bg(theme.selected))
+            .when(current, |row| row.bg(theme.accent))
             .when(current && self.ring, |row| {
-                row.child(theme.focus_ring(theme.radius.item))
+                row.child(theme.focus_ring(theme.radius.control))
             })
             .when(!current && !disabled && pose == Pose::Rest, |row| {
-                row.hover(|style| style.bg(theme.fill))
+                row.hover(|style| style.bg(theme.secondary))
             })
             .when(!disabled, |row| {
                 row.pointer_cursor(theme)
@@ -253,7 +255,7 @@ impl Options {
                         body.child(
                             div()
                                 .truncate()
-                                .text_small()
+                                .text_caption(theme.typography)
                                 .text_color(quiet)
                                 .child(description),
                         )
@@ -264,7 +266,7 @@ impl Options {
                     h_flex()
                         .flex_none()
                         .gap(px(4.0))
-                        .text_small()
+                        .text_caption(theme.typography)
                         .font_features(tabular())
                         .text_color(quiet)
                         .child(end),
@@ -284,9 +286,9 @@ fn list_frame(id: ElementId, label: SharedString, options: &Options) -> Stateful
         .aria_label(label)
         .track_focus(&options.focus.clone().tab_stop(true))
         .rounded(options.theme.radius.panel)
-        .bg(options.theme.surface)
+        .bg(options.theme.card)
         .border_1()
-        .border_color(options.theme.hairline)
+        .border_color(options.theme.border)
 }
 
 #[derive(Clone, Copy)]

@@ -785,14 +785,14 @@ impl Client {
             .px(STATUS_PADDING)
             .py(px(8.0))
             .rounded(theme.radius.panel)
-            .bg(theme.overlay)
+            .bg(theme.popover)
             .border_1()
             .border_color(theme.border)
-            .shadow(theme.floating())
+            .shadow(theme.popup_shadow())
             .text_size(TEXT_BODY)
             .line_height(LINE_BODY)
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .text_center()
             .whitespace_nowrap()
             .overflow_hidden()
@@ -927,11 +927,11 @@ impl Client {
             .flex_none()
             .w(SIDEBAR_WIDTH)
             .h_full()
-            .bg(theme.well)
+            .bg(theme.sidebar)
             .border_r_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .text_size(TEXT_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .child(
                 div()
                     .flex()
@@ -973,7 +973,7 @@ impl Client {
                                             ))
                                         })
                                         .map(|keys| {
-                                            div().text_color(theme.text_tertiary).child(keys)
+                                            div().text_color(theme.muted_foreground).child(keys)
                                         }),
                                 ),
                         )
@@ -1038,7 +1038,7 @@ impl Client {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .border_color(theme.base)
+            .border_color(theme.background)
             .when(column > 0, |tile| tile.border_l_1())
             .when(column + 1 < columns, |tile| tile.border_r_1())
             .when(row > 0, |tile| tile.border_t_1())
@@ -1078,7 +1078,7 @@ impl Client {
                         if index < self.sessions.len() {
                             cell.child(self.tile(&theme, index, cx))
                         } else {
-                            cell.bg(theme.base)
+                            cell.bg(theme.background)
                         }
                     }))
             }))
@@ -1094,9 +1094,9 @@ impl Client {
             .items_center()
             .justify_center()
             .gap(px(6.0))
-            .bg(theme.base)
+            .bg(theme.background)
             .text_size(TEXT_BODY)
-            .text_color(theme.text_secondary)
+            .text_color(theme.muted_foreground)
             .child("No tabs are open.")
             .child(
                 Button::new("open-session", "New tab")
@@ -1150,7 +1150,7 @@ pub(super) fn tab_face(
                 .children(glance.map(|glance| {
                     div()
                         .text_color(match glance.tone {
-                            Tone::Neutral => theme.text_tertiary,
+                            Tone::Neutral => theme.muted_foreground,
                             tone => theme.tone(tone).2,
                         })
                         .child(glance.label)
@@ -1201,7 +1201,7 @@ pub(crate) fn bar(cx: &App) -> gpui::Div {
         .gap(px(2.0))
         .h(super::BAR_HEIGHT)
         .pr(BAR_PADDING)
-        .bg(theme.base)
+        .bg(theme.background)
         .border_b_1()
         .border_color(theme.border)
 }
@@ -1219,7 +1219,7 @@ pub(crate) fn bar_title(title: impl Into<SharedString>, cx: &App) -> gpui::Div {
         .text_size(TEXT_BODY)
         .line_height(LINE_BODY)
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(cx.theme().text_secondary)
+        .text_color(cx.theme().muted_foreground)
         .child(title.into())
 }
 
@@ -1229,7 +1229,7 @@ pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
         .mx(px(4.0))
         .w(px(1.0))
         .h(px(16.0))
-        .bg(cx.theme().hairline)
+        .bg(cx.theme().border)
 }
 
 impl Render for Client {
@@ -1240,7 +1240,7 @@ impl Render for Client {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
             }
         }
-        let (bar_background, bar_border) = (cx.theme().base, cx.theme().border);
+        let (bar_background, bar_border) = (cx.theme().background, cx.theme().border);
         let game_bar = !self.sessions.is_empty();
         let body = if self.sessions.is_empty() {
             self.empty(cx).into_any_element()

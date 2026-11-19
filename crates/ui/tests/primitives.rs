@@ -1671,12 +1671,18 @@ impl Render for Profiles {
             .child(
                 Tabs::new("profiles", "Profiles", 3, move |index| {
                     let chosen = chosen.clone();
-                    Tab::new(["Generic", "Farming", "Boss"][index]).menu(move |_, _| {
-                        let chosen = chosen.clone();
-                        vec![MenuItem::action("Rename", move |_, _| {
-                            chosen.borrow_mut().push(format!("rename {index}"))
-                        })]
-                    })
+                    Tab::new(["Generic", "Farming", "Boss"][index])
+                        .start_slot(
+                            div()
+                                .size(gpui::px(4.0))
+                                .debug_selector(move || format!("profile-{index}")),
+                        )
+                        .menu(move |_, _| {
+                            let chosen = chosen.clone();
+                            vec![MenuItem::action("Rename", move |_, _| {
+                                chosen.borrow_mut().push(format!("rename {index}"))
+                            })]
+                        })
                 })
                 .vertical()
                 .selected(self.selected)
@@ -1693,7 +1699,7 @@ impl Render for Profiles {
 
 #[gpui::test]
 fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppContext) {
-    use gpui::{Modifiers, MouseButton, point, px};
+    use gpui::{Modifiers, MouseButton};
     cx.update(mira_ui::init);
     let chosen = Rc::new(std::cell::RefCell::new(Vec::new()));
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -1714,7 +1720,7 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1"]);
 
-    let third = point(px(20.0), px(83.0));
+    let third = cx.debug_bounds("profile-2").unwrap().center();
     cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();

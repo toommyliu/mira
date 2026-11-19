@@ -757,13 +757,13 @@ pub(crate) fn panel_shell(
         })
         .p(PANEL_INSET)
         .rounded(theme.radius.panel)
-        .bg(theme.overlay)
+        .bg(theme.popover)
         .border_1()
         .border_color(theme.border)
-        .shadow(theme.floating())
+        .shadow(theme.popup_shadow())
         .text_size(TEXT_BODY)
         .line_height(LINE_BODY)
-        .text_color(theme.text)
+        .text_color(theme.foreground)
 }
 
 fn switch_mark(on: bool, theme: &Theme) -> Div {
@@ -773,17 +773,13 @@ fn switch_mark(on: bool, theme: &Theme) -> Div {
         .h(px(14.0))
         .p(px(2.0))
         .rounded_full()
-        .bg(if on {
-            theme.accent
-        } else {
-            theme.border_strong
-        })
+        .bg(if on { theme.accent } else { theme.input })
         .child(
             div()
                 .when(on, |thumb| thumb.ml(px(10.0)))
                 .size(px(10.0))
                 .rounded_full()
-                .bg(theme.knob),
+                .bg(theme.background),
         )
 }
 
@@ -835,16 +831,16 @@ fn rows(
                     .h(px(1.0))
                     .mx(px(-4.0))
                     .my(PANEL_INSET)
-                    .bg(theme.hairline)
+                    .bg(theme.border)
                     .into_any_element(),
                 Kind::Header => div()
                     .flex_none()
                     .px(ROW_PADDING)
                     .pt(px(6.0))
                     .pb(px(2.0))
-                    .text_caption()
+                    .text_caption(theme.typography)
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_tertiary)
+                    .text_color(theme.muted_foreground)
                     .child(label)
                     .into_any_element(),
                 Kind::Action(_) | Kind::Submenu(_) => {
@@ -852,9 +848,11 @@ fn rows(
                     let lit = highlighted == Some(index);
                     let open = submenu.is_some_and(|(parent, _)| parent == index);
                     let fg = match (disabled, danger) {
-                        (true, _) => theme.text_disabled,
-                        (false, true) => theme.danger_text,
-                        (false, false) => theme.text,
+                        (true, _) => theme
+                            .muted_foreground
+                            .opacity(crate::theme::DISABLED_OPACITY),
+                        (false, true) => theme.destructive,
+                        (false, false) => theme.foreground,
                     };
                     let two_line = description.is_some();
                     let sub = match item_kind {
@@ -882,11 +880,11 @@ fn rows(
                             body.child(
                                 div()
                                     .truncate()
-                                    .text_small()
+                                    .text_caption(theme.typography)
                                     .text_color(if lit {
-                                        theme.text_secondary
+                                        theme.muted_foreground
                                     } else {
-                                        theme.text_tertiary
+                                        theme.muted_foreground
                                     })
                                     .child(description),
                             )
@@ -895,16 +893,16 @@ fn rows(
                         h_flex()
                             .flex_none()
                             .gap(px(4.0))
-                            .text_small()
+                            .text_caption(theme.typography)
                             .text_color(if lit {
-                                theme.text_secondary
+                                theme.muted_foreground
                             } else {
-                                theme.text_tertiary
+                                theme.muted_foreground
                             })
                             .child(content)
                     };
                     row(index, nested, metas, state)
-                        .rounded(theme.radius.item)
+                        .rounded(theme.radius.control)
                         .role(role)
                         .aria_label(label.clone())
                         .when_some(description, |row, description| {
@@ -928,9 +926,9 @@ fn rows(
                         )
                         .when(lit || open, |row| {
                             row.bg(if danger {
-                                theme.danger_soft
+                                theme.destructive_fill()
                             } else {
-                                theme.selected
+                                theme.accent
                             })
                         })
                         .when(!two_line, |row| row.h(ITEM_HEIGHT))
@@ -964,13 +962,13 @@ fn rows(
                                     .items_center()
                                     .justify_center()
                                     .size(px(18.0))
-                                    .rounded(theme.radius.item)
+                                    .rounded(theme.radius.control)
                                     .when(lit, |button| {
                                         button
                                             .role(Role::Button)
                                             .aria_label(label)
-                                            .text_color(theme.text_secondary)
-                                            .hover(|button| button.bg(theme.fill_hover))
+                                            .text_color(theme.muted_foreground)
+                                            .hover(|button| button.bg(theme.muted))
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.stop_propagation()
                                             })
@@ -978,7 +976,7 @@ fn rows(
                                                 cx.stop_propagation();
                                                 dismiss(window, cx);
                                             })
-                                            .child(small_icon(Icon::X, theme.text_secondary))
+                                            .child(small_icon(Icon::X, theme.muted_foreground))
                                     }),
                             )
                         })
@@ -1326,12 +1324,12 @@ impl RenderOnce for MenuList {
             .flex_col()
             .p(PANEL_INSET)
             .rounded(theme.radius.panel)
-            .bg(theme.surface)
+            .bg(theme.card)
             .border_1()
-            .border_color(theme.hairline)
+            .border_color(theme.border)
             .text_size(TEXT_BODY)
             .line_height(LINE_BODY)
-            .text_color(theme.text)
+            .text_color(theme.foreground)
             .children(pinned)
             .child(scrolling(
                 ElementId::from((self.id, "rest")),

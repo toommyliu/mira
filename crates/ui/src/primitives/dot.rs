@@ -83,11 +83,11 @@ impl StatusDot {
 impl RenderOnce for StatusDot {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let (mark, ink) = match self.activity {
-            Activity::Idle => (super::Icon::Circle, cx.theme().text_tertiary),
-            Activity::Running => (super::Icon::CircleDot, cx.theme().text),
-            Activity::Waiting => (super::Icon::LoaderCircle, cx.theme().text_tertiary),
-            Activity::Stopped => (super::Icon::CircleStop, cx.theme().text_tertiary),
-            Activity::Failed => (super::Icon::OctagonX, cx.theme().danger),
+            Activity::Idle => (super::Icon::Circle, cx.theme().muted_foreground),
+            Activity::Running => (super::Icon::CircleDot, cx.theme().foreground),
+            Activity::Waiting => (super::Icon::LoaderCircle, cx.theme().muted_foreground),
+            Activity::Stopped => (super::Icon::CircleStop, cx.theme().muted_foreground),
+            Activity::Failed => (super::Icon::OctagonX, cx.theme().destructive),
         };
         let glyph = super::icon(mark, ink);
         if self.activity == Activity::Waiting {

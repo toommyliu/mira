@@ -164,8 +164,8 @@ impl RenderOnce for Scrollbar {
                     .w(Self::GUTTER - INSET * 2.0)
                     .h(thumb)
                     .rounded_full()
-                    .bg(theme.text.opacity(if dragging { 0.36 } else { 0.2 }))
-                    .hover(|style| style.bg(theme.text.opacity(0.32)))
+                    .bg(theme.foreground.opacity(if dragging { 0.36 } else { 0.2 }))
+                    .hover(|style| style.bg(theme.foreground.opacity(0.32)))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         grab.drag
                             .set(Some((event.position.y, grab_handle.offset().y)));

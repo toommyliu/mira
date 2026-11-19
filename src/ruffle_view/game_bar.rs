@@ -684,7 +684,7 @@ impl RenderOnce for Busy {
             .flex_none()
             .size(px(14.0))
             .when(spinning < 1.0, |busy| {
-                let clock = icon(Icon::Clock, cx.theme().text);
+                let clock = icon(Icon::Clock, cx.theme().foreground);
                 let clock = if cx.reduce_motion() {
                     clock.into_any_element()
                 } else {
@@ -763,7 +763,7 @@ fn trigger(
         .child(
             div()
                 .flex_none()
-                .when(on == Some(true), |title| title.text_color(theme.text))
+                .when(on == Some(true), |title| title.text_color(theme.foreground))
                 .child(title),
         )
         .children(value.map(|value| {
@@ -773,7 +773,7 @@ fn trigger(
                     .min_w_0()
                     .max_w(px(120.0))
                     .truncate()
-                    .text_color(theme.text_tertiary)
+                    .text_color(theme.muted_foreground)
                     .child(value)
                     .into_any_element(),
                 Detail::Working(label) | Detail::Waiting(label) => Busy {
@@ -826,7 +826,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .h(BAR_HEIGHT)
         .gap(px(2.0))
         .pr(px(6.0))
-        .bg(theme.base)
+        .bg(theme.background)
         .border_b_1()
         .border_color(theme.border)
         .child(super::client::drag_area().flex_none().w(bar.inset))
@@ -978,9 +978,9 @@ fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Ve
 
 fn heading(title: &'static str, cx: &App) -> impl IntoElement {
     div()
-        .text_caption()
+        .text_caption(cx.theme().typography)
         .font_weight(FontWeight::MEDIUM)
-        .text_color(cx.theme().text_tertiary)
+        .text_color(cx.theme().muted_foreground)
         .child(title)
 }
 
@@ -988,8 +988,8 @@ fn note(text: &'static str, cx: &App) -> AnyElement {
     div()
         .px(px(8.0))
         .py(px(6.0))
-        .text_small()
-        .text_color(cx.theme().text_tertiary)
+        .text_caption(cx.theme().typography)
+        .text_color(cx.theme().muted_foreground)
         .child(text)
         .into_any_element()
 }
@@ -1388,21 +1388,21 @@ fn jump_panel(
         };
         let hover = spot.clone();
         let travel = travel.clone();
-        let pressed = theme.fill_pressed;
+        let pressed = theme.muted;
         h_flex()
             .id(id)
             .flex_none()
             .h(ROW)
             .px(px(6.0))
             .gap(px(6.0))
-            .rounded(theme.radius.item)
+            .rounded(theme.radius.control)
             .role(Role::MenuItemRadio)
             .aria_label(label.clone())
             .pointer_cursor(&theme)
-            .when(*spot.read(cx) == spot_here, |row| row.bg(theme.fill_hover))
+            .when(*spot.read(cx) == spot_here, |row| row.bg(theme.muted))
             .active(move |style| style.bg(pressed))
             .child(div().flex_none().w(px(12.0)).when(here, |mark| {
-                mark.child(icon(Icon::Check, theme.text).size(px(12.0)))
+                mark.child(icon(Icon::Check, theme.foreground).size(px(12.0)))
             }))
             .child(div().min_w_0().truncate().child(label))
             .on_mouse_move(move |_, _, cx| {
@@ -1458,7 +1458,7 @@ fn jump_panel(
                 location.pad.eq_ignore_ascii_case(pad),
                 (location.cell.clone(), pad.to_string()),
             )
-            .when(!in_cell, |row| row.text_color(theme.text_tertiary))
+            .when(!in_cell, |row| row.text_color(theme.muted_foreground))
         })
         .collect();
     let column = |label| {
@@ -1509,7 +1509,7 @@ fn jump_panel(
                 .self_stretch()
                 .w(px(1.0))
                 .mx(px(6.0))
-                .bg(theme.hairline),
+                .bg(theme.border),
         )
         .child(column("Pad").children(pads))
         .into_any_element()
@@ -1611,10 +1611,10 @@ mod tests {
             div()
                 .key_context(mira_ui::FOCUS_SCOPE)
                 .size_full()
-                .bg(theme.base)
-                .text_color(theme.text)
-                .font_family(mira_ui::theme::SYSTEM_SANS)
-                .text_body()
+                .bg(theme.background)
+                .text_color(theme.foreground)
+                .font_family(mira_ui::theme::UI_FONT)
+                .text_body(theme.typography)
                 .child(
                     Menubar::new("bar", "Game")
                         .h(BAR_HEIGHT)
@@ -1758,10 +1758,10 @@ mod tests {
             let theme = cx.theme().clone();
             div()
                 .size_full()
-                .bg(theme.base)
-                .text_color(theme.text)
-                .font_family(mira_ui::theme::SYSTEM_SANS)
-                .text_body()
+                .bg(theme.background)
+                .text_color(theme.foreground)
+                .font_family(mira_ui::theme::UI_FONT)
+                .text_body(theme.typography)
                 .child(
                     Menubar::new("bar", "Game")
                         .h(BAR_HEIGHT)
@@ -1822,10 +1822,10 @@ mod tests {
             v_flex()
                 .size_full()
                 .gap(px(8.0))
-                .bg(theme.surface)
-                .text_color(theme.text)
-                .font_family(mira_ui::theme::SYSTEM_SANS)
-                .text_body()
+                .bg(theme.card)
+                .text_color(theme.foreground)
+                .font_family(mira_ui::theme::UI_FONT)
+                .text_body(theme.typography)
                 .children((self.0)().into_iter().enumerate().map(|(index, bar)| {
                     div()
                         .id(("bar", index))
