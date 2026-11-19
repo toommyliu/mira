@@ -9,7 +9,6 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, StyledExt as _,
     primitives::{Button, Dialog, Input, Scrollbar, button::Variant},
-    theme::LINE_BODY,
     v_flex,
 };
 
@@ -234,6 +233,8 @@ impl ScriptDialogs {
 
 impl Render for ScriptDialogs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         if let Some(front) = self.queue.front() {
             self.last = Some(front.request.clone());
             if self.focused != Some(front.id) {
@@ -266,9 +267,11 @@ impl Render for ScriptDialogs {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .when(overflowing, |scroller| {
-                scroller.min_h(LINE_BODY * 2.0).pr(Scrollbar::GUTTER)
+                scroller
+                    .min_h(typography.body_line * 2.0)
+                    .pr(Scrollbar::GUTTER)
             })
-            .text_body(theme.typography)
+            .text_body(typography)
             .text_color(theme.muted_foreground)
             .child(message);
         let prompt = match (&self.prompt, request) {
@@ -303,7 +306,7 @@ impl Render for ScriptDialogs {
                 .absolute()
                 .left_0()
                 .right_0()
-                .h(LINE_BODY)
+                .h(typography.body_line)
                 .bg(linear_gradient(
                     180.0,
                     linear_color_stop(from, 0.0),
@@ -334,7 +337,7 @@ impl Render for ScriptDialogs {
             ));
         let body = v_flex()
             .min_h_0()
-            .gap(px(12.0))
+            .gap(layout.space(3.0))
             .debug_selector(|| "script-dialog-body".into())
             .child(message)
             .children(prompt);
@@ -396,10 +399,7 @@ mod tests {
     use gpui::{
         Bounds, KeyUpEvent, Keystroke, Modifiers, Pixels, TestAppContext, VisualTestContext, point,
     };
-    use mira_ui::{
-        FOCUS_SCOPE,
-        theme::{TEXT_BODY, UI_FONT},
-    };
+    use mira_ui::{FOCUS_SCOPE, theme::UI_FONT};
     use serde_json::{Value as Json, json};
 
     use super::*;
@@ -412,6 +412,7 @@ mod tests {
     impl Render for Host {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme();
+            let typography = theme.typography;
             div()
                 .key_context(FOCUS_SCOPE)
                 .track_focus(&self.focus)
@@ -419,7 +420,7 @@ mod tests {
                 .bg(theme.background)
                 .text_color(theme.foreground)
                 .font_family(UI_FONT)
-                .text_size(TEXT_BODY)
+                .text_size(typography.body)
                 .child(self.dialogs.clone())
         }
     }

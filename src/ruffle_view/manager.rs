@@ -1446,6 +1446,7 @@ fn member_script_items(
     ids: Vec<AccountId>,
     own: Option<Option<&Path>>,
     window: &Window,
+    theme: &Theme,
 ) -> Vec<MenuItem> {
     let same = {
         let this = this.clone();
@@ -1465,6 +1466,7 @@ fn member_script_items(
         scripts,
         own,
         window,
+        theme,
         script_pick(setup.to_owned(), ScriptFor::Members(ids)),
     ));
     items
@@ -1475,6 +1477,7 @@ fn script_items(
     scripts: &[PathBuf],
     current: Option<Option<&Path>>,
     window: &Window,
+    theme: &Theme,
     run: Pick,
 ) -> Vec<MenuItem> {
     let item = |label: SharedString, script: Option<PathBuf>| {
@@ -1499,7 +1502,7 @@ fn script_items(
             let hidden = script.to_path_buf();
             let refresh = this.clone();
             let row = item(file_name(script).into(), Some(script.to_path_buf()))
-                .description(fit_path_to(&folder, SCRIPT_PATH_WIDTH, window));
+                .description(fit_path_to(&folder, SCRIPT_PATH_WIDTH, window, theme));
             let row = if current == Some(Some(script)) {
                 row
             } else {
@@ -1527,7 +1530,7 @@ fn account_menu(
     scripts: Vec<PathBuf>,
     setup: Option<(String, Option<PathBuf>)>,
 ) -> impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static {
-    move |window, _| {
+    move |window, cx| {
         let many = targets.len() > 1;
         let act = |label: &'static str,
                    run: fn(&mut Manager, Vec<Account>, &mut Context<Manager>)| {
@@ -1556,7 +1559,7 @@ fn account_menu(
         items.extend([
             MenuItem::submenu(
                 "Run script",
-                script_items(&this, &scripts, None, window, run),
+                script_items(&this, &scripts, None, window, cx.theme(), run),
             ),
             act("Stop", Manager::stop),
             act("Close", Manager::close),
@@ -1576,6 +1579,7 @@ fn account_menu(
                         ids,
                         (!many).then_some(own.as_deref()),
                         window,
+                        cx.theme(),
                     ),
                 ),
                 targets_item(&this, &targets, "Remove", move |manager, targets, _, cx| {
@@ -1924,12 +1928,13 @@ impl Manager {
                                         theme.muted_foreground,
                                     )),
                             )
-                            .items(move |window, _| {
+                            .items(move |window, cx| {
                                 script_items(
                                     &this,
                                     &scripts,
                                     Some(current.as_deref()),
                                     window,
+                                    cx.theme(),
                                     script_pick(name.clone(), ScriptFor::Setup),
                                 )
                             });
@@ -2179,7 +2184,7 @@ impl Manager {
                         .child(
                             Tooltip::new(
                                 SharedString::from(format!("note-{}", account.username)),
-                                fit_path_to(&path, CARD_PATH_WIDTH, window),
+                                fit_path_to(&path, CARD_PATH_WIDTH, window, theme),
                                 line(note),
                             )
                             .align_start(),
@@ -2263,7 +2268,9 @@ impl Manager {
                     .size(Size::Small)
                     .text_size(TEXT_BODY),
             )
-            .items(move |window, _| script_items(&this, &scripts, None, window, run.clone()));
+            .items(move |window, cx| {
+                script_items(&this, &scripts, None, window, cx.theme(), run.clone())
+            });
         let this = cx.weak_entity();
         let menu_button = |id: &'static str, label: &'static str| {
             Button::new(id, label)
@@ -2328,8 +2335,16 @@ impl Manager {
                     .width(SCRIPT_MENU_WIDTH)
                     .max_height(px(320.0))
                     .trigger(menu_button("selection-script-trigger", "Setup script"))
-                    .items(move |window, _| {
-                        member_script_items(&this, &scripts, &picked, ids.clone(), None, window)
+                    .items(move |window, cx| {
+                        member_script_items(
+                            &this,
+                            &scripts,
+                            &picked,
+                            ids.clone(),
+                            None,
+                            window,
+                            cx.theme(),
+                        )
                     });
                 vec![script.into_any_element()]
             }
