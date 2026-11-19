@@ -12,10 +12,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::{Button, Icon, button::Size, icon};
-use crate::{
-    ActiveTheme as _,
-    theme::{CONTROL_MD, CONTROL_SM, LINE_BODY, TEXT_BODY, TEXT_SMALL, tabular},
-};
+use crate::{ActiveTheme as _, theme::tabular};
 
 actions!(
     text_field,
@@ -792,6 +789,8 @@ impl Focusable for Input {
 impl Render for Input {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let focused = !self.disabled && self.focus.is_focused(window);
         if focused && !self.was_focused && crate::nav::keyboard_input(window, cx) {
             self.selected = 0..self.content.len();
@@ -805,9 +804,9 @@ impl Render for Input {
         self.was_focused = focused;
         let clearable = self.search && !self.content.is_empty();
         let height = match (self.bare, self.small) {
-            (true, _) => LINE_BODY,
-            (false, true) => CONTROL_SM,
-            (false, false) => CONTROL_MD,
+            (true, _) => typography.body_line,
+            (false, true) => layout.control_sm,
+            (false, false) => layout.control,
         };
         let radius = if self.pill {
             height / 2.0
@@ -872,23 +871,25 @@ impl Render for Input {
             })
             .flex()
             .items_center()
-            .gap(px(4.0))
+            .gap(layout.space(1.0))
             .w_full()
             .h(height)
             .when(!self.bare, |field| {
                 field
-                    .pl(px(8.0))
+                    .pl(layout.space(2.0))
                     .pr(px(if clearable || self.password { 2.0 } else { 8.0 }))
                     .rounded(radius)
-                    .bg(theme.secondary)
+                    .bg(theme.input_fill())
                     .border_1()
-                    .border_color(match (self.invalid, self.pill) {
-                        (true, _) => theme.destructive,
-                        (false, true) => theme.secondary,
-                        (false, false) => theme.border,
+                    .border_color(if self.invalid {
+                        theme.invalid_border()
+                    } else if focused {
+                        theme.ring
+                    } else {
+                        theme.input
                     })
             })
-            .when(focused, |field| {
+            .when(focused || self.invalid, |field| {
                 let color = if self.invalid {
                     theme.destructive
                 } else {
@@ -905,23 +906,29 @@ impl Render for Input {
                             .bg(color),
                     )
                 } else {
-                    field.child(theme.ring_around(color, radius, px(1.0)))
+                    field.child(theme.halo(
+                        if self.invalid {
+                            theme.invalid_halo()
+                        } else {
+                            color.opacity(0.3)
+                        },
+                        radius,
+                        px(1.0),
+                        px(2.0),
+                    ))
                 }
             })
-            .text_size(if self.small { TEXT_SMALL } else { TEXT_BODY })
-            .line_height(LINE_BODY)
-            .text_color(if self.disabled {
-                theme
-                    .muted_foreground
-                    .opacity(crate::theme::DISABLED_OPACITY)
-            } else {
-                theme.foreground
+            .text_size(typography.body)
+            .line_height(typography.body_line)
+            .text_color(theme.foreground)
+            .when(self.disabled, |field| {
+                field.opacity(crate::theme::DISABLED_OPACITY)
             })
             .when(self.numeric.is_some(), |field| {
                 field.font_features(tabular())
             })
             .when(self.search, |field| {
-                field.child(icon(Icon::Search, theme.muted_foreground).mr(px(2.0)))
+                field.child(icon(Icon::Search, theme.muted_foreground).mr(layout.space(0.5)))
             })
             .child(
                 div()
@@ -1009,7 +1016,7 @@ impl gpui::Element for TextElement {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
-        style.size.width = relative(1.).into();
+        style.size.width = relative(1.0).into();
         style.size.height = window.line_height().into();
         (window.request_layout(style, [], cx), ())
     }
@@ -1027,13 +1034,7 @@ impl gpui::Element for TextElement {
         let field = self.field.read(cx);
         let style = window.text_style();
         let (text, color) = if field.content.is_empty() {
-            let color = if field.disabled {
-                theme
-                    .muted_foreground
-                    .opacity(crate::theme::DISABLED_OPACITY)
-            } else {
-                theme.muted_foreground
-            };
+            let color = theme.muted_foreground;
             (field.placeholder.clone(), color)
         } else {
             (field.display_text(), style.color)

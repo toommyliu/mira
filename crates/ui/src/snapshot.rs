@@ -22,6 +22,25 @@ pub fn snapshot_after<V: Render + 'static>(
     keys: &[&'static str],
     build: impl Fn(&mut Window, &mut App) -> Entity<V>,
 ) -> Vec<PathBuf> {
+    snapshot_with(name, size, build, |cx, window| {
+        for key in keys {
+            let keystroke =
+                Keystroke::parse(key).unwrap_or_else(|_| panic!("{key} is not a keystroke"));
+            cx.update_window(window, |_, window, cx| {
+                window.dispatch_keystroke(keystroke, cx);
+            })
+            .expect("press the key");
+            cx.run_until_parked();
+        }
+    })
+}
+
+pub fn snapshot_with<V: Render + 'static>(
+    name: &str,
+    size: Size<Pixels>,
+    build: impl Fn(&mut Window, &mut App) -> Entity<V>,
+    interact: impl Fn(&mut HeadlessAppContext, gpui::AnyWindowHandle),
+) -> Vec<PathBuf> {
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).expect("create the snapshot folder");
     let mut cx = HeadlessAppContext::with_platform(
@@ -40,23 +59,18 @@ pub fn snapshot_after<V: Render + 'static>(
     [("dark", Theme::dark()), ("light", Theme::light())]
         .into_iter()
         .map(|(appearance, theme)| {
-            cx.update(|cx| cx.set_global(theme));
+            cx.update(|cx| cx.set_global(theme.clone()));
             let window = cx
-                .open_window(size, |window, cx| build(window, cx))
+                .open_window(size, |window, cx| {
+                    let root = build(window, cx);
+                    cx.set_global(theme.clone());
+                    root
+                })
                 .expect("open a headless window");
             cx.run_until_parked();
             cx.update_window(window.into(), |_, window, _| window.activate_window())
                 .expect("activate the window");
-            for key in keys {
-                let Ok(keystroke) = Keystroke::parse(key) else {
-                    panic!("{key} is not a keystroke");
-                };
-                cx.update_window(window.into(), |_, window, cx| {
-                    window.dispatch_keystroke(keystroke, cx);
-                })
-                .expect("press the key");
-                cx.run_until_parked();
-            }
+            interact(&mut cx, window.into());
             cx.update_window(window.into(), |_, window, _| window.refresh())
                 .expect("redraw the window");
             cx.run_until_parked();

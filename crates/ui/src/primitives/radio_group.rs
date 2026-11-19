@@ -10,10 +10,8 @@ use super::label::caption_with;
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _,
     nav::{self, Axis, Step},
-    theme::{DISABLED_OPACITY, LINE_BODY, TEXT_BODY},
+    theme::DISABLED_OPACITY,
 };
-
-const BOX: f32 = 14.0;
 
 pub struct Radio {
     label: SharedString,
@@ -88,6 +86,8 @@ impl RadioGroup {
 
 impl RenderOnce for RadioGroup {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let layout = cx.theme().layout;
+        let typography = cx.theme().typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let ring = nav::keyboard_focused(&focus, window, cx);
         let theme = cx.theme().clone();
@@ -102,7 +102,7 @@ impl RenderOnce for RadioGroup {
             .track_focus(&focus.clone().tab_stop(true))
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(theme.space(3.0))
             .rounded(theme.radius.control)
             .when(ring && selected.is_none(), |group| {
                 group.child(theme.focus_ring(px(6.0)))
@@ -150,10 +150,10 @@ impl RenderOnce for RadioGroup {
                     .when(checked, |radio| radio.aria_active_descendant())
                     .flex()
                     .items_start()
-                    .gap(px(8.0))
+                    .gap(layout.space(2.0))
                     .py(px(3.0))
-                    .text_size(TEXT_BODY)
-                    .line_height(LINE_BODY)
+                    .text_size(typography.body)
+                    .line_height(typography.body_line)
                     .text_color(theme.foreground)
                     .when(disabled, |radio| radio.opacity(DISABLED_OPACITY))
                     .when(!disabled, |radio| radio.pointer_cursor(&theme))
@@ -163,28 +163,48 @@ impl RenderOnce for RadioGroup {
                             .flex_none()
                             .items_center()
                             .justify_center()
-                            .mt(px(2.0))
-                            .size(px(BOX))
+                            .mt(layout.space(0.5))
+                            .size(layout.check)
                             .rounded_full()
+                            .id("mark")
+                            .border_1()
                             .map(|dot| {
                                 if checked {
-                                    dot.bg(theme.primary)
+                                    dot.bg(theme.primary).border_color(theme.primary)
                                 } else {
-                                    dot.border_1()
-                                        .border_color(theme.border)
-                                        .bg(theme.secondary)
-                                        .when(!disabled, |dot| {
-                                            dot.group_hover("radio", |style| {
-                                                style.border_color(theme.input)
-                                            })
-                                        })
+                                    dot.border_color(theme.input).bg(theme.outline_fill())
                                 }
                             })
-                            .when(checked && ring, |dot| dot.child(theme.focus_ring(px(7.0))))
+                            .when(!disabled, |dot| {
+                                dot.group_hover("radio", |style| style.border_color(theme.ring))
+                                    .group_active("radio", |style| {
+                                        style.bg(theme.pressed(
+                                            theme.background,
+                                            if checked {
+                                                theme.primary
+                                            } else {
+                                                theme.input_fill()
+                                            },
+                                            if checked {
+                                                theme.primary_foreground
+                                            } else {
+                                                theme.foreground
+                                            },
+                                        ))
+                                    })
+                            })
+                            .when(checked && ring, |dot| {
+                                dot.border_color(theme.ring).child(theme.halo(
+                                    theme.ring.opacity(0.5),
+                                    px(8.0),
+                                    px(1.0),
+                                    px(3.0),
+                                ))
+                            })
                             .when(checked, |dot| {
                                 dot.child(
                                     div()
-                                        .size(px(6.0))
+                                        .size(layout.check / 2.0)
                                         .rounded_full()
                                         .bg(theme.primary_foreground),
                                 )

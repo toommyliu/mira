@@ -3,10 +3,7 @@ use gpui::{
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use crate::{
-    ActiveTheme as _, StyledExt as _, h_flex,
-    theme::{LINE_BODY, TEXT_BODY},
-};
+use crate::{ActiveTheme as _, StyledExt as _, h_flex};
 
 #[derive(IntoElement)]
 pub struct Empty {
@@ -40,22 +37,22 @@ impl Empty {
 impl RenderOnce for Empty {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let layout = theme.layout;
+        let typography = theme.typography;
         div()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(4.0))
-            .py(px(if self.compact { 16.0 } else { 32.0 }))
-            .px(px(24.0))
+            .gap(layout.space(1.0))
+            .py(theme.space(if self.compact { 4.0 } else { 6.0 }))
+            .px(layout.space(6.0))
             .child(
                 div()
                     .map(|title| {
                         if self.compact {
-                            title
-                                .text_body(theme.typography)
-                                .font_weight(FontWeight::MEDIUM)
+                            title.text_body(typography).font_weight(FontWeight::MEDIUM)
                         } else {
-                            title.text_title(theme.typography)
+                            title.text_title(typography)
                         }
                     })
                     .text_color(theme.foreground)
@@ -65,16 +62,16 @@ impl RenderOnce for Empty {
                 div()
                     .max_w(px(320.0))
                     .text_center()
-                    .text_size(TEXT_BODY)
-                    .line_height(LINE_BODY)
+                    .text_size(typography.body)
+                    .line_height(typography.body_line)
                     .text_color(theme.muted_foreground)
                     .child(self.body),
             )
             .when(!self.actions.is_empty(), |empty| {
                 empty.child(
                     h_flex()
-                        .gap(px(6.0))
-                        .pt(px(if self.compact { 8.0 } else { 12.0 }))
+                        .gap(layout.space(1.5))
+                        .pt(theme.space(3.0))
                         .children(self.actions),
                 )
             })
