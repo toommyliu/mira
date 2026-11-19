@@ -250,8 +250,6 @@ impl RenderOnce for ShortcutField {
         let typography = theme.typography;
         let quiet = |text: &str| {
             div()
-                .text_size(typography.secondary)
-                .line_height(typography.secondary_line)
                 .text_color(theme.muted_foreground)
                 .child(text.to_owned())
         };
@@ -334,8 +332,8 @@ impl RenderOnce for ShortcutField {
                 )
             })
             .pointer_cursor(&theme)
-            .text_size(typography.body)
-            .line_height(typography.body_line)
+            .text_size(typography.secondary)
+            .line_height(typography.secondary_line)
             .text_color(theme.foreground)
             .children(shown);
         h_flex()
