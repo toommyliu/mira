@@ -107,6 +107,16 @@ impl Theme {
         }
     }
 
+    pub fn fill_columns(&self, first: impl IntoElement, second: impl IntoElement) -> Div {
+        h_flex()
+            .flex_1()
+            .min_h_0()
+            .items_stretch()
+            .child(v_flex().flex_1().min_w_0().child(first))
+            .child(div().w(px(1.0)).bg(self.border))
+            .child(v_flex().flex_1().min_w_0().child(second))
+    }
+
     pub fn account_columns(&self, pane: Pixels) -> usize {
         let gap = self.space(2.0);
         let inner = pane - self.space(3.0) * 2.0;
