@@ -1073,6 +1073,63 @@ impl Render for Form {
 }
 
 #[test]
+fn snapshot_input_drag_selection() {
+    use gpui::{Focusable as _, MouseButton, MouseDownEvent, MouseMoveEvent, PlatformInput};
+    use mira_ui::primitives::{Field, Input};
+
+    mira_ui::snapshot_with(
+        "input-drag-selection",
+        size(px(260.0), px(88.0)),
+        |window, cx| {
+            let input = cx.new(|cx| {
+                let mut input = Input::new("Token", cx).password();
+                input.set_text("start-0123456789-middle-0123456789-end", cx);
+                input.reveal(true, cx);
+                input
+            });
+            let focus = input.focus_handle(cx);
+            let scene = Scene::open(
+                move |_, _| Field::new("Token", input.clone()).into_any_element(),
+                window,
+                cx,
+            );
+            window.focus(&focus, cx);
+            scene
+        },
+        |cx, owner| {
+            cx.run_until_parked();
+            cx.update_window(owner, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        position: point(px(78.0), px(58.0)),
+                        button: MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(2.0), px(58.0)),
+                        pressed_button: Some(MouseButton::Left),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+            cx.run_until_parked();
+            for _ in 0..30 {
+                cx.advance_clock(std::time::Duration::from_millis(16));
+                cx.update_window(owner, |_, window, cx| window.simulate_next_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+            }
+        },
+    );
+}
+
+#[test]
 fn snapshot_form() {
     use mira_ui::primitives::{Input, Numeric};
     for path in snapshot("form", size(px(620.0), px(260.0)), |_, cx| {

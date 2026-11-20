@@ -955,7 +955,7 @@ fn password_input_hides_its_text_until_revealed_and_keeps_it_off_the_clipboard(
 
 #[gpui::test]
 fn input_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
-    use gpui::{Modifiers, point, px};
+    use gpui::{EntityInputHandler as _, Modifiers, MouseButton, point, px};
     let (input, cx) = focused_input(|input| input, cx);
     let long = "a".repeat(400);
     cx.simulate_input(&format!("{long}bcd"));
@@ -969,6 +969,52 @@ fn input_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
     cx.simulate_click(point(px(12.0), middle), Modifiers::none());
     cx.simulate_input("Y");
     assert!(text(&input, cx).find('Y').unwrap() < 5);
+
+    let selected = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            input.update(cx, |field, cx| {
+                field.selected_text_range(false, window, cx).unwrap().range
+            })
+        })
+    };
+    let length = text(&input, cx).len();
+    let next_frame = |cx: &mut VisualTestContext| {
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_millis(50));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    for (key, outside, endpoint) in [
+        ("end", -px(60.0), 0),
+        ("home", viewport.width + px(60.0), length),
+    ] {
+        press(cx, key);
+        let start = point(viewport.width / 2.0, middle);
+        let outside = point(outside, middle);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        let anchor = selected(cx).start;
+        assert!(anchor > 0 && anchor < length);
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        let expected = anchor.min(endpoint)..anchor.max(endpoint);
+        let partial = selected(cx);
+        assert!(!partial.is_empty());
+        assert_ne!(partial, expected);
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        next_frame(cx);
+        assert_eq!(selected(cx), partial);
+
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::shift());
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        for _ in 0..80 {
+            next_frame(cx);
+            if selected(cx) == expected {
+                break;
+            }
+        }
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(start, None, Modifiers::none());
+        assert_eq!(selected(cx), expected);
+    }
 }
 
 #[gpui::test]
