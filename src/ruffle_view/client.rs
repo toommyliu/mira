@@ -1700,7 +1700,7 @@ mod tests {
             cx.debug_bounds("hotkey-status")
                 .map(|bounds| bounds.size.width)
         };
-        let short = show("Anti AFK: On", cx);
+        let short = show("Anti-AFK: On", cx);
         cx.executor().advance_clock(STATUS_LINGER / 2);
         let long = show("Skip cutscenes: Off", cx);
         assert!(short.is_some());
