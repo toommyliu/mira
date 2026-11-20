@@ -80,22 +80,26 @@ fn scene_after_keys(
     }
 }
 
-fn hover(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
+fn move_pointer(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
     use gpui::{MouseMoveEvent, PlatformInput, point};
 
+    cx.update_window(owner, |_, window, cx| {
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: point(px(x), px(y)),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.refresh();
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+fn hover(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
     for nudge in [0.0, 1.0] {
-        cx.update_window(owner, |_, window, cx| {
-            window.dispatch_event(
-                PlatformInput::MouseMove(MouseMoveEvent {
-                    position: point(px(x + nudge), px(y)),
-                    ..Default::default()
-                }),
-                cx,
-            );
-            window.refresh();
-        })
-        .unwrap();
-        cx.run_until_parked();
+        move_pointer(cx, owner, x + nudge, y);
         cx.capture_screenshot(owner).unwrap();
     }
 }
@@ -506,6 +510,54 @@ fn snapshot_menu() {
             )
             .into_any_element()
     });
+
+    mira_ui::snapshot_with(
+        "menu-dismiss-hover",
+        size(px(292.0), px(176.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    DropdownMenu::new("recent")
+                        .default_open(true)
+                        .width(px(260.0))
+                        .trigger(Button::new("run", "Run script").size(Size::Small))
+                        .items(|_, _| {
+                            vec![
+                                MenuItem::header("Recent"),
+                                MenuItem::action("daily.ts", |_, _| {})
+                                    .description("~/Documents/Mira/scripts/ultras")
+                                    .dismiss("Remove from recent", |_, _| {}),
+                                MenuItem::separator(),
+                                MenuItem::action("Choose a file…", |_, _| {}),
+                            ]
+                        })
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            hover(cx, owner, 75.0, 98.0);
+            let row = cx.capture_screenshot(owner).unwrap();
+            hover(cx, owner, 75.0, 146.0);
+            move_pointer(cx, owner, 255.0, 98.0);
+            let dismiss = cx.capture_screenshot(owner).unwrap();
+            let scale = row.width() / 292;
+            let glyph = (255 * scale, 98 * scale);
+            assert!(
+                row[glyph][0].abs_diff(dismiss[glyph][0]) >= 40,
+                "the × must take its hover ink on the first pointer move"
+            );
+            let sample = (262 * scale, 98 * scale);
+            let before = row[sample][0];
+            let after = dismiss[sample][0];
+            assert!(
+                before.abs_diff(after) >= 20,
+                "hovering the dismiss button must distinguish its fill from the row ({before} to {after})"
+            );
+        },
+    );
 }
 
 #[test]
