@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{AppContext as _, Context, Size, Window, px, size};
+use gpui::{AppContext as _, Context, Focusable as _, Size, Window, px, size};
 use reqwest::header::HeaderValue;
 
 use super::{
@@ -350,7 +350,7 @@ fn snapshot_a_setup_before_during_and_after_a_run() {
 }
 
 #[test]
-fn snapshot_hovering_a_running_card_and_a_setup_row() {
+fn snapshot_manager_hover_states() {
     shoot_at(
         "manager-hover-card",
         opening(),
@@ -382,6 +382,19 @@ fn snapshot_hovering_a_running_card_and_a_setup_row() {
         Some("Daily"),
         Some((100.0, 190.0)),
         |_, _, _| {},
+    );
+    shoot_at(
+        "manager-clear-search",
+        opening(),
+        Scene::MidRun,
+        None,
+        Some((975.0, 18.0)),
+        |manager, window, cx| {
+            manager.search.update(cx, |search, cx| {
+                search.set_text("whomity", cx);
+                search.focus_handle(cx).focus(window, cx);
+            });
+        },
     );
 }
 
