@@ -1345,6 +1345,7 @@ pub struct DropdownMenu {
     width: Option<Pixels>,
     max_height: Pixels,
     default_open: bool,
+    state: Option<Entity<MenuState>>,
 }
 
 impl DropdownMenu {
@@ -1357,7 +1358,13 @@ impl DropdownMenu {
             width: None,
             max_height: MENU_MAX_HEIGHT,
             default_open: false,
+            state: None,
         }
+    }
+
+    pub(crate) fn state(mut self, state: Entity<MenuState>) -> Self {
+        self.state = Some(state);
+        self
     }
 
     pub fn trigger(mut self, trigger: Button) -> Self {
@@ -1398,7 +1405,10 @@ impl DropdownMenu {
 
 impl RenderOnce for DropdownMenu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = state(&self.id, self.default_open, window, cx);
+        let state = self
+            .state
+            .clone()
+            .unwrap_or_else(|| state(&self.id, self.default_open, window, cx));
         let is_open = state.read(cx).open;
         let shown = presence(&state, window, cx).is_some();
         let trigger = self

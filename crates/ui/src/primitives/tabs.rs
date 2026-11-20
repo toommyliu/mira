@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FontWeight, InteractiveElement as _, IntoElement,
@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use super::{
-    Button, ContextMenu, Flow, HoverCard, Icon, MenuItem, Pose, Sortable,
+    Button, ContextMenu, DropdownMenu, Flow, HoverCard, Icon, MenuItem, Pose, Sortable,
     button::Size,
     menu::{self, Handler, ItemsBuilder, MenuState},
 };
@@ -164,6 +164,7 @@ impl Tabs {
 
 #[derive(Clone)]
 struct Render {
+    id: ElementId,
     tab: TabBuilder,
     selected: usize,
     count: usize,
@@ -208,8 +209,28 @@ impl Render {
         let label = tab.label.clone();
         let menu = tab.menu.take().filter(|_| pose != Pose::Lifted);
         let card = tab.hover_card.take().filter(|_| pose == Pose::Rest);
+        let more = menu
+            .clone()
+            .filter(|_| self.vertical && pose == Pose::Rest)
+            .map(|items| {
+                let id = ElementId::NamedChild(
+                    Arc::new(self.id.clone()),
+                    format!("more-{index}").into(),
+                );
+                let state = menu::state(&id, false, window, cx);
+                let open = state.read(cx).open;
+                let trigger = DropdownMenu::new(id)
+                    .state(state)
+                    .trigger(
+                        Button::icon(("more", index), Icon::Ellipsis, format!("{label} actions"))
+                            .size(Size::XSmall)
+                            .hide_tooltip(),
+                    )
+                    .items(move |window, cx| items(window, cx));
+                (trigger, open || (current && self.ring))
+            });
         let row = if self.vertical {
-            self.vertical_tab(base, tab, index, current, pose)
+            self.vertical_tab(base, tab, index, current, pose, more)
         } else {
             self.horizontal_tab(base, tab, current)
         }
@@ -233,6 +254,7 @@ impl Render {
         index: usize,
         current: bool,
         pose: Pose,
+        more: Option<(DropdownMenu, bool)>,
     ) -> Stateful<Div> {
         let layout = self.theme.layout;
         let typography = self.theme.typography;
@@ -295,14 +317,42 @@ impl Render {
                     body.children(tab.children)
                 }
             }))
-            .when_some(tab.end, |row, end| {
+            .when(tab.end.is_some() || more.is_some(), |row| {
+                let shown = more.as_ref().is_some_and(|(_, shown)| *shown);
+                let reveals = more.is_some();
                 row.child(
-                    h_flex()
+                    div()
+                        .relative()
                         .flex_none()
                         .h(typography.body_line)
-                        .text_caption(typography)
-                        .text_color(quiet)
-                        .child(end),
+                        .min_w(layout.control_xs)
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .when_some(tab.end, |slot, end| {
+                            slot.child(
+                                h_flex()
+                                    .text_caption(typography)
+                                    .text_color(quiet)
+                                    .when(shown, |end| end.invisible())
+                                    .when(reveals, |end| {
+                                        end.group_hover(GROUP, |end| end.invisible())
+                                    })
+                                    .child(end),
+                            )
+                        })
+                        .when_some(more, |slot, (trigger, _)| {
+                            slot.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right(px(-4.0))
+                                    .when(!shown, |more| {
+                                        more.invisible().group_hover(GROUP, |more| more.visible())
+                                    })
+                                    .child(trigger),
+                            )
+                        }),
                 )
             })
             .when_some(tab.on_close.filter(|_| pose == Pose::Rest), |row, close| {
@@ -409,6 +459,7 @@ impl RenderOnce for Tabs {
             cx,
         );
         let render = Render {
+            id: self.id.clone(),
             tab: self.tab.clone(),
             selected: self.selected,
             count: self.count,
