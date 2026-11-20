@@ -32,6 +32,7 @@ impl RenderOnce for Dot {
             Tone::Accent => (super::Icon::ArrowDownToLine, "Update available"),
             Tone::Success => (super::Icon::CircleCheck, "Succeeded"),
             Tone::Warning => (super::Icon::TriangleAlert, "Warning"),
+            Tone::Attention => (super::Icon::TriangleAlert, "Needs attention"),
             Tone::Danger => (super::Icon::OctagonX, "Problem"),
         };
         StatusMark::new(mark, label, self.tone).render_mark(cx)

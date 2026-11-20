@@ -201,6 +201,7 @@ pub enum Tone {
     Accent,
     Success,
     Warning,
+    Attention,
     Danger,
 }
 
@@ -228,6 +229,7 @@ pub struct Theme {
     pub accent: Hsla,
     pub accent_foreground: Hsla,
     pub destructive: Hsla,
+    pub warning: Hsla,
     pub border: Hsla,
     pub input: Hsla,
     pub ring: Hsla,
@@ -289,6 +291,11 @@ impl Theme {
                 oklch(0.704, 0.191, 22.216, 1.0)
             } else {
                 oklch(0.577, 0.245, 27.325, 1.0)
+            },
+            warning: if dark {
+                oklch(0.828, 0.189, 84.429, 1.0)
+            } else {
+                oklch(0.555, 0.163, 48.998, 1.0)
             },
             border,
             input: if dark {
@@ -459,6 +466,9 @@ impl Theme {
         self.destructive
             .opacity(if self.dark_mode { 0.2 } else { 0.1 })
     }
+    pub fn warning_fill(&self) -> Hsla {
+        self.warning.opacity(if self.dark_mode { 0.2 } else { 0.1 })
+    }
     pub fn invalid_halo(&self) -> Hsla {
         self.destructive
             .opacity(if self.dark_mode { 0.4 } else { 0.2 })
@@ -479,6 +489,7 @@ impl Theme {
             ),
             Tone::Success => (self.foreground, self.secondary, self.secondary_foreground),
             Tone::Accent | Tone::Warning => (self.foreground, self.input_fill(), self.foreground),
+            Tone::Attention => (self.warning, self.warning_fill(), self.warning),
             Tone::Danger => (self.destructive, self.destructive_fill(), self.destructive),
         }
     }

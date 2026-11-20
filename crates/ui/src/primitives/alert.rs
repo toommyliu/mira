@@ -25,7 +25,7 @@ impl Alert {
             icon: match tone {
                 Tone::Neutral | Tone::Accent => Icon::Info,
                 Tone::Success => Icon::CircleCheck,
-                Tone::Warning => Icon::TriangleAlert,
+                Tone::Warning | Tone::Attention => Icon::TriangleAlert,
                 Tone::Danger => Icon::OctagonX,
             },
             title: title.into(),
