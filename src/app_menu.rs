@@ -2,7 +2,7 @@ use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, ac
 use mira_ui::primitives::text_field;
 use objc2_app_kit::NSApplication;
 
-use crate::{Quit, ruffle_view as game, settings};
+use crate::{quit::Quit, ruffle_view as game, settings};
 
 actions!(
     mira,
@@ -20,14 +20,12 @@ actions!(
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-h", Hide, None),
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
         KeyBinding::new("cmd-f", Find, None),
     ]);
-    cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &About, _| show_about());
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());

@@ -1406,6 +1406,7 @@ impl Render for Packets {
                 cx.notify();
             }))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(header)
             .child(
                 div().flex_none().px(layout.space(4.0)).child(

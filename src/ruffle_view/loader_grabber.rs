@@ -1552,6 +1552,7 @@ impl Render for LoaderGrabber {
                 window.focus(&gpui::Focusable::focus_handle(this.search.read(cx), cx), cx)
             }))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(header)
             .child(body)
             .child(self.shop_warning_dialog(cx))

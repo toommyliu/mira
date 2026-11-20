@@ -42,6 +42,7 @@ pub(crate) mod layer {
     pub const POPUP: usize = 4;
     pub const TOOLTIP: usize = 5;
     pub const DRAG: usize = 6;
+    pub const SHORTCUT_HINT: usize = 7;
 }
 
 pub use alert::Alert;

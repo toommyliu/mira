@@ -2207,6 +2207,7 @@ impl Render for Manager {
             })
             .on_key_down(cx.listener(Self::key_down))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(title_bar)
             .child(
                 div()

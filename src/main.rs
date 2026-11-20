@@ -14,6 +14,7 @@ mod jitter;
 mod logging;
 mod net;
 mod packages;
+mod quit;
 mod ruffle;
 mod ruffle_view;
 mod script_inputs;
@@ -26,9 +27,7 @@ mod storyboard;
 
 use std::{iter, path::PathBuf};
 
-use gpui::{AppContext as _, actions};
-
-actions!(mira, [Quit]);
+use gpui::AppContext as _;
 
 #[cfg_attr(feature = "storyboard", allow(unreachable_code))]
 fn main() -> anyhow::Result<()> {
@@ -60,6 +59,7 @@ fn main() -> anyhow::Result<()> {
             .detach();
             mira_ui::init(cx);
             app_menu::init(cx);
+            quit::init(cx);
             ruffle_view::bind_keys(cx);
             ruffle_view::bind_profile_keys(cx);
             settings::init(data.join("settings.json"), settings_changed, cx);
