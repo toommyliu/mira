@@ -827,6 +827,25 @@ fn snapshot_progress_arcs() {
 }
 
 #[test]
+fn snapshot_focused_sidebar_rows() {
+    scene_after_keys("sidebar-focus", 240.0, 140.0, &["tab"], |_, _| {
+        div()
+            .w(px(180.0))
+            .child(
+                Tabs::new("setups", "Setups", 2, |index| {
+                    Tab::new(["Daily", "Daily 2"][index])
+                        .end_slot(div().child("8"))
+                        .menu(|_, _| vec![MenuItem::action("Edit", |_, _| {})])
+                })
+                .vertical()
+                .selected(0)
+                .on_select(|_, _, _| {}),
+            )
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_tabs() {
     scene("tabs", 460.0, 260.0, |_, _| {
         div()
