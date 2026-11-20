@@ -365,17 +365,10 @@ impl RuffleView {
 
     pub(super) fn script_status(&self) -> Option<String> {
         let status = self.script.status()?;
-        let Some(index) = self
-            .queue
-            .entries()
-            .iter()
-            .position(|entry| entry.running())
-            .filter(|_| self.script.running())
-        else {
-            return Some(status);
-        };
-        let total = self.queue.entries().len();
-        Some(format!("{status} ({} of {total})", index + 1))
+        Some(match self.queue.ahead() {
+            queued @ 1.. if self.script.running() => format!("{status} · {queued} queued"),
+            _ => status,
+        })
     }
 
     pub(super) fn edit_queue(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Queue)) {
