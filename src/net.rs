@@ -90,6 +90,21 @@ pub(crate) struct Server {
     address: Option<(GameHost, u16)>,
 }
 
+#[cfg(test)]
+impl Server {
+    pub(crate) fn sample(name: &str, players: u32, capacity: u32, ping: u64) -> Self {
+        Self {
+            name: name.into(),
+            players,
+            capacity,
+            online: true,
+            members: false,
+            ping: Some(Duration::from_millis(ping)),
+            address: None,
+        }
+    }
+}
+
 pub(crate) fn servers(device: HeaderValue) -> anyhow::Result<Vec<Server>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

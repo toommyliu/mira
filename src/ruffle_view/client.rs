@@ -1,7 +1,7 @@
 use mira_ui::StyledExt as _;
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -19,8 +19,8 @@ use super::{
     Changed, Details, Glance, Identified, RuffleView, ScriptPhase, ScriptState, Summary, Target,
     Updated,
     launches::{self, Launch, Launches},
-    manager::OpenAccounts,
-    script::CloseTab,
+    manager::OpenManager,
+    script::{CloseTab, Finished},
 };
 use mira_ui::{
     ActiveTheme as _, Theme, Tone,
@@ -124,6 +124,7 @@ pub struct Client {
     pacing: bool,
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
+    finished: HashMap<(AccountId, PathBuf), Instant>,
     _activation: Subscription,
 }
 
@@ -141,6 +142,7 @@ struct Session {
     _changes: Subscription,
     _moved: Subscription,
     _identified: Subscription,
+    _finished: Subscription,
     _close: Subscription,
 }
 
@@ -214,7 +216,7 @@ fn tool_menu(client: &WeakEntity<Client>, view: EntityId, title: &SharedString) 
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Layout {
+pub(crate) enum Layout {
     Single,
     Grid,
 }
@@ -353,6 +355,7 @@ impl Client {
             pacing: false,
             unopened: HashMap::new(),
             ended: HashMap::new(),
+            finished: HashMap::new(),
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if !window.is_window_active() {
                     this.hide_shortcut_hints(cx);
@@ -387,6 +390,7 @@ impl Client {
             pacing: false,
             unopened: HashMap::new(),
             ended: HashMap::new(),
+            finished: HashMap::new(),
             _activation: Subscription::new(|| {}),
         })
     }
@@ -432,6 +436,13 @@ impl Client {
             _moved: cx.subscribe(&view, |_, _, _: &Updated, cx| cx.emit(Updated)),
             _identified: cx.subscribe(&view, |this, view, Identified(name), cx| {
                 this.link(&view, name, cx)
+            }),
+            _finished: cx.subscribe(&view, |this, view, Finished(entry), cx| {
+                if let Some(account) = view.read(cx).account_id() {
+                    this.finished
+                        .insert((account, entry.clone()), Instant::now());
+                    cx.notify();
+                }
             }),
             _close: cx.subscribe_in(&view, window, |this, view, _: &CloseTab, window, cx| {
                 if let Some(index) = this.sessions.iter().position(|s| &s.view == view) {
@@ -543,12 +554,22 @@ impl Client {
         self.launches.position(account)
     }
 
+    pub(crate) fn waiting_script(&self, account: &AccountId) -> Option<PathBuf> {
+        self.launches.script(account).cloned()
+    }
+
     pub(crate) fn unopened(&self, account: &AccountId) -> Option<SharedString> {
         self.unopened.get(account).cloned()
     }
 
     pub(crate) fn ended(&self, account: &AccountId) -> Option<ScriptState> {
         self.ended.get(account).cloned()
+    }
+
+    pub(crate) fn finished_at(&self, account: &AccountId, entry: &Path) -> Option<Instant> {
+        self.finished
+            .get(&(account.clone(), entry.to_path_buf()))
+            .copied()
     }
 
     pub(crate) fn loaded_scripts(&self, cx: &App) -> Vec<PathBuf> {
@@ -731,6 +752,7 @@ impl Client {
                 ScriptPhase::Running | ScriptPhase::NeedsInput | ScriptPhase::Stopping
             ) {
                 last.phase = ScriptPhase::Stopped;
+                last.since = Some(Instant::now());
             }
             self.ended.insert(account, last);
         }
@@ -747,7 +769,15 @@ impl Client {
         }
     }
 
-    fn set_layout(&mut self, layout: Layout, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_layout(
+        &mut self,
+        layout: Layout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.layout == layout {
+            return;
+        }
         self.layout = layout;
         super::native::present_next_frame_with_players(window);
         self.show(window, cx);
@@ -1021,17 +1051,17 @@ impl Client {
             .child(drag_area().flex_1())
             .child(
                 div().flex_none().p(layout.space(2.0)).child(
-                    Button::new("accounts", "Accounts")
+                    Button::new("manager", "Manager")
                         .variant(Variant::Ghost)
                         .w_full()
                         .child(
                             h_flex()
                                 .flex_1()
                                 .justify_between()
-                                .child("Accounts")
+                                .child("Manager")
                                 .children(
                                     window
-                                        .highest_precedence_binding_for_action(&OpenAccounts)
+                                        .highest_precedence_binding_for_action(&OpenManager)
                                         .and_then(|binding| {
                                             Some(format_keystroke(
                                                 binding.keystrokes().first()?.inner(),
@@ -1043,7 +1073,7 @@ impl Client {
                                 ),
                         )
                         .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(OpenAccounts), cx)
+                            window.dispatch_action(Box::new(OpenManager), cx)
                         }),
                 ),
             )

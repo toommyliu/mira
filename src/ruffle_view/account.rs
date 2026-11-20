@@ -74,6 +74,7 @@ pub(crate) struct ScriptState {
     pub(crate) entry: PathBuf,
     pub(crate) name: SharedString,
     pub(crate) phase: ScriptPhase,
+    pub(crate) since: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -263,6 +264,7 @@ impl RuffleView {
             entry: script.to_path_buf(),
             name: file_name(script).into(),
             phase: ScriptPhase::Queued,
+            since: None,
         });
         Summary {
             login,

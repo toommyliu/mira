@@ -49,6 +49,14 @@ impl Launches {
         self.waiting.len() != before
     }
 
+    pub(super) fn script(&self, account: &AccountId) -> Option<&PathBuf> {
+        self.waiting
+            .iter()
+            .find(|launch| &launch.account == account)?
+            .script
+            .as_ref()
+    }
+
     pub(super) fn position(&self, account: &AccountId) -> Option<(usize, usize)> {
         let index = self
             .waiting
