@@ -11,7 +11,8 @@ use gpui::{
     InteractiveElement as _, IntoElement, KeyBinding, Keystroke, Menu, MenuItem,
     ParentElement as _, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, TitlebarOptions, Window, WindowAppearance, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, point, prelude::FluentBuilder as _, px, size,
+    WindowHandle, WindowOptions, actions, div, linear_color_stop, linear_gradient, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme,
@@ -1423,6 +1424,24 @@ impl Render for SettingsWindow {
                                         .pb(layout.space(4.0))
                                         .children(groups),
                                 )
+                                .when(self.scroll.offset().y < px(0.0), |pane| {
+                                    pane.child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(layout.space(6.0))
+                                            .bg(linear_gradient(
+                                                180.0,
+                                                linear_color_stop(theme.background, 0.0),
+                                                linear_color_stop(
+                                                    theme.background.opacity(0.0),
+                                                    1.0,
+                                                ),
+                                            )),
+                                    )
+                                })
                                 .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
                         ),
                     ),
@@ -1802,6 +1821,13 @@ mod tests {
                 "",
             ),
             (
+                "settings-shortcuts-scrolled",
+                SETTINGS_HEIGHT,
+                Pane::Shortcuts,
+                Settings::default(),
+                "",
+            ),
+            (
                 "settings-window-shortcuts",
                 440.0,
                 Pane::Shortcuts,
@@ -1864,9 +1890,14 @@ mod tests {
                         settings.pane = pane;
                         settings.advanced = pane == Pane::Appearance;
                         settings.resetting = (name == "settings-reset").then_some(pane);
-                        settings
-                            .search
-                            .update(cx, |search, cx| search.set_text(query, cx));
+                        if name == "settings-shortcuts-scrolled" {
+                            settings.scroll.set_offset(point(px(0.0), px(-40.0)));
+                        }
+                        if !query.is_empty() {
+                            settings
+                                .search
+                                .update(cx, |search, cx| search.set_text(query, cx));
+                        }
                         window.focus(&settings.focus, cx);
                         settings
                     })
