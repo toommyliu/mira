@@ -7,7 +7,7 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
-    FontWeight, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, deferred, div,
     point, prelude::FluentBuilder as _, px,
@@ -58,6 +58,7 @@ pub struct MenuItem {
     shortcut: Option<SharedString>,
     key: Option<SharedString>,
     checked: Option<bool>,
+    current: Option<SharedString>,
     mark: Mark,
     disabled: bool,
     danger: bool,
@@ -78,6 +79,7 @@ impl MenuItem {
             shortcut: None,
             key: None,
             checked: None,
+            current: None,
             mark: Mark::Check,
             disabled: false,
             danger: false,
@@ -153,6 +155,11 @@ impl MenuItem {
 
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
+        self
+    }
+
+    pub fn current(mut self, label: impl Into<SharedString>) -> Self {
+        self.current = Some(label.into());
         self
     }
 
@@ -767,6 +774,8 @@ fn rows(
     let gutter = items
         .iter()
         .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
+    let lead = items.iter().any(|item| item.current.is_some());
+    let lead_slot = layout.space(3.5);
     let count = metas.iter().filter(|meta| meta.navigable).count();
     let mut position = 0;
     items
@@ -783,6 +792,7 @@ fn rows(
                 shortcut,
                 key,
                 checked,
+                current,
                 mark,
                 disabled,
                 danger,
@@ -800,10 +810,10 @@ fn rows(
                 Kind::Header => div()
                     .flex_none()
                     .px(layout.space(2.0))
+                    .when(lead, |header| header.pl(layout.space(4.0) + lead_slot))
                     .pt(layout.space(1.5))
                     .pb(layout.space(1.5))
                     .text_caption(typography)
-                    .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.muted_foreground)
                     .child(label)
                     .into_any_element(),
@@ -860,9 +870,15 @@ fn rows(
                         .rounded(theme.radius.control)
                         .role(role)
                         .aria_label(label.clone())
-                        .when_some(description, |row, description| {
-                            row.aria_description(description)
-                        })
+                        .when_some(
+                            match (description, current.clone()) {
+                                (Some(description), Some(current)) => {
+                                    Some(SharedString::from(format!("{current}, {description}")))
+                                }
+                                (description, current) => description.or(current),
+                            },
+                            |row, description| row.aria_description(description),
+                        )
                         .aria_position_in_set(position)
                         .aria_size_of_set(count)
                         .when_some(shortcut.clone().or(key), |row, keys| {
@@ -894,6 +910,17 @@ fn rows(
                             row.active(|style| {
                                 style.bg(theme.pressed(theme.popover, theme.accent, fg))
                             })
+                        })
+                        .when(lead, |row| {
+                            row.child(
+                                h_flex()
+                                    .flex_none()
+                                    .w(lead_slot)
+                                    .justify_center()
+                                    .when(current.is_some(), |slot| {
+                                        slot.child(div().size(px(6.0)).rounded_full().bg(fg))
+                                    }),
+                            )
                         })
                         .when_some(start, |row, start| {
                             row.child(h_flex().flex_none().child(start))
