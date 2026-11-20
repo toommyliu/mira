@@ -19,7 +19,7 @@ use super::{
     Client, Login, ScriptPhase, ScriptState, Summary, Updated,
     account::file_name,
     account_card::{Face, Fix, Line, Mood, Presence, Show, face},
-    client::{CloseSession, bar_title, drag_area, window_bar},
+    client::{self, CloseSession, bar_title, drag_area, window_bar},
     form::note,
     scripts::{fit_path_to, home_relative},
 };
@@ -84,18 +84,16 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 pub(crate) fn open(
-    game: WindowHandle<Client>,
-    client: Entity<Client>,
     path: PathBuf,
     device: HeaderValue,
     cx: &mut App,
-) {
+) -> Option<WindowHandle<Manager>> {
     if let Some(manager) = cx.try_global::<Open>().map(|open| open.0)
         && manager
             .update(cx, |_, window, _| window.activate_window())
             .is_ok()
     {
-        return;
+        return Some(manager);
     }
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -113,8 +111,9 @@ pub(crate) fn open(
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
+        crate::settings::follow_system(window);
         let manager = cx.new(|cx| {
-            let mut manager = Manager::new(game, client, path, device, window, cx);
+            let mut manager = Manager::new(path, device, window, cx);
             manager.check_servers(cx);
             manager
         });
@@ -122,8 +121,14 @@ pub(crate) fn open(
         window.focus(&focus, cx);
         manager
     }) {
-        Ok(manager) => cx.set_global(Open(manager)),
-        Err(error) => tracing::error!(%error, "couldn't open the account manager"),
+        Ok(manager) => {
+            cx.set_global(Open(manager));
+            Some(manager)
+        }
+        Err(error) => {
+            tracing::error!(%error, "couldn't open the account manager");
+            None
+        }
     }
 }
 
@@ -134,8 +139,6 @@ enum View {
 }
 
 pub(crate) struct Manager {
-    window: WindowHandle<Client>,
-    client: Entity<Client>,
     accounts: Result<Accounts, SharedString>,
     device: HeaderValue,
     servers: Servers,
@@ -153,6 +156,7 @@ pub(crate) struct Manager {
     filter: Entity<Input>,
     grid_scroll: ScrollHandle,
     focus: FocusHandle,
+    watching: Option<[Subscription; 2]>,
     _subscriptions: [Subscription; 4],
 }
 
@@ -426,7 +430,27 @@ fn retryable(presence: &Presence) -> bool {
     }
 }
 
-fn presence(client: &Client, account: &AccountId, cx: &App) -> Presence {
+fn game(cx: &App) -> Option<&Client> {
+    let client = client::window(cx)?.entity(cx).ok()?;
+    Some(client.read(cx))
+}
+
+fn watch(client: &Entity<Client>, cx: &mut Context<Manager>) -> [Subscription; 2] {
+    [
+        cx.observe(client, |_, _, cx| cx.notify()),
+        cx.subscribe(client, |_, _, _: &Updated, cx| cx.notify()),
+    ]
+}
+
+fn unavailable(error: &anyhow::Error) -> SharedString {
+    tracing::error!(%error, "couldn't open the client");
+    "Couldn't open the game window.".into()
+}
+
+fn presence(account: &AccountId, cx: &App) -> Presence {
+    let Some(client) = game(cx) else {
+        return Presence::Closed(None);
+    };
     if let Some((place, of)) = client.waiting(account) {
         return Presence::Waiting {
             place,
@@ -508,8 +532,6 @@ fn common_script(scripts: &[PathBuf]) -> Option<PathBuf> {
 
 impl Manager {
     fn new(
-        game: WindowHandle<Client>,
-        client: Entity<Client>,
         path: PathBuf,
         device: HeaderValue,
         window: &mut Window,
@@ -522,9 +544,18 @@ impl Manager {
                 .search()
                 .small()
         });
+        let manager = cx.weak_entity();
+        let closed = manager.clone();
         let subscriptions = [
-            cx.observe(&client, |_, _, cx| cx.notify()),
-            cx.subscribe(&client, |_, _, _: &Updated, cx| cx.notify()),
+            cx.on_window_closed(move |cx, _| {
+                closed.update(cx, |_, cx| cx.notify()).ok();
+            }),
+            cx.observe_new(move |_: &mut Client, _, cx| {
+                let client = cx.entity();
+                manager
+                    .update(cx, |manager, cx| manager.watch(&client, cx))
+                    .ok();
+            }),
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Changed) {
@@ -533,9 +564,10 @@ impl Manager {
                 }
             }),
         ];
+        let watching = client::window(cx)
+            .and_then(|window| window.entity(cx).ok())
+            .map(|client| watch(&client, cx));
         Self {
-            window: game,
-            client,
             accounts: Accounts::open(path).map_err(Into::into),
             device,
             servers: Servers {
@@ -556,8 +588,14 @@ impl Manager {
             filter,
             grid_scroll: ScrollHandle::new(),
             focus,
+            watching,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn watch(&mut self, client: &Entity<Client>, cx: &mut Context<Self>) {
+        self.watching = Some(watch(client, cx));
+        cx.notify();
     }
 
     fn check_servers(&mut self, cx: &mut Context<Self>) {
@@ -629,10 +667,9 @@ impl Manager {
     }
 
     fn presences(&self, accounts: &[Account], cx: &App) -> Vec<Presence> {
-        let client = self.client.read(cx);
         accounts
             .iter()
-            .map(|account| presence(client, &account.id(), cx))
+            .map(|account| presence(&account.id(), cx))
             .collect()
     }
 
@@ -661,20 +698,28 @@ impl Manager {
     fn act(
         &mut self,
         targets: Vec<Account>,
+        open: bool,
         cx: &mut Context<Self>,
         act: impl Fn(&mut Client, &Account, &mut Window, &mut Context<Client>),
     ) {
-        let done = self.window.update(cx, |client, window, cx| {
-            for account in &targets {
-                act(client, account, window, cx);
-            }
+        let game = match client::window(cx) {
+            Some(game) => Ok(game),
+            None if open => client::open(false, cx),
+            None => return,
+        };
+        let done = game.and_then(|game| {
+            game.update(cx, |client, window, cx| {
+                for account in &targets {
+                    act(client, account, window, cx);
+                }
+            })
         });
-        self.notice = done.is_err().then(|| "The game window is closed.".into());
+        self.notice = done.err().map(|error| unavailable(&error));
         cx.notify();
     }
 
     fn launch(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.act(targets, cx, |client, account, window, cx| {
+        self.act(targets, true, cx, |client, account, window, cx| {
             client.launch(account, None, window, cx)
         });
     }
@@ -688,7 +733,7 @@ impl Manager {
             cx.notify();
             return;
         }
-        self.act(targets, cx, |client, account, window, cx| {
+        self.act(targets, true, cx, |client, account, window, cx| {
             client.run_script(account, script.clone(), true, None, window, cx)
         });
     }
@@ -705,7 +750,7 @@ impl Manager {
     }
 
     fn stop(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.act(targets, cx, |client, account, _, cx| {
+        self.act(targets, false, cx, |client, account, _, cx| {
             client.stop_script(&account.id(), cx)
         });
     }
@@ -724,19 +769,19 @@ impl Manager {
     }
 
     fn close_now(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.act(targets, cx, |client, account, window, cx| {
+        self.act(targets, false, cx, |client, account, window, cx| {
             client.close_account(&account.id(), window, cx)
         });
     }
 
     fn show_account(&mut self, account: Account, cx: &mut Context<Self>) {
-        self.act(vec![account], cx, |client, account, window, cx| {
+        self.act(vec![account], false, cx, |client, account, window, cx| {
             client.show_account(&account.id(), window, cx)
         });
     }
 
     fn open_account(&mut self, account: Account, cx: &mut Context<Self>) {
-        let open = self.client.read(cx).summary(&account.id(), cx).is_some();
+        let open = game(cx).is_some_and(|client| client.summary(&account.id(), cx).is_some());
         if open {
             self.show_account(account, cx);
         } else {
@@ -746,8 +791,9 @@ impl Manager {
 
     fn restart(&mut self, account: &Account, cx: &mut Context<Self>) {
         let id = account.id();
-        self.client
-            .update(cx, |client, cx| client.restart_script(&id, cx));
+        if let Some(client) = client::window(cx).and_then(|window| window.entity(cx).ok()) {
+            client.update(cx, |client, cx| client.restart_script(&id, cx));
+        }
     }
 
     fn recent_scripts(&self, cx: &App) -> Vec<PathBuf> {
@@ -768,7 +814,11 @@ impl Manager {
             .recent
             .iter()
             .cloned()
-            .chain(self.client.read(cx).loaded_scripts(cx))
+            .chain(
+                game(cx)
+                    .map(|client| client.loaded_scripts(cx))
+                    .unwrap_or_default(),
+            )
             .chain(from_setups)
         {
             if !scripts.contains(&script) && !hidden.contains(&script) {
@@ -915,13 +965,10 @@ impl Manager {
             return;
         };
         let accounts = self.account_list();
-        let presences: HashMap<_, _> = {
-            let client = self.client.read(cx);
-            accounts
-                .iter()
-                .map(|account| (account.id(), presence(client, &account.id(), cx)))
-                .collect()
-        };
+        let presences: HashMap<_, _> = accounts
+            .iter()
+            .map(|account| (account.id(), presence(&account.id(), cx)))
+            .collect();
         let plan = plan(&setup, &presences, scope);
         let named = |id: &AccountId| accounts.iter().find(|account| &account.id() == id).cloned();
         if !plan.conflicts.is_empty() && replace.is_none() {
@@ -958,21 +1005,27 @@ impl Manager {
         let server = setup.server.clone();
         let unreadable = !runs.is_empty() && script_inputs::unreadable(cx);
         let runs = if unreadable { Vec::new() } else { runs };
-        let done = self.window.update(cx, |client, window, cx| {
-            for (account, script, replace) in &runs {
-                client.run_script(
-                    account,
-                    script.clone(),
-                    *replace,
-                    server.clone(),
-                    window,
-                    cx,
-                );
-            }
-            for account in &logins {
-                client.launch(account, server.clone(), window, cx);
-            }
-        });
+        let done = if runs.is_empty() && logins.is_empty() {
+            Ok(())
+        } else {
+            client::open(false, cx).and_then(|game| {
+                game.update(cx, |client, window, cx| {
+                    for (account, script, replace) in &runs {
+                        client.run_script(
+                            account,
+                            script.clone(),
+                            *replace,
+                            server.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                    for account in &logins {
+                        client.launch(account, server.clone(), window, cx);
+                    }
+                })
+            })
+        };
         let skipped: Vec<String> = unreadable
             .then(|| INPUTS_UNREADABLE.to_owned())
             .into_iter()
@@ -984,7 +1037,7 @@ impl Manager {
             )
             .collect();
         self.notice = match done {
-            Err(_) => Some("The game window is closed.".into()),
+            Err(error) => Some(unavailable(&error)),
             Ok(()) if skipped.is_empty() => None,
             Ok(()) => Some(skipped.join("\n").into()),
         };
@@ -1063,10 +1116,10 @@ impl Manager {
             .as_ref()
             .filter(|editing| **editing != AccountId::of(draft.username.trim()));
         if let Some(old) = renamed {
-            let client = self.client.read(cx);
-            let blocked = if client.summary(old, cx).is_some() {
+            let client = game(cx);
+            let blocked = if client.is_some_and(|client| client.summary(old, cx).is_some()) {
                 Some("Close this account's tab before changing its username.")
-            } else if client.waiting(old).is_some() {
+            } else if client.is_some_and(|client| client.waiting(old).is_some()) {
                 Some("Stop this account's launch before changing its username.")
             } else {
                 None
@@ -1651,16 +1704,13 @@ impl Manager {
             .map(|accounts| accounts.setups().to_vec())
             .unwrap_or_default();
         let rows: Vec<(Setup, usize)> = {
-            let client = self.client.read(cx);
             setups
                 .into_iter()
                 .map(|setup| {
                     let running = setup
                         .members
                         .iter()
-                        .filter(|member| {
-                            running_entry(&presence(client, &member.id(), cx)).is_some()
-                        })
+                        .filter(|member| running_entry(&presence(&member.id(), cx)).is_some())
                         .count();
                     (setup, running)
                 })
@@ -2881,19 +2931,9 @@ mod tests {
         ] {
             for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
                 crate::settings::init(dir.join("settings.json"), |_| {}, cx);
-                let client = Client::empty_for_tests(&dir, cx);
-                let game = cx
-                    .open_window(Default::default(), |_, _| client.clone())
-                    .unwrap();
                 cx.new(|cx| {
-                    let mut manager = Manager::new(
-                        game,
-                        client,
-                        path.clone(),
-                        HeaderValue::from_static("test"),
-                        window,
-                        cx,
-                    );
+                    let mut manager =
+                        Manager::new(path.clone(), HeaderValue::from_static("test"), window, cx);
                     manager.checked.extend(
                         manager
                             .accounts

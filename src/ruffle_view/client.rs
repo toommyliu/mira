@@ -7,11 +7,12 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable,
+    App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable, Global,
     InteractiveElement as _, IntoElement, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, actions,
-    div, point, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TitlebarOptions, WeakEntity,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    point, prelude::FluentBuilder as _, px, size,
 };
 
 use super::{
@@ -236,6 +237,86 @@ impl Sidebar {
 fn grid_shape(count: usize) -> (usize, usize) {
     let columns = (count as f64).sqrt().ceil().max(1.0) as usize;
     (columns, count.div_ceil(columns).max(1))
+}
+
+struct Game {
+    data: PathBuf,
+    accounts: PathBuf,
+    device: reqwest::header::HeaderValue,
+    armies: Armies,
+    window: Option<WindowHandle<Client>>,
+}
+
+impl Global for Game {}
+
+pub(crate) fn init(
+    data: PathBuf,
+    accounts: PathBuf,
+    device: reqwest::header::HeaderValue,
+    armies: Armies,
+    cx: &mut App,
+) {
+    cx.set_global(Game {
+        data,
+        accounts,
+        device,
+        armies,
+        window: None,
+    });
+    cx.on_window_closed(|cx, closed| {
+        let game = cx.global::<Game>().window;
+        if game.is_some_and(|game| game.window_id() == closed) {
+            cx.defer(super::close_tools);
+        }
+    })
+    .detach();
+}
+
+pub(crate) fn window(cx: &App) -> Option<WindowHandle<Client>> {
+    cx.try_global::<Game>()?
+        .window
+        .filter(|window| window.entity(cx).is_ok())
+}
+
+pub(crate) fn open(blank_tab: bool, cx: &mut App) -> anyhow::Result<WindowHandle<Client>> {
+    if let Some(window) = window(cx) {
+        return Ok(window);
+    }
+    let game = cx
+        .try_global::<Game>()
+        .ok_or_else(|| anyhow::anyhow!("The client isn't set up"))?;
+    let (data, accounts, device, armies) = (
+        game.data.clone(),
+        game.accounts.clone(),
+        game.device.clone(),
+        game.armies.clone(),
+    );
+    let chrome = cx.theme().layout.chrome;
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(960.0), px(550.0) + chrome),
+            cx,
+        ))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Mira".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.0), px(12.0))),
+        }),
+        window_background: WindowBackgroundAppearance::Transparent,
+        window_min_size: Some(size(px(920.0), px(528.0) + chrome)),
+        app_owns_titlebar_drag: true,
+        ..Default::default()
+    };
+    let window = cx.open_window(options, |window, cx| {
+        settings::follow_system(window);
+        let view = Client::new(data, accounts, device, armies, blank_tab, window, cx)
+            .expect("create the AQW player view");
+        window.focus(&view.read(cx).focus_handle(cx), cx);
+        view
+    })?;
+    cx.global_mut::<Game>().window = Some(window);
+    Ok(window)
 }
 
 impl Client {
