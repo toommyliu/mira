@@ -68,6 +68,21 @@ impl Theme {
             .border_color(self.border)
     }
 
+    pub fn floating_bar(&self) -> Div {
+        h_flex()
+            .flex_none()
+            .relative()
+            .gap(px(2.0))
+            .pl(self.space(3.0))
+            .pr(self.space(1.0))
+            .py(self.space(1.0))
+            .rounded(self.radius.panel + px(2.0))
+            .bg(self.popover)
+            .text_color(self.popover_foreground)
+            .shadow(self.large_shadow())
+            .child(self.surface_ring(self.radius.panel + px(2.0)))
+    }
+
     pub fn sidebar_pane(&self) -> Div {
         v_flex()
             .flex_none()
