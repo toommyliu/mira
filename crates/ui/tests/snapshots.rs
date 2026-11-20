@@ -713,6 +713,62 @@ fn snapshot_popover() {
 }
 
 #[test]
+fn right_clicking_a_tab_opens_its_menu_without_pressing_it() {
+    mira_ui::snapshot_with(
+        "tab-right-click",
+        size(px(240.0), px(160.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    div()
+                        .w(px(180.0))
+                        .child(
+                            Tabs::new("setups", "Setups", 2, |index| {
+                                Tab::new(["Daily", "Warlord farm"][index])
+                                    .menu(|_, _| vec![MenuItem::action("Edit", |_, _| {})])
+                            })
+                            .vertical()
+                            .selected(0)
+                            .on_select(|_, _, _| {}),
+                        )
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            use gpui::{MouseButton, MouseDownEvent, PlatformInput, point};
+
+            hover(cx, owner, 60.0, 70.0);
+            let image = cx.capture_screenshot(owner).unwrap();
+            let scale = image.width() / 240;
+            let hovered = *image.get_pixel(30 * scale, 62 * scale);
+            cx.update_window(owner, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Right,
+                        position: point(px(60.0), px(70.0)),
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.refresh();
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let image = cx.capture_screenshot(owner).unwrap();
+            assert_eq!(
+                *image.get_pixel(30 * scale, 62 * scale),
+                hovered,
+                "a right-click leaves the row's hover fill"
+            );
+        },
+    );
+}
+
+#[test]
 fn snapshot_server_signal() {
     scene("server-signal", 380.0, 220.0, |_, cx| {
         let theme = cx.theme().clone();
