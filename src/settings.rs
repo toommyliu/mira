@@ -187,10 +187,40 @@ impl Start {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum QuitShortcut {
+    Direct,
+    #[default]
+    Hold,
+    DoublePress,
+}
+
+impl QuitShortcut {
+    const ALL: [Self; 3] = [Self::Direct, Self::Hold, Self::DoublePress];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Direct => "Direct",
+            Self::Hold => "Hold",
+            Self::DoublePress => "Double press",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Direct => "Press ⌘Q once to quit.",
+            Self::Hold => "Hold ⌘Q or press it twice to quit.",
+            Self::DoublePress => "Press ⌘Q twice to quit.",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
     start: Start,
+    quit_shortcut: QuitShortcut,
     sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
@@ -364,6 +394,10 @@ pub(crate) fn appearance_menu(cx: &App) -> MenuItem {
 
 pub(crate) fn start(cx: &App) -> Start {
     cx.global::<Store>().settings.start
+}
+
+pub(crate) fn quit_shortcut(cx: &App) -> QuitShortcut {
+    cx.global::<Store>().settings.quit_shortcut
 }
 
 pub(crate) fn sidebar(cx: &App) -> bool {
@@ -907,6 +941,9 @@ impl SettingsWindow {
             .into_iter()
             .collect();
         let start = Start::ALL.iter().position(|&start| start == settings.start);
+        let quit = QuitShortcut::ALL
+            .iter()
+            .position(|&mode| mode == settings.quit_shortcut);
         vec![
             Block::Section(Section::default().row(Row::new(
                 "Open at launch",
@@ -915,6 +952,24 @@ impl SettingsWindow {
                     |index, _, cx| change(cx, |settings| settings.start = Start::ALL[index]),
                 ),
             ))),
+            Block::Section(
+                Section::titled("Confirmations").row(Row::new(
+                    "Quit shortcut",
+                    Some(settings.quit_shortcut.description()),
+                    Select::new(
+                        "quit-shortcut",
+                        "Quit shortcut",
+                        QuitShortcut::ALL.map(QuitShortcut::label),
+                        quit,
+                    )
+                    .width(px(136.0))
+                    .on_select(|index, _, cx| {
+                        change(cx, |settings| {
+                            settings.quit_shortcut = QuitShortcut::ALL[index]
+                        })
+                    }),
+                )),
+            ),
             Block::Section(Section::titled("GitHub").row(Row::new(
                 "Token",
                 Some(
@@ -1300,6 +1355,7 @@ impl Render for SettingsWindow {
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(reset_dialog)
             .child(
                 window_bar(window, cx)
@@ -1391,9 +1447,11 @@ mod tests {
         assert!(!Settings::default().pointer_cursors);
         assert!(!Settings::default().font_smoothing);
         assert_eq!(Settings::default().start, Start::Client);
+        assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
         assert!(!Settings::default().sidebar);
         let chosen = Settings {
             start: Start::Manager,
+            quit_shortcut: QuitShortcut::DoublePress,
             sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
@@ -1414,6 +1472,7 @@ mod tests {
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["quitShortcut"], "doublePress");
         assert_eq!(saved["colors"]["dark"]["accent"], "#3B82F6");
         assert_eq!(saved["textSize"], 15);
         assert_eq!(
@@ -1604,6 +1663,34 @@ mod tests {
     }
 
     #[gpui::test]
+    fn quit_shortcut_select_applies_and_saves_the_chosen_mode(cx: &mut gpui::TestAppContext) {
+        let dir = crate::storyboard::scratch("quit-shortcut-setting");
+        let path = dir.join("settings.json");
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            init(path.clone(), |_| {}, cx);
+            packages::init(dir.join("packages"), dir.join("token"), cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let settings = SettingsWindow::new(cx);
+            window.activate_window();
+            window.focus(&settings.focus, cx);
+            settings
+        });
+        cx.simulate_keystrokes("tab tab tab tab space down escape");
+        assert_eq!(cx.update(|_, cx| quit_shortcut(cx)), QuitShortcut::Hold);
+        for (choice, expected) in [
+            ("space end enter", QuitShortcut::DoublePress),
+            ("space home enter", QuitShortcut::Direct),
+        ] {
+            cx.simulate_keystrokes(choice);
+            assert_eq!(cx.update(|_, cx| quit_shortcut(cx)), expected);
+            assert_eq!(Settings::load(&path).unwrap().quit_shortcut, expected);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[gpui::test]
     fn a_recorded_shortcut_is_saved_and_bound_and_a_taken_one_is_not(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1684,6 +1771,13 @@ mod tests {
                 "",
             ),
             (
+                "settings-confirmations",
+                SETTINGS_MIN_HEIGHT,
+                Pane::General,
+                Settings::default(),
+                "",
+            ),
+            (
                 "settings-appearance",
                 980.0,
                 Pane::Appearance,
@@ -1736,16 +1830,24 @@ mod tests {
                 "color",
             ),
         ] {
-            for written in mira_ui::snapshot(
+            let keys: &[&str] = if name == "settings-confirmations" {
+                &["tab", "tab", "tab", "tab", "space"]
+            } else {
+                &[]
+            };
+            for written in mira_ui::snapshot_after(
                 name,
                 size(
-                    px(if name == "settings-min" {
-                        SETTINGS_MIN_WIDTH
-                    } else {
-                        SETTINGS_WIDTH
-                    }),
+                    px(
+                        if matches!(name, "settings-min" | "settings-confirmations") {
+                            SETTINGS_MIN_WIDTH
+                        } else {
+                            SETTINGS_WIDTH
+                        },
+                    ),
                     px(height),
                 ),
+                keys,
                 move |window, cx| {
                     cx.set_global(Store {
                         path: PathBuf::new(),
@@ -1773,6 +1875,38 @@ mod tests {
                 assert!(written.exists(), "{} was not written", written.display());
             }
         }
+    }
+
+    #[test]
+    fn snapshot_quit_overlay() {
+        let dir = crate::storyboard::scratch("quit-overlay-snapshots");
+        for (name, mode) in [
+            ("quit-hold", QuitShortcut::Hold),
+            ("quit-double-press", QuitShortcut::DoublePress),
+        ] {
+            mira_ui::snapshot_with(
+                name,
+                size(px(SETTINGS_WIDTH), px(SETTINGS_MIN_HEIGHT)),
+                |window, cx| {
+                    cx.set_global(Store {
+                        path: dir.join("settings.json"),
+                        settings: Settings {
+                            quit_shortcut: mode,
+                            ..Settings::default()
+                        },
+                        on_change: |_| {},
+                    });
+                    packages::init(dir.join("packages"), dir.join("token"), cx);
+                    cx.new(|cx| {
+                        let settings = SettingsWindow::new(cx);
+                        window.focus(&settings.focus, cx);
+                        settings
+                    })
+                },
+                |cx, _| cx.update(crate::quit::tests::press_quit_shortcut),
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

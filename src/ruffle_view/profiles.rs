@@ -1763,6 +1763,7 @@ impl Render for Editor {
                 }
             }))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(bar)
             .child(
                 div()
