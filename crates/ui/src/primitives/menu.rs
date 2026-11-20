@@ -16,13 +16,12 @@ use gpui::{
 use super::{
     Button, Icon, Scrollbar,
     button::{KeyHandler, PressHandler},
-    small_icon,
 };
 use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
     motion::{self, From},
     nav::{self, Axis, Step},
-    theme::Layout,
+    theme::{Layout, PointerCursor as _},
     v_flex,
 };
 
@@ -955,8 +954,9 @@ fn rows(
                                         button
                                             .role(Role::Button)
                                             .aria_label(label)
-                                            .text_color(theme.muted_foreground)
-                                            .hover(|button| button.bg(theme.ghost_hover()))
+                                            .pointer_cursor(theme)
+                                            .group("menu-dismiss")
+                                            .hover(|button| button.bg(fg.opacity(0.16)))
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.stop_propagation()
                                             })
@@ -964,7 +964,12 @@ fn rows(
                                                 cx.stop_propagation();
                                                 dismiss(window, cx);
                                             })
-                                            .child(small_icon(Icon::X, theme.muted_foreground))
+                                            .child(
+                                                super::icon(Icon::X, theme.muted_foreground)
+                                                    .group_hover("menu-dismiss", |icon| {
+                                                        icon.text_color(fg)
+                                                    }),
+                                            )
                                     }),
                             )
                         })
