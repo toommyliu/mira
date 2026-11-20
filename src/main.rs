@@ -26,10 +26,7 @@ mod storyboard;
 
 use std::{iter, path::PathBuf};
 
-use gpui::{
-    AppContext as _, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions, actions, point, px, size,
-};
+use gpui::{AppContext as _, actions};
 
 actions!(mira, [Quit]);
 
@@ -83,114 +80,84 @@ fn main() -> anyhow::Result<()> {
             })
             .detach();
             app_menu::set_menus(cx);
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(960.0), px(550.0) + mira_ui::ActiveTheme::theme(cx).layout.chrome),
-                    cx,
-                ))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Mira".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(12.0), px(12.0))),
-                }),
-                window_background: WindowBackgroundAppearance::Transparent,
-                window_min_size: Some(size(px(920.0), px(528.0) + mira_ui::ActiveTheme::theme(cx).layout.chrome)),
-                app_owns_titlebar_drag: true,
-                ..Default::default()
-            };
             let accounts = data.join("accounts.json");
-            let manager_device = device.clone();
-            let start = settings::start(cx);
-            let opened = cx.open_window(options, |window, cx| {
-                settings::follow_system(window);
-                let view = ruffle_view::Client::new(
-                    data,
-                    accounts.clone(),
-                    device,
-                    armies,
-                    start == settings::Start::Client,
-                    window,
-                    cx,
-                )
-                .expect("create the AQW player view");
-                window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx), cx);
-                view
-            });
-            let main = match opened {
-                Ok(main) => main,
-                Err(error) => {
-                    tracing::error!(%error, "couldn't open Mira");
-                    cx.quit();
-                    return;
+            ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
+            let main = match settings::start(cx) {
+                settings::Start::Client => ruffle_view::open_client(true, cx)
+                    .map(|client| client.into())
+                    .inspect_err(|error| tracing::error!(%error, "couldn't open Mira"))
+                    .ok(),
+                settings::Start::Manager => {
+                    ruffle_view::open_accounts(accounts.clone(), device.clone(), cx)
+                        .map(|manager| manager.into())
                 }
             };
-            let Ok(client) = main.entity(cx) else {
+            let Some(main) = main.map(|main: gpui::AnyWindowHandle| main.window_id()) else {
                 cx.quit();
                 return;
             };
-            let load_client = client.clone();
             let (load_folder, load_types) = (scripts.clone(), types.clone());
             cx.on_action(move |_: &ruffle_view::LoadScript, cx| {
-                let client = load_client.clone();
                 let (folder, types) = (load_folder.clone(), load_types.clone());
-                cx.defer(move |cx| ruffle_view::load_script(client, folder, types, cx));
+                cx.defer(move |cx| {
+                    if let Some(client) = client(cx) {
+                        ruffle_view::load_script(client, folder, types, cx);
+                    }
+                });
             });
-            let scripts_client = client.clone();
             cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
-                let client = scripts_client.clone();
                 let (folder, types) = (scripts.clone(), types.clone());
                 cx.defer(move |cx| {
-                    ruffle_view::open_scripts(client, folder, types, ruffle_view::Target::Selected, cx)
+                    if let Some(client) = client(cx) {
+                        ruffle_view::open_scripts(
+                            client,
+                            folder,
+                            types,
+                            ruffle_view::Target::Selected,
+                            cx,
+                        );
+                    }
                 });
             });
-            let environment_client = client.clone();
-            cx.on_action(move |_: &ruffle_view::OpenEnvironment, cx| {
-                let client = environment_client.clone();
-                cx.defer(move |cx| {
-                    ruffle_view::open_environment(client, ruffle_view::Target::Selected, cx)
+            cx.on_action(|_: &ruffle_view::OpenEnvironment, cx| {
+                cx.defer(|cx| {
+                    if let Some(client) = client(cx) {
+                        ruffle_view::open_environment(client, ruffle_view::Target::Selected, cx);
+                    }
                 });
             });
-            let follower_client = client.clone();
-            cx.on_action(move |_: &ruffle_view::OpenFollower, cx| {
-                let client = follower_client.clone();
-                cx.defer(move |cx| {
-                    ruffle_view::open_follower(client, ruffle_view::Target::Selected, cx)
+            cx.on_action(|_: &ruffle_view::OpenFollower, cx| {
+                cx.defer(|cx| {
+                    if let Some(client) = client(cx) {
+                        ruffle_view::open_follower(client, ruffle_view::Target::Selected, cx);
+                    }
                 });
             });
-            let grabber_client = client.clone();
-            cx.on_action(move |_: &ruffle_view::OpenLoaderGrabber, cx| {
-                let client = grabber_client.clone();
-                cx.defer(move |cx| {
-                    ruffle_view::open_loader_grabber(client, ruffle_view::Target::Selected, cx)
+            cx.on_action(|_: &ruffle_view::OpenLoaderGrabber, cx| {
+                cx.defer(|cx| {
+                    if let Some(client) = client(cx) {
+                        ruffle_view::open_loader_grabber(client, ruffle_view::Target::Selected, cx);
+                    }
                 });
             });
-            let packets_client = client.clone();
-            cx.on_action(move |_: &ruffle_view::OpenPackets, cx| {
-                let client = packets_client.clone();
-                cx.defer(move |cx| {
-                    ruffle_view::open_packets(client, ruffle_view::Target::Selected, cx)
+            cx.on_action(|_: &ruffle_view::OpenPackets, cx| {
+                cx.defer(|cx| {
+                    if let Some(client) = client(cx) {
+                        ruffle_view::open_packets(client, ruffle_view::Target::Selected, cx);
+                    }
                 });
             });
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
             });
-            if start == settings::Start::Manager {
-                ruffle_view::open_accounts(
-                    main,
-                    client.clone(),
-                    accounts.clone(),
-                    manager_device.clone(),
-                    cx,
-                );
-            }
             cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
-                let (client, accounts, device) =
-                    (client.clone(), accounts.clone(), manager_device.clone());
-                cx.defer(move |cx| ruffle_view::open_accounts(main, client, accounts, device, cx));
+                let (accounts, device) = (accounts.clone(), device.clone());
+                cx.defer(move |cx| {
+                    ruffle_view::open_accounts(accounts, device, cx);
+                });
             });
             cx.on_window_closed(move |cx, closed| {
-                if closed == main.window_id() || cx.windows().is_empty() {
+                if closed == main || cx.windows().is_empty() {
                     cx.quit();
                 }
             })
@@ -198,6 +165,13 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
         });
     Ok(())
+}
+
+fn client(cx: &mut gpui::App) -> Option<gpui::Entity<ruffle_view::Client>> {
+    ruffle_view::open_client(true, cx)
+        .and_then(|window| window.entity(cx))
+        .inspect_err(|error| tracing::error!(%error, "couldn't open the client"))
+        .ok()
 }
 
 fn settings_changed(cx: &mut gpui::App) {

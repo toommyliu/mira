@@ -54,6 +54,12 @@ struct Open(WindowHandle<Packets>);
 
 impl Global for Open {}
 
+pub(super) fn close(cx: &mut App) {
+    if let Some(open) = cx.try_global::<Open>().map(|open| open.0) {
+        open.update(cx, |_, window, _| window.remove_window()).ok();
+    }
+}
+
 pub(crate) fn open(client: Entity<Client>, target: shown_tab::Target, cx: &mut App) {
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
         && handle
