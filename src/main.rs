@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
                     .inspect_err(|error| tracing::error!(%error, "couldn't open Mira"))
                     .ok(),
                 settings::Start::Manager => {
-                    ruffle_view::open_accounts(accounts.clone(), device.clone(), cx)
+                    ruffle_view::open_manager(accounts.clone(), device.clone(), cx)
                         .map(|manager| manager.into())
                 }
             };
@@ -150,10 +150,10 @@ fn main() -> anyhow::Result<()> {
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
                 cx.defer(|cx| ruffle_view::open_combat_profiles(None, cx));
             });
-            cx.on_action(move |_: &ruffle_view::OpenAccounts, cx| {
+            cx.on_action(move |_: &ruffle_view::OpenManager, cx| {
                 let (accounts, device) = (accounts.clone(), device.clone());
                 cx.defer(move |cx| {
-                    ruffle_view::open_accounts(accounts, device, cx);
+                    ruffle_view::open_manager(accounts, device, cx);
                 });
             });
             cx.on_window_closed(move |cx, closed| {

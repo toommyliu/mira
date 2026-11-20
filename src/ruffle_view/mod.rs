@@ -69,7 +69,7 @@ pub(crate) use game_bar::{
     ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
 };
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
-pub(crate) use manager::{OpenAccounts, open as open_accounts};
+pub(crate) use manager::{OpenManager, open as open_manager};
 pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
