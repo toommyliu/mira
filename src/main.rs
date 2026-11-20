@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
             let accounts = data.join("accounts.json");
             ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
             let main = match settings::start(cx) {
-                settings::Start::Client => ruffle_view::open_client(true, cx)
+                settings::Start::Client => ruffle_view::open_client(ruffle_view::Home::Shared, true, cx)
                     .map(|client| client.into())
                     .inspect_err(|error| tracing::error!(%error, "couldn't open Mira"))
                     .ok(),
@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn client(cx: &mut gpui::App) -> Option<gpui::Entity<ruffle_view::Client>> {
-    ruffle_view::open_client(true, cx)
+    ruffle_view::current_client(cx)
         .and_then(|window| window.entity(cx))
         .inspect_err(|error| tracing::error!(%error, "couldn't open the client"))
         .ok()
