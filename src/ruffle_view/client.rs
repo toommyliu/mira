@@ -1535,7 +1535,11 @@ impl Client {
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseSession, window, cx| {
-                this.close_session(this.active, window, cx)
+                if this.sessions.is_empty() {
+                    window.remove_window();
+                } else {
+                    this.close_session(this.active, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| this.step(1, window, cx)))
             .on_action(
@@ -1652,11 +1656,12 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_finished_script_stays_finished_after_its_window_closes(cx: &mut gpui::TestAppContext) {
+    fn cmd_w_closes_an_empty_client_and_preserves_finished_scripts(cx: &mut gpui::TestAppContext) {
         let folder = std::env::temp_dir().join(format!("mira-finished-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         cx.update(|cx| {
             mira_ui::init(cx);
+            bind_keys(cx);
             crate::settings::init(folder.join("settings.json"), |_| {}, cx);
             init(
                 folder.clone(),
@@ -1675,10 +1680,8 @@ mod tests {
                 client.record_finished(account.clone(), entry.clone(), cx)
             })
             .unwrap();
-        window
-            .update(cx, |_, window, _| window.remove_window())
-            .unwrap();
-        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "cmd-w");
+        assert!(!cx.windows().contains(&window.into()));
         assert!(cx.update(|cx| clients(cx).is_empty()));
         assert!(cx.update(|cx| finished_at(&account, &entry, cx)).is_some());
         std::fs::remove_dir_all(folder).unwrap();
