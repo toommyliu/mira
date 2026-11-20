@@ -18,7 +18,14 @@ struct Rooms {
 
 impl Render for Rooms {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let options = ["Yulgar", "Battleon", "Swordhaven"].map(SharedString::from);
+        let options = [
+            "Yulgar",
+            "Battleon",
+            "Swordhaven",
+            "Safiria",
+            "Swordhaven (EU)",
+        ]
+        .map(SharedString::from);
         let picked = self.picked.clone();
         div()
             .key_context(FOCUS_SCOPE)
@@ -65,13 +72,37 @@ fn select_picks_the_next_option_from_the_keyboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn select_jumps_to_the_option_matching_what_was_typed(cx: &mut TestAppContext) {
+    assert_eq!(rooms(Some(0), "tab enter s a enter", cx), Some(3));
+}
+
+#[gpui::test]
+fn select_typeahead_takes_spaces_inside_a_name(cx: &mut TestAppContext) {
+    let keys = "tab enter s w o r d h a v e n space enter";
+    assert_eq!(rooms(Some(0), keys, cx), Some(4));
+}
+
+#[gpui::test]
+fn select_typeahead_cycles_through_options_on_a_repeated_letter(cx: &mut TestAppContext) {
+    assert_eq!(rooms(Some(0), "tab enter s s s enter", cx), Some(4));
+}
+
+#[gpui::test]
+fn select_typeahead_forgets_its_prefix_when_the_menu_closes(cx: &mut TestAppContext) {
+    let escaped = "tab enter s escape enter space";
+    assert_eq!(rooms(Some(0), escaped, cx), Some(0));
+    let tabbed = "tab enter s tab shift-tab enter a enter";
+    assert_eq!(rooms(Some(0), tabbed, cx), Some(0));
+}
+
+#[gpui::test]
 fn select_opens_on_the_first_option_without_a_valid_selection(cx: &mut TestAppContext) {
     assert_eq!(rooms(None, "tab enter enter", cx), Some(0));
 }
 
 #[gpui::test]
 fn select_treats_a_selection_past_its_options_as_none(cx: &mut TestAppContext) {
-    assert_eq!(rooms(Some(3), "tab enter enter", cx), Some(0));
+    assert_eq!(rooms(Some(9), "tab enter enter", cx), Some(0));
 }
 
 struct LongSelect {

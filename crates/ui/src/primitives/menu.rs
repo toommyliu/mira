@@ -20,7 +20,7 @@ use super::{
 use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
     motion::{self, From},
-    nav::{self, Axis, Step},
+    nav::{self, Axis, Step, Typeahead},
     theme::{Layout, PointerCursor as _},
     v_flex,
 };
@@ -303,6 +303,7 @@ pub(crate) struct MenuState {
     submenu_bounds: Rc<Cell<Bounds<Pixels>>>,
     submenu_rows: RefCell<HashMap<usize, Bounds<Pixels>>>,
     rest_scroll: ScrollHandle,
+    typeahead: Typeahead,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_size: Rc<Cell<gpui::Size<Pixels>>>,
     reveal: Cell<bool>,
@@ -323,6 +324,7 @@ impl MenuState {
             submenu_bounds: Rc::default(),
             submenu_rows: RefCell::default(),
             rest_scroll: ScrollHandle::new(),
+            typeahead: Typeahead::default(),
             trigger_bounds: Rc::default(),
             panel_size: Rc::default(),
             reveal: Cell::new(false),
@@ -512,6 +514,7 @@ pub(crate) fn close(state: &Entity<MenuState>, restore: bool, window: &mut Windo
         }
         menu.open = false;
         menu.submenu = None;
+        menu.typeahead = Typeahead::default();
         cx.notify();
         menu.return_focus.take()
     });
@@ -549,16 +552,25 @@ fn activate(
     on_select(window, cx);
 }
 
-fn typeahead(key: &str, metas: &[Meta], current: Option<usize>) -> Option<usize> {
-    nav::typeahead(
-        key,
-        metas
-            .iter()
-            .enumerate()
-            .filter(|(_, meta)| meta.navigable)
-            .map(|(i, meta)| (i, meta.label.to_string())),
-        current,
-    )
+fn typeahead(
+    event: &KeyDownEvent,
+    metas: &[Meta],
+    current: Option<usize>,
+    state: &Entity<MenuState>,
+    cx: &mut App,
+) -> Option<usize> {
+    state.update(cx, |menu, _| {
+        menu.typeahead.find(
+            &event.keystroke,
+            Instant::now(),
+            metas
+                .iter()
+                .enumerate()
+                .filter(|(_, meta)| meta.navigable)
+                .map(|(i, meta)| (i, &meta.label)),
+            current,
+        )
+    })
 }
 
 fn keyed(event: &KeyDownEvent, metas: &[Meta]) -> Option<usize> {
@@ -580,7 +592,12 @@ fn key_down(
     cx: &mut App,
 ) {
     let key = event.keystroke.key.as_str();
+    state.update(cx, |menu, _| {
+        menu.typeahead.end_unless_typed(&event.keystroke)
+    });
     let (highlighted, submenu) = current(metas, state.read(cx));
+    let activates =
+        key == "enter" || (key == "space" && !state.read(cx).typeahead.typing(Instant::now()));
     if key == "tab" {
         close(state, true, window, cx);
         return;
@@ -597,7 +614,7 @@ fn key_down(
             cx.stop_propagation();
             return;
         }
-        if key == "enter" || key == "space" {
+        if activates {
             if let Some(index) = sub_highlight {
                 activate(sub, index, state, true, window, cx);
             }
@@ -611,7 +628,7 @@ fn key_down(
         }
         let next = Step::from_key(event, Axis::Vertical)
             .and_then(|step| nav::step(sub_highlight, sub.len(), step, true, |i| sub[i].navigable))
-            .or_else(|| typeahead(key, sub, sub_highlight));
+            .or_else(|| typeahead(event, sub, sub_highlight, state, cx));
         if let Some(next) = next {
             state.update(cx, |menu, cx| {
                 menu.submenu = Some((parent, Some(next)));
@@ -628,7 +645,7 @@ fn key_down(
                 dismiss(window, cx);
             }
         }
-        "enter" | "space" => {
+        "enter" | "space" if activates => {
             if let Some(index) = highlighted {
                 activate(metas, index, state, true, window, cx);
             }
@@ -650,7 +667,7 @@ fn key_down(
                 .and_then(|step| {
                     nav::step(highlighted, metas.len(), step, true, |i| metas[i].navigable)
                 })
-                .or_else(|| typeahead(key, metas, highlighted));
+                .or_else(|| typeahead(event, metas, highlighted, state, cx));
             let Some(next) = next else {
                 return;
             };
