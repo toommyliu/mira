@@ -30,6 +30,14 @@ impl RenderOnce for Badge {
         let layout = theme.layout;
         let typography = theme.typography;
         let (_, soft, text) = theme.tone(self.tone);
+        let soft = match self.tone {
+            Tone::Neutral | Tone::Success => {
+                theme
+                    .foreground
+                    .opacity(if theme.dark_mode { 0.1 } else { 0.06 })
+            }
+            _ => soft,
+        };
         crate::h_flex()
             .flex_none()
             .h(layout.control_xs)
