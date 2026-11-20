@@ -2569,3 +2569,29 @@ fn a_keyboard_restart_after_a_click_shows_its_ring_when_done(cx: &mut TestAppCon
         "a recording restarted from the keyboard hid its ring"
     );
 }
+
+struct TrailingSwitch(Rc<Cell<Option<bool>>>);
+
+impl Render for TrailingSwitch {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let toggled = self.0.clone();
+        div().w(gpui::px(240.0)).child(
+            mira_ui::primitives::Switch::new("relogin", "Auto relogin", false)
+                .trailing()
+                .description("Logs back in when you disconnect")
+                .on_toggle(move |on, _, _| toggled.set(Some(on))),
+        )
+    }
+}
+
+#[gpui::test]
+fn clicking_a_trailing_switch_label_toggles_it(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    cx.update(mira_ui::init);
+    let toggled = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|_, _| TrailingSwitch(toggled.clone()));
+    cx.run_until_parked();
+    cx.simulate_click(point(px(20.0), px(14.0)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(toggled.get(), Some(true));
+}

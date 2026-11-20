@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, MouseButton,
+    AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, Toggled, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -22,6 +22,8 @@ pub struct Switch {
     label: SharedString,
     description: Option<SharedString>,
     show_label: bool,
+    trailing: bool,
+    end: Option<AnyElement>,
     disabled: bool,
     on_toggle: Option<ToggleHandler>,
 }
@@ -35,6 +37,8 @@ impl Switch {
             label: label.into(),
             description: None,
             show_label: true,
+            trailing: false,
+            end: None,
             disabled: false,
             on_toggle: None,
         }
@@ -52,6 +56,16 @@ impl Switch {
 
     pub fn hide_label(mut self) -> Self {
         self.show_label = false;
+        self
+    }
+
+    pub fn trailing(mut self) -> Self {
+        self.trailing = true;
+        self
+    }
+
+    pub fn end_slot(mut self, element: impl IntoElement) -> Self {
+        self.end = Some(element.into_any_element());
         self
     }
 
@@ -90,33 +104,39 @@ impl RenderOnce for Switch {
             })
             .read(cx)
             .clone();
+        let control = track(self.small, t, &theme)
+            .id("track")
+            .mt(px((20.0 - if self.small { 14.0 } else { TRACK_H }) / 2.0))
+            .when(!self.disabled, |control| {
+                let (fill, ink) = if on {
+                    (theme.primary, theme.primary_foreground)
+                } else {
+                    (off_fill(&theme), theme.foreground)
+                };
+                control.group_active("switch", |style| {
+                    style.bg(theme.pressed(theme.background, fill, ink))
+                })
+            })
+            .when(ring, |control| {
+                control.border_color(theme.ring).child(theme.ring_around(
+                    theme.ring,
+                    px(TRACK_H / 2.0),
+                    px(1.0),
+                ))
+            });
+        let label = self
+            .show_label
+            .then(|| caption(self.label, self.description, cx));
+        let end = self.end.map(|end| div().flex_none().child(end));
         row.role(Role::Switch)
             .group("switch")
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
-            .child(
-                track(self.small, t, &theme)
-                    .id("track")
-                    .mt(px((20.0 - if self.small { 14.0 } else { TRACK_H }) / 2.0))
-                    .when(!self.disabled, |control| {
-                        let (fill, ink) = if on {
-                            (theme.primary, theme.primary_foreground)
-                        } else {
-                            (off_fill(&theme), theme.foreground)
-                        };
-                        control.group_active("switch", |style| {
-                            style.bg(theme.pressed(theme.background, fill, ink))
-                        })
-                    })
-                    .when(ring, |control| {
-                        control.border_color(theme.ring).child(theme.ring_around(
-                            theme.ring,
-                            px(TRACK_H / 2.0),
-                            px(1.0),
-                        ))
-                    }),
-            )
-            .when(self.show_label, |row| {
-                row.child(caption(self.label, self.description, cx))
+            .map(|row| {
+                if self.trailing {
+                    row.children(label).children(end).child(control)
+                } else {
+                    row.child(control).children(label).children(end)
+                }
             })
             .when_some(
                 self.on_toggle.filter(|_| !self.disabled),
