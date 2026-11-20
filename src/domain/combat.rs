@@ -106,7 +106,6 @@ pub(crate) fn fight_any(
     loader: &impl Loader,
     counter_attacks: &CounterAttacks,
     fighter: &mut Fighter,
-    first: &[MonsterQuery],
 ) -> Result<(), CallError> {
     if !auth::in_game(loader)?
         || counter_attacks.holds_skills(loader)?
@@ -114,19 +113,11 @@ pub(crate) fn fight_any(
     {
         return Ok(());
     }
-    let preferred =
-        world::first_available_mon_map_id(loader, first, |id| !counter_attacks.countering(id))?;
-    let attacked = match preferred {
-        Some(id) if targeting(loader, id)? => true,
-        Some(id) => {
-            fighter.restart();
-            attack_id(loader, id)?
-        }
-        None if bridge::combat::has_target(loader)? => true,
-        None => {
-            fighter.restart();
-            attack_any(loader, counter_attacks)?
-        }
+    let attacked = if bridge::combat::has_target(loader)? {
+        true
+    } else {
+        fighter.restart();
+        attack_any(loader, counter_attacks)?
     };
     if attacked {
         fighter.act(loader)?;

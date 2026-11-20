@@ -1708,6 +1708,13 @@ mod tests {
                 "",
             ),
             (
+                "settings-window-shortcuts",
+                440.0,
+                Pane::Shortcuts,
+                edited.clone(),
+                "Windows",
+            ),
+            (
                 "settings-reset",
                 SETTINGS_HEIGHT,
                 Pane::Appearance,

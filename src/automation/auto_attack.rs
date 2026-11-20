@@ -44,7 +44,7 @@ pub(crate) async fn run(
             }
             () = fighter.listen(&loader) => {}
             () = sleep_until(next), if enabled => {
-                if let Err(error) = combat::fight_any(&loader, &counter_attacks, &mut fighter, &[]) {
+                if let Err(error) = combat::fight_any(&loader, &counter_attacks, &mut fighter) {
                     tracing::debug!(%error, "auto attack skipped a tick");
                 }
                 next = Instant::now() + TICK;

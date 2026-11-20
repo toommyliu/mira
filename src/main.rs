@@ -126,13 +126,6 @@ fn main() -> anyhow::Result<()> {
                     }
                 });
             });
-            cx.on_action(|_: &ruffle_view::OpenFollower, cx| {
-                cx.defer(|cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::open_follower(client, ruffle_view::Target::Selected, cx);
-                    }
-                });
-            });
             cx.on_action(|_: &ruffle_view::OpenLoaderGrabber, cx| {
                 cx.defer(|cx| {
                     if let Some(client) = client(cx) {

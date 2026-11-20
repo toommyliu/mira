@@ -429,7 +429,7 @@ impl Kind {
     }
 }
 
-pub(crate) fn player_update(packet: &str) -> Option<PlayerUpdate> {
+fn player_update(packet: &str) -> Option<PlayerUpdate> {
     decode::<PlayerUpdatePacket>(packet)
         .map(PlayerUpdate::from)
         .or_else(|| decode::<PlayerUpdateLine>(packet).map(PlayerUpdate::from))
