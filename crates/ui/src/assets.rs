@@ -17,6 +17,8 @@ impl AssetSource for Assets {
             "icons/bell.svg" => include_str!("../assets/icons/lucide/bell.svg"),
             "icons/bell-ring.svg" => include_str!("../assets/icons/lucide/bell-ring.svg"),
             "icons/check.svg" => include_str!("../assets/icons/lucide/check.svg"),
+            "icons/spinner-track.svg" => include_str!("../assets/icons/spinner-track.svg"),
+            "icons/spinner-arc.svg" => include_str!("../assets/icons/spinner-arc.svg"),
             "icons/chevron-down.svg" => include_str!("../assets/icons/lucide/chevron-down.svg"),
             "icons/chevron-right.svg" => include_str!("../assets/icons/lucide/chevron-right.svg"),
             "icons/chevron-up.svg" => include_str!("../assets/icons/lucide/chevron-up.svg"),
