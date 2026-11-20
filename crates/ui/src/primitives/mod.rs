@@ -62,7 +62,7 @@ pub use menu::{DropdownMenu, MenuItem, MenuList};
 pub use menubar::Menubar;
 pub use placement::{Align, Placement, Side};
 pub use popover::{Popover, PopoverClose};
-pub use progress::Progress;
+pub use progress::{Progress, SegmentedProgress};
 pub use radio_group::{Radio, RadioGroup};
 pub use scrollbar::Scrollbar;
 pub use select::{Select, SelectOption};

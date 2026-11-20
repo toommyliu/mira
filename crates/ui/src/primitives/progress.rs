@@ -4,7 +4,7 @@ use gpui::{
     prelude::FluentBuilder as _, relative,
 };
 
-use crate::{ActiveTheme as _, motion, theme::tabular};
+use crate::{ActiveTheme as _, Tone, motion, theme::tabular};
 
 #[derive(IntoElement)]
 pub struct Progress {
@@ -107,5 +107,79 @@ impl RenderOnce for Progress {
                     ))
                     .into_any_element(),
             })
+    }
+}
+
+#[derive(IntoElement)]
+pub struct SegmentedProgress {
+    id: ElementId,
+    label: SharedString,
+    total: usize,
+    parts: Vec<(usize, Tone)>,
+}
+
+impl SegmentedProgress {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>, total: usize) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            total,
+            parts: Vec::new(),
+        }
+    }
+
+    pub fn part(mut self, count: usize, tone: Tone) -> Self {
+        self.parts.push((count, tone));
+        self
+    }
+}
+
+impl RenderOnce for SegmentedProgress {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let filled: usize = self.parts.iter().map(|(count, _)| count).sum();
+        let total = self.total.max(filled).max(1);
+        let mut segments: Vec<(usize, gpui::Hsla)> = self
+            .parts
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, tone)| {
+                let color = match tone {
+                    Tone::Success => theme.primary,
+                    Tone::Attention => theme.warning,
+                    Tone::Danger => theme.destructive,
+                    Tone::Neutral | Tone::Accent | Tone::Warning => {
+                        theme.muted_foreground.opacity(0.6)
+                    }
+                };
+                (count, color)
+            })
+            .collect();
+        if filled < total {
+            segments.push((total - filled, theme.muted));
+        }
+        let last = segments.len().saturating_sub(1);
+        div()
+            .id(self.id)
+            .role(Role::Image)
+            .aria_label(self.label)
+            .flex()
+            .gap(gpui::px(2.0))
+            .w_full()
+            .h(theme.layout.track)
+            .children(
+                segments
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (count, color))| {
+                        div()
+                            .h_full()
+                            .flex_basis(gpui::px(0.0))
+                            .flex_grow(count as f32)
+                            .bg(color)
+                            .when(index == 0, |segment| segment.rounded_l_full())
+                            .when(index == last, |segment| segment.rounded_r_full())
+                    }),
+            )
     }
 }
