@@ -11,8 +11,12 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use super::{Button, Icon, button::Size, icon};
-use crate::{ActiveTheme as _, PointerCursor as _, theme::tabular};
+use super::{
+    Button, Icon,
+    button::{Size, Variant},
+    icon,
+};
+use crate::{ActiveTheme as _, theme::tabular};
 
 actions!(
     text_field,
@@ -877,7 +881,7 @@ impl Render for Input {
             self.reversed = false;
         }
         self.was_focused = focused;
-        let clearable = self.search && !self.content.is_empty();
+        let clearable = self.search && !self.content.is_empty() && !self.disabled;
         let frame = self.frame;
         let height = match frame {
             Frame::Boxed if self.small => layout.control_sm,
@@ -906,7 +910,7 @@ impl Render for Input {
             .when(self.invalid, |field| {
                 field.aria_description("Invalid value")
             })
-            .key_context(CONTEXT)
+            .when(focused, |field| field.key_context(CONTEXT))
             .when(!self.disabled, |field| {
                 field.track_focus(&self.focus).cursor(CursorStyle::IBeam)
             })
@@ -1046,35 +1050,27 @@ impl Render for Input {
             })
             .when(clearable, |field| {
                 let entity = cx.entity();
-                let mark = theme.muted_foreground;
-                field.child(trailing(
-                    &self.focus,
-                    div()
-                        .id("clear")
-                        .role(Role::Button)
-                        .aria_label("Clear search")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(16.0))
-                        .mr(px(4.0))
-                        .rounded_full()
-                        .bg(mark)
-                        .hover(|style| {
-                            style.bg(crate::theme::perceptual_mix(mark, theme.foreground, 0.35))
-                        })
-                        .active(|style| style.bg(theme.foreground))
-                        .pointer_cursor(&theme)
-                        .child(icon(Icon::X, theme.background).size(px(10.0)))
-                        .on_click(move |_, window, cx| {
-                            entity.update(cx, |field, cx| {
-                                field.set_text("", cx);
-                                window.focus(&field.focus, cx);
-                            })
-                        }),
-                ))
+                field.child(clear_search_button(&self.focus, move |cx| {
+                    entity.update(cx, |field, cx| field.set_text("", cx));
+                }))
             })
     }
+}
+
+pub(super) fn clear_search_button(focus: &FocusHandle, clear: impl Fn(&mut App) + 'static) -> Div {
+    let restore = focus.clone();
+    trailing(
+        focus,
+        Button::icon("clear", Icon::X, "Clear search")
+            .variant(Variant::Inset)
+            .size(Size::XSmall)
+            .icon_size(px(14.0))
+            .on_click(move |_, window, cx| {
+                clear(cx);
+                window.focus(&restore, cx);
+            }),
+    )
+    .debug_selector(|| "clear-search".into())
 }
 
 fn trailing(field: &FocusHandle, button: impl IntoElement) -> Div {

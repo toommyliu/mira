@@ -36,6 +36,7 @@ pub enum Variant {
     Secondary,
     Outline,
     Ghost,
+    Inset,
     Danger,
 }
 
@@ -310,6 +311,12 @@ impl RenderOnce for Button {
                     theme.foreground,
                     clear,
                 ),
+                Variant::Inset => (
+                    theme.foreground.opacity(0.08),
+                    theme.foreground.opacity(0.16),
+                    theme.foreground,
+                    clear,
+                ),
                 Variant::Danger => (
                     theme.destructive_fill(),
                     theme
@@ -325,10 +332,10 @@ impl RenderOnce for Button {
         } else {
             (bg, hover)
         };
-        let active = if self.swatch {
-            clear
-        } else {
-            theme.pressed(theme.background, hover, fg)
+        let active = match (self.swatch, self.variant) {
+            (true, _) => clear,
+            (_, Variant::Inset) => fg.opacity(0.24),
+            _ => theme.pressed(theme.background, hover, fg),
         };
         let radius = if self.swatch {
             self.size.height(theme.layout)

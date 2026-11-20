@@ -1796,6 +1796,55 @@ mod tests {
     }
 
     #[test]
+    fn settings_search_clear_stands_out_at_rest_and_on_hover() {
+        use gpui::Focusable as _;
+
+        let dir = crate::storyboard::scratch("settings-search-clear");
+        mira_ui::snapshot_with(
+            "settings-search-clear-hover",
+            size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
+            |window, cx| {
+                init(dir.join("settings.json"), |_| {}, cx);
+                packages::init(dir.join("packages"), dir.join("token"), cx);
+                let settings = cx.new(SettingsWindow::new);
+                window.focus(&settings.read(cx).search.focus_handle(cx), cx);
+                settings
+            },
+            |cx, owner| {
+                for key in ["c", "o", "l", "o", "r"] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                    })
+                    .unwrap();
+                }
+                cx.run_until_parked();
+                let rest = cx.capture_screenshot(owner).unwrap();
+                let scale = rest.width() / SETTINGS_WIDTH as u32;
+                let field = rest.get_pixel(164 * scale, 60 * scale)[0];
+                let button = rest.get_pixel(179 * scale, 60 * scale)[0];
+                cx.update_window(owner, |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position: point(px(186.0), px(60.0)),
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.refresh();
+                })
+                .unwrap();
+                cx.run_until_parked();
+                let hovered = cx.capture_screenshot(owner).unwrap();
+                let hover = hovered.get_pixel(179 * scale, 60 * scale)[0];
+                assert!(
+                    field.abs_diff(button) >= 12 && button.abs_diff(hover) >= 12,
+                    "clear button should stand out against the field and respond to hover: field {field}, button {button}, hover {hover}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn snapshot_settings_window() {
         let edited = Settings {
             appearance: Appearance::System,
