@@ -357,6 +357,12 @@ struct Frame {
     scripts: Vec<PathBuf>,
 }
 
+struct SetupRow {
+    name: SharedString,
+    statuses: Vec<Status>,
+    script: Option<SharedString>,
+}
+
 impl Manager {
     fn frame(&self, cx: &App) -> Frame {
         let now = Instant::now();
@@ -443,7 +449,8 @@ impl Manager {
                 .child(all_label("All accounts".into(), &all_statuses))
                 .end_slot(count(total))
         })
-        .vertical()
+        .page_sidebar()
+        .small()
         .selected(if self.view == View::All {
             0
         } else {
@@ -460,94 +467,97 @@ impl Manager {
             View::All => None,
             View::Setup(name) => setups.iter().position(|setup| &setup.name == name),
         };
-        let rows: Rc<[(String, Vec<Status>, usize)]> = setups
+        let rows: Rc<[SetupRow]> = setups
             .iter()
-            .map(|setup| {
-                (
-                    setup.name.clone(),
-                    base(&mut setup.members.iter().map(|member| member.id())),
-                    setup.members.len(),
-                )
+            .map(|setup| SetupRow {
+                name: setup.name.clone().into(),
+                statuses: base(&mut setup.members.iter().map(|member| member.id())),
+                script: setup.script.as_deref().map(home_relative),
             })
             .collect();
-        let names: Rc<[String]> = setups.iter().map(|setup| setup.name.clone()).collect();
+        let choices = rows.clone();
         let this = cx.weak_entity();
         let list = Tabs::new("setups", "Setups", setups.len(), move |index| {
-            let (name, statuses, total) = &rows[index];
+            let row = &rows[index];
             let this = this.clone();
-            let menu_name = name.clone();
-            Tab::new(SharedString::from(name.clone()))
-                .child(label(name.clone().into(), statuses))
-                .end_slot(count(*total))
-                .menu(move |_, _| setup_menu(&this, &menu_name))
+            let menu_name = row.name.clone();
+            let description = row.script.clone().unwrap_or_else(|| "No script".into());
+            let caption = div()
+                .text_caption(typography)
+                .text_color(tertiary)
+                .truncate()
+                .text_ellipsis_start()
+                .child(description.clone());
+            let tab = Tab::new(row.name.clone())
+                .description(description)
+                .child(label(row.name.clone(), &row.statuses))
+                .child(caption)
+                .end_slot(count(row.statuses.len()))
+                .menu(move |_, _| setup_menu(&this, &menu_name));
+            match &row.script {
+                Some(path) => tab.hover_card(
+                    HoverCard::new(("setup-path", index), row.name.clone())
+                        .placement(Placement::new(Side::Right, Align::Start))
+                        .path_row("Script", path.clone()),
+                ),
+                None => tab,
+            }
         })
-        .vertical()
+        .page_sidebar()
+        .small()
         .selected(selected.unwrap_or(usize::MAX))
         .on_select({
             let this = cx.weak_entity();
             move |index, window, cx| {
-                let name = names[index].clone();
+                let name = choices[index].name.to_string();
                 this.update(cx, |manager, cx| {
                     manager.set_view(View::Setup(name), window, cx)
                 })
                 .ok();
             }
         });
-        let shown = !accounts.is_empty() || !setups.is_empty();
         theme
             .sidebar_pane()
             .h_full()
-            .pt(layout.space(2.0))
-            .px(layout.space(2.0))
             .child(all)
-            .when(shown, |sidebar| {
-                sidebar
+            .child(
+                h_flex()
+                    .flex_none()
+                    .justify_between()
+                    .pl(layout.space(4.0))
+                    .pr(layout.space(2.0))
+                    .text_caption(typography)
+                    .text_color(theme.muted_foreground)
+                    .child("Setups")
                     .child(
-                        div()
-                            .flex_none()
-                            .h(layout.control_lg)
-                            .mt(layout.space(2.0))
-                            .px(layout.space(2.0))
-                            .flex()
-                            .items_center()
-                            .text_caption(typography)
-                            .text_color(theme.muted_foreground)
-                            .child("Setups"),
-                    )
-                    .child(
-                        div()
-                            .id("setups-list")
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .child(list),
-                    )
-                    .when(setups.is_empty(), |sidebar| {
-                        sidebar.child(
-                            div()
-                                .px(layout.space(2.0))
-                                .text_caption(typography)
-                                .text_color(theme.muted_foreground)
-                                .child("Setups run one script on a group of accounts."),
-                        )
-                    })
+                        Button::icon("new-setup", Icon::Plus, "New setup")
+                            .size(Size::Small)
+                            .tooltip("New setup (⌘N)")
+                            .disabled(self.accounts.is_err())
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.new_setup(window, cx)),
+                            ),
+                    ),
+            )
+            .when(!setups.is_empty(), |sidebar| {
+                sidebar.child(
+                    div()
+                        .id("setups-list")
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(list),
+                )
+            })
+            .when(setups.is_empty() && !accounts.is_empty(), |sidebar| {
+                sidebar.child(
+                    div()
+                        .px(layout.space(4.0))
+                        .text_caption(typography)
+                        .text_color(theme.muted_foreground)
+                        .child("Setups run one script on a group of accounts."),
+                )
             })
             .child(drag_area().flex_1())
-            .child(
-                div().flex_none().py(layout.space(2.0)).child(
-                    Button::new("new-setup", "New setup")
-                        .variant(Variant::Ghost)
-                        .w_full()
-                        .disabled(self.accounts.is_err())
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .justify_between()
-                                .child("New setup")
-                                .child(div().text_color(theme.muted_foreground).child("⌘N")),
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| this.new_setup(window, cx))),
-                ),
-            )
     }
 
     fn filter_buttons(
@@ -1191,9 +1201,7 @@ impl Manager {
                     match (&line.detail, &line.path) {
                         (Some((title, message)), path) => HoverCard::new(id, title.clone())
                             .placement(Placement::new(Side::Bottom, Align::Start))
-                            .when_some(path.clone(), |card, path| {
-                                card.row("Script", path, Tone::Neutral)
-                            })
+                            .when_some(path.clone(), |card, path| card.path_row("Script", path))
                             .row("Error", message.clone(), Tone::Danger)
                             .child({
                                 let ink = mood_color(theme, line.mood);
@@ -1204,17 +1212,17 @@ impl Manager {
                                     .hover(move |style| style.border_color(ink))
                             })
                             .into_any_element(),
-                        (None, Some(path)) => Tooltip::new(
-                            id,
-                            fit_path_to(path, layout.card_min, window, theme),
-                            text(line),
-                        )
-                        .align_start()
-                        .into_any_element(),
+                        (None, Some(path)) => HoverCard::new(id, account.name.clone())
+                            .placement(Placement::new(Side::Bottom, Align::Start))
+                            .path_row("Script", path.clone())
+                            .child(text(line).id("script-name").aria_description(path.clone()))
+                            .into_any_element(),
                         (None, None) => text(line).into_any_element(),
                     }
                 })
-                .when(line.detail.is_none(), |row| row.child(div().flex_1())),
+                .when(line.path.is_none() && line.detail.is_none(), |row| {
+                    row.child(div().flex_1())
+                }),
         }
         .children(end);
         let clicked = id.clone();

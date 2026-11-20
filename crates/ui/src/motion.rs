@@ -60,29 +60,22 @@ pub fn arrive<E: IntoElement + Styled + 'static>(
     element: E,
     from: From,
 ) -> AnimationElement<E> {
-    arrive_for(id, element, from, ARRIVE)
-}
-
-pub(crate) fn arrive_for<E: IntoElement + Styled + 'static>(
-    id: impl Into<ElementId>,
-    element: E,
-    from: From,
-    duration: Duration,
-) -> AnimationElement<E> {
     element.with_animation(
         id,
-        Animation::new(duration).with_easing(ease),
-        move |element, t| {
-            let shift = px((1.0 - t) * ARRIVE_DISTANCE);
-            let element = element.relative().opacity(t);
-            match from {
-                From::Left => element.left(-shift),
-                From::Right => element.left(shift),
-                From::Above => element.top(-shift),
-                From::Below => element.top(shift),
-            }
-        },
+        Animation::new(ARRIVE).with_easing(ease),
+        move |element, t| anchored_frame(element, from, t),
     )
+}
+
+pub(crate) fn anchored_frame<E: Styled>(element: E, from: From, progress: f32) -> E {
+    let shift = px((1.0 - progress) * ARRIVE_DISTANCE);
+    let element = element.relative().opacity(progress);
+    match from {
+        From::Left => element.left(-shift),
+        From::Right => element.left(shift),
+        From::Above => element.top(-shift),
+        From::Below => element.top(shift),
+    }
 }
 
 pub fn fade<E: IntoElement + Styled + 'static>(
@@ -134,7 +127,7 @@ pub fn leaving(since: Instant, window: &mut Window, cx: &App) -> Option<f32> {
     if cx.reduce_motion() {
         return None;
     }
-    let t = since.elapsed().as_secs_f32() / LEAVE.as_secs_f32();
+    let t = (cx.background_executor().now() - since).as_secs_f32() / LEAVE.as_secs_f32();
     if t >= 1.0 {
         return None;
     }

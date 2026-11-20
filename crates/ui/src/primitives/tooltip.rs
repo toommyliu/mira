@@ -137,14 +137,22 @@ impl Showing {
 
 enum Phase {
     Hidden,
-    Waiting { _timer: Task<()> },
-    Open,
-    Leaving { since: Instant, _timer: Task<()> },
+    Waiting {
+        _timer: Task<()>,
+    },
+    Open {
+        entered: Option<Instant>,
+    },
+    Leaving {
+        since: Instant,
+        entrance: f32,
+        _timer: Task<()>,
+    },
 }
 
 impl Phase {
     fn on_screen(&self) -> bool {
-        matches!(self, Phase::Open | Phase::Leaving { .. })
+        matches!(self, Phase::Open { .. } | Phase::Leaving { .. })
     }
 }
 
@@ -157,7 +165,6 @@ enum Over {
 struct Tip {
     kind: Kind,
     phase: Phase,
-    instant: bool,
     over_trigger: bool,
     over_panel: bool,
     focused: bool,
@@ -171,7 +178,6 @@ impl Tip {
         Self {
             kind,
             phase: Phase::Hidden,
-            instant: false,
             over_trigger: false,
             over_panel: false,
             focused: false,
@@ -197,7 +203,7 @@ impl Tip {
                 Some(self.approach(cx))
             }
             Phase::Waiting { .. } if !hovered => Some(Phase::Hidden),
-            Phase::Open if !hovered => Some(self.close(cx)),
+            Phase::Open { .. } if !hovered => Some(self.close(cx)),
             _ => None,
         };
         if let Some(next) = next {
@@ -218,7 +224,8 @@ impl Tip {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) -> Phase {
-        self.instant = self.warm(cx);
+        let entered = (!self.focused && !cx.reduce_motion() && !self.warm(cx))
+            .then(|| cx.background_executor().now());
         let me = cx.weak_entity();
         let previous = cx
             .default_global::<Showing>()
@@ -233,7 +240,19 @@ impl Tip {
                 cx.notify();
             });
         }
-        Phase::Open
+        Phase::Open { entered }
+    }
+
+    fn entrance(&self, cx: &App) -> f32 {
+        match self.phase {
+            Phase::Open {
+                entered: Some(start),
+            } if !self.focused && !cx.reduce_motion() => {
+                let elapsed = cx.background_executor().now() - start;
+                motion::ease(elapsed.as_secs_f32() / self.kind.arrival().as_secs_f32())
+            }
+            _ => 1.0,
+        }
     }
 
     fn warm(&self, cx: &mut Context<Self>) -> bool {
@@ -263,7 +282,8 @@ impl Tip {
             Phase::Hidden
         } else {
             Phase::Leaving {
-                since: Instant::now(),
+                since: cx.background_executor().now(),
+                entrance: self.entrance(cx),
                 _timer: after(motion::LEAVE, |tip, _| tip.phase = Phase::Hidden, cx),
             }
         }
@@ -273,7 +293,7 @@ impl Tip {
         self.dismissed = true;
         self.over_panel = false;
         match self.phase {
-            Phase::Open => self.phase = self.fade(cx),
+            Phase::Open { .. } => self.phase = self.fade(cx),
             Phase::Waiting { .. } => self.phase = Phase::Hidden,
             Phase::Hidden | Phase::Leaving { .. } => {}
         }
@@ -325,20 +345,28 @@ pub(crate) fn hover(
 ) -> Stateful<Div> {
     let kind = help.kind();
     let tip = window.use_keyed_state(id.clone(), cx, |_, _| Tip::new(kind));
-    let (presence, enter, bounds, measured) = tip.update(cx, |tip, cx| {
+    let (frame, bounds, measured) = tip.update(cx, |tip, cx| {
         if focused && !tip.focused {
             tip.dismissed = false;
         }
         tip.focused = focused;
-        let (presence, enter) = match tip.phase {
-            Phase::Open => (Some(1.0), !tip.instant),
-            _ if focused && !tip.dismissed => (Some(1.0), false),
-            Phase::Leaving { since, .. } => (motion::leaving(since, window, cx), false),
-            Phase::Hidden | Phase::Waiting { .. } => (None, false),
+        let frame = match tip.phase {
+            _ if focused && !tip.dismissed => Some((1.0, 1.0)),
+            Phase::Open { .. } => {
+                let entrance = tip.entrance(cx);
+                if entrance < 1.0 {
+                    window.request_animation_frame();
+                }
+                Some((entrance, 1.0))
+            }
+            Phase::Leaving {
+                since, entrance, ..
+            } => motion::leaving(since, window, cx).map(|fade| (entrance, fade)),
+            Phase::Hidden | Phase::Waiting { .. } => None,
         };
-        (presence, enter, tip.trigger.clone(), tip.size.clone())
+        (frame, tip.trigger.clone(), tip.size.clone())
     });
-    let shown = presence.is_some();
+    let shown = frame.is_some();
     let at = bounds.get();
     let hover = tip.clone();
     let press = tip.clone();
@@ -367,22 +395,22 @@ pub(crate) fn hover(
             .absolute()
             .inset_0(),
         )
-        .when_some(presence, |trigger, presence| {
+        .when_some(frame, |trigger, (entrance, fade)| {
             let viewport = window.viewport_size();
             let (positioner, from) = placement.resolve(at, measured.get(), viewport);
-            let content = help.panel(cx.theme());
-            let content = if enter {
-                motion::arrive_for("enter", content, from, kind.arrival()).into_any_element()
-            } else {
-                content.into_any_element()
-            };
+            let theme = cx.theme();
+            let content = help
+                .panel(theme)
+                .font_family(theme.font_family.clone())
+                .font_weight(gpui::FontWeight::NORMAL);
+            let content = motion::anchored_frame(content, from, entrance);
             let selector = id.to_string();
             let panel = div()
                 .debug_selector(|| selector)
                 .id((id, "floating-help"))
                 .relative()
                 .max_w(viewport.width - COLLISION_MARGIN * 2.0)
-                .opacity(presence)
+                .opacity(fade)
                 .when(matches!(kind, Kind::Card), |panel| {
                     panel.on_hover(move |over, _, cx| {
                         tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))
