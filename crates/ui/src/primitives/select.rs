@@ -157,7 +157,7 @@ impl RenderOnce for Select {
         let value = selected.map(|index| self.options[index].label.clone());
         let count = self.options.len();
         let initial = selected.or((count > 0).then_some(0));
-        let (press, keys) = trigger_handlers(&state, None, initial);
+        let (press, keys) = trigger_handlers(&state, None, initial, false);
         let trigger = Button::new((self.id.clone(), "trigger"), self.label.clone())
             .combobox(value.clone())
             .when(self.small, |button| button.size(super::button::Size::Small))

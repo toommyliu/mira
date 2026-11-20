@@ -236,35 +236,349 @@ fn a_long_menu_with_submenus_scrolls_inside_the_window(cx: &mut TestAppContext) 
     );
 }
 
+struct ProfileRow {
+    focus: FocusHandle,
+    picked: Rc<Cell<Option<&'static str>>>,
+}
+
+impl Render for ProfileRow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let picked = self.picked.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(div().w(gpui::px(200.0)).child(
+                DropdownMenu::row("profile", "Profile", "Generic", cx).items(move |_, _| {
+                    ["Generic", "Daily boss", "Ultra dage", "Ultra speaker"]
+                        .map(|name| {
+                            let picked = picked.clone();
+                            MenuItem::radio(name, name == "Generic", move |_, _| {
+                                picked.set(Some(name))
+                            })
+                        })
+                        .into()
+                }),
+            ))
+    }
+}
+
+#[gpui::test]
+fn typing_a_name_picks_it_from_a_menu_row(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let picked = Rc::new(Cell::new(None));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        ProfileRow {
+            focus,
+            picked: picked.clone(),
+        }
+    });
+    cx.run_until_parked();
+    for key in ["tab", "enter", "u", "u", "enter"] {
+        press(cx, key);
+    }
+    assert_eq!(picked.get(), Some("Ultra speaker"));
+}
+
+struct RenderingRow {
+    disabled: bool,
+}
+
+impl Render for RenderingRow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().p(gpui::px(40.0)).child(
+            div().w(gpui::px(200.0)).child(
+                DropdownMenu::row("rendering", "Rendering", "Full", cx)
+                    .disabled(self.disabled)
+                    .items(|_, _| {
+                        vec![
+                            MenuItem::radio("Full", true, |_, _| {})
+                                .start_slot(div().debug_selector(|| "full".into())),
+                            MenuItem::radio("Minimal", false, |_, _| {}),
+                        ]
+                    }),
+            ),
+        )
+    }
+}
+
+struct PickedRendering {
+    focus: FocusHandle,
+    picked: Rc<Cell<Option<&'static str>>>,
+}
+
+impl Render for PickedRendering {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let picked = self.picked.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .p(gpui::px(40.0))
+            .child(div().w(gpui::px(200.0)).child(
+                DropdownMenu::row("rendering", "Rendering", "Full", cx).items(move |_, _| {
+                    ["Full", "Minimal"]
+                        .map(|mode| {
+                            let picked = picked.clone();
+                            MenuItem::radio(mode, mode == "Full", move |_, _| {
+                                picked.set(Some(mode))
+                            })
+                            .start_slot(div().debug_selector(move || mode.to_lowercase()))
+                        })
+                        .into()
+                }),
+            ))
+    }
+}
+
+#[derive(PartialEq)]
+enum Pointer {
+    Away,
+    Hover,
+    Click,
+}
+
+fn rendering_window<'a>(
+    picked: Rc<Cell<Option<&'static str>>>,
+    cx: &'a mut TestAppContext,
+) -> &'a mut VisualTestContext {
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        PickedRendering { focus, picked }
+    });
+    cx.run_until_parked();
+    cx
+}
+
+const RENDERING_ROW: (f32, f32) = (100.0, 54.0);
+
+fn hover_rendering_row(cx: &mut VisualTestContext) {
+    use gpui::{MouseMoveEvent, point, px};
+    let (x, y) = RENDERING_ROW;
+    for x in [x, x + 1.0] {
+        cx.simulate_event(MouseMoveEvent {
+            position: point(px(x), px(y)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+}
+
+fn pick_rendering(
+    pointer: Pointer,
+    keys: &[&'static str],
+    cx: &mut TestAppContext,
+) -> Option<&'static str> {
+    use gpui::{Modifiers, point, px};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let picked = Rc::new(Cell::new(None));
+    let cx = rendering_window(picked.clone(), cx);
+    if pointer != Pointer::Away {
+        hover_rendering_row(cx);
+    }
+    if pointer == Pointer::Click {
+        let (x, y) = RENDERING_ROW;
+        cx.simulate_click(point(px(x + 1.0), px(y)), Modifiers::none());
+        cx.run_until_parked();
+    }
+    for key in keys {
+        press(cx, key);
+    }
+    picked.get()
+}
+
+#[gpui::test]
+fn shift_keeps_a_menu_row_open_after_a_pick(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let picked = Rc::new(Cell::new(None));
+    let cx = rendering_window(picked.clone(), cx);
+    press(cx, "tab");
+    press(cx, "enter");
+    press(cx, "down");
+    press(cx, "shift-enter");
+    assert_eq!(picked.take(), Some("Minimal"));
+    let full = cx
+        .debug_bounds("full")
+        .expect("Shift-Return keeps the menu open");
+    cx.simulate_click(point(full.left(), full.center().y), Modifiers::shift());
+    cx.run_until_parked();
+    assert_eq!(picked.take(), Some("Full"));
+    let minimal = cx
+        .debug_bounds("minimal")
+        .expect("Shift-click keeps it open too");
+    cx.simulate_click(point(minimal.left(), minimal.center().y), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(picked.take(), Some("Minimal"));
+    assert!(
+        cx.debug_bounds("minimal").is_none(),
+        "a plain pick closes it"
+    );
+}
+
+#[gpui::test]
+fn clicking_a_menu_row_its_hover_opened_keeps_the_menu_open(cx: &mut TestAppContext) {
+    assert_eq!(
+        pick_rendering(Pointer::Click, &["down", "down", "enter"], cx),
+        Some("Minimal")
+    );
+}
+
+#[gpui::test]
+fn a_menu_row_opens_in_place_from_the_keyboard_as_on_hover(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let cx = rendering_window(Rc::default(), cx);
+    press(cx, "tab");
+    press(cx, "enter");
+    let keyed = cx.debug_bounds("full").expect("Return opens the menu");
+    press(cx, "escape");
+    hover_rendering_row(cx);
+    let hovered = cx.debug_bounds("full").expect("hovering opens the menu");
+    assert_eq!(
+        keyed, hovered,
+        "the menu appears where it rests, with no slide"
+    );
+}
+
+#[gpui::test]
+fn a_menu_row_opens_and_picks_from_the_keyboard(cx: &mut TestAppContext) {
+    assert_eq!(
+        pick_rendering(Pointer::Away, &["tab", "enter", "down", "enter"], cx),
+        Some("Minimal")
+    );
+}
+
+#[gpui::test]
+fn right_opens_a_menu_row_and_left_returns_to_it(cx: &mut TestAppContext) {
+    assert_eq!(
+        pick_rendering(
+            Pointer::Away,
+            &["tab", "right", "down", "left", "right", "enter"],
+            cx
+        ),
+        Some("Full"),
+        "Left closes the menu, so Right reopens it on its first choice"
+    );
+}
+
+#[gpui::test]
+fn left_from_a_menu_opened_by_hover_lands_on_its_row(cx: &mut TestAppContext) {
+    assert_eq!(
+        pick_rendering(Pointer::Hover, &["left", "enter", "enter"], cx),
+        Some("Full"),
+        "after Left, Return reopens the row's menu instead of acting elsewhere"
+    );
+}
+
+#[gpui::test]
+fn a_menu_row_opened_by_hover_takes_the_arrow_keys(cx: &mut TestAppContext) {
+    assert_eq!(
+        pick_rendering(Pointer::Hover, &["down", "down", "enter"], cx),
+        Some("Minimal")
+    );
+}
+
+#[gpui::test]
+fn hovering_a_disabled_menu_row_leaves_its_menu_closed(cx: &mut TestAppContext) {
+    use gpui::{MouseMoveEvent, point, px};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_, cx) = cx.add_window_view(|_, _| RenderingRow { disabled: true });
+    cx.run_until_parked();
+    for x in [100.0, 101.0] {
+        cx.simulate_event(MouseMoveEvent {
+            position: point(px(x), px(54.0)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+    assert!(cx.debug_bounds("full").is_none());
+}
+
+#[gpui::test]
+fn a_menu_row_opens_beside_itself_on_hover_and_closes_on_another_row(cx: &mut TestAppContext) {
+    use gpui::{MouseMoveEvent, Pixels, Point, point, px};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_, cx) = cx.add_window_view(|_, _| RenderingRow { disabled: false });
+    cx.run_until_parked();
+    let pointer = |cx: &mut VisualTestContext, at: Point<Pixels>| {
+        for position in [at, at + point(px(1.0), px(0.0))] {
+            cx.simulate_event(MouseMoveEvent {
+                position,
+                ..Default::default()
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    assert!(cx.debug_bounds("full").is_none());
+    let row = point(px(100.0), px(54.0));
+    pointer(cx, row);
+    let full = cx
+        .debug_bounds("full")
+        .expect("hovering the row opens its menu");
+    assert!(
+        full.top() <= row.y && full.bottom() >= row.y && full.left() >= px(244.0),
+        "the menu opens beside the row with its first choice level with it: {full:?}"
+    );
+    pointer(cx, point(px(242.0), row.y));
+    pointer(cx, point(full.left() + px(40.0), full.top()));
+    assert!(
+        cx.debug_bounds("full").is_some(),
+        "crossing from the row into the menu keeps it open"
+    );
+    pointer(cx, point(px(100.0), px(120.0)));
+    assert!(
+        cx.debug_bounds("full").is_none(),
+        "moving to another row closes it at once"
+    );
+}
+
 struct Servers {
     focus: FocusHandle,
 }
 
 impl Render for Servers {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .size_full()
-            .child(
-                DropdownMenu::new("server")
-                    .trigger(Button::new("server", "Server"))
-                    .items(|_, _| {
-                        let mut items = vec![
-                            MenuItem::action("Their own servers", |_, _| {}).pinned(),
-                            MenuItem::separator().pinned(),
-                        ];
-                        items.extend((0..30usize).map(|index| {
-                            let item = MenuItem::action(format!("Server {index}"), |_, _| {});
-                            if index == 29 {
-                                item.start_slot(div().debug_selector(|| "last".into()))
-                            } else {
-                                item
-                            }
-                        }));
-                        items
-                    }),
-            )
+            .child(div().w(gpui::px(200.0)).child(
+                DropdownMenu::row("server", "Server", "Server 1", cx).items(|_, _| {
+                    let mut items = vec![
+                        MenuItem::action("Their own servers", |_, _| {}).pinned(),
+                        MenuItem::separator().pinned(),
+                    ];
+                    items.extend((0..30usize).map(|index| {
+                        let item =
+                            MenuItem::action(format!("A long server name {index}"), |_, _| {});
+                        if index == 29 {
+                            item.start_slot(div().debug_selector(|| "last".into()))
+                        } else {
+                            item
+                        }
+                    }));
+                    items
+                }),
+            ))
     }
 }
 
