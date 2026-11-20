@@ -846,6 +846,96 @@ fn snapshot_focused_sidebar_rows() {
 }
 
 #[test]
+fn snapshot_attention_and_run_parts() {
+    mira_ui::snapshot_with(
+        "attention-and-run-parts",
+        size(px(520.0), px(250.0)),
+        |window, cx| {
+            Scene::open(
+                |_, cx| {
+                    let theme = cx.theme().clone();
+                    let row = |glyph, text: &'static str| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_color(theme.muted_foreground)
+                            .child(mira_ui::primitives::icon(glyph, theme.muted_foreground))
+                            .child(text)
+                    };
+                    div()
+                        .flex()
+                        .gap(px(24.0))
+                        .child(
+                            div().w(px(180.0)).child(
+                                Tabs::new("setups", "Setups", 2, |index| {
+                                    let (name, count) =
+                                        [("Daily", "8"), ("Warlord farm", "4")][index];
+                                    Tab::new(name)
+                                        .end_slot(div().child(count))
+                                        .menu(|_, _| vec![MenuItem::action("Edit", |_, _| {})])
+                                })
+                                .vertical()
+                                .selected(0),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(6.0))
+                                        .child(Badge::new("Running"))
+                                        .child(Badge::new("Needs you").tone(Tone::Attention))
+                                        .child(Badge::new("Failed").tone(Tone::Danger))
+                                        .child(Dot::new(Tone::Attention))
+                                        .child(Dot::new(Tone::Danger)),
+                                )
+                                .child(
+                                    mira_ui::primitives::SegmentedProgress::new(
+                                        "run",
+                                        "1 done, 2 running, 1 needs you, 4 not started",
+                                        8,
+                                    )
+                                    .part(1, Tone::Success)
+                                    .part(2, Tone::Neutral)
+                                    .part(1, Tone::Attention),
+                                )
+                                .child(row(Icon::FileCode, "daily.ts"))
+                                .child(row(Icon::MapPin, "Twig · yulgar · Enter"))
+                                .child(row(Icon::User, "Lv 100 · ArchPaladin"))
+                                .child(row(Icon::Server, "Twig"))
+                                .child(
+                                    theme
+                                        .floating_bar()
+                                        .child("3 selected")
+                                        .child(
+                                            Button::new("stop", "Stop")
+                                                .variant(Variant::Ghost)
+                                                .size(Size::Small),
+                                        )
+                                        .child(
+                                            Button::new("close", "Close")
+                                                .variant(Variant::Ghost)
+                                                .size(Size::Small),
+                                        ),
+                                ),
+                        )
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| hover(cx, owner, 120.0, 72.0),
+    );
+}
+
+#[test]
 fn snapshot_tabs() {
     scene("tabs", 460.0, 260.0, |_, _| {
         div()
