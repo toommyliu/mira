@@ -837,6 +837,31 @@ fn text(input: &gpui::Entity<mira_ui::primitives::Input>, cx: &mut VisualTestCon
 }
 
 #[gpui::test]
+fn clearing_a_search_keeps_it_ready_for_the_next_query(cx: &mut TestAppContext) {
+    let (input, cx) = focused_input(|input| input.search(), cx);
+    cx.simulate_input("Twig");
+    cx.run_until_parked();
+    let clear = cx.debug_bounds("clear-search").unwrap().center();
+    cx.simulate_click(clear, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(text(&input, cx), "");
+
+    for key in ["enter", "space"] {
+        cx.simulate_input("Yulgar");
+        assert_eq!(text(&input, cx), "Yulgar");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        press(cx, key);
+        assert_eq!(text(&input, cx), "");
+    }
+    cx.simulate_input("Battleon");
+    assert_eq!(text(&input, cx), "Battleon");
+    press(cx, "escape");
+    assert_eq!(text(&input, cx), "");
+}
+
+#[gpui::test]
 fn input_moves_and_deletes_by_word(cx: &mut TestAppContext) {
     let (input, cx) = focused_input(|input| input, cx);
     cx.simulate_input("kill the boss");
