@@ -8,7 +8,7 @@ use crate::Tone;
 
 const MAX_LINES: usize = 3;
 
-struct Card {
+pub(super) struct Card {
     title: SharedString,
     rows: Vec<(SharedString, SharedString, Tone)>,
 }
@@ -59,13 +59,11 @@ impl HoverCard {
         tooltip::hover(
             trigger.children(self.children),
             (self.id, "card").into(),
+            tooltip::Help::Card(self.card),
             focused,
             self.placement,
             window,
             cx,
-            move |_, from, theme| {
-                crate::motion::arrive("hover-card-enter", popup(self.card, theme), from)
-            },
         )
     }
 }
@@ -83,7 +81,7 @@ impl RenderOnce for HoverCard {
     }
 }
 
-fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
+pub(super) fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
     let layout = theme.layout;
     let typography = theme.typography;
     div()
