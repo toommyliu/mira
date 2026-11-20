@@ -721,6 +721,48 @@ fn tab_closes_an_open_select_and_moves_on(cx: &mut TestAppContext) {
     assert!(pressed.get());
 }
 
+struct Advanced {
+    focus: FocusHandle,
+    open: bool,
+}
+
+impl Render for Advanced {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                mira_ui::components::Disclosure::new("advanced", "Advanced", self.open).on_toggle(
+                    move |open, _, cx| {
+                        let _ = this.update(cx, |view, cx| {
+                            view.open = open;
+                            cx.notify();
+                        });
+                    },
+                ),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_disclosure_toggles_once_per_key_press(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Advanced { focus, open: false }
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    for (key, open) in [("space", true), ("enter", false), ("enter", true)] {
+        press(cx, key);
+        assert_eq!(view.read_with(cx, |view, _| view.open), open, "after {key}");
+    }
+}
+
 gpui::actions!(test, [CloseWindow]);
 
 struct Shortcut {
