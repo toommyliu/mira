@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Window,
-    prelude::FluentBuilder as _, px,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Transformation, Window,
+    point, prelude::FluentBuilder as _, px, size,
 };
 
 use super::{
@@ -73,7 +73,20 @@ impl Checkbox {
                 theme.outline_fill()
             })
             .when_some(glyph, |mark, glyph| {
-                mark.child(icon(glyph, theme.primary_foreground).size(theme.layout.check_mark))
+                let layout = theme.layout;
+                // GPUI snaps SVG bounds to device pixels. Scale from the box's center after snapping.
+                let scale = layout.check_mark / layout.check;
+                let mut transform = Transformation::scale(size(scale, scale));
+                if glyph == Icon::Check {
+                    // Lucide's check is half a unit above center in its 24-unit viewBox.
+                    transform =
+                        transform.with_translation(point(px(0.0), layout.check_mark / 48.0));
+                }
+                mark.child(
+                    icon(glyph, theme.primary_foreground)
+                        .size(layout.check)
+                        .with_transformation(transform),
+                )
             })
     }
 
