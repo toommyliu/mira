@@ -508,7 +508,7 @@ pub(crate) fn hand_off(
 pub(crate) fn close(state: &Entity<MenuState>, restore: bool, window: &mut Window, cx: &mut App) {
     let return_focus = state.update(cx, |menu, cx| {
         if menu.open {
-            menu.closed_at = Some(Instant::now());
+            menu.closed_at = Some(cx.background_executor().now());
         }
         menu.open = false;
         menu.submenu = None;

@@ -247,25 +247,11 @@ fn shoot(
     view: Option<&str>,
     act: impl Fn(&mut Manager, &mut Window, &mut Context<Manager>) + 'static,
 ) {
-    shoot_at(name, window_size, scene, view, None, act);
+    shoot_with(name, window_size, scene, view, |_, _| {}, act);
 }
 
-fn shoot_at(
-    name: &str,
-    window_size: Size<gpui::Pixels>,
-    scene: Scene,
-    view: Option<&str>,
-    pointer: Option<(f32, f32)>,
-    act: impl Fn(&mut Manager, &mut Window, &mut Context<Manager>) + 'static,
-) {
-    let dir = std::env::temp_dir().join(format!("mira-manager-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = write_accounts(&dir);
-    let view = view.map(str::to_owned);
-    let hover = move |cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle| {
-        let Some((x, y)) = pointer else {
-            return;
-        };
+fn hover_at(x: f32, y: f32) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+    move |cx, owner| {
         for nudge in [0.0, 1.0] {
             cx.update_window(owner, |_, window, cx| {
                 window.dispatch_event(
@@ -280,8 +266,22 @@ fn shoot_at(
             .unwrap();
             cx.run_until_parked();
         }
-        cx.advance_clock(std::time::Duration::from_secs(1));
-    };
+        cx.advance_clock(Duration::from_secs(1));
+    }
+}
+
+fn shoot_with(
+    name: &str,
+    window_size: Size<gpui::Pixels>,
+    scene: Scene,
+    view: Option<&str>,
+    interact: impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle),
+    act: impl Fn(&mut Manager, &mut Window, &mut Context<Manager>) + 'static,
+) {
+    let dir = std::env::temp_dir().join(format!("mira-manager-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = write_accounts(&dir);
+    let view = view.map(str::to_owned);
     for written in mira_ui::snapshot_with(
         name,
         window_size,
@@ -304,7 +304,7 @@ fn shoot_at(
                 manager
             })
         },
-        hover,
+        interact,
     ) {
         assert!(written.exists());
     }
@@ -351,44 +351,89 @@ fn snapshot_a_setup_before_during_and_after_a_run() {
 
 #[test]
 fn snapshot_manager_hover_states() {
-    shoot_at(
+    shoot_with(
         "manager-hover-card",
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        Some((330.0, 150.0)),
+        hover_at(330.0, 150.0),
         |_, _, _| {},
     );
-    shoot_at(
+    shoot_with(
+        "manager-hover-account-script",
+        size(px(720.0), px(420.0)),
+        Scene::MidRun,
+        None,
+        hover_at(265.0, 129.0),
+        |_, _, _| {},
+    );
+    shoot_with(
         "manager-hover-error",
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        Some((280.0, 269.0)),
+        hover_at(280.0, 269.0),
         |_, _, _| {},
     );
-    shoot_at(
+    shoot_with(
         "manager-hover-long-name",
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        Some((600.0, 400.0)),
+        hover_at(600.0, 400.0),
         |_, _, _| {},
     );
-    shoot_at(
+    shoot_with(
         "manager-hover-setup",
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        Some((100.0, 190.0)),
+        hover_at(100.0, 162.0),
         |_, _, _| {},
     );
-    shoot_at(
+    shoot_with(
+        "manager-hover-setup-path",
+        size(px(720.0), px(420.0)),
+        Scene::NotStarted,
+        Some("Daily"),
+        hover_at(175.0, 136.0),
+        |manager, _, cx| {
+            let path = PathBuf::from("/Volumes/Shared/Scripts/farming/daily.ts");
+            manager.set_setup_script("Daily", Some(path), cx);
+            manager.set_setup_script("Warlord farm", None, cx);
+        },
+    );
+    shoot_with(
+        "manager-setup-actions",
+        size(px(720.0), px(420.0)),
+        Scene::NotStarted,
+        None,
+        |cx, owner| {
+            let (x, y) = (184.0, 115.0);
+            hover_at(x, y)(cx, owner);
+            cx.update_window(owner, |_, window, cx| {
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        position: gpui::point(px(x), px(y)),
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.advance_clock(Duration::from_secs(1));
+        },
+        |_, _, _| {},
+    );
+    shoot_with(
         "manager-clear-search",
         opening(),
         Scene::MidRun,
         None,
-        Some((975.0, 18.0)),
+        hover_at(975.0, 18.0),
         |manager, window, cx| {
             manager.search.update(cx, |search, cx| {
                 search.set_text("whomity", cx);
@@ -675,6 +720,70 @@ fn open_manager<'a>(
         manager
     });
     (manager, cx, dir)
+}
+
+#[gpui::test]
+fn setup_rows_preview_paths_on_hover_and_switch_on_click(cx: &mut gpui::TestAppContext) {
+    let (manager, cx, dir) = open_manager("setup-row-hover", View::All, cx);
+    cx.simulate_resize(size(px(720.0), px(420.0)));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.run_until_parked();
+    let mods = gpui::Modifiers::none();
+    let account_script = gpui::point(px(265.0), px(129.0));
+    cx.simulate_mouse_move(account_script, None, mods);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("card-line-whomity-card").is_none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("card-line-whomity-card").is_some());
+    cx.simulate_mouse_move(gpui::point(px(8.0), px(300.0)), None, mods);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    let daily_name = gpui::point(px(32.0), px(116.0));
+    cx.simulate_mouse_move(daily_name, None, mods);
+    cx.simulate_click(daily_name, mods);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(manager.read_with(cx, |m, _| m.view == View::Setup("Daily".into())));
+    assert!(cx.debug_bounds("setup-path-0-card").is_none());
+
+    let warlord_padding = gpui::point(px(175.0), px(180.0));
+    cx.simulate_mouse_move(warlord_padding, None, mods);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("setup-path-1-card").is_none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("setup-path-1-card").is_some());
+    cx.simulate_click(warlord_padding, mods);
+    cx.run_until_parked();
+    assert!(manager.read_with(cx, |m, _| m.view == View::Setup("Warlord farm".into())));
+    assert!(cx.debug_bounds("setup-path-1-card").is_none());
+
+    let daily_actions = gpui::point(px(184.0), px(115.0));
+    cx.simulate_mouse_move(daily_actions, None, mods);
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("setup-path-0-card").is_some());
+    cx.simulate_click(daily_actions, mods);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("setup-path-0-card").is_none(),
+        "opening the actions menu dismisses the preview"
+    );
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("setup-path-0-card").is_none());
+    let edit = gpui::point(px(225.0), px(148.0));
+    cx.simulate_mouse_move(edit, None, mods);
+    cx.simulate_click(edit, mods);
+    cx.run_until_parked();
+    assert!(manager.read_with(cx, |m, _| {
+        m.editing
+            .as_ref()
+            .is_some_and(|editing| editing.setup == "Daily")
+    }));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

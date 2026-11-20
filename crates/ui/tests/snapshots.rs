@@ -104,6 +104,64 @@ fn hover(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32
     }
 }
 
+#[test]
+fn leaving_a_tooltip_during_its_entrance_fades_from_the_visible_frame() {
+    use mira_ui::primitives::{Align, Placement, Side, Tooltip};
+    use std::time::Duration;
+
+    mira_ui::snapshot_with(
+        "tooltip-interrupted",
+        size(px(300.0), px(90.0)),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    div()
+                        .w(px(100.0))
+                        .child(
+                            Tooltip::new("hint", "Script path", div().h(px(28.0)).child("Script"))
+                                .placement(Placement::new(Side::Right, Align::Start)),
+                        )
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            cx.update(|cx| cx.set_reduce_motion(false));
+            cx.advance_clock(Duration::from_secs(1));
+            let closed = cx.capture_screenshot(owner).unwrap();
+            hover(cx, owner, 45.0, 30.0);
+            cx.advance_clock(Duration::from_millis(48));
+            cx.update_window(owner, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+            let entering = cx.capture_screenshot(owner).unwrap();
+            assert!(
+                entering != closed,
+                "the tooltip must be visible before leaving"
+            );
+            move_pointer(cx, owner, 20.0, 75.0);
+            let leaving = cx.capture_screenshot(owner).unwrap();
+            assert!(
+                leaving == entering,
+                "the first exit frame must match the last entrance frame"
+            );
+            cx.advance_clock(mira_ui::motion::LEAVE);
+            move_pointer(cx, owner, 21.0, 75.0);
+            assert!(
+                cx.capture_screenshot(owner).unwrap() == closed,
+                "the fade must finish"
+            );
+            hover(cx, owner, 45.0, 30.0);
+            assert!(
+                cx.capture_screenshot(owner).unwrap() != entering,
+                "a warm tooltip opens fully"
+            );
+        },
+    );
+}
+
 fn assert_centered_checkbox_marks(
     cx: &mut gpui::HeadlessAppContext,
     owner: gpui::AnyWindowHandle,

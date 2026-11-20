@@ -131,9 +131,9 @@ impl RenderOnce for Dialog {
         if self.open != was_open {
             let opening = self.open;
             let return_focus = opening.then(|| window.focused(cx)).flatten();
-            let restore = state.update(cx, |state, _| {
+            let restore = state.update(cx, |state, cx| {
                 state.was_open = opening;
-                state.closed_at = (!opening).then(std::time::Instant::now);
+                state.closed_at = (!opening).then(|| cx.background_executor().now());
                 if opening {
                     state.return_focus = return_focus;
                     None

@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FontWeight, InteractiveElement as _, IntoElement,
@@ -112,6 +112,7 @@ pub struct Tabs {
     selected: usize,
     layout: TabLayout,
     line: bool,
+    small: bool,
     scroll: Option<ScrollHandle>,
     on_select: Option<IndexHandler>,
     on_reorder: Option<ReorderHandler>,
@@ -132,6 +133,7 @@ impl Tabs {
             selected: 0,
             layout: TabLayout::Horizontal,
             line: false,
+            small: false,
             scroll: None,
             on_select: None,
             on_reorder: None,
@@ -145,6 +147,11 @@ impl Tabs {
 
     pub fn line(mut self) -> Self {
         self.line = true;
+        self
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
         self
     }
 
@@ -182,6 +189,7 @@ struct Render {
     count: usize,
     layout: TabLayout,
     line: bool,
+    small: bool,
     ring: bool,
     focus: gpui::FocusHandle,
     menu: Entity<MenuState>,
@@ -220,15 +228,11 @@ impl Render {
             );
         let label = tab.label.clone();
         let menu = tab.menu.take().filter(|_| pose != Pose::Lifted);
-        let card = tab.hover_card.take().filter(|_| pose == Pose::Rest);
         let more = menu
             .clone()
             .filter(|_| self.layout != TabLayout::Horizontal && pose == Pose::Rest)
             .map(|items| {
-                let id = ElementId::NamedChild(
-                    Arc::new(self.id.clone()),
-                    format!("more-{index}").into(),
-                );
+                let id = ElementId::from((self.id.clone(), format!("more-{index}")));
                 let state = menu::state(&id, false, window, cx);
                 let open = state.read(cx).open;
                 let trigger = DropdownMenu::new(id)
@@ -239,8 +243,27 @@ impl Render {
                             .hide_tooltip(),
                     )
                     .items(move |window, cx| items(window, cx));
-                (trigger, open || (current && self.ring))
+                (trigger, open)
             });
+        let context_menu = menu.map(|items| {
+            let id = ElementId::from((self.id.clone(), format!("context-{index}")));
+            let state = if current {
+                self.menu.clone()
+            } else {
+                menu::state(&id, false, window, cx)
+            };
+            let open = state.read(cx).open;
+            let context_menu = ContextMenu::new(id, label)
+                .state(state)
+                .items(move |window, cx| items(window, cx));
+            (context_menu, open)
+        });
+        let menu_open = more.as_ref().is_some_and(|(_, open)| *open)
+            || context_menu.as_ref().is_some_and(|(_, open)| *open);
+        let card = tab
+            .hover_card
+            .take()
+            .filter(|_| pose == Pose::Rest && !menu_open);
         let row = if self.layout != TabLayout::Horizontal {
             self.vertical_tab(base, tab, index, current, pose, more)
         } else {
@@ -249,12 +272,8 @@ impl Render {
         .when_some(card, |row, card| {
             card.attach(row, current && self.ring, window, cx)
         });
-        match menu {
-            Some(items) => ContextMenu::new(("menu", index), label)
-                .items(move |window, cx| items(window, cx))
-                .when(current, |menu| menu.state(self.menu.clone()))
-                .child(row)
-                .into_any_element(),
+        match context_menu {
+            Some((menu, _)) => menu.child(row).into_any_element(),
             None => row.into_any_element(),
         }
     }
@@ -273,6 +292,11 @@ impl Render {
         let theme = &self.theme;
         let quiet = theme.muted_foreground;
         let page = self.layout == TabLayout::PageSidebar;
+        let (height, padding_y) = if self.small {
+            (layout.control, theme.space(1.0))
+        } else {
+            (layout.control_lg, theme.space(1.5))
+        };
         let hover_fill = if page {
             theme.sidebar_accent.opacity(0.5)
         } else {
@@ -283,8 +307,8 @@ impl Render {
             .items_start()
             .gap(layout.space(2.0))
             .px(layout.space(2.0))
-            .min_h(layout.control_lg)
-            .py(theme.space(1.5))
+            .min_h(height)
+            .py(padding_y)
             .rounded(theme.radius.control)
             .group(GROUP)
             .text_body(typography)
@@ -346,7 +370,9 @@ impl Render {
                 }
             }))
             .when(tab.end.is_some() || more.is_some(), |row| {
-                let shown = more.as_ref().is_some_and(|(_, shown)| *shown);
+                let shown = more
+                    .as_ref()
+                    .is_some_and(|(_, open)| *open || (current && self.ring));
                 let reveals = more.is_some();
                 row.child(
                     div()
@@ -493,6 +519,7 @@ impl RenderOnce for Tabs {
             count: self.count,
             layout: self.layout,
             line: self.line,
+            small: self.small,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus: focus.clone(),
             menu: menu.clone(),
@@ -539,7 +566,10 @@ impl RenderOnce for Tabs {
             .flex()
             .map(|list| {
                 if vertical {
-                    list.flex_col().gap(px(1.0)).p(render.theme.space(2.0))
+                    list.flex_col()
+                        .gap(px(1.0))
+                        .px(layout.space(2.0))
+                        .py(layout.space(if self.small { 1.0 } else { 2.0 }))
                 } else {
                     list.h(layout.control_lg)
                         .items_center()
