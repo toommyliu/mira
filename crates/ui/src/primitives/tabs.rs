@@ -291,7 +291,15 @@ impl Render {
                 ))
             })
             .when(current && self.ring, |tab| {
-                tab.child(theme.halo(theme.sidebar_ring, theme.radius.control, px(0.0), px(2.0)))
+                tab.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(theme.radius.control)
+                        .border_2()
+                        .border_color(theme.sidebar_ring)
+                        .child(crate::nav::reveal_probe()),
+                )
             })
             .when_some(tab.start, |row, start| {
                 row.child(h_flex().flex_none().h(typography.body_line).child(start))
