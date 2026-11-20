@@ -1,8 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    App, Bounds, DispatchPhase, FocusHandle, Global, IntoElement, KeyDownEvent, MouseDownEvent,
-    Pixels, ScrollHandle, Styled as _, Window, WindowId, canvas, px,
+    App, Bounds, DispatchPhase, FocusHandle, Global, IntoElement, KeyDownEvent, Keystroke,
+    MouseDownEvent, Pixels, ScrollHandle, Styled as _, Window, WindowId, canvas, px,
 };
 
 const REVEAL_MARGIN: Pixels = px(24.0);
@@ -251,28 +254,84 @@ fn backward_page(at: usize, enabled: &impl Fn(usize) -> bool) -> Option<usize> {
     (target..at).find(|&i| enabled(i))
 }
 
-pub fn typeahead(
-    key: &str,
-    labels: impl Iterator<Item = (usize, String)>,
-    current: Option<usize>,
-) -> Option<usize> {
-    let mut chars = key.chars();
-    let (Some(letter), None) = (chars.next(), chars.next()) else {
-        return None;
-    };
-    if !letter.is_alphanumeric() {
+const TYPEAHEAD_RESET: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+pub struct Typeahead {
+    query: String,
+    typed_at: Option<Instant>,
+}
+
+impl Typeahead {
+    pub fn end_unless_typed(&mut self, keystroke: &Keystroke) {
+        if typed(keystroke).is_none() {
+            self.query.clear();
+        }
+    }
+
+    pub fn typing(&self, now: Instant) -> bool {
+        !self.query.is_empty()
+            && self
+                .typed_at
+                .is_some_and(|at| now.duration_since(at) < TYPEAHEAD_RESET)
+    }
+
+    pub fn find(
+        &mut self,
+        keystroke: &Keystroke,
+        now: Instant,
+        labels: impl Iterator<Item = (usize, impl AsRef<str>)>,
+        current: Option<usize>,
+    ) -> Option<usize> {
+        let typed = typed(keystroke)?;
+        if !self.typing(now) {
+            if typed == ' ' {
+                return None;
+            }
+            self.query.clear();
+        }
+        self.query.extend(typed.to_lowercase());
+        self.typed_at = Some(now);
+        let first = self.query.chars().next()?;
+        let search = if self.query.chars().all(|c| c == first) {
+            &self.query[..first.len_utf8()]
+        } else {
+            &self.query
+        };
+        let start = match (current, search.len() == first.len_utf8()) {
+            (Some(at), true) => at + 1,
+            (Some(at), false) => at,
+            (None, _) => 0,
+        };
+        let mut wrapped = None;
+        for (index, label) in labels {
+            if !starts_with(label.as_ref(), search) {
+                continue;
+            }
+            if index >= start {
+                return Some(index);
+            }
+            wrapped.get_or_insert(index);
+        }
+        wrapped
+    }
+}
+
+fn typed(keystroke: &Keystroke) -> Option<char> {
+    let modifiers = keystroke.modifiers;
+    if modifiers.control || modifiers.platform || modifiers.function || modifiers.alt {
         return None;
     }
-    let letter = letter.to_lowercase().next()?;
-    let matches: Vec<usize> = labels
-        .filter(|(_, label)| label.to_lowercase().starts_with(letter))
-        .map(|(index, _)| index)
-        .collect();
-    matches
-        .iter()
-        .find(|&&index| current.is_none_or(|at| index > at))
-        .or(matches.first())
-        .copied()
+    let mut chars = keystroke.key_char.as_deref()?.chars();
+    let (Some(typed), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    (!typed.is_control()).then_some(typed)
+}
+
+fn starts_with(label: &str, lowercase_prefix: &str) -> bool {
+    let mut label = label.chars().flat_map(char::to_lowercase);
+    lowercase_prefix.chars().all(|c| label.next() == Some(c))
 }
 
 pub fn keyboard_focused(handle: &FocusHandle, window: &Window, cx: &App) -> bool {
@@ -314,7 +373,11 @@ pub fn focus_handle(
 
 #[cfg(test)]
 mod tests {
-    use super::{Step, step, typeahead};
+    use std::time::{Duration, Instant};
+
+    use gpui::Keystroke;
+
+    use super::{Step, Typeahead, step};
 
     #[test]
     fn steps_skip_disabled_items_and_wrap_only_when_asked() {
@@ -348,17 +411,42 @@ mod tests {
     }
 
     #[test]
-    fn typeahead_cycles_through_matches_after_the_current_item() {
+    fn typeahead_matches_the_typed_prefix_until_a_pause() {
         let labels = || {
-            ["Apple", "Grape", "Guava", "Tomato"]
-                .into_iter()
-                .enumerate()
-                .map(|(i, label)| (i, label.to_string()))
+            [
+                "Artix",
+                "Sepulchure",
+                "Safiria",
+                "Sir Ver",
+                "Swordhaven",
+                "Swordhaven (EU)",
+            ]
+            .into_iter()
+            .enumerate()
         };
-        assert_eq!(typeahead("g", labels(), None), Some(1));
-        assert_eq!(typeahead("g", labels(), Some(1)), Some(2));
-        assert_eq!(typeahead("G", labels(), Some(2)), Some(1));
-        assert_eq!(typeahead("z", labels(), None), None);
-        assert_eq!(typeahead("tab", labels(), None), None);
+        let key = |key: &'static str| Keystroke::parse(key).unwrap().with_simulated_ime();
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut typeahead = Typeahead::default();
+        let mut typing = |keys: &'static str, ms, current| {
+            keys.split(' ')
+                .map(|k| typeahead.find(&key(k), at(ms), labels(), current))
+                .last()
+                .flatten()
+        };
+        assert_eq!(typing("s a", 0, None), Some(2));
+        assert_eq!(typing("s i r space", 2000, None), Some(3));
+        assert_eq!(typing("s w o r d h a v e n space", 4000, None), Some(5));
+        assert_eq!(typing("shift-s", 6000, Some(1)), Some(2));
+        assert_eq!(typing("s", 6100, Some(2)), Some(3));
+        assert_eq!(typing("a", 8000, Some(4)), Some(0));
+        assert_eq!(typing("z", 10000, Some(4)), None);
+        assert_eq!(typing("space", 12000, Some(4)), None);
+        assert_eq!(typing("cmd-a", 14000, None), None);
+        assert_eq!(typing("tab", 16000, None), None);
+        let mut typeahead = Typeahead::default();
+        typeahead.find(&key("s"), at(0), labels(), None);
+        typeahead.end_unless_typed(&key("right"));
+        assert_eq!(typeahead.find(&key("a"), at(100), labels(), None), Some(0));
     }
 }
