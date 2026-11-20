@@ -72,6 +72,11 @@ impl RenderOnce for ContextMenu {
         div()
             .id(self.id.clone())
             .aria_keyshortcuts("Shift+F10")
+            .capture_any_mouse_down(|event, window, _| {
+                if event.button == MouseButton::Right {
+                    window.prevent_default();
+                }
+            })
             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                 open(&mouse_state, None, Some(event.position), window, cx);
                 cx.stop_propagation();
