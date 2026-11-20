@@ -561,6 +561,74 @@ fn snapshot_menu() {
 }
 
 #[test]
+fn snapshot_select_opens_immediately_on_the_side_with_room() {
+    use gpui::{MouseButton, MouseDownEvent, PlatformInput};
+    use std::time::Duration;
+
+    // The first trigger has room on both sides, with slightly more room above.
+    for (name, trigger_top, below) in [("select-below", 108, true), ("select-above", 172, false)] {
+        mira_ui::snapshot_with(
+            name,
+            size(px(184.0), px(240.0)),
+            |window, cx| {
+                Scene::open(
+                    move |_, _| {
+                        div()
+                            .pt(px((trigger_top - 16) as f32))
+                            .child(
+                                Select::new(
+                                    "quit",
+                                    "Quit shortcut",
+                                    ["Direct", "Hold", "Double press"],
+                                    Some(2),
+                                )
+                                .width(px(136.0)),
+                            )
+                            .into_any_element()
+                    },
+                    window,
+                    cx,
+                )
+            },
+            |cx, owner| {
+                let closed = cx.capture_screenshot(owner).unwrap();
+                let first = cx
+                    .update_window(owner, |_, window, cx| {
+                        cx.set_reduce_motion(false);
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: point(px(112.0), px(trigger_top as f32 + 14.0)),
+                                click_count: 1,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                        window.draw(cx).clear(cx);
+                        window.render_to_image().unwrap()
+                    })
+                    .unwrap();
+                cx.advance_clock(Duration::from_millis(150));
+                cx.update_window(owner, |_, window, cx| window.simulate_next_frame(cx))
+                    .unwrap();
+                cx.run_until_parked();
+                let open = cx.capture_screenshot(owner).unwrap();
+                assert!(first == open, "{name} moved or faded after its first frame");
+
+                let scale = open.width() / 184;
+                let stride = open.width() * 4 * scale;
+                let above_end = ((trigger_top - 8) * stride) as usize;
+                let below_start = ((trigger_top + 28 + 8) * stride) as usize;
+                let changed_above = open.as_raw()[..above_end] != closed.as_raw()[..above_end];
+                let changed_below = open.as_raw()[below_start..] != closed.as_raw()[below_start..];
+                assert_eq!((changed_above, changed_below), (!below, below), "{name}");
+            },
+        );
+    }
+}
+
+#[test]
 fn snapshot_select_short_window() {
     scene_after_keys(
         "select-short-window",
