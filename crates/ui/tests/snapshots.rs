@@ -1127,12 +1127,15 @@ fn snapshot_chip_editing() {
 #[test]
 fn snapshot_color_picker_open() {
     scene_after_keys("color-picker", 320.0, 300.0, &["tab", "enter"], |_, _| {
-        mira_ui::primitives::ColorPicker::new(
-            "primary",
-            "Light primary",
-            mira_ui::theme::parse_hex("#2563EB").unwrap(),
-        )
-        .into_any_element()
+        div()
+            .flex()
+            .justify_end()
+            .child(mira_ui::primitives::ColorPicker::new(
+                "primary",
+                "Light primary",
+                mira_ui::theme::parse_hex("#2563EB").unwrap(),
+            ))
+            .into_any_element()
     });
 }
 
