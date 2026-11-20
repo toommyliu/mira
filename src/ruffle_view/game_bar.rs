@@ -914,10 +914,9 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
 }
 
 fn windows_menu(cx: &App) -> Vec<MenuItem> {
-    let windows: [(&str, Box<dyn gpui::Action>); 5] = [
+    let windows: [(&str, Box<dyn gpui::Action>); 4] = [
         ("Combat profiles", Box::new(super::OpenCombatProfiles)),
         ("Environment", Box::new(super::OpenEnvironment)),
-        ("Follower", Box::new(super::OpenFollower)),
         ("Loader/grabber", Box::new(super::OpenLoaderGrabber)),
         ("Packets", Box::new(super::OpenPackets)),
     ];

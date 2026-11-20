@@ -315,7 +315,7 @@ mod tests {
             let target = self.0;
             let (tool, shown) = match target {
                 Target::Selected => ("Packets", "Artix"),
-                Target::Pinned(_) => ("Follower", self.1),
+                Target::Pinned(_) => ("Environment", self.1),
             };
             let menu = tab_menu(shown.into(), target, tabs, Some(main), |_, _, _| {}, cx)
                 .default_open(matches!(target, Target::Pinned(_)));

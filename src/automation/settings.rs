@@ -2,14 +2,12 @@ use tokio::sync::watch;
 
 use crate::domain::rooms::Rooms;
 
-use super::{auto_attack, auto_relogin, boosts, drops, follower, game_settings, quests, spammer};
+use super::{auto_attack, auto_relogin, boosts, drops, game_settings, quests, spammer};
 
 #[derive(Clone, Default)]
 pub(crate) struct Automation {
     relogin: watch::Sender<auto_relogin::Settings>,
     attack: watch::Sender<auto_attack::Settings>,
-    follower: watch::Sender<follower::Settings>,
-    follower_status: watch::Sender<follower::Status>,
     game: watch::Sender<game_settings::Settings>,
     frame_rate: watch::Sender<Option<game_settings::FrameRate>>,
     quests: watch::Sender<quests::State>,
@@ -54,37 +52,6 @@ impl Automation {
         change: impl FnOnce(&mut auto_attack::Settings),
     ) -> auto_attack::Settings {
         update(&self.attack, change)
-    }
-
-    pub(crate) fn follower(&self) -> follower::Settings {
-        self.follower.borrow().clone()
-    }
-
-    pub(crate) fn watch_follower(&self) -> watch::Receiver<follower::Settings> {
-        self.follower.subscribe()
-    }
-
-    pub(crate) fn update_follower(
-        &self,
-        change: impl FnOnce(&mut follower::Settings),
-    ) -> follower::Settings {
-        update(&self.follower, change)
-    }
-
-    pub(crate) fn follower_status(&self) -> follower::Status {
-        *self.follower_status.borrow()
-    }
-
-    pub(crate) fn watch_follower_status(&self) -> watch::Receiver<follower::Status> {
-        self.follower_status.subscribe()
-    }
-
-    pub(crate) fn report_follower(&self, status: follower::Status) {
-        self.follower_status.send_if_modified(|current| {
-            let changed = *current != status;
-            *current = status;
-            changed
-        });
     }
 
     pub(crate) fn game_settings(&self) -> game_settings::Settings {

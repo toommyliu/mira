@@ -2,7 +2,6 @@ mod account;
 mod account_card;
 mod client;
 mod environment;
-mod follower;
 mod form;
 mod game_bar;
 mod input;
@@ -64,7 +63,6 @@ pub(crate) use client::{
     open as open_client, window_bar,
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
-pub(crate) use follower::{OpenFollower, open as open_follower};
 pub(crate) use game_bar::{
     GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
     ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
@@ -81,7 +79,6 @@ pub(crate) use shown_tab::Target;
 fn close_tools(client: gpui::EntityId, cx: &mut gpui::App) {
     scripts::close(client, cx);
     environment::close(client, cx);
-    follower::close(client, cx);
     loader_grabber::close(client, cx);
     packets::close(client, cx);
 }
@@ -535,12 +532,6 @@ impl RuffleView {
         {
             self.automation
                 .update_auto_attack(|settings| settings.profile = to);
-        }
-        if let Some(name) = self.automation.follower().profile
-            && let Some(to) = store.moved_to(&name)
-        {
-            self.automation
-                .update_follower(|settings| settings.profile = to);
         }
     }
 
