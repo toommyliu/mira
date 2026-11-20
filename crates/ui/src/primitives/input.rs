@@ -1,13 +1,13 @@
-use std::ops::Range;
+use std::{ops::Range, time::Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Div, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId,
-    InteractiveElement as _, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement as _, Pixels, Point, Render, Role,
-    ShapedLine, SharedString, StatefulInteractiveElement as _, Style, Styled as _, TextRun,
-    UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::FluentBuilder as _,
-    px, relative, size,
+    App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Div, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, InteractiveElement as _, IntoElement, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement as _, Pixels, Point,
+    Render, Role, ShapedLine, SharedString, StatefulInteractiveElement as _, Style, Styled as _,
+    TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill, point,
+    prelude::FluentBuilder as _, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -114,6 +114,11 @@ struct Snapshot {
     selected: Range<usize>,
 }
 
+struct SelectionDrag {
+    x: Pixels,
+    last_frame: Option<Instant>,
+}
+
 pub struct Input {
     focus: FocusHandle,
     label: SharedString,
@@ -140,7 +145,7 @@ pub struct Input {
     layout: Option<ShapedLine>,
     bounds: Option<Bounds<Pixels>>,
     scroll: Pixels,
-    selecting: bool,
+    drag: Option<SelectionDrag>,
 }
 
 impl EventEmitter<InputEvent> for Input {}
@@ -173,7 +178,7 @@ impl Input {
             layout: None,
             bounds: None,
             scroll: Pixels::ZERO,
-            selecting: false,
+            drag: None,
         }
     }
 
@@ -475,6 +480,11 @@ impl Input {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.set_selection_head(offset);
+        cx.notify();
+    }
+
+    fn set_selection_head(&mut self, offset: usize) {
         if self.reversed {
             self.selected.start = offset;
         } else {
@@ -484,7 +494,6 @@ impl Input {
             self.reversed = !self.reversed;
             self.selected = self.selected.end..self.selected.start;
         }
-        cx.notify();
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -594,23 +603,27 @@ impl Input {
         cx.propagate();
     }
 
-    fn index_for_mouse(&self, position: Point<Pixels>) -> usize {
+    fn index_for_x(&self, x: Pixels) -> usize {
         let (Some(bounds), Some(line)) = (self.bounds.as_ref(), self.layout.as_ref()) else {
             return 0;
         };
-        if self.content.is_empty() || position.y < bounds.top() {
+        if self.content.is_empty() {
             return 0;
         }
-        if position.y > bounds.bottom() || line.text != self.display_text() {
+        if line.text != self.display_text() {
             return self.content.len();
         }
-        self.from_display(line.closest_index_for_x(position.x - bounds.left()))
+        let x = x.clamp(bounds.left() + self.scroll, bounds.right());
+        self.from_display(line.closest_index_for_x(x - bounds.left()))
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        self.selecting = true;
-        let index = self.index_for_mouse(event.position);
+        self.drag = Some(SelectionDrag {
+            x: event.position.x,
+            last_frame: None,
+        });
+        let index = self.index_for_x(event.position.x);
         if event.modifiers.shift {
             self.select_to(index, cx);
         } else if event.click_count >= 2 {
@@ -621,14 +634,61 @@ impl Input {
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.selecting = false;
+    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .drag
+            .take()
+            .is_some_and(|drag| drag.x != event.position.x)
+        {
+            self.select_to(self.index_for_x(event.position.x), cx);
+        }
     }
 
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selecting {
-            self.select_to(self.index_for_mouse(event.position), cx);
+    fn drag_to(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        if let Some(drag) = &mut self.drag
+            && drag.x != x
+        {
+            drag.x = x;
+            drag.last_frame
+                .get_or_insert_with(|| cx.background_executor().now());
+            self.select_to(self.index_for_x(x), cx);
         }
+    }
+
+    fn drag_scroll(
+        &mut self,
+        left: Pixels,
+        visible: Pixels,
+        line: &ShapedLine,
+        window: &mut Window,
+        cx: &App,
+    ) -> Option<Pixels> {
+        let drag = self.drag.as_mut()?;
+        let last_frame = drag.last_frame.as_mut()?;
+        let now = cx.background_executor().now();
+        let elapsed = (now - *last_frame).as_secs_f32().min(0.05);
+        *last_frame = now;
+        let x = drag.x - left;
+        if self.content.is_empty() {
+            return None;
+        }
+        let max_scroll = (line.width - visible).max(Pixels::ZERO);
+        let (edge, limit) = if x <= Pixels::ZERO {
+            (Pixels::ZERO, Pixels::ZERO)
+        } else if x >= visible {
+            (visible, max_scroll)
+        } else {
+            return None;
+        };
+        let speed = ((x - edge).abs() * 12.0).clamp(px(100.0), px(1600.0));
+        let step = speed * elapsed;
+        let current = self.scroll.clamp(Pixels::ZERO, max_scroll);
+        let scroll = current + (limit - current).clamp(-step, step);
+        self.set_selection_head(self.from_display(line.closest_index_for_x(scroll + edge)));
+        if scroll != limit {
+            window.request_animation_frame();
+        }
+        Some(scroll)
     }
 
     fn utf16_to_utf8(&self, offset: usize) -> usize {
@@ -809,6 +869,9 @@ impl Render for Input {
             self.reversed = false;
             self.typing = false;
         }
+        if !focused || !window.is_window_active() {
+            self.drag = None;
+        }
         if !focused && self.was_focused {
             self.selected = self.selected.end..self.selected.end;
             self.reversed = false;
@@ -880,7 +943,6 @@ impl Render for Input {
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
-                    .on_mouse_move(cx.listener(Self::mouse_move))
             })
             .flex()
             .items_center()
@@ -1142,20 +1204,30 @@ impl gpui::Element for TextElement {
         } else {
             bounds
         };
+        let visible = match field.frame {
+            Frame::Inline => bounds.size.width,
+            Frame::Boxed | Frame::Bare => (bounds.size.width - CARET_WIDTH).max(Pixels::ZERO),
+        };
+        let drag_scroll = if field.drag.is_some() {
+            self.field.update(cx, |field, cx| {
+                field.drag_scroll(bounds.left(), visible, &line, window, cx)
+            })
+        } else {
+            None
+        };
+        let field = self.field.read(cx);
         let caret_x = if field.content.is_empty() {
             px(0.0)
         } else {
             line.x_for_index(field.to_display(field.cursor()))
         };
-        let visible = match field.frame {
-            Frame::Inline => bounds.size.width,
-            Frame::Boxed | Frame::Bare => bounds.size.width - CARET_WIDTH,
-        };
-        let mut scroll = field.scroll;
-        if field.focus.is_focused(window) {
-            scroll = scroll.min(caret_x).max(caret_x - visible);
-        }
-        let scroll = scroll.min(line.width - visible).max(Pixels::ZERO);
+        let scroll = drag_scroll.unwrap_or_else(|| {
+            let mut scroll = field.scroll;
+            if field.focus.is_focused(window) {
+                scroll = scroll.min(caret_x).max(caret_x - visible);
+            }
+            scroll.min(line.width - visible).max(Pixels::ZERO)
+        });
         let bounds = Bounds::new(
             point(bounds.left() - scroll, bounds.top()),
             size(bounds.size.width + scroll, bounds.size.height),
@@ -1210,6 +1282,15 @@ impl gpui::Element for TextElement {
         cx: &mut App,
     ) {
         let bounds = prepainted.bounds;
+        let field = self.field.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+            if phase == DispatchPhase::Capture
+                && event.pressed_button == Some(MouseButton::Left)
+                && field.read(cx).drag.is_some()
+            {
+                field.update(cx, |field, cx| field.drag_to(event.position.x, cx));
+            }
+        });
         let focus = self.field.read(cx).focus.clone();
         window.handle_input(
             &focus,
