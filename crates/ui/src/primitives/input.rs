@@ -52,7 +52,7 @@ actions!(
     ]
 );
 
-const CONTEXT: &str = "Input";
+pub(crate) const CONTEXT: &str = "Input";
 const BULLET: char = '\u{2022}';
 
 pub fn bind_keys(cx: &mut App) {
