@@ -40,7 +40,7 @@ use crate::{
 actions!(mira, [OpenEnvironment]);
 
 const WIDTH: f32 = 800.0;
-const HEIGHT: f32 = 520.0;
+const HEIGHT: f32 = 420.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 280.0;
 
@@ -1077,7 +1077,12 @@ impl Environment {
             self.drops(theme, automation, split, cx),
         );
         let mut others = self.quests(theme, automation, split, cx);
-        others.push(div().flex_none().h(theme.space(2.0)).into_any_element());
+        let divider = div()
+            .flex_none()
+            .my(theme.space(2.0))
+            .h(px(1.0))
+            .bg(theme.border);
+        others.push(divider.into_any_element());
         others.extend(self.boosts(theme, automation, split, cx));
         let others = column("others-column", second, others);
         if split {
@@ -1785,7 +1790,7 @@ mod tests {
     #[gpui::test]
     fn unlisted_drops_start_open_only_for_a_tab_that_uses_them(cx: &mut TestAppContext) {
         let (environment, automation, cx) = open(cx);
-        let mut height = |cx: &mut VisualTestContext| {
+        let height = |cx: &mut VisualTestContext| {
             environment.update(cx, |environment, cx| environment.reset(cx));
             cx.update(|window, cx| window.simulate_next_frame(cx));
             cx.run_until_parked();

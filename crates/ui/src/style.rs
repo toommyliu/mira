@@ -134,7 +134,7 @@ impl Theme {
             .min_h_0()
             .items_stretch()
             .child(v_flex().flex_1().min_w_0().child(first))
-            .child(div().w(px(1.0)).bg(self.border))
+            .child(div().w(px(1.0)).my(self.space(4.0)).bg(self.border))
             .child(v_flex().flex_1().min_w_0().child(second))
     }
 
