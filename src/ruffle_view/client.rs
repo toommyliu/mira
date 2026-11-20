@@ -1102,16 +1102,15 @@ impl Client {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .border_color(if index == self.active {
-                theme.foreground
-            } else {
-                theme.border
-            })
+            .border_color(theme.border)
             .when(column > 0, |tile| tile.border_l_1())
             .when(column + 1 < columns, |tile| tile.border_r_1())
             .when(row > 0, |tile| tile.border_t_1())
             .when(row + 1 < rows, |tile| tile.border_b_1())
             .child(self.sessions[index].view.clone())
+            .when(index != self.active, |tile| {
+                tile.child(div().absolute().inset_0().bg(gpui::black().opacity(0.4)))
+            })
             .on_any_mouse_down(cx.listener(move |this, _, window, cx| {
                 if this.active != index {
                     this.select(index, window, cx);
