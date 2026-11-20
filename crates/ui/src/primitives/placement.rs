@@ -1,4 +1,4 @@
-use gpui::{Anchor, Anchored, Bounds, Pixels, Size, anchored, point, px};
+use gpui::{Anchor, Anchored, Axis, Bounds, Pixels, Point, Size, anchored, point, px};
 
 use crate::motion::From;
 
@@ -72,66 +72,61 @@ impl Placement {
             self.side
         };
 
-        let x = align_at(self.align, target.left(), target.center().x, target.right())
-            + self.align_offset;
-        let y = align_at(self.align, target.top(), target.center().y, target.bottom())
-            + self.align_offset;
-        let (origin, corner, from) = match side {
-            Side::Top => (
-                point(x, target.top() - self.side_offset),
-                align_at(
-                    self.align,
-                    Anchor::BottomLeft,
-                    Anchor::BottomCenter,
-                    Anchor::BottomRight,
-                ),
-                From::Below,
-            ),
-            Side::Bottom => (
-                point(x, target.bottom() + self.side_offset),
-                align_at(
-                    self.align,
-                    Anchor::TopLeft,
-                    Anchor::TopCenter,
-                    Anchor::TopRight,
-                ),
-                From::Above,
-            ),
-            Side::Left => (
-                point(target.left() - self.side_offset, y),
-                align_at(
-                    self.align,
-                    Anchor::TopRight,
-                    Anchor::RightCenter,
-                    Anchor::BottomRight,
-                ),
-                From::Right,
-            ),
-            Side::Right => (
-                point(target.right() + self.side_offset, y),
-                align_at(
-                    self.align,
-                    Anchor::TopLeft,
-                    Anchor::LeftCenter,
-                    Anchor::BottomLeft,
-                ),
-                From::Left,
-            ),
-        };
+        let (anchor, corner, offset, from) = self.anchors(side);
         (
             anchored()
-                .anchor(corner)
-                .position(origin)
+                .anchor(anchor)
+                .position(target.corner(corner) + offset)
                 .snap_to_window_with_margin(COLLISION_MARGIN),
             from,
         )
     }
-}
 
-fn align_at<T>(align: Align, start: T, center: T, end: T) -> T {
-    match align {
-        Align::Start => start,
-        Align::Center => center,
-        Align::End => end,
+    pub(super) fn anchored_to(self, target: Bounds<Pixels>) -> Anchored {
+        let (anchor, corner, offset, _) = self.anchors(self.side);
+        anchored()
+            .anchor(anchor)
+            .attach(target, corner)
+            .offset(offset)
+            .snap_to_window_with_margin(COLLISION_MARGIN)
+    }
+
+    fn anchors(self, side: Side) -> (Anchor, Anchor, Point<Pixels>, From) {
+        let align = |start, center, end| match self.align {
+            Align::Start => start,
+            Align::Center => center,
+            Align::End => end,
+        };
+        let (anchor, axis, offset, from) = match side {
+            Side::Top => (
+                align(
+                    Anchor::BottomLeft,
+                    Anchor::BottomCenter,
+                    Anchor::BottomRight,
+                ),
+                Axis::Vertical,
+                point(self.align_offset, -self.side_offset),
+                From::Below,
+            ),
+            Side::Bottom => (
+                align(Anchor::TopLeft, Anchor::TopCenter, Anchor::TopRight),
+                Axis::Vertical,
+                point(self.align_offset, self.side_offset),
+                From::Above,
+            ),
+            Side::Left => (
+                align(Anchor::TopRight, Anchor::RightCenter, Anchor::BottomRight),
+                Axis::Horizontal,
+                point(-self.side_offset, self.align_offset),
+                From::Right,
+            ),
+            Side::Right => (
+                align(Anchor::TopLeft, Anchor::LeftCenter, Anchor::BottomLeft),
+                Axis::Horizontal,
+                point(self.side_offset, self.align_offset),
+                From::Left,
+            ),
+        };
+        (anchor, anchor.other_side_along(axis), offset, from)
     }
 }

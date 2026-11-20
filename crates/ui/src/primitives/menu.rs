@@ -6,11 +6,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
+    Anchored, AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
     HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, deferred, div,
-    point, prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -250,53 +250,41 @@ pub(crate) fn attach(
     let trigger = menu.trigger_bounds.get();
     let measured = menu.panel_size.clone();
     let (positioner, from) = placement.resolve(trigger, measured.get(), window.viewport_size());
+    let measure = canvas(
+        move |area, window, _| {
+            if measured.replace(area.size) != area.size {
+                window.refresh();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0();
+    popup_layer(
+        positioner,
+        state,
+        on_outside,
+        [panel(from, window), measure.into_any_element()],
+    )
+}
+
+pub(super) fn popup_layer(
+    positioner: Anchored,
+    state: &Entity<MenuState>,
+    on_outside: PressHandler,
+    children: impl IntoIterator<Item = AnyElement>,
+) -> Div {
     div().absolute().child(
         deferred(
             positioner.child(
                 div()
                     .relative()
                     .child(dismiss_probe(state, on_outside))
-                    .child(panel(from, window))
-                    .child(
-                        canvas(
-                            move |area, window, _| {
-                                if measured.replace(area.size) != area.size {
-                                    window.refresh();
-                                }
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .inset_0(),
-                    ),
+                    .children(children),
             ),
         )
         .with_priority(super::layer::POPUP),
     )
-}
-
-pub(crate) fn item_over_trigger(
-    index: usize,
-    count: usize,
-    state: &Entity<MenuState>,
-    window: &Window,
-    cx: &App,
-) -> Option<Point<Pixels>> {
-    let layout = cx.theme().layout;
-    let inset = layout.space(1.0);
-    let height = inset * 2.0 + layout.control * count as f32;
-    if height > SELECT_MAX_HEIGHT {
-        return None;
-    }
-    let trigger = state.read(cx).trigger_bounds.get();
-    let offset = point(
-        inset,
-        inset + layout.control * index as f32 - (trigger.size.height - layout.control) / 2.0,
-    );
-    let top = trigger.top() - offset.y;
-    let fits =
-        top >= WINDOW_MARGIN && top + height <= window.viewport_size().height - WINDOW_MARGIN;
-    fits.then_some(offset)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -317,7 +305,6 @@ pub(crate) struct MenuState {
     rest_scroll: ScrollHandle,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_size: Rc<Cell<gpui::Size<Pixels>>>,
-    pub(crate) item_offset: Cell<Option<Point<Pixels>>>,
     reveal: Cell<bool>,
     closed_at: Option<Instant>,
     pointer: Option<Point<Pixels>>,
@@ -338,7 +325,6 @@ impl MenuState {
             rest_scroll: ScrollHandle::new(),
             trigger_bounds: Rc::default(),
             panel_size: Rc::default(),
-            item_offset: Cell::new(None),
             reveal: Cell::new(false),
             closed_at: None,
             pointer: None,
@@ -364,8 +350,8 @@ impl MenuState {
         self.focus.clone()
     }
 
-    pub(crate) fn trigger_width(&self) -> Pixels {
-        self.trigger_bounds.get().size.width
+    pub(super) fn trigger_bounds(&self) -> Bounds<Pixels> {
+        self.trigger_bounds.get()
     }
 }
 
@@ -410,7 +396,12 @@ fn heading_toward(
 pub(crate) fn trigger_probe(state: &Entity<MenuState>) -> impl IntoElement {
     let state = state.clone();
     canvas(
-        move |area, _, cx| state.read(cx).trigger_bounds.set(area),
+        move |area, window, cx| {
+            let menu = state.read(cx);
+            if menu.trigger_bounds.replace(area) != area && menu.open {
+                window.request_animation_frame();
+            }
+        },
         |_, _, _, _| {},
     )
     .absolute()
@@ -1124,22 +1115,19 @@ fn row(
         })
 }
 
-pub(crate) fn popup(
+pub(super) fn popup_panel(
     id: &ElementId,
-    label: SharedString,
     items: Vec<MenuItem>,
     kind: PopupKind,
     max_height: Pixels,
-    from: From,
     state: &Entity<MenuState>,
     window: &mut Window,
     cx: &App,
-) -> AnyElement {
-    let shown = presence(state, window, cx).unwrap_or(0.0);
+) -> Stateful<Div> {
     let max_height = max_height.min(window.viewport_size().height - WINDOW_MARGIN * 2.0);
-    let theme = &cx.theme().clone();
-    let metas = metas(&items);
+    let theme = cx.theme();
     let menu = state.read(cx);
+    let metas = metas(&items);
     let (highlighted, submenu) = current(&metas, menu);
     let submenu_row =
         submenu.and_then(|(parent, _)| menu.submenu_rows.borrow().get(&parent).copied());
@@ -1161,39 +1149,49 @@ pub(crate) fn popup(
         theme,
     );
     let rest = pinned.split_off(count);
-    let panel = motion::arrive(
-        (id.clone(), "popup"),
-        panel_shell((id.clone(), "panel"), None, theme)
-            .max_h(max_height)
-            .child(theme.surface_ring(theme.radius.panel))
-            .role(match kind {
-                PopupKind::Menu => Role::Menu,
-                PopupKind::ListBox => Role::ListBox,
-            })
-            .aria_label(label)
-            .track_focus(&focus)
-            .on_key_down(move |event, window, cx| {
-                key_down(&keys_metas, kind, &keys_state, event, window, cx)
-            })
-            .on_action(move |_: &FocusNext, window, cx| {
-                close(&next_state, true, window, cx);
-                cx.propagate();
-            })
-            .on_action(move |_: &FocusPrevious, window, cx| {
-                close(&prev_state, true, window, cx);
-                cx.propagate();
-            })
-            .children(pinned)
-            .child(scrolling(
-                ElementId::from((id.clone(), "rest")),
-                max_height,
-                false,
-                rest,
-                &rest_scroll,
-            )),
-        from,
-    );
-    fading(panel, shown)
+    panel_shell((id.clone(), "panel"), None, theme)
+        .max_h(max_height)
+        .child(theme.surface_ring(theme.radius.panel))
+        .role(match kind {
+            PopupKind::Menu => Role::Menu,
+            PopupKind::ListBox => Role::ListBox,
+        })
+        .track_focus(&focus)
+        .on_key_down(move |event, window, cx| {
+            key_down(&keys_metas, kind, &keys_state, event, window, cx)
+        })
+        .on_action(move |_: &FocusNext, window, cx| {
+            close(&next_state, true, window, cx);
+            cx.propagate();
+        })
+        .on_action(move |_: &FocusPrevious, window, cx| {
+            close(&prev_state, true, window, cx);
+            cx.propagate();
+        })
+        .children(pinned)
+        .child(scrolling(
+            ElementId::from((id.clone(), "rest")),
+            max_height,
+            false,
+            rest,
+            &rest_scroll,
+        ))
+}
+
+pub(crate) fn popup(
+    id: &ElementId,
+    label: SharedString,
+    items: Vec<MenuItem>,
+    max_height: Pixels,
+    from: From,
+    state: &Entity<MenuState>,
+    window: &mut Window,
+    cx: &App,
+) -> AnyElement {
+    let shell =
+        popup_panel(id, items, PopupKind::Menu, max_height, state, window, cx).aria_label(label);
+    let panel = motion::arrive((id.clone(), "popup"), shell, from);
+    fading(panel, presence(state, window, cx).unwrap_or(0.0))
 }
 
 fn scrolling(
@@ -1464,21 +1462,11 @@ impl RenderOnce for DropdownMenu {
                     window,
                     cx,
                     |from, window| {
-                        let panel = popup(
-                            &id,
-                            label,
-                            items,
-                            PopupKind::Menu,
-                            max_height,
-                            from,
-                            &state,
-                            window,
-                            cx,
-                        );
+                        let panel = popup(&id, label, items, max_height, from, &state, window, cx);
                         match width {
                             Some(width) => div().w(width).child(panel).into_any_element(),
                             None => div()
-                                .min_w(state.read(cx).trigger_width().max(px(128.0)))
+                                .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
                                 .child(panel)
                                 .into_any_element(),
                         }
