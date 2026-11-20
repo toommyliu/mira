@@ -57,7 +57,10 @@ struct Stage(AnyView);
 
 impl Render for Stage {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.0.clone())
+        div()
+            .size_full()
+            .child(self.0.clone())
+            .child(crate::quit::Overlay)
     }
 }
 
@@ -69,8 +72,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             mira_ui::init(cx);
             globals(cx);
             crate::ruffle_view::bind_keys(cx);
-            cx.bind_keys([gpui::KeyBinding::new("cmd-q", crate::Quit, None)]);
-            cx.on_action(|_: &crate::Quit, cx| cx.quit());
+            crate::quit::init(cx);
             match live::open(cx) {
                 Ok(index) => {
                     cx.on_window_closed(move |cx, closed| {
@@ -257,6 +259,7 @@ mod live {
                 .text_color(theme.foreground)
                 .key_context(FOCUS_SCOPE)
                 .track_focus(&self.focus)
+                .child(crate::quit::Overlay)
                 .child(
                     window_bar(window, cx)
                         .child(bar_title("Storyboard", cx))

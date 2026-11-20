@@ -2244,6 +2244,7 @@ impl Render for ScriptsWindow {
                 window.focus(&this.search.focus_handle(cx), cx);
             }))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(header)
             .child(toolbar)
             .child(body)

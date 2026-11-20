@@ -1614,6 +1614,7 @@ impl Render for Environment {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .child(mira_ui::nav::pointer_probe())
+            .child(crate::quit::Overlay)
             .child(header.child(self.bulk_actions(
                 automation.is_some() && tabs >= 2,
                 clearable,
