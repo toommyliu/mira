@@ -1,14 +1,18 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, ElementId, InteractiveElement as _, IntoElement,
+    AnyElement, App, Bounds, Context, Div, ElementId, Global, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Pixels, RenderOnce, SharedString, Size, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, deferred, div,
+    StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, canvas, deferred, div,
     prelude::FluentBuilder as _, px,
 };
 
-use super::{Align, Placement, Side, placement::COLLISION_MARGIN};
-use crate::{ActiveTheme as _, Theme, motion::From};
+use super::{Align, Placement, Side, hover_card::Card, placement::COLLISION_MARGIN};
+use crate::{ActiveTheme as _, Theme, motion};
 
 #[derive(IntoElement)]
 pub struct Tooltip {
@@ -54,54 +58,264 @@ impl RenderOnce for Tooltip {
         hover(
             trigger,
             (self.id, "tooltip").into(),
+            Help::Label(self.label),
             false,
             self.placement,
             window,
             cx,
-            move |_, from, theme| panel(self.label, from, theme),
         )
     }
 }
 
+pub(crate) enum Help {
+    Label(SharedString),
+    Card(Card),
+}
+
+impl Help {
+    fn kind(&self) -> Kind {
+        match self {
+            Help::Label(_) => Kind::Tooltip,
+            Help::Card(_) => Kind::Card,
+        }
+    }
+
+    fn panel(self, theme: &Theme) -> Div {
+        match self {
+            Help::Label(label) => panel(label, theme),
+            Help::Card(card) => super::hover_card::popup(card, theme),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Tooltip,
+    Card,
+}
+
+impl Kind {
+    fn open_delay(self) -> Duration {
+        match self {
+            Kind::Tooltip => Duration::ZERO,
+            Kind::Card => Duration::from_millis(600),
+        }
+    }
+
+    fn close_delay(self) -> Duration {
+        match self {
+            Kind::Tooltip => Duration::from_millis(120),
+            Kind::Card => Duration::ZERO,
+        }
+    }
+
+    fn arrival(self) -> Duration {
+        match self {
+            Kind::Tooltip => motion::TRAVEL,
+            Kind::Card => motion::ARRIVE,
+        }
+    }
+}
+
+const WARM: Duration = Duration::from_millis(400);
+
 #[derive(Default)]
+struct Group {
+    tip: Option<WeakEntity<Tip>>,
+    closed: Option<Instant>,
+}
+
+#[derive(Default)]
+struct Showing {
+    tooltip: Group,
+    card: Group,
+}
+
+impl Global for Showing {}
+
+impl Showing {
+    fn group(&mut self, kind: Kind) -> &mut Group {
+        match kind {
+            Kind::Tooltip => &mut self.tooltip,
+            Kind::Card => &mut self.card,
+        }
+    }
+}
+
+enum Phase {
+    Hidden,
+    Waiting { _timer: Task<()> },
+    Open,
+    Lingering { _timer: Task<()> },
+    Leaving { since: Instant, _timer: Task<()> },
+}
+
+impl Phase {
+    fn on_screen(&self) -> bool {
+        matches!(
+            self,
+            Phase::Open | Phase::Lingering { .. } | Phase::Leaving { .. }
+        )
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Over {
+    Trigger,
+    Panel,
+}
+
 struct Tip {
+    kind: Kind,
+    phase: Phase,
+    instant: bool,
     over_trigger: bool,
     over_panel: bool,
     focused: bool,
-    shown: bool,
     dismissed: bool,
-    close: Option<Task<()>>,
     trigger: Rc<Cell<Bounds<Pixels>>>,
     size: Rc<Cell<Size<Pixels>>>,
 }
 
 impl Tip {
-    fn pointer(&mut self, over_trigger: bool, entered: bool, cx: &mut Context<Self>) {
-        if over_trigger {
-            self.over_trigger = entered;
-            if entered {
-                self.dismissed = false;
-            }
-        } else {
-            self.over_panel = entered;
+    fn new(kind: Kind) -> Self {
+        Self {
+            kind,
+            phase: Phase::Hidden,
+            instant: false,
+            over_trigger: false,
+            over_panel: false,
+            focused: false,
+            dismissed: false,
+            trigger: Rc::default(),
+            size: Rc::default(),
         }
-        if self.over_trigger || self.over_panel {
-            self.close = None;
-            self.shown = true;
-        } else {
-            // Keep the popup mounted while the pointer crosses the gap beside its anchor.
-            self.close = Some(cx.spawn(async move |tip, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let _ = tip.update(cx, |tip, cx| {
-                    tip.shown = false;
-                    cx.notify();
-                });
-            }));
+    }
+
+    fn pointer(&mut self, over: Over, entered: bool, cx: &mut Context<Self>) {
+        match over {
+            Over::Trigger => {
+                self.over_trigger = entered;
+                if entered {
+                    self.dismissed = false;
+                }
+            }
+            Over::Panel => self.over_panel = entered,
+        }
+        let hovered = self.over_trigger || self.over_panel;
+        let next = match self.phase {
+            Phase::Hidden | Phase::Leaving { .. } if over == Over::Trigger && entered => {
+                Some(self.approach(cx))
+            }
+            Phase::Lingering { .. } if hovered => Some(Phase::Open),
+            Phase::Waiting { .. } if !hovered => Some(Phase::Hidden),
+            Phase::Open if !hovered => Some(self.withdraw(cx)),
+            _ => None,
+        };
+        if let Some(next) = next {
+            self.phase = next;
         }
         cx.notify();
     }
+
+    fn approach(&mut self, cx: &mut Context<Self>) -> Phase {
+        let delay = self.kind.open_delay();
+        if delay.is_zero() || self.warm(cx) {
+            self.open(cx)
+        } else {
+            Phase::Waiting {
+                _timer: after(delay, |tip, cx| tip.phase = tip.open(cx), cx),
+            }
+        }
+    }
+
+    fn withdraw(&mut self, cx: &mut Context<Self>) -> Phase {
+        let delay = self.kind.close_delay();
+        if delay.is_zero() {
+            self.close(cx)
+        } else {
+            Phase::Lingering {
+                _timer: after(delay, |tip, cx| tip.phase = tip.close(cx), cx),
+            }
+        }
+    }
+
+    fn open(&mut self, cx: &mut Context<Self>) -> Phase {
+        self.instant = self.warm(cx);
+        let me = cx.weak_entity();
+        let previous = cx
+            .default_global::<Showing>()
+            .group(self.kind)
+            .tip
+            .replace(me.clone())
+            .filter(|previous| previous != &me)
+            .and_then(|previous| previous.upgrade());
+        if let Some(previous) = previous {
+            previous.update(cx, |tip, cx| {
+                tip.phase = Phase::Hidden;
+                cx.notify();
+            });
+        }
+        Phase::Open
+    }
+
+    fn warm(&self, cx: &mut Context<Self>) -> bool {
+        let now = cx.background_executor().now();
+        let me = cx.entity_id();
+        let group = cx.default_global::<Showing>().group(self.kind);
+        let closed_lately = group
+            .closed
+            .is_some_and(|closed| now.duration_since(closed) < WARM);
+        let showing = group.tip.as_ref().and_then(WeakEntity::upgrade);
+        closed_lately
+            || match showing {
+                Some(tip) if tip.entity_id() == me => self.phase.on_screen(),
+                Some(tip) => tip.read(cx).phase.on_screen(),
+                None => false,
+            }
+    }
+
+    fn close(&self, cx: &mut Context<Self>) -> Phase {
+        let now = cx.background_executor().now();
+        cx.default_global::<Showing>().group(self.kind).closed = Some(now);
+        self.fade(cx)
+    }
+
+    fn fade(&self, cx: &mut Context<Self>) -> Phase {
+        if cx.reduce_motion() {
+            Phase::Hidden
+        } else {
+            Phase::Leaving {
+                since: Instant::now(),
+                _timer: after(motion::LEAVE, |tip, _| tip.phase = Phase::Hidden, cx),
+            }
+        }
+    }
+
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.dismissed = true;
+        self.over_panel = false;
+        match self.phase {
+            Phase::Open | Phase::Lingering { .. } => self.phase = self.fade(cx),
+            Phase::Waiting { .. } => self.phase = Phase::Hidden,
+            Phase::Hidden | Phase::Leaving { .. } => {}
+        }
+        cx.notify();
+    }
+}
+
+fn after(
+    delay: Duration,
+    then: fn(&mut Tip, &mut Context<Tip>),
+    cx: &mut Context<Tip>,
+) -> Task<()> {
+    cx.spawn(async move |tip, cx| {
+        cx.background_executor().timer(delay).await;
+        let _ = tip.update(cx, |tip, cx| {
+            then(tip, cx);
+            cx.notify();
+        });
+    })
 }
 
 pub fn attach(
@@ -115,56 +329,54 @@ pub fn attach(
     hover(
         trigger,
         id.into(),
+        Help::Label(label),
         focused,
         Placement::new(Side::Top, Align::Center),
         window,
         cx,
-        move |_, from, theme| panel(label, from, theme),
     )
 }
 
-pub(crate) fn hover<E: IntoElement>(
+pub(crate) fn hover(
     trigger: Stateful<Div>,
     id: ElementId,
+    help: Help,
     focused: bool,
     placement: Placement,
     window: &mut Window,
     cx: &mut App,
-    content: impl FnOnce(Bounds<Pixels>, From, &Theme) -> E,
 ) -> Stateful<Div> {
-    let tip = window.use_keyed_state(id.clone(), cx, |_, _| Tip::default());
-    let (shown, bounds, measured) = tip.update(cx, |tip, _| {
+    let kind = help.kind();
+    let tip = window.use_keyed_state(id.clone(), cx, |_, _| Tip::new(kind));
+    let (presence, enter, bounds, measured) = tip.update(cx, |tip, cx| {
         if focused && !tip.focused {
             tip.dismissed = false;
         }
         tip.focused = focused;
-        (
-            (tip.shown || focused) && !tip.dismissed,
-            tip.trigger.clone(),
-            tip.size.clone(),
-        )
+        let (presence, enter) = match tip.phase {
+            Phase::Open | Phase::Lingering { .. } => (Some(1.0), !tip.instant),
+            _ if focused && !tip.dismissed => (Some(1.0), false),
+            Phase::Leaving { since, .. } => (motion::leaving(since, window, cx), false),
+            Phase::Hidden | Phase::Waiting { .. } => (None, false),
+        };
+        (presence, enter, tip.trigger.clone(), tip.size.clone())
     });
+    let shown = presence.is_some();
     let at = bounds.get();
     let hover = tip.clone();
     let press = tip.clone();
     let escape = tip.clone();
     trigger
-        .on_hover(move |over, _, cx| hover.update(cx, |tip, cx| tip.pointer(true, *over, cx)))
+        .on_hover(move |over, _, cx| {
+            hover.update(cx, |tip, cx| tip.pointer(Over::Trigger, *over, cx))
+        })
         .on_key_down(move |event, _, cx| {
             if shown && event.keystroke.key == "escape" {
-                escape.update(cx, |tip, cx| {
-                    tip.dismissed = true;
-                    tip.over_panel = false;
-                    cx.notify();
-                });
+                escape.update(cx, |tip, cx| tip.dismiss(cx));
             }
         })
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            press.update(cx, |tip, cx| {
-                tip.dismissed = true;
-                tip.over_panel = false;
-                cx.notify();
-            })
+            press.update(cx, |tip, cx| tip.dismiss(cx))
         })
         .child(
             canvas(
@@ -178,17 +390,26 @@ pub(crate) fn hover<E: IntoElement>(
             .absolute()
             .inset_0(),
         )
-        .when(shown, |trigger| {
+        .when_some(presence, |trigger, presence| {
             let viewport = window.viewport_size();
             let (positioner, from) = placement.resolve(at, measured.get(), viewport);
+            let content = help.panel(cx.theme());
+            let content = if enter {
+                motion::arrive_for("enter", content, from, kind.arrival()).into_any_element()
+            } else {
+                content.into_any_element()
+            };
+            let selector = id.to_string();
             let panel = div()
+                .debug_selector(|| selector)
                 .id((id, "floating-help"))
                 .relative()
                 .max_w(viewport.width - COLLISION_MARGIN * 2.0)
+                .opacity(presence)
                 .on_hover(move |over, _, cx| {
-                    tip.update(cx, |tip, cx| tip.pointer(false, *over, cx))
+                    tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))
                 })
-                .child(content(at, from, cx.theme()))
+                .child(content)
                 .child(
                     canvas(
                         move |area, window, _| {
@@ -205,8 +426,8 @@ pub(crate) fn hover<E: IntoElement>(
         })
 }
 
-fn panel(label: SharedString, from: From, theme: &Theme) -> impl IntoElement + use<> {
-    let panel = div()
+fn panel(label: SharedString, theme: &Theme) -> Div {
+    div()
         .max_w(px(320.0))
         .py(theme.space(1.5))
         .px(theme.space(3.0))
@@ -215,6 +436,5 @@ fn panel(label: SharedString, from: From, theme: &Theme) -> impl IntoElement + u
         .text_color(theme.background)
         .text_size(theme.typography.body)
         .line_height(theme.typography.secondary_line)
-        .child(label);
-    crate::motion::arrive_for("tooltip-enter", panel, from, crate::motion::TRAVEL)
+        .child(label)
 }

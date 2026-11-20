@@ -1587,17 +1587,23 @@ mod tests {
             |_, cx| cx.new(|_| Sessions),
             |cx, owner| {
                 let before = cx.capture_screenshot(owner).unwrap();
-                cx.update_window(owner, |_, window, cx| {
-                    window.dispatch_event(
-                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
-                            position: point(px(42.0), px(24.0)),
-                            ..Default::default()
-                        }),
-                        cx,
-                    );
-                    window.refresh();
-                })
-                .unwrap();
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(42.0 + nudge), px(24.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                cx.advance_clock(std::time::Duration::from_secs(1));
+                cx.update_window(owner, |_, window, _| window.refresh())
+                    .unwrap();
                 cx.run_until_parked();
                 let after = cx.capture_screenshot(owner).unwrap();
                 let scale = before.width() / 600;
