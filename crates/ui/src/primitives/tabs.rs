@@ -96,6 +96,13 @@ impl From<&'static str> for Tab {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabLayout {
+    Horizontal,
+    Sidebar,
+    PageSidebar,
+}
+
 #[derive(IntoElement)]
 pub struct Tabs {
     id: ElementId,
@@ -103,7 +110,7 @@ pub struct Tabs {
     count: usize,
     tab: TabBuilder,
     selected: usize,
-    vertical: bool,
+    layout: TabLayout,
     line: bool,
     scroll: Option<ScrollHandle>,
     on_select: Option<IndexHandler>,
@@ -123,7 +130,7 @@ impl Tabs {
             count,
             tab: Rc::new(tab),
             selected: 0,
-            vertical: false,
+            layout: TabLayout::Horizontal,
             line: false,
             scroll: None,
             on_select: None,
@@ -142,7 +149,12 @@ impl Tabs {
     }
 
     pub fn vertical(mut self) -> Self {
-        self.vertical = true;
+        self.layout = TabLayout::Sidebar;
+        self
+    }
+
+    pub fn page_sidebar(mut self) -> Self {
+        self.layout = TabLayout::PageSidebar;
         self
     }
 
@@ -168,7 +180,7 @@ struct Render {
     tab: TabBuilder,
     selected: usize,
     count: usize,
-    vertical: bool,
+    layout: TabLayout,
     line: bool,
     ring: bool,
     focus: gpui::FocusHandle,
@@ -211,7 +223,7 @@ impl Render {
         let card = tab.hover_card.take().filter(|_| pose == Pose::Rest);
         let more = menu
             .clone()
-            .filter(|_| self.vertical && pose == Pose::Rest)
+            .filter(|_| self.layout != TabLayout::Horizontal && pose == Pose::Rest)
             .map(|items| {
                 let id = ElementId::NamedChild(
                     Arc::new(self.id.clone()),
@@ -229,7 +241,7 @@ impl Render {
                     .items(move |window, cx| items(window, cx));
                 (trigger, open || (current && self.ring))
             });
-        let row = if self.vertical {
+        let row = if self.layout != TabLayout::Horizontal {
             self.vertical_tab(base, tab, index, current, pose, more)
         } else {
             self.horizontal_tab(base, tab, current)
@@ -260,6 +272,12 @@ impl Render {
         let typography = self.theme.typography;
         let theme = &self.theme;
         let quiet = theme.muted_foreground;
+        let page = self.layout == TabLayout::PageSidebar;
+        let hover_fill = if page {
+            theme.sidebar_accent.opacity(0.5)
+        } else {
+            theme.sidebar_accent
+        };
         base.flex()
             .flex_none()
             .items_start()
@@ -270,18 +288,23 @@ impl Render {
             .rounded(theme.radius.control)
             .group(GROUP)
             .text_body(typography)
-            .text_color(if current {
-                theme.foreground
-            } else {
-                theme.sidebar_foreground
-            })
+            .text_color(theme.sidebar_foreground)
             .when(current, |tab| {
-                tab.bg(theme.sidebar_accent)
+                let fill = if page {
+                    crate::theme::perceptual_mix(
+                        theme.sidebar_accent,
+                        theme.sidebar_accent_foreground,
+                        0.05,
+                    )
+                } else {
+                    theme.sidebar_accent
+                };
+                tab.bg(fill)
                     .text_color(theme.sidebar_accent_foreground)
-                    .font_weight(FontWeight::MEDIUM)
+                    .when(!page, |row| row.font_weight(FontWeight::MEDIUM))
             })
             .when(!current && pose == Pose::Rest, |tab| {
-                tab.hover(|style| style.bg(theme.sidebar_accent))
+                tab.hover(|style| style.bg(hover_fill))
             })
             .active(|style| {
                 style.bg(theme.pressed(
@@ -306,21 +329,18 @@ impl Render {
             })
             .child(v_flex().flex_1().min_w_0().map(|body| {
                 if tab.children.is_empty() {
-                    body.child(
-                        div()
-                            .truncate()
-                            .when(current, |label| label.font_weight(FontWeight::MEDIUM))
-                            .child(tab.label),
+                    body.child(div().truncate().child(tab.label)).when_some(
+                        tab.description,
+                        |body, description| {
+                            body.child(
+                                div()
+                                    .truncate()
+                                    .text_caption(typography)
+                                    .text_color(quiet)
+                                    .child(description),
+                            )
+                        },
                     )
-                    .when_some(tab.description, |body, description| {
-                        body.child(
-                            div()
-                                .truncate()
-                                .text_caption(typography)
-                                .text_color(quiet)
-                                .child(description),
-                        )
-                    })
                 } else {
                     body.children(tab.children)
                 }
@@ -471,7 +491,7 @@ impl RenderOnce for Tabs {
             tab: self.tab.clone(),
             selected: self.selected,
             count: self.count,
-            vertical: self.vertical,
+            layout: self.layout,
             line: self.line,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus: focus.clone(),
@@ -480,7 +500,8 @@ impl RenderOnce for Tabs {
             theme: cx.theme().clone(),
         };
         let (selected, count) = (self.selected, self.count);
-        let axis = if self.vertical {
+        let vertical = self.layout != TabLayout::Horizontal;
+        let axis = if vertical {
             Axis::Vertical
         } else {
             Axis::Horizontal
@@ -517,7 +538,7 @@ impl RenderOnce for Tabs {
             })
             .flex()
             .map(|list| {
-                if self.vertical {
+                if vertical {
                     list.flex_col().gap(px(1.0)).p(render.theme.space(2.0))
                 } else {
                     list.h(layout.control_lg)
@@ -535,11 +556,7 @@ impl RenderOnce for Tabs {
             });
         match self.on_reorder {
             Some(reorder) => {
-                let flow = if self.vertical {
-                    Flow::Column
-                } else {
-                    Flow::Row
-                };
+                let flow = if vertical { Flow::Column } else { Flow::Row };
                 let sortable = Sortable::new(
                     list,
                     flow,

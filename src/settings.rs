@@ -1297,7 +1297,7 @@ impl Render for SettingsWindow {
             Pane::ALL.len(),
             |index| Tab::new(Pane::ALL[index].label()),
         )
-        .vertical()
+        .page_sidebar()
         .selected(if query.is_empty() {
             Pane::ALL
                 .iter()
@@ -1762,6 +1762,37 @@ mod tests {
         assert_eq!(Settings::open(&path), None);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_settings_sidebar_hover() {
+        let dir = crate::storyboard::scratch("settings-sidebar-hover");
+        mira_ui::snapshot_with(
+            "settings-sidebar-hover",
+            size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
+            |_, cx| {
+                init(dir.join("settings.json"), |_| {}, cx);
+                packages::init(dir.join("packages"), dir.join("token"), cx);
+                cx.new(SettingsWindow::new)
+            },
+            |cx, owner| {
+                for x in [90.0, 91.0] {
+                    cx.capture_screenshot(owner).unwrap();
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(x), px(140.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+            },
+        );
     }
 
     #[test]
