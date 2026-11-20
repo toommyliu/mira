@@ -817,6 +817,7 @@ struct Bar {
     inset: Pixels,
     live: bool,
     relogin: bool,
+    login_captured: bool,
     relogin_detail: Option<Detail>,
     attack: bool,
     script: ScriptControl,
@@ -832,6 +833,7 @@ pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl I
         inset: view.bar_inset,
         live: view.in_game(),
         relogin: view.automation.auto_relogin().enabled,
+        login_captured: view.login_captured,
         relogin_detail: relogin_value(view),
         attack: view.automation.auto_attack().enabled,
         script,
@@ -874,7 +876,8 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
                 bar.relogin_detail,
                 Some(bar.relogin),
                 cx,
-            ),
+            )
+            .disabled(!bar.relogin && !bar.login_captured),
             {
                 let this = this.clone();
                 move |_, window, cx| match this.read_with(cx, |view, _| view.relogin()) {
@@ -884,7 +887,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             },
         )
         .row_popover(
-            trigger("auto-attack", "Auto attack", None, Some(bar.attack), cx),
+            trigger("auto-attack", "Auto attack", None, Some(bar.attack), cx).disabled(!bar.live),
             {
                 let this = this.clone();
                 move |close, _, cx| match this.read_with(cx, |view, _| {
@@ -2326,13 +2329,14 @@ mod tests {
 
     #[test]
     fn snapshot_bar() {
-        for path in mira_ui::snapshot("game-bar", gpui::size(px(900.0), px(160.0)), |_, cx| {
+        for path in mira_ui::snapshot("game-bar", gpui::size(px(900.0), px(200.0)), |_, cx| {
             cx.new(|_| {
                 Bars(|| {
                     let bar = |relogin_detail: Option<Detail>, attack, script| Bar {
                         inset: px(84.0),
                         live: true,
                         relogin: relogin_detail.is_some(),
+                        login_captured: true,
                         relogin_detail,
                         attack,
                         script,
@@ -2346,6 +2350,11 @@ mod tests {
                             true,
                             ScriptControl::Stop("hunt.ts".into()),
                         ),
+                        Bar {
+                            live: false,
+                            login_captured: false,
+                            ..bar(None, false, ScriptControl::Start(None))
+                        },
                     ]
                 })
             })

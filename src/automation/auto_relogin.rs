@@ -78,6 +78,7 @@ pub(crate) enum Phase {
 pub(crate) enum Report {
     Phase(Phase),
     Servers(Vec<String>),
+    LoginCaptured,
 }
 
 pub(crate) fn wants(event: &Event) -> bool {
@@ -180,6 +181,9 @@ pub(crate) async fn run(
                     failure = None;
                     dialog = None;
                     logins.connected(&loader);
+                    if logins.last().is_some() {
+                        (reporter.report)(Report::LoginCaptured);
+                    }
                     if let Ok(servers) = auth::servers(&loader)
                         && !servers.is_empty()
                     {
@@ -496,7 +500,7 @@ pub(super) mod tests {
             .rev()
             .find_map(|report| match report {
                 Report::Phase(phase) => Some(phase.clone()),
-                Report::Servers(_) => None,
+                Report::Servers(_) | Report::LoginCaptured => None,
             })
     }
 
@@ -843,18 +847,17 @@ pub(super) mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn servers_seen_at_login_are_reported() {
+    async fn a_login_reports_its_servers_and_that_it_can_be_restored() {
         LocalSet::new()
             .run_until(async {
                 let running = start(Settings::default());
+                after(1).await;
+                assert!(!running.reports.borrow().contains(&Report::LoginCaptured));
                 running.world.connect();
                 after(1).await;
-                assert!(
-                    running
-                        .reports
-                        .borrow()
-                        .contains(&Report::Servers(vec!["Twilly".into(), "Yorumi".into()]))
-                );
+                let reports = running.reports.borrow();
+                assert!(reports.contains(&Report::Servers(vec!["Twilly".into(), "Yorumi".into()])));
+                assert!(reports.contains(&Report::LoginCaptured));
             })
             .await;
     }
