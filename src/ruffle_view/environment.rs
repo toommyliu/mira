@@ -1,27 +1,27 @@
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Global, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Render, Role, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle,
-    WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
+    Render, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
-    components::{Chips, Empty},
+    components::{Chips, Disclosure, Empty},
     h_flex,
     primitives::{
         Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input, InputEvent,
         MenuItem, Scrollbar, Switch,
         button::{Size, Variant},
     },
-    theme::{DISABLED_OPACITY, RING_ROOM, tabular},
+    theme::{RING_ROOM, tabular},
     v_flex,
 };
 
 use super::{
     Client,
     client::CloseSession,
-    form::{LABEL_WIDTH, choices_row, note, row, row_label, section, switch_row},
+    form::{choices_row, note, row, section},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
 use crate::{
@@ -40,7 +40,7 @@ use crate::{
 actions!(mira, [OpenEnvironment]);
 
 const WIDTH: f32 = 800.0;
-const HEIGHT: f32 = 600.0;
+const HEIGHT: f32 = 520.0;
 const MIN_WIDTH: f32 = 340.0;
 const MIN_HEIGHT: f32 = 280.0;
 
@@ -253,6 +253,7 @@ pub(crate) struct Environment {
     fetch: Fetch,
     pickup: Pickup,
     confirm: Option<Confirm>,
+    unlisted: bool,
     scroll: ScrollHandle,
     columns: [ScrollHandle; 2],
     _subscriptions: Vec<Subscription>,
@@ -307,6 +308,7 @@ impl Environment {
             fetch: Fetch::Idle,
             pickup: Pickup::Idle,
             confirm: None,
+            unlisted: false,
             scroll: ScrollHandle::new(),
             columns: [ScrollHandle::new(), ScrollHandle::new()],
             _subscriptions: subscriptions,
@@ -349,6 +351,9 @@ impl Environment {
         self.fetch = Fetch::Idle;
         self.pickup = Pickup::Idle;
         self.confirm = None;
+        self.unlisted = self
+            .automation()
+            .is_some_and(|automation| automation.drops().config.acts_on_unregistered());
     }
 
     fn automation(&self) -> Option<&Automation> {
@@ -739,7 +744,6 @@ impl Environment {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let layout = theme.layout;
-        let typography = theme.typography;
         let state = automation.drops();
         let on = state.config.enabled;
         let switching = automation.clone();
@@ -806,42 +810,57 @@ impl Environment {
         let derived = (!from_quests.is_empty()).then(|| {
             let marking = automation.clone();
             let names = from_quests.clone();
-            [
-                div()
-                    .when(listed.is_some(), |caption| caption.mt(layout.space(0.5)))
-                    .mb(layout.space(-0.5))
-                    .text_caption(typography)
-                    .text_color(theme.muted_foreground)
-                    .when(!on, |caption| caption.opacity(DISABLED_OPACITY))
-                    .child("From your quests")
-                    .into_any_element(),
-                Chips::new(
-                    "quest-drops",
-                    "From your quests",
-                    from_quests
-                        .iter()
-                        .map(|name| SharedString::from(name.clone())),
+            Chips::new(
+                "quest-drops",
+                "From your quests",
+                from_quests
+                    .iter()
+                    .map(|name| SharedString::from(name.clone())),
+            )
+            .scrollable(split)
+            .disabled(!on)
+            .marked(
+                Icon::Bell,
+                Icon::BellRing,
+                "Beep",
+                from_quests
+                    .iter()
+                    .map(|name| state.rings(&ItemQuery::Name(name.clone()))),
+            )
+            .on_mark(move |index, on, _, _| {
+                if let Some(name) = names.get(index) {
+                    marking
+                        .update_drops(|state| state.set_sound(&ItemQuery::Name(name.clone()), on));
+                }
+            })
+            .into_any_element()
+        });
+        let quests = automation.quests();
+        let settled = matches!(self.pickup, Pickup::Idle);
+        let taken = div()
+            .grid()
+            .grid_cols_max_content(2)
+            .gap_x(layout.space(3.0))
+            .children(Taken::ALL.into_iter().map(|taken| {
+                let (automation, this) = (automation.clone(), cx.weak_entity());
+                Checkbox::new(
+                    ("quests-take", taken as usize),
+                    taken.label(),
+                    checked(*taken.flag(&mut quests.config.clone())),
                 )
-                .scrollable(split)
-                .disabled(!on)
-                .marked(
-                    Icon::Bell,
-                    Icon::BellRing,
-                    "Beep",
-                    from_quests
-                        .iter()
-                        .map(|name| state.rings(&ItemQuery::Name(name.clone()))),
-                )
-                .on_mark(move |index, on, _, _| {
-                    if let Some(name) = names.get(index) {
-                        marking.update_drops(|state| {
-                            state.set_sound(&ItemQuery::Name(name.clone()), on)
+                .disabled(!on || !settled)
+                .on_toggle(move |on, _, cx| {
+                    if on {
+                        let _ = this.update(cx, |this, cx| {
+                            this.change_quests(QuestChange::Take(taken), cx)
                         });
+                    } else {
+                        automation.update_quests(|state| *taken.flag(&mut state.config) = false);
                     }
                 })
-                .into_any_element(),
-            ]
-        });
+            }));
+        let status = matches!(self.pickup, Pickup::Checking { .. })
+            .then(|| ("Checking drops…".into(), theme.muted_foreground));
         let field = self.list_field(
             List::Drops,
             on,
@@ -853,7 +872,7 @@ impl Environment {
             section(
                 "Drops",
                 "Picks up the drops you list.",
-                None,
+                status,
                 switch.hide_label(),
                 theme,
             )
@@ -862,8 +881,12 @@ impl Environment {
         ]
         .into_iter()
         .chain(listed)
-        .chain(derived.into_iter().flatten())
-        .chain([unlisted_drops_policy(theme, automation, state.config).into_any_element()])
+        .chain([choices_row(layout, "From quests", on, taken).into_any_element()])
+        .chain(derived)
+        .chain([
+            unlisted_drops_policy(theme, automation, state.config, self.unlisted, cx)
+                .into_any_element(),
+        ])
         .collect()
     }
 
@@ -874,7 +897,6 @@ impl Environment {
         split: bool,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let layout = theme.layout;
         let typography = theme.typography;
         let state = automation.quests();
         let on = state.config.enabled;
@@ -910,37 +932,12 @@ impl Environment {
                 .child(unreadable.reason.clone()),
             None => note(List::Quests.note(), on, theme),
         };
-        let settled = matches!(self.pickup, Pickup::Idle);
-        let pickups = div()
-            .grid()
-            .grid_cols_max_content(2)
-            .gap_x(layout.space(3.0))
-            .children(Taken::ALL.into_iter().map(|taken| {
-                let (automation, this) = (automation.clone(), cx.weak_entity());
-                Checkbox::new(
-                    ("quests-take", taken as usize),
-                    taken.label(),
-                    checked(*taken.flag(&mut state.config.clone())),
-                )
-                .disabled(!on || !settled)
-                .on_toggle(move |on, _, cx| {
-                    if on {
-                        let _ = this.update(cx, |this, cx| {
-                            this.change_quests(QuestChange::Take(taken), cx)
-                        });
-                    } else {
-                        automation.update_quests(|state| *taken.flag(&mut state.config) = false);
-                    }
-                })
-            }));
-        let status = matches!(self.pickup, Pickup::Checking { .. })
-            .then(|| ("Checking drops…".into(), theme.muted_foreground));
         let field = self.list_field(List::Quests, on, message, chips.is_some(), cx);
         [
             section(
                 "Quests",
                 "Accepts listed quests and turns them in when done.",
-                status,
+                None,
                 switch.hide_label(),
                 theme,
             )
@@ -949,7 +946,6 @@ impl Environment {
         ]
         .into_iter()
         .chain(chips)
-        .chain([choices_row(layout, "Also pick up", on, pickups).into_any_element()])
         .collect()
     }
 
@@ -1080,14 +1076,8 @@ impl Environment {
             first,
             self.drops(theme, automation, split, cx),
         );
-        let divider = div()
-            .flex_none()
-            .my(theme.space(2.0))
-            .h(px(1.0))
-            .bg(theme.border)
-            .into_any_element();
         let mut others = self.quests(theme, automation, split, cx);
-        others.push(divider);
+        others.push(div().flex_none().h(theme.space(2.0)).into_any_element());
         others.extend(self.boosts(theme, automation, split, cx));
         let others = column("others-column", second, others);
         if split {
@@ -1319,101 +1309,69 @@ fn unlisted_drops_policy(
     theme: &Theme,
     automation: &Automation,
     mut config: drops::Config,
+    open: bool,
+    cx: &mut Context<Environment>,
 ) -> Stateful<Div> {
     type Kind = (
         &'static str,
         &'static str,
         fn(&mut drops::Config) -> &mut bool,
     );
-    let rows: [(&str, [Kind; 2]); 2] = [
-        (
-            "Free",
-            [
-                ("drops-ac", "Free AC", |config| &mut config.accept_ac),
-                ("drops-non-ac", "Free non-AC", |config| {
-                    &mut config.accept_non_ac
-                }),
-            ],
-        ),
-        (
-            "Member-only",
-            [
-                ("drops-ac-member", "Member-only AC", |config| {
-                    &mut config.accept_ac_member_only
-                }),
-                ("drops-non-ac-member", "Member-only non-AC", |config| {
-                    &mut config.accept_non_ac_member_only
-                }),
-            ],
-        ),
+    let kinds: [Kind; 4] = [
+        ("drops-ac", "Free AC", |config| &mut config.accept_ac),
+        ("drops-non-ac", "Free non-AC", |config| {
+            &mut config.accept_non_ac
+        }),
+        ("drops-ac-member", "Member AC", |config| {
+            &mut config.accept_ac_member_only
+        }),
+        ("drops-non-ac-member", "Member non-AC", |config| {
+            &mut config.accept_non_ac_member_only
+        }),
     ];
     let layout = theme.layout;
     let enabled = config.enabled;
-    let axis = |text: &'static str| {
-        div()
-            .flex_none()
-            .text_color(theme.muted_foreground)
-            .when(!enabled, |axis| axis.opacity(DISABLED_OPACITY))
-            .child(text)
-    };
-    let cell = |content: AnyElement| h_flex().flex_1().min_w_0().justify_center().child(content);
-    let header = h_flex()
-        .gap(layout.space(2.0))
-        .child(
-            row_label("Unlisted drops", enabled)
-                .flex_none()
-                .w(LABEL_WIDTH),
-        )
-        .children(["AC", "Non-AC"].map(|kind| cell(axis(kind).into_any_element())));
-    let matrix = v_flex().child(header).children(rows.map(|(label, kinds)| {
-        h_flex()
-            .gap(layout.space(2.0))
-            .min_h(layout.control)
-            .child(axis(label).w(LABEL_WIDTH).pl(layout.space(3.0)))
-            .children(kinds.map(|(id, name, field)| {
-                let automation = automation.clone();
-                cell(
-                    Checkbox::new(id, name, checked(*field(&mut config)))
-                        .hide_label()
-                        .disabled(!enabled)
-                        .on_toggle(move |on, _, _| {
-                            automation.update_drops(|state| *field(&mut state.config) = on);
-                        })
-                        .into_any_element(),
-                )
-            }))
-    }));
-    let matrix = matrix.child(note(
-        "Also picks up drops of the ticked kinds.",
-        enabled,
-        theme,
-    ));
+    let kinds = div()
+        .grid()
+        .grid_cols_max_content(2)
+        .gap_x(layout.space(3.0))
+        .children(kinds.map(|(id, name, field)| {
+            let automation = automation.clone();
+            Checkbox::new(id, name, checked(*field(&mut config)))
+                .disabled(!enabled)
+                .on_toggle(move |on, _, _| {
+                    automation.update_drops(|state| *field(&mut state.config) = on);
+                })
+        }));
     let rejecting = automation.clone();
-    let reject = "Rejects every drop not picked up above.";
+    let reject = Checkbox::new(
+        "drops-reject",
+        "Everything else",
+        checked(config.reject_others),
+    )
+    .disabled(!enabled)
+    .on_toggle(move |on, _, _| {
+        rejecting.update_drops(|state| state.config.reject_others = on);
+    });
+    let this = cx.weak_entity();
+    let disclosure = Disclosure::new("unlisted-drops-toggle", "Unlisted drops", open).on_toggle(
+        move |open, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.unlisted = open;
+                cx.notify();
+            });
+        },
+    );
     v_flex()
         .id("unlisted-drops-policy")
         .debug_selector(|| "unlisted-drops-policy".into())
-        .role(Role::Group)
-        .aria_label("Unlisted drops policy")
-        .border_t_1()
-        .border_color(theme.border)
-        .pt(theme.space(3.0))
         .gap(theme.space(2.0))
-        .child(matrix)
-        .child(
-            v_flex()
-                .child(switch_row(
-                    layout,
-                    "Reject others",
-                    enabled,
-                    Switch::new("drops-reject", "Reject others", config.reject_others)
-                        .description(reject)
-                        .on_toggle(move |on, _, _| {
-                            rejecting.update_drops(|state| state.config.reject_others = on);
-                        }),
-                ))
-                .child(note(reject, enabled, theme).mt(layout.space(-0.5))),
-        )
+        .child(disclosure)
+        .when(open, |policy| {
+            policy
+                .child(choices_row(layout, "Pick up", enabled, kinds))
+                .child(choices_row(layout, "Reject", enabled, reject))
+        })
 }
 
 fn pick_row(checkbox: Checkbox, tag: Option<&'static str>, quantity: i32, theme: &Theme) -> Div {
@@ -1825,6 +1783,25 @@ mod tests {
     }
 
     #[gpui::test]
+    fn unlisted_drops_start_open_only_for_a_tab_that_uses_them(cx: &mut TestAppContext) {
+        let (environment, automation, cx) = open(cx);
+        let mut height = |cx: &mut VisualTestContext| {
+            environment.update(cx, |environment, cx| environment.reset(cx));
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+            cx.debug_bounds("unlisted-drops-policy")
+                .expect("policy")
+                .size
+                .height
+        };
+        let closed = height(cx);
+        automation.update_drops(|state| state.config.reject_others = true);
+        assert!(height(cx) > closed);
+        automation.update_drops(|state| state.config.reject_others = false);
+        assert_eq!(height(cx), closed);
+    }
+
+    #[gpui::test]
     fn a_long_drop_name_stays_inside_its_column(cx: &mut TestAppContext) {
         let (environment, automation, cx) = open(cx);
         automation.update_drops(|state| {
@@ -2016,6 +1993,7 @@ mod tests {
                 .join(", ")
         );
         for (name, width, height, listed) in [
+            ("environment-drops-empty", WIDTH, HEIGHT, ""),
             ("environment-drops", WIDTH, HEIGHT, few),
             ("environment-drops-many", WIDTH, HEIGHT, many.as_str()),
             (
@@ -2029,12 +2007,19 @@ mod tests {
         ] {
             snapshot_form(name, width, height, |environment| {
                 let automation = Automation::default();
+                let used = !listed.is_empty();
                 automation.update_drops(|state| {
                     register_items(&mut state.items, items(listed));
                     state.set_sound(&ItemQuery::Name("Tainted Gem".into()), true);
-                    state.config.accept_ac_member_only = true;
-                    state.config.accept_non_ac_member_only = true;
+                    state.config.accept_ac_member_only = used;
+                    state.config.accept_non_ac_member_only = used;
                 });
+                environment.unlisted = used;
+                if used {
+                    automation.update_quests(|state| state.config.accept_rewards = true);
+                    automation
+                        .report_quest_items(vec!["Legion Seal".into(), "Undead Essence".into()]);
+                }
                 environment.shown = Some(ShownTab::fake("Legion farming session", automation));
             });
         }
