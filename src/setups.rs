@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +10,30 @@ pub(crate) struct Setup {
     pub(crate) name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) script: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) server: Option<String>,
     pub(crate) members: Vec<Member>,
+    #[serde(default, skip_serializing_if = "Launch::is_default")]
+    pub(crate) launch: Launch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Member {
     pub(crate) username: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) script: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Launch {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) new_window: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) grid: bool,
+}
+
+impl Launch {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Member {
@@ -33,22 +43,23 @@ impl Member {
 }
 
 impl Setup {
-    pub(crate) fn member(&self, account: &AccountId) -> Option<&Member> {
-        self.members.iter().find(|member| &member.id() == account)
+    pub(crate) fn new(name: String, script: Option<PathBuf>, members: Vec<Member>) -> Self {
+        Self {
+            name,
+            script,
+            members,
+            launch: Launch::default(),
+        }
     }
 
-    pub(crate) fn script_for(&self, account: &AccountId) -> Option<&Path> {
-        let member = self.member(account)?;
-        member.script.as_deref().or(self.script.as_deref())
+    pub(crate) fn member(&self, account: &AccountId) -> Option<&Member> {
+        self.members.iter().find(|member| &member.id() == account)
     }
 
     pub(crate) fn add(&mut self, usernames: impl IntoIterator<Item = String>) {
         for username in usernames {
             if self.member(&AccountId::of(&username)).is_none() {
-                self.members.push(Member {
-                    username,
-                    script: None,
-                });
+                self.members.push(Member { username });
             }
         }
     }
@@ -58,47 +69,15 @@ impl Setup {
             .retain(|member| !accounts.contains(&member.id()));
     }
 
-    pub(crate) fn pick(&mut self, accounts: &[AccountId], script: Option<PathBuf>) {
-        for member in self
-            .members
-            .iter_mut()
-            .filter(|member| accounts.contains(&member.id()))
-        {
-            member.script.clone_from(&script);
+    pub(crate) fn move_member(&mut self, from: usize, to: usize) {
+        if from < self.members.len() && to < self.members.len() {
+            let member = self.members.remove(from);
+            self.members.insert(to, member);
         }
     }
 }
 
-const FIRST: &str = "My scripts";
 pub(crate) const NEW: &str = "New setup";
-
-pub(crate) fn seeded(scripts: Vec<(String, PathBuf)>) -> Option<Setup> {
-    let mut counts: HashMap<&Path, usize> = HashMap::new();
-    for (_, script) in &scripts {
-        *counts.entry(script).or_default() += 1;
-    }
-    let common = scripts
-        .iter()
-        .map(|(_, script)| script.as_path())
-        .fold(None, |best: Option<&Path>, script| match best {
-            Some(best) if counts[best] >= counts[script] => Some(best),
-            _ => Some(script),
-        })?
-        .to_path_buf();
-    let members = scripts
-        .into_iter()
-        .map(|(username, script)| Member {
-            username,
-            script: (script != common).then_some(script),
-        })
-        .collect();
-    Some(Setup {
-        name: FIRST.into(),
-        script: Some(common),
-        server: None,
-        members,
-    })
-}
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Invalid {
@@ -168,48 +147,20 @@ pub(crate) fn forgotten(setups: &[Setup], account: &AccountId) -> Vec<Setup> {
 mod tests {
     use super::*;
 
-    fn member(username: &str, script: Option<&str>) -> Member {
+    fn member(username: &str) -> Member {
         Member {
             username: username.into(),
-            script: script.map(Into::into),
         }
     }
 
     fn setup(name: &str, members: Vec<Member>) -> Setup {
-        Setup {
-            name: name.into(),
-            script: Some("/scripts/daily.ts".into()),
-            server: None,
-            members,
-        }
-    }
-
-    #[test]
-    fn an_account_runs_the_setup_script_unless_it_picks_another() {
-        let warlord = Setup {
-            name: "Warlord farm".into(),
-            script: Some("/scripts/warlord.ts".into()),
-            server: None,
-            members: vec![
-                member("Main", None),
-                member("alt2", Some("/scripts/follower.ts")),
-            ],
-        };
-        assert_eq!(
-            warlord.script_for(&AccountId::of("main")),
-            Some(Path::new("/scripts/warlord.ts"))
-        );
-        assert_eq!(
-            warlord.script_for(&AccountId::of("alt2")),
-            Some(Path::new("/scripts/follower.ts"))
-        );
-        assert_eq!(warlord.script_for(&AccountId::of("alt3")), None);
+        Setup::new(name.into(), Some("/scripts/daily.ts".into()), members)
     }
 
     #[test]
     fn a_renamed_setup_needs_a_name_no_other_setup_has() {
         let list = vec![
-            setup("Dailies", vec![member("main", None)]),
+            setup("Dailies", vec![member("main")]),
             setup("Bosses", Vec::new()),
         ];
         assert_eq!(renamed_setup(&list, "Dailies", "  "), Err(Invalid::NoName));
@@ -237,43 +188,16 @@ mod tests {
     }
 
     #[test]
-    fn members_are_added_once_and_only_picked_ones_change_script() {
-        let mut dailies = setup("Dailies", vec![member("main", None)]);
+    fn members_are_added_once_and_keep_the_order_they_launch_in() {
+        let mut dailies = setup("Dailies", vec![member("main")]);
         dailies.add(["Main".to_owned(), "alt1".to_owned(), "alt2".to_owned()]);
-        dailies.pick(
-            &[AccountId::of("alt1"), AccountId::of("alt9")],
-            Some("/scripts/follower.ts".into()),
-        );
-        dailies.remove(&[AccountId::of("alt2")]);
+        dailies.move_member(2, 0);
+        dailies.move_member(0, 9);
         assert_eq!(
             dailies.members,
-            [
-                member("main", None),
-                member("alt1", Some("/scripts/follower.ts")),
-            ]
+            [member("alt2"), member("main"), member("alt1")]
         );
-    }
-
-    #[test]
-    fn scripts_saved_on_accounts_become_one_setup() {
-        let seeded = seeded(vec![
-            ("main".to_owned(), PathBuf::from("/scripts/warlord.ts")),
-            ("alt1".to_owned(), PathBuf::from("/scripts/warlord.ts")),
-            ("alt2".to_owned(), PathBuf::from("/scripts/follower.ts")),
-        ]);
-        assert_eq!(
-            seeded,
-            Some(Setup {
-                name: "My scripts".into(),
-                script: Some("/scripts/warlord.ts".into()),
-                server: None,
-                members: vec![
-                    member("main", None),
-                    member("alt1", None),
-                    member("alt2", Some("/scripts/follower.ts")),
-                ],
-            })
-        );
-        assert_eq!(super::seeded(Vec::new()), None);
+        dailies.remove(&[AccountId::of("main")]);
+        assert_eq!(dailies.members, [member("alt2"), member("alt1")]);
     }
 }

@@ -1,3 +1,6 @@
+mod run;
+mod view;
+
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -6,48 +9,30 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable as _,
-    FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent,
-    MouseButton, ParentElement as _, PathPromptOptions, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Toggled,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _, Global, KeyBinding,
+    KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Subscription, Task,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, px, size,
 };
 use reqwest::header::HeaderValue;
 
+use self::run::{Filter, Runs, Start, Stoppable, plan, setup_work, stoppable};
 use super::{
-    Client, Login, ScriptPhase, ScriptState, Summary, Updated,
-    account::file_name,
-    account_card::{Face, Fix, Line, Mood, Presence, Show, face},
-    client::{self, CloseSession, bar_title, drag_area, window_bar},
-    form::note,
-    scripts::{fit_path_to, home_relative},
+    Client, Updated,
+    account_card::{Presence, script_name},
+    client::{self, Layout},
 };
-use mira_ui::primitives::{Checkbox, CheckedState};
-use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
-    components::Empty,
-    h_flex,
-    primitives::{
-        Alert, Badge, Button, ContextMenu, Dialog, DropdownMenu, Field, Icon, Input, InputEvent,
-        MenuItem, MenuList, Scrollbar, Spinner, Tab, Tabs, ToggleGroup, ToggleItem, Tooltip,
-        button::{Size, Variant},
-        small_icon,
-    },
-    theme::tabular,
-    v_flex,
-};
+use mira_ui::primitives::{Input, InputEvent};
 
 use crate::{
     accounts::{Account, AccountId, Accounts, Change, Draft, Invalid, SaveError, SetupError},
     net, script_inputs,
-    setups::{Member, Setup},
+    setups::{Launch, Member, Setup},
 };
 
 actions!(
     mira,
     [
-        OpenAccounts,
+        OpenManager,
         AddAccount,
         NewSetup,
         StartSetup,
@@ -56,18 +41,17 @@ actions!(
     ]
 );
 
-type Pick = Rc<dyn Fn(&mut Manager, Option<PathBuf>, &mut Context<Manager>)>;
+type Pick = Rc<dyn Fn(&mut Manager, Option<PathBuf>, &mut Window, &mut Context<Manager>)>;
+type PickServer = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 
-const CONTEXT: &str = "Accounts";
+const CONTEXT: &str = "Manager";
 const MAX_FIELD: usize = 64;
-const CARD_LINES: usize = 3;
 const RECENT_LIMIT: usize = 8;
-const SCRIPT_MENU_WIDTH: gpui::Pixels = px(260.0);
-const SCRIPT_PATH_WIDTH: gpui::Pixels = px(186.0);
-const CHOOSE_IN_GAME: &str = "Choose in game";
 const SERVERS_FRESH_FOR: Duration = Duration::from_secs(60);
 const SERVERS_RECHECK_AFTER: Duration = Duration::from_secs(5);
-const SERVER_LIST_HEIGHT: gpui::Pixels = px(264.0);
+const CLOCK: Duration = Duration::from_secs(30);
+const INPUTS_UNREADABLE: &str =
+    "Saved script inputs couldn't be read. Open Scripts to recover them, then start again.";
 
 struct Open(WindowHandle<Manager>);
 
@@ -102,7 +86,7 @@ pub(crate) fn open(
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
-            title: Some("Accounts".into()),
+            title: Some("Manager".into()),
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
@@ -126,7 +110,7 @@ pub(crate) fn open(
             Some(manager)
         }
         Err(error) => {
-            tracing::error!(%error, "couldn't open the account manager");
+            tracing::error!(%error, "couldn't open the manager");
             None
         }
     }
@@ -143,21 +127,29 @@ pub(crate) struct Manager {
     device: HeaderValue,
     servers: Servers,
     view: View,
-    show: Show,
+    filter: Option<Filter>,
+    editing: Option<Editing>,
     checked: HashSet<AccountId>,
     cursor: Option<AccountId>,
     columns: usize,
     recent: Vec<PathBuf>,
     form: Option<Form>,
-    bulk: Option<Bulk>,
-    renaming: Option<Renaming>,
     confirm: Option<Confirming>,
     notice: Option<SharedString>,
-    filter: Entity<Input>,
+    search: Entity<Input>,
     grid_scroll: ScrollHandle,
     focus: FocusHandle,
+    clock: Option<Task<()>>,
+    #[cfg(test)]
+    fake: Option<Fake>,
     watching: Option<[Subscription; 2]>,
     _subscriptions: [Subscription; 4],
+}
+
+#[cfg(test)]
+struct Fake {
+    presences: HashMap<AccountId, Presence>,
+    finished: HashMap<AccountId, Instant>,
 }
 
 struct Servers {
@@ -201,69 +193,11 @@ impl Servers {
     }
 }
 
-type PickServer = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
-
-const INPUTS_UNREADABLE: &str =
-    "Saved script inputs couldn't be read. Open Scripts to recover them, then start again.";
-
-fn server_items(
-    first: &'static str,
-    servers: &[net::Server],
-    current: Option<Option<&str>>,
-    theme: &Theme,
-    pick: &PickServer,
-) -> Vec<MenuItem> {
-    let item = |label: String, server: Option<String>| {
-        let pick = pick.clone();
-        let checked = current == Some(server.as_deref());
-        MenuItem::action(label, move |window, cx| pick(server.clone(), window, cx)).checked(checked)
-    };
-    let mut items = vec![
-        item(first.to_owned(), None).pinned(),
-        MenuItem::separator().pinned(),
-    ];
-    items.extend(servers.iter().map(|server| {
-        item(server.name.clone(), Some(server.name.clone())).end_slot(server_stats(server, theme))
-    }));
-    if let Some(saved) = current
-        .flatten()
-        .filter(|saved| !servers.iter().any(|server| server.name == *saved))
-    {
-        items.push(item(saved.to_owned(), Some(saved.to_owned())));
-    }
-    items
-}
-
-fn server_stats(server: &net::Server, theme: &Theme) -> gpui::Div {
-    let layout = theme.layout;
-    let typography = theme.typography;
-    let (players, color) = if !server.online {
-        (SharedString::from("Offline"), theme.muted_foreground)
-    } else {
-        (
-            format!("{}/{}", server.players, server.capacity).into(),
-            if server.players >= server.capacity {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            },
-        )
-    };
-    h_flex()
-        .gap(layout.space(2.5))
-        .ml(layout.space(4.0))
-        .text_size(typography.secondary)
-        .font_features(tabular())
-        .when(server.members, |stats| stats.child(Badge::new("Member")))
-        .child(div().text_color(color).child(players))
-        .child(
-            div()
-                .w(px(44.0))
-                .flex()
-                .justify_end()
-                .text_color(theme.muted_foreground)
-                .children(server.ping.map(|ping| format!("{} ms", ping.as_millis()))),
-        )
+struct Editing {
+    setup: String,
+    name: Entity<Input>,
+    error: Option<SharedString>,
+    _subscriptions: [Subscription; 1],
 }
 
 struct Form {
@@ -296,26 +230,6 @@ impl Form {
     }
 }
 
-struct Bulk {
-    open: bool,
-    ids: HashSet<AccountId>,
-    change: Change,
-    error: Option<SharedString>,
-}
-
-struct Renaming {
-    setup: String,
-    input: Entity<Input>,
-    error: Option<SharedString>,
-    _subscriptions: [Subscription; 2],
-}
-
-#[derive(Clone)]
-enum ScriptFor {
-    Setup,
-    Members(Vec<AccountId>),
-}
-
 struct Confirming {
     open: bool,
     ask: Ask,
@@ -323,111 +237,33 @@ struct Confirming {
 
 #[derive(Clone)]
 enum Ask {
+    Start {
+        setup: String,
+        start: Start,
+        with: Option<PathBuf>,
+        conflicts: Vec<String>,
+    },
+    Run {
+        targets: Vec<Account>,
+        script: PathBuf,
+        conflicts: Vec<(String, String)>,
+    },
+    Stop {
+        targets: Vec<AccountId>,
+        title: String,
+        description: String,
+        many: bool,
+    },
     Close {
         targets: Vec<Account>,
         running: usize,
     },
-    Start {
-        setup: String,
-        scope: Scope,
-        conflicts: Vec<String>,
+    Remove {
+        account: Account,
     },
     Delete {
         setup: String,
     },
-    Remove {
-        account: Account,
-    },
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Scope {
-    Everyone,
-    Failed,
-}
-
-#[derive(Default, Debug, PartialEq, Eq)]
-struct Plan {
-    start: Vec<(AccountId, PathBuf)>,
-    conflicts: Vec<(AccountId, PathBuf)>,
-    login: Vec<AccountId>,
-    unscripted: Vec<AccountId>,
-}
-
-fn live(presence: &Presence) -> Option<&Summary> {
-    match presence {
-        Presence::Open(summary)
-        | Presence::Waiting {
-            open: Some(summary),
-            ..
-        } => Some(summary),
-        _ => None,
-    }
-}
-
-fn running_entry(presence: &Presence) -> Option<&Path> {
-    match live(presence)?.script.as_ref()? {
-        ScriptState {
-            entry,
-            phase: ScriptPhase::Running | ScriptPhase::NeedsInput,
-            ..
-        } => Some(entry),
-        _ => None,
-    }
-}
-
-fn plan(setup: &Setup, presences: &HashMap<AccountId, Presence>, scope: Scope) -> Plan {
-    let mut plan = Plan::default();
-    for member in &setup.members {
-        let id = member.id();
-        let Some(presence) = presences.get(&id) else {
-            continue;
-        };
-        if scope == Scope::Failed && !retryable(presence) {
-            continue;
-        }
-        let Some(script) = setup.script_for(&id) else {
-            plan.unscripted.push(id);
-            continue;
-        };
-        match running_entry(presence) {
-            Some(running) if running == script => {
-                if logged_out(presence) {
-                    plan.login.push(id);
-                }
-            }
-            Some(_) => plan.conflicts.push((id, script.to_path_buf())),
-            None => plan.start.push((id, script.to_path_buf())),
-        }
-    }
-    plan
-}
-
-fn logged_out(presence: &Presence) -> bool {
-    live(presence)
-        .is_some_and(|summary| matches!(summary.login, Login::Disconnected | Login::Failed(_)))
-}
-
-fn retryable(presence: &Presence) -> bool {
-    match presence {
-        Presence::Unopened(_) => true,
-        Presence::Open(summary) => match summary.login {
-            Login::Failed(_) | Login::Disconnected => true,
-            Login::Online => matches!(
-                summary.script,
-                Some(ScriptState {
-                    phase: ScriptPhase::Failed(_),
-                    ..
-                })
-            ),
-            _ => false,
-        },
-        Presence::Closed(Some(ScriptState {
-            phase: ScriptPhase::Failed(_),
-            ..
-        })) => true,
-        Presence::Waiting { .. } | Presence::Closed(_) => false,
-    }
 }
 
 fn game(cx: &App) -> Option<&Client> {
@@ -447,14 +283,11 @@ fn unavailable(error: &anyhow::Error) -> SharedString {
     "Couldn't open the game window.".into()
 }
 
-fn presence(account: &AccountId, cx: &App) -> Presence {
-    let Some(client) = game(cx) else {
-        return Presence::Closed(None);
-    };
-    if let Some((place, of)) = client.waiting(account) {
+fn presence(client: &Client, account: &AccountId, cx: &App) -> Presence {
+    if let Some((place, _)) = client.waiting(account) {
         return Presence::Waiting {
             place,
-            of,
+            script: client.waiting_script(account),
             open: client.summary(account, cx),
         };
     }
@@ -469,11 +302,8 @@ fn presence(account: &AccountId, cx: &App) -> Presence {
 
 fn last_entry(presence: &Presence) -> Option<&Path> {
     match presence {
-        Presence::Open(Summary {
-            script: Some(script),
-            ..
-        })
-        | Presence::Closed(Some(script)) => Some(&script.entry),
+        Presence::Open(summary) => summary.script.as_ref().map(|script| script.entry.as_path()),
+        Presence::Closed(Some(script)) => Some(&script.entry),
         _ => None,
     }
 }
@@ -530,6 +360,21 @@ fn common_script(scripts: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn plural(count: usize, word: &str) -> String {
+    match count {
+        1 => format!("1 {word}"),
+        count => format!("{count} {word}s"),
+    }
+}
+
 impl Manager {
     fn new(
         path: PathBuf,
@@ -538,7 +383,7 @@ impl Manager {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let filter = cx.new(|cx| {
+        let search = cx.new(|cx| {
             Input::new("Filter accounts", cx)
                 .placeholder("Filter accounts")
                 .search()
@@ -557,13 +402,14 @@ impl Manager {
                     .ok();
             }),
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
-            cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
+            cx.subscribe(&search, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Changed) {
                     this.checked.clear();
                     cx.notify();
                 }
             }),
         ];
+        cx.default_global::<Runs>();
         let watching = client::window(cx)
             .and_then(|window| window.entity(cx).ok())
             .map(|client| watch(&client, cx));
@@ -575,19 +421,21 @@ impl Manager {
                 check: Check::Idle,
             },
             view: View::All,
-            show: Show::All,
+            filter: None,
+            editing: None,
             checked: HashSet::new(),
             cursor: None,
             columns: 1,
             recent: Vec::new(),
             form: None,
-            bulk: None,
-            renaming: None,
             confirm: None,
             notice: None,
-            filter,
+            search,
             grid_scroll: ScrollHandle::new(),
             focus,
+            clock: None,
+            #[cfg(test)]
+            fake: None,
             watching,
             _subscriptions: subscriptions,
         }
@@ -642,49 +490,97 @@ impl Manager {
             .unwrap_or_default()
     }
 
+    fn setups(&self) -> Vec<Setup> {
+        self.accounts
+            .as_ref()
+            .map(|accounts| accounts.setups().to_vec())
+            .unwrap_or_default()
+    }
+
+    fn setup_named(&self, name: &str) -> Option<&Setup> {
+        self.accounts.as_ref().ok()?.setup(name)
+    }
+
     fn setup(&self) -> Option<&Setup> {
         let View::Setup(name) = &self.view else {
             return None;
         };
-        self.accounts.as_ref().ok()?.setup(name)
+        self.setup_named(name)
     }
 
-    fn view_accounts(&self) -> Vec<Account> {
+    fn members(&self, setup: &Setup) -> Vec<Account> {
         let accounts = self.account_list();
-        match self.setup() {
-            Some(setup) => setup
-                .members
-                .iter()
-                .filter_map(|member| {
-                    accounts
-                        .iter()
-                        .find(|account| account.id() == member.id())
-                        .cloned()
-                })
-                .collect(),
-            None => accounts,
-        }
-    }
-
-    fn presences(&self, accounts: &[Account], cx: &App) -> Vec<Presence> {
-        accounts
+        setup
+            .members
             .iter()
-            .map(|account| presence(&account.id(), cx))
+            .filter_map(|member| {
+                accounts
+                    .iter()
+                    .find(|account| account.id() == member.id())
+                    .cloned()
+            })
             .collect()
     }
 
-    fn shown(&self, cx: &App) -> Vec<Account> {
-        let accounts = self.view_accounts();
-        let query = self.filter.read(cx).text().to_owned();
-        let presences = self.presences(&accounts, cx);
-        accounts
-            .into_iter()
-            .zip(presences)
-            .filter(|(account, presence)| {
-                let face = face(account, presence);
-                face.shown_in(self.show) && face.matches(account, &query)
+    fn view_accounts(&self) -> Vec<Account> {
+        match self.setup() {
+            Some(setup) => self.members(setup),
+            None => self.account_list(),
+        }
+    }
+
+    fn presences(&self, cx: &App) -> HashMap<AccountId, Presence> {
+        #[cfg(test)]
+        if let Some(fake) = &self.fake {
+            return self
+                .account_list()
+                .iter()
+                .map(|account| {
+                    let id = account.id();
+                    let presence = fake
+                        .presences
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or(Presence::Closed(None));
+                    (id, presence)
+                })
+                .collect();
+        }
+        let client = game(cx);
+        self.account_list()
+            .iter()
+            .map(|account| {
+                let id = account.id();
+                let presence =
+                    client.map_or(Presence::Closed(None), |client| presence(client, &id, cx));
+                (id, presence)
             })
-            .map(|(account, _)| account)
+            .collect()
+    }
+
+    fn finished_at(&self, account: &AccountId, script: &Path, cx: &App) -> Option<Instant> {
+        #[cfg(test)]
+        if let Some(fake) = &self.fake {
+            return fake.finished.get(account).copied();
+        }
+        game(cx)?.finished_at(account, script)
+    }
+
+    fn done(&self, setup: &Setup, cx: &App) -> HashSet<AccountId> {
+        let (Some(script), Some(started)) = (
+            setup.script.as_deref(),
+            cx.global::<Runs>().started(&setup.name),
+        ) else {
+            return HashSet::new();
+        };
+        setup
+            .members
+            .iter()
+            .map(Member::id)
+            .filter(|id| {
+                self.finished_at(id, script, cx)
+                    .is_some_and(|at| at >= started)
+            })
             .collect()
     }
 
@@ -692,6 +588,13 @@ impl Manager {
         self.account_list()
             .into_iter()
             .filter(|account| self.checked.contains(&account.id()))
+            .collect()
+    }
+
+    fn named(&self, ids: &[AccountId]) -> Vec<Account> {
+        let accounts = self.account_list();
+        ids.iter()
+            .filter_map(|id| accounts.iter().find(|account| &account.id() == id).cloned())
             .collect()
     }
 
@@ -724,10 +627,42 @@ impl Manager {
         });
     }
 
+    fn remember(&mut self, script: &Path, cx: &mut Context<Self>) {
+        self.recent.retain(|recent| recent != script);
+        self.recent.insert(0, script.to_path_buf());
+        crate::settings::show_recent_script(script, cx);
+    }
+
     fn run(&mut self, targets: Vec<Account>, script: PathBuf, cx: &mut Context<Self>) {
-        self.recent.retain(|recent| recent != &script);
-        self.recent.insert(0, script.clone());
-        crate::settings::show_recent_script(&script, cx);
+        let presences = self.presences(cx);
+        let mut plan = Vec::new();
+        let mut conflicts = Vec::new();
+        for account in targets {
+            match presences.get(&account.id()).and_then(Presence::running) {
+                Some(running) if running == script => {}
+                Some(running) => {
+                    conflicts.push((account.name.clone(), script_name(running)));
+                    plan.push(account);
+                }
+                None => plan.push(account),
+            }
+        }
+        if conflicts.is_empty() {
+            self.run_now(plan, script, cx);
+        } else {
+            self.ask(
+                Ask::Run {
+                    targets: plan,
+                    script,
+                    conflicts,
+                },
+                cx,
+            );
+        }
+    }
+
+    fn run_now(&mut self, targets: Vec<Account>, script: PathBuf, cx: &mut Context<Self>) {
+        self.remember(&script, cx);
         if script_inputs::unreadable(cx) {
             self.notice = Some(INPUTS_UNREADABLE.into());
             cx.notify();
@@ -750,16 +685,113 @@ impl Manager {
     }
 
     fn stop(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
+        let presences = self.presences(cx);
+        let found = stoppable(
+            targets
+                .iter()
+                .filter_map(|account| Some((account.id(), presences.get(&account.id())?))),
+            None,
+        );
+        self.ask_stop(found, None, &presences, cx);
+    }
+
+    fn stop_setup(&mut self, cx: &mut Context<Self>) {
+        let Some(setup) = self.setup().cloned() else {
+            return;
+        };
+        let presences = self.presences(cx);
+        let found = setup_work(&setup, &presences);
+        self.ask_stop(found, Some(&setup), &presences, cx);
+    }
+
+    fn ask_stop(
+        &mut self,
+        found: Stoppable,
+        setup: Option<&Setup>,
+        presences: &HashMap<AccountId, Presence>,
+        cx: &mut Context<Self>,
+    ) {
+        if found.is_empty() {
+            return;
+        }
+        let targets = found.all();
+        let names: Vec<String> = self
+            .named(&targets)
+            .into_iter()
+            .map(|account| account.name)
+            .collect();
+        let scripts: HashSet<&Path> = targets
+            .iter()
+            .filter_map(|id| {
+                let presence = presences.get(id)?;
+                presence.running().or_else(|| presence.queued())
+            })
+            .collect();
+        let script = (scripts.len() == 1)
+            .then(|| scripts.iter().next().map(|script| script_name(script)))
+            .flatten();
+        let one = (names.len() == 1).then(|| names[0].clone());
+        let title = match (setup, &one, &script) {
+            (Some(setup), _, _) => format!("Stop {}?", setup.name),
+            (None, Some(name), Some(script)) => format!("Stop {script} on {name}?"),
+            (None, None, Some(script)) => format!("Stop {script} on {} accounts?", names.len()),
+            (None, _, None) => format!("Stop {}?", plural(targets.len(), "script")),
+        };
+        let mut description = String::new();
+        if setup.is_some() {
+            let (running, waiting) = (found.running.len(), found.waiting.len());
+            description.push_str(&match (running, waiting) {
+                (0, waiting) => format!(
+                    "This stops {} that haven't started. ",
+                    plural(waiting, "script")
+                ),
+                (running, 0) => format!("This stops {}. ", plural(running, "running script")),
+                (running, waiting) => format!(
+                    "This stops {} and {waiting} that haven't started. ",
+                    plural(running, "running script")
+                ),
+            });
+        }
+        description.push_str(&match &one {
+            Some(name) => format!("{name} stays logged in."),
+            None => "The accounts stay logged in.".to_owned(),
+        });
+        if let Some(setup) = setup {
+            let done = self.done(setup, cx).len();
+            if done > 0 {
+                description.push_str(&format!(
+                    " Starting {} again later skips the {done} already done.",
+                    setup.name
+                ));
+            }
+        }
+        self.ask(
+            Ask::Stop {
+                targets,
+                title,
+                description,
+                many: one.is_none(),
+            },
+            cx,
+        );
+    }
+
+    fn stop_now(&mut self, targets: Vec<AccountId>, cx: &mut Context<Self>) {
+        let targets = self.named(&targets);
         self.act(targets, false, cx, |client, account, _, cx| {
             client.stop_script(&account.id(), cx)
         });
     }
 
     fn close(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        let presences = self.presences(&targets, cx);
-        let running = presences
+        let presences = self.presences(cx);
+        let running = targets
             .iter()
-            .filter(|presence| running_entry(presence).is_some())
+            .filter(|account| {
+                presences
+                    .get(&account.id())
+                    .is_some_and(|presence| presence.running().is_some())
+            })
             .count();
         if running == 0 {
             self.close_now(targets, cx);
@@ -781,7 +813,10 @@ impl Manager {
     }
 
     fn open_account(&mut self, account: Account, cx: &mut Context<Self>) {
-        let open = game(cx).is_some_and(|client| client.summary(&account.id(), cx).is_some());
+        let open = self
+            .presences(cx)
+            .get(&account.id())
+            .is_some_and(Presence::opened);
         if open {
             self.show_account(account, cx);
         } else {
@@ -797,17 +832,7 @@ impl Manager {
     }
 
     fn recent_scripts(&self, cx: &App) -> Vec<PathBuf> {
-        let setups = self
-            .accounts
-            .as_ref()
-            .map(|accounts| accounts.setups().to_vec())
-            .unwrap_or_default();
-        let from_setups = setups.into_iter().flat_map(|setup| {
-            setup
-                .script
-                .into_iter()
-                .chain(setup.members.into_iter().filter_map(|member| member.script))
-        });
+        let from_setups = self.setups().into_iter().filter_map(|setup| setup.script);
         let hidden = crate::settings::hidden_recent_scripts(cx);
         let mut scripts: Vec<PathBuf> = Vec::new();
         for script in self
@@ -832,28 +857,56 @@ impl Manager {
     fn toggle(&mut self, id: AccountId, cx: &mut Context<Self>) {
         if !self.checked.remove(&id) {
             self.checked.insert(id.clone());
+            self.check_stale_servers(cx);
         }
         self.cursor = Some(id);
         cx.notify();
     }
 
-    fn set_show(&mut self, show: Show, cx: &mut Context<Self>) {
-        self.show = show;
+    fn set_filter(&mut self, filter: Option<Filter>, cx: &mut Context<Self>) {
+        self.filter = filter;
         self.checked.clear();
         cx.notify();
     }
 
-    fn set_view(&mut self, view: View, cx: &mut Context<Self>) {
+    fn set_view(&mut self, view: View, window: &mut Window, cx: &mut Context<Self>) {
         if self.view != view {
+            self.finish_edit(window, cx);
             self.view = view;
+            self.filter = None;
             self.checked.clear();
             self.cursor = None;
         }
         cx.notify();
     }
 
+    fn shown(&self, cx: &App) -> Vec<Account> {
+        let accounts = self.view_accounts();
+        let presences = self.presences(cx);
+        let done = self
+            .setup()
+            .map(|setup| self.done(setup, cx))
+            .unwrap_or_default();
+        let query = self.search.read(cx).text().to_owned();
+        let now = Instant::now();
+        accounts
+            .into_iter()
+            .filter(|account| {
+                let id = account.id();
+                let presence = presences
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or(Presence::Closed(None));
+                let card = super::account_card::card(account, &presence, done.contains(&id), now);
+                self.filter.is_none_or(|filter| filter.admits(card.status))
+                    && card.matches(account, &query)
+            })
+            .collect()
+    }
+
     fn select_shown(&mut self, cx: &mut Context<Self>) {
         self.checked = self.shown(cx).iter().map(Account::id).collect();
+        self.check_stale_servers(cx);
         cx.notify();
     }
 
@@ -867,6 +920,13 @@ impl Manager {
             return;
         }
         let modifiers = event.keystroke.modifiers;
+        if let Some(editing) = &self.editing {
+            let setup = editing.setup.clone();
+            if !modifiers.platform && !modifiers.control {
+                self.reorder_key(&setup, event, modifiers.alt, cx);
+            }
+            return;
+        }
         if modifiers.platform || modifiers.control || modifiers.alt {
             return;
         }
@@ -910,9 +970,49 @@ impl Manager {
         }
     }
 
+    fn reorder_key(&mut self, name: &str, event: &KeyDownEvent, alt: bool, cx: &mut Context<Self>) {
+        let Some(setup) = self.setup_named(name) else {
+            return;
+        };
+        let ids: Vec<AccountId> = self.members(setup).iter().map(Account::id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let at = self
+            .cursor
+            .as_ref()
+            .and_then(|cursor| ids.iter().position(|id| id == cursor));
+        let columns = self.columns.max(1);
+        let last = ids.len() - 1;
+        let to = match (event.keystroke.key.as_str(), at) {
+            ("left" | "right" | "up" | "down", None) => {
+                self.cursor = Some(ids[0].clone());
+                self.grid_scroll.scroll_to_item(0);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            ("left", Some(at)) => at.saturating_sub(1),
+            ("right", Some(at)) => (at + 1).min(last),
+            ("up", Some(at)) => at.saturating_sub(columns),
+            ("down", Some(at)) => (at + columns).min(last),
+            _ => return,
+        };
+        let Some(at) = at else {
+            return;
+        };
+        if alt {
+            self.move_member(name, at, to, cx);
+        } else {
+            self.cursor = Some(ids[to].clone());
+        }
+        self.grid_scroll.scroll_to_item(to);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     fn dialog_open(&self) -> bool {
         self.form.as_ref().is_some_and(|form| form.open)
-            || self.bulk.as_ref().is_some_and(|bulk| bulk.open)
             || self.confirm.as_ref().is_some_and(|confirm| confirm.open)
     }
 
@@ -928,126 +1028,140 @@ impl Manager {
         }
     }
 
-    fn confirm(&mut self, choice: bool, cx: &mut Context<Self>) {
+    fn confirm(&mut self, choice: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(confirm) = self.confirm.as_mut().filter(|confirm| confirm.open) else {
             return;
         };
         confirm.open = false;
         match confirm.ask.clone() {
+            Ask::Start {
+                setup, start, with, ..
+            } => self.start_setup(&setup, start, Some(choice), with, cx),
+            Ask::Run {
+                targets, script, ..
+            } => self.run_now(targets, script, cx),
+            Ask::Stop { targets, .. } => self.stop_now(targets, cx),
             Ask::Close { targets, .. } => self.close_now(targets, cx),
-            Ask::Start { setup, scope, .. } => self.start_setup(&setup, scope, Some(choice), cx),
-            Ask::Delete { setup } => self.delete_setup(&setup, cx),
+            Ask::Delete { setup } => self.delete_setup(&setup, window, cx),
             Ask::Remove { account } => self.remove(&account.id(), cx),
         }
         cx.notify();
     }
 
+    fn primary_start(&self, setup: &Setup, cx: &App) -> Option<Start> {
+        setup.script.as_ref()?;
+        let done = self.done(setup, cx);
+        let complete = !setup.members.is_empty()
+            && setup
+                .members
+                .iter()
+                .all(|member| done.contains(&member.id()));
+        Some(if complete {
+            Start::Fresh
+        } else {
+            Start::Continue
+        })
+    }
+
     fn start_current(&mut self, cx: &mut Context<Self>) {
-        if let View::Setup(name) = self.view.clone() {
-            self.start_setup(&name, Scope::Everyone, None, cx);
+        let Some(setup) = self.setup().cloned() else {
+            return;
+        };
+        if self.editing.is_some() {
+            return;
         }
+        if let Some(start) = self.primary_start(&setup, cx) {
+            self.start_setup(&setup.name, start, None, None, cx);
+        }
+    }
+
+    fn start_with(&mut self, name: &str, script: PathBuf, cx: &mut Context<Self>) {
+        self.start_setup(name, Start::Fresh, None, Some(script), cx);
     }
 
     fn start_setup(
         &mut self,
         name: &str,
-        scope: Scope,
+        start: Start,
         replace: Option<bool>,
+        with: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        let Some(setup) = self
-            .accounts
-            .as_ref()
-            .ok()
-            .and_then(|accounts| accounts.setup(name))
-            .cloned()
-        else {
+        let Some(mut setup) = self.setup_named(name).cloned() else {
             return;
         };
-        let accounts = self.account_list();
-        let presences: HashMap<_, _> = accounts
-            .iter()
-            .map(|account| (account.id(), presence(&account.id(), cx)))
-            .collect();
-        let plan = plan(&setup, &presences, scope);
-        let named = |id: &AccountId| accounts.iter().find(|account| &account.id() == id).cloned();
+        if let Some(script) = &with {
+            setup.script = Some(script.clone());
+        }
+        let Some(script) = setup.script.clone() else {
+            return;
+        };
+        let presences = self.presences(cx);
+        let done = self.done(&setup, cx);
+        let plan = plan(&setup, &presences, &done, start);
         if !plan.conflicts.is_empty() && replace.is_none() {
-            let conflicts = plan
-                .conflicts
-                .iter()
-                .filter_map(|(id, _)| named(id).map(|account| account.name))
+            let conflicts = self
+                .named(&plan.conflicts)
+                .into_iter()
+                .map(|account| account.name)
                 .collect();
             self.ask(
                 Ask::Start {
                     setup: setup.name,
-                    scope,
+                    start,
+                    with,
                     conflicts,
                 },
                 cx,
             );
             return;
         }
-        let runs: Vec<(Account, PathBuf, bool)> = plan
-            .start
-            .iter()
-            .map(|(id, script)| (id, script, false))
+        let runs: Vec<(Account, bool)> = self
+            .named(&plan.start)
+            .into_iter()
+            .map(|account| (account, false))
             .chain(
-                plan.conflicts
-                    .iter()
+                self.named(&plan.conflicts)
+                    .into_iter()
                     .filter(|_| replace == Some(true))
-                    .map(|(id, script)| (id, script, true)),
+                    .map(|account| (account, true)),
             )
-            .filter_map(|(id, script, replace)| {
-                named(id).map(|account| (account, script.clone(), replace))
-            })
             .collect();
-        let logins: Vec<Account> = plan.login.iter().filter_map(&named).collect();
-        let server = setup.server.clone();
-        let unreadable = !runs.is_empty() && script_inputs::unreadable(cx);
-        let runs = if unreadable { Vec::new() } else { runs };
+        let logins = self.named(&plan.login);
+        if !runs.is_empty() && script_inputs::unreadable(cx) {
+            self.notice = Some(INPUTS_UNREADABLE.into());
+            cx.notify();
+            return;
+        }
+        if let Some(script) = with {
+            self.remember(&script, cx);
+            if !self.change_setup(name, cx, |setup| setup.script = Some(script)) {
+                return;
+            }
+        }
+        if start == Start::Fresh || cx.global::<Runs>().started(&setup.name).is_none() {
+            cx.global_mut::<Runs>().start(&setup.name, Instant::now());
+        }
+        let grid = setup.launch.grid;
         let done = if runs.is_empty() && logins.is_empty() {
             Ok(())
         } else {
             client::open(false, cx).and_then(|game| {
                 game.update(cx, |client, window, cx| {
-                    for (account, script, replace) in &runs {
-                        client.run_script(
-                            account,
-                            script.clone(),
-                            *replace,
-                            server.clone(),
-                            window,
-                            cx,
-                        );
+                    for (account, replace) in &runs {
+                        client.run_script(account, script.clone(), *replace, None, window, cx);
                     }
                     for account in &logins {
-                        client.launch(account, server.clone(), window, cx);
+                        client.launch(account, None, window, cx);
+                    }
+                    if grid {
+                        client.set_layout(Layout::Grid, window, cx);
                     }
                 })
             })
         };
-        let skipped: Vec<String> = unreadable
-            .then(|| INPUTS_UNREADABLE.to_owned())
-            .into_iter()
-            .chain(
-                plan.unscripted
-                    .iter()
-                    .filter_map(&named)
-                    .map(|account| format!("{} has no script in this setup.", account.name)),
-            )
-            .collect();
-        self.notice = match done {
-            Err(error) => Some(unavailable(&error)),
-            Ok(()) if skipped.is_empty() => None,
-            Ok(()) => Some(skipped.join("\n").into()),
-        };
+        self.notice = done.err().map(|error| unavailable(&error));
         cx.notify();
-    }
-
-    fn retry_failed(&mut self, cx: &mut Context<Self>) {
-        if let View::Setup(name) = self.view.clone() {
-            self.start_setup(&name, Scope::Failed, None, cx);
-        }
     }
 
     fn edit(&mut self, account: Option<&Account>, cx: &mut Context<Self>) {
@@ -1171,33 +1285,22 @@ impl Manager {
         cx.notify();
     }
 
-    fn edit_selected(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.bulk = Some(Bulk {
-            open: true,
-            ids: targets.iter().map(Account::id).collect(),
-            change: Change {
-                server: shared(&targets, |account| &account.server),
-            },
-            error: None,
-        });
-        self.check_stale_servers(cx);
-        cx.notify();
-    }
-
-    fn close_bulk(&mut self, cx: &mut Context<Self>) {
-        if let Some(bulk) = &mut self.bulk {
-            bulk.open = false;
-            cx.notify();
-        }
-    }
-
-    fn save_bulk(&mut self, cx: &mut Context<Self>) {
-        let (Some(bulk), Ok(accounts)) = (&mut self.bulk, &mut self.accounts) else {
+    fn set_servers(
+        &mut self,
+        ids: HashSet<AccountId>,
+        server: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(accounts) = &mut self.accounts else {
             return;
         };
-        match accounts.change(&bulk.ids, bulk.change.clone()) {
-            Ok(()) => bulk.open = false,
-            Err(error) => bulk.error = Some(format!("couldn't save the accounts: {error}").into()),
+        if let Err(error) = accounts.change(
+            &ids,
+            Change {
+                server: Some(server),
+            },
+        ) {
+            self.notice = Some(format!("couldn't save the accounts: {error}").into());
         }
         cx.notify();
     }
@@ -1212,22 +1315,19 @@ impl Manager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let presences = self.presences(&targets, cx);
-        let entries: Vec<Option<PathBuf>> = presences
+        let presences = self.presences(cx);
+        let scripts: Vec<PathBuf> = targets
             .iter()
-            .map(|presence| last_entry(presence).map(Path::to_path_buf))
+            .filter_map(|account| last_entry(presences.get(&account.id())?))
+            .map(Path::to_path_buf)
             .collect();
-        let scripts: Vec<PathBuf> = entries.iter().flatten().cloned().collect();
-        let common = common_script(&scripts);
         let members = targets
             .into_iter()
-            .zip(entries)
-            .map(|(account, entry)| Member {
+            .map(|account| Member {
                 username: account.username,
-                script: entry.filter(|entry| Some(entry) != common.as_ref()),
             })
             .collect();
-        self.create_setup(common, members, window, cx);
+        self.create_setup(common_script(&scripts), members, window, cx);
     }
 
     fn create_setup(
@@ -1241,173 +1341,177 @@ impl Manager {
             return;
         };
         match accounts.create_setup(script, members) {
-            Ok(name) => {
-                self.view = View::Setup(name.clone());
-                self.checked.clear();
-                self.start_rename(&name, window, cx);
-            }
+            Ok(name) => self.edit_setup(&name, window, cx),
             Err(error) => self.notice = Some(format!("couldn't save the setups: {error}").into()),
         }
         cx.notify();
     }
 
-    fn start_rename(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_view(View::Setup(name.to_owned()), cx);
+    fn edit_setup(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_view(View::Setup(name.to_owned()), window, cx);
         let input = input(
             name.to_owned(),
-            |cx| Input::new("Setup name", cx).bare(),
+            |cx| Input::new("Setup name", cx).small(),
             cx,
         );
-        let focus = input.focus_handle(cx);
-        let subscriptions =
-            [
-                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-                    match event {
-                        InputEvent::Submitted => this.finish_rename(true, window, cx),
-                        InputEvent::Changed => {
-                            if let Some(renaming) = &mut this.renaming
-                                && renaming.error.take().is_some()
-                            {
-                                cx.notify();
-                            }
-                        }
+        let subscriptions = [cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Submitted => this.finish_edit(window, cx),
+                InputEvent::Changed => {
+                    if let Some(editing) = &mut this.editing
+                        && editing.error.take().is_some()
+                    {
+                        cx.notify();
                     }
-                }),
-                cx.on_blur(&focus, window, |this, window, cx| {
-                    this.finish_rename(false, window, cx)
-                }),
-            ];
+                }
+            },
+        )];
+        let focus = input.focus_handle(cx);
         window.focus(&focus, cx);
-        self.renaming = Some(Renaming {
+        self.editing = Some(Editing {
             setup: name.to_owned(),
-            input,
+            name: input,
             error: None,
             _subscriptions: subscriptions,
         });
+        self.checked.clear();
+        self.cursor = None;
         cx.notify();
     }
 
-    fn finish_rename(&mut self, submitted: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(renaming), Ok(accounts)) = (&mut self.renaming, &mut self.accounts) else {
+    fn finish_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(editing), Ok(accounts)) = (&mut self.editing, &mut self.accounts) else {
             return;
         };
-        let name = renaming.input.read(cx).text().to_owned();
-        match accounts.rename_setup(&renaming.setup, &name) {
-            Ok(name) => {
-                if self.view == View::Setup(renaming.setup.clone()) {
-                    self.view = View::Setup(name);
+        let name = editing.name.read(cx).text().to_owned();
+        if name.trim() != editing.setup {
+            match accounts.rename_setup(&editing.setup, &name) {
+                Ok(name) => {
+                    cx.global_mut::<Runs>().rename(&editing.setup, &name);
+                    if self.view == View::Setup(editing.setup.clone()) {
+                        self.view = View::Setup(name);
+                    }
                 }
-                self.end_rename(submitted, window, cx);
-            }
-            Err(SetupError::Invalid(invalid)) if submitted => {
-                renaming.error = Some(invalid.to_string().into());
-                cx.notify();
-            }
-            Err(SetupError::Invalid(_)) => self.end_rename(false, window, cx),
-            Err(SetupError::Io(error)) => {
-                self.notice = Some(format!("couldn't save the setups: {error}").into());
-                self.end_rename(submitted, window, cx);
+                Err(SetupError::Invalid(invalid)) => {
+                    editing.error = Some(invalid.to_string().into());
+                    cx.notify();
+                    return;
+                }
+                Err(SetupError::Io(error)) => {
+                    self.notice = Some(format!("couldn't save the setups: {error}").into());
+                }
             }
         }
-    }
-
-    fn end_rename(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.renaming = None;
-        if refocus {
-            window.focus(&self.focus, cx);
-        }
+        self.editing = None;
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
-    fn change_setup(&mut self, name: &str, cx: &mut Context<Self>, edit: impl FnOnce(&mut Setup)) {
+    fn change_setup(
+        &mut self,
+        name: &str,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Setup),
+    ) -> bool {
         let Ok(accounts) = &mut self.accounts else {
-            return;
+            return false;
         };
-        if let Err(error) = accounts.edit_setup(name, edit) {
+        let saved = accounts.edit_setup(name, edit);
+        if let Err(error) = &saved {
             self.notice = Some(format!("couldn't save the setups: {error}").into());
         }
         cx.notify();
+        saved.is_ok()
     }
 
-    fn set_setup_server(&mut self, setup: &str, server: Option<String>, cx: &mut Context<Self>) {
-        self.change_setup(setup, cx, |setup| setup.server = server);
-    }
-
-    fn toggle_member(&mut self, setup: &str, account: &Account, cx: &mut Context<Self>) {
-        let member = self
-            .accounts
-            .as_ref()
-            .ok()
-            .and_then(|accounts| accounts.setup(setup))
-            .is_some_and(|setup| setup.member(&account.id()).is_some());
-        if member {
-            self.remove_from_setup(setup, std::slice::from_ref(account), cx);
-        } else {
-            self.add_to_setup(setup, vec![account.clone()], cx);
-        }
-    }
-
-    fn add_to_setup(&mut self, setup: &str, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.change_setup(setup, cx, |setup| {
-            setup.add(targets.into_iter().map(|account| account.username));
-        });
-    }
-
-    fn remove_from_setup(&mut self, setup: &str, targets: &[Account], cx: &mut Context<Self>) {
-        let ids: Vec<AccountId> = targets.iter().map(Account::id).collect();
-        self.checked.retain(|id| !ids.contains(id));
-        self.change_setup(setup, cx, |setup| setup.remove(&ids));
-    }
-
-    fn set_script(
-        &mut self,
-        setup: &str,
-        target: ScriptFor,
-        script: Option<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_setup_script(&mut self, name: &str, script: Option<PathBuf>, cx: &mut Context<Self>) {
         if let Some(script) = &script {
-            crate::settings::show_recent_script(script, cx);
+            self.remember(script, cx);
         }
-        self.change_setup(setup, cx, |setup| match target {
-            ScriptFor::Setup => setup.script = script,
-            ScriptFor::Members(ids) => setup.pick(&ids, script),
-        });
+        self.change_setup(name, cx, |setup| setup.script = script);
     }
 
-    fn choose_script_for(&mut self, setup: String, target: ScriptFor, cx: &mut Context<Self>) {
+    fn choose_setup_script(&mut self, name: String, cx: &mut Context<Self>) {
         let chosen = choose_script(cx);
         cx.spawn(async move |this, cx| {
             let Some(script) = chosen.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.set_script(&setup, target, Some(script), cx)
+                this.set_setup_script(&name, Some(script), cx)
             });
         })
         .detach();
     }
 
-    fn duplicate_setup(&mut self, name: &str, cx: &mut Context<Self>) {
+    fn choose_start(&mut self, name: String, cx: &mut Context<Self>) {
+        let chosen = choose_script(cx);
+        cx.spawn(async move |this, cx| {
+            let Some(script) = chosen.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| this.start_with(&name, script, cx));
+        })
+        .detach();
+    }
+
+    fn set_launch(&mut self, name: &str, edit: impl FnOnce(&mut Launch), cx: &mut Context<Self>) {
+        self.change_setup(name, cx, |setup| edit(&mut setup.launch));
+    }
+
+    fn toggle_member(&mut self, name: &str, account: &Account, cx: &mut Context<Self>) {
+        let id = account.id();
+        let member = self
+            .setup_named(name)
+            .is_some_and(|setup| setup.member(&id).is_some());
+        if member {
+            self.checked.remove(&id);
+            self.change_setup(name, cx, |setup| setup.remove(&[id]));
+        } else {
+            self.add_to_setup(name, vec![account.clone()], cx);
+        }
+    }
+
+    fn add_to_setup(&mut self, name: &str, targets: Vec<Account>, cx: &mut Context<Self>) {
+        self.change_setup(name, cx, |setup| {
+            setup.add(targets.into_iter().map(|account| account.username));
+        });
+    }
+
+    fn move_member(&mut self, name: &str, from: usize, to: usize, cx: &mut Context<Self>) {
+        self.change_setup(name, cx, |setup| setup.move_member(from, to));
+    }
+
+    fn duplicate_setup(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Ok(accounts) = &mut self.accounts else {
             return;
         };
         match accounts.duplicate_setup(name) {
-            Ok(Some(copy)) => self.view = View::Setup(copy),
+            Ok(Some(copy)) => self.set_view(View::Setup(copy), window, cx),
             Ok(None) => {}
             Err(error) => self.notice = Some(format!("couldn't save the setups: {error}").into()),
         }
         cx.notify();
     }
 
-    fn delete_setup(&mut self, name: &str, cx: &mut Context<Self>) {
+    fn delete_setup(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Ok(accounts) = &mut self.accounts else {
             return;
         };
         match accounts.remove_setup(name) {
             Ok(()) => {
+                cx.global_mut::<Runs>().forget(name);
+                if self
+                    .editing
+                    .as_ref()
+                    .is_some_and(|editing| editing.setup == name)
+                {
+                    self.editing = None;
+                }
                 if self.view == View::Setup(name.to_owned()) {
-                    self.view = View::All;
+                    self.set_view(View::All, window, cx);
                 }
             }
             Err(error) => self.notice = Some(format!("couldn't save the setups: {error}").into()),
@@ -1415,1777 +1519,21 @@ impl Manager {
         cx.notify();
     }
 
-    fn set_server(&mut self, server: Option<String>, bulk: bool) {
-        if bulk {
-            if let Some(bulk) = &mut self.bulk {
-                bulk.change.server = Some(server);
-            }
-        } else if let Some(form) = &mut self.form {
-            form.server = server;
-        }
-    }
-}
-
-fn plan_line(setup: &Setup, id: &AccountId, presence: &Presence) -> Option<Line> {
-    let current = match presence {
-        Presence::Open(Summary {
-            script: Some(script),
-            ..
-        }) => Some(script.entry.as_path()),
-        _ => None,
-    };
-    match setup.script_for(id) {
-        Some(planned) if Some(planned) != current => {
-            Some(Line::new(file_name(planned), Mood::Quiet).path(planned))
-        }
-        Some(_) => None,
-        None => Some(Line::new("No script in this setup", Mood::Quiet)),
-    }
-}
-
-fn color(theme: &Theme, mood: Mood) -> gpui::Hsla {
-    match mood {
-        Mood::Quiet => theme.muted_foreground,
-        Mood::Muted => theme.muted_foreground,
-        Mood::Plain => theme.foreground,
-        Mood::Accent => theme.foreground,
-        Mood::Warning => theme.foreground,
-        Mood::Danger => theme.destructive,
-    }
-}
-
-fn targets_item(
-    this: &WeakEntity<Manager>,
-    targets: &[Account],
-    label: impl Into<SharedString>,
-    run: impl Fn(&mut Manager, Vec<Account>, &mut Window, &mut Context<Manager>) + 'static,
-) -> MenuItem {
-    let this = this.clone();
-    let targets = targets.to_vec();
-    MenuItem::action(label, move |window, cx| {
-        this.update(cx, |manager, cx| run(manager, targets.clone(), window, cx))
-            .ok();
-    })
-}
-
-fn script_pick(setup: String, target: ScriptFor) -> Pick {
-    Rc::new(move |manager, script, cx| match script {
-        Some(script) => manager.set_script(&setup, target.clone(), Some(script), cx),
-        None => manager.choose_script_for(setup.clone(), target.clone(), cx),
-    })
-}
-
-fn member_script_items(
-    this: &WeakEntity<Manager>,
-    scripts: &[PathBuf],
-    setup: &str,
-    ids: Vec<AccountId>,
-    own: Option<Option<&Path>>,
-    window: &Window,
-    theme: &Theme,
-) -> Vec<MenuItem> {
-    let same = {
-        let this = this.clone();
-        let setup = setup.to_owned();
-        let ids = ids.clone();
-        MenuItem::action("Same as the setup", move |_, cx| {
-            this.update(cx, |manager, cx| {
-                manager.set_script(&setup, ScriptFor::Members(ids.clone()), None, cx)
-            })
-            .ok();
-        })
-        .checked(own == Some(None))
-    };
-    let mut items = vec![same, MenuItem::separator()];
-    items.extend(script_items(
-        this,
-        scripts,
-        own,
-        window,
-        theme,
-        script_pick(setup.to_owned(), ScriptFor::Members(ids)),
-    ));
-    items
-}
-
-fn script_items(
-    this: &WeakEntity<Manager>,
-    scripts: &[PathBuf],
-    current: Option<Option<&Path>>,
-    window: &Window,
-    theme: &Theme,
-    run: Pick,
-) -> Vec<MenuItem> {
-    let item = |label: SharedString, script: Option<PathBuf>| {
-        let this = this.clone();
-        let run = run.clone();
-        MenuItem::action(label, move |_, cx| {
-            this.update(cx, |manager, cx| run(manager, script.clone(), cx))
-                .ok();
-        })
-    };
-    let mut listed: Vec<&Path> = scripts.iter().map(PathBuf::as_path).collect();
-    if let Some(Some(current)) = current
-        && !listed.contains(&current)
-    {
-        listed.insert(0, current);
-    }
-    let mut items = Vec::new();
-    if !listed.is_empty() {
-        items.push(MenuItem::header("Recent"));
-        items.extend(listed.into_iter().map(|script| {
-            let folder = script.parent().map(home_relative).unwrap_or_default();
-            let hidden = script.to_path_buf();
-            let refresh = this.clone();
-            let row = item(file_name(script).into(), Some(script.to_path_buf()))
-                .description(fit_path_to(&folder, SCRIPT_PATH_WIDTH, window, theme));
-            let row = if current == Some(Some(script)) {
-                row
-            } else {
-                row.dismiss("Remove from recent", move |_, cx| {
-                    crate::settings::hide_recent_script(hidden.clone(), cx);
-                    refresh.update(cx, |_, cx| cx.notify()).ok();
-                })
-            };
-            match current {
-                Some(current) => row.checked(current == Some(script)),
-                None => row,
-            }
-        }));
-        items.push(MenuItem::separator());
-    }
-    items.push(item("Choose a file…".into(), None));
-    items
-}
-
-fn account_menu(
-    this: WeakEntity<Manager>,
-    account: Account,
-    targets: Vec<Account>,
-    open: bool,
-    scripts: Vec<PathBuf>,
-    setup: Option<(String, Option<PathBuf>)>,
-) -> impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static {
-    move |window, cx| {
-        let many = targets.len() > 1;
-        let act = |label: &'static str,
-                   run: fn(&mut Manager, Vec<Account>, &mut Context<Manager>)| {
-            targets_item(&this, &targets, label, move |manager, targets, _, cx| {
-                run(manager, targets, cx)
-            })
-        };
-        let run_targets = targets.clone();
-        let run: Pick = Rc::new(move |manager, script, cx| match script {
-            Some(script) => manager.run(run_targets.clone(), script, cx),
-            None => manager.run_chosen(run_targets.clone(), cx),
-        });
-        let mut items = Vec::new();
-        if many {
-            items.push(MenuItem::header(format!("{} accounts", targets.len())));
-        }
-        items.push(if open && !many {
-            act("Show", |manager, targets, cx| {
-                if let Some(account) = targets.into_iter().next() {
-                    manager.show_account(account, cx);
-                }
-            })
-        } else {
-            act("Launch", Manager::launch)
-        });
-        items.extend([
-            MenuItem::submenu(
-                "Run script",
-                script_items(&this, &scripts, None, window, cx.theme(), run),
-            ),
-            act("Stop", Manager::stop),
-            act("Close", Manager::close),
-            MenuItem::separator(),
-        ]);
-        if let Some((name, own)) = &setup {
-            let ids = targets.iter().map(Account::id).collect();
-            let removed = name.clone();
-            items.extend([
-                MenuItem::header(name.clone()),
-                MenuItem::submenu(
-                    "Script",
-                    member_script_items(
-                        &this,
-                        &scripts,
-                        name,
-                        ids,
-                        (!many).then_some(own.as_deref()),
-                        window,
-                        cx.theme(),
-                    ),
-                ),
-                targets_item(&this, &targets, "Remove", move |manager, targets, _, cx| {
-                    manager.remove_from_setup(&removed, &targets, cx)
-                }),
-                MenuItem::separator(),
-            ]);
-        }
-        if many {
-            items.push(act("Edit server…", Manager::edit_selected));
-        } else {
-            let edited = account.clone();
-            let removed = account.clone();
-            items.extend([
-                targets_item(&this, &targets, "Edit…", move |manager, _, _, cx| {
-                    manager.edit(Some(&edited), cx)
-                }),
-                targets_item(&this, &targets, "Remove…", move |manager, _, _, cx| {
-                    manager.ask(
-                        Ask::Remove {
-                            account: removed.clone(),
-                        },
-                        cx,
-                    )
-                })
-                .danger(),
-            ]);
-        }
-        items
-    }
-}
-
-impl Manager {
-    fn title_bar(
-        &self,
-        faces: &[Face],
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = cx.theme().layout;
-        let filters = [
-            (Show::All, "All"),
-            (Show::Running, "Running"),
-            (Show::Problems, "Problems"),
-            (Show::NotOpen, "Not open"),
-        ];
-        let items = filters.map(|(show, label)| {
-            let count = faces.iter().filter(|face| face.shown_in(show)).count();
-            let tone = if show == Show::Problems && count > 0 {
-                Tone::Danger
-            } else {
-                Tone::Neutral
-            };
-            ToggleItem::new(label).end_slot(Badge::new(count.to_string()).tone(tone))
-        });
-        let selected = filters
-            .iter()
-            .position(|(show, _)| *show == self.show)
-            .unwrap_or(0);
-        let owner = cx.weak_entity();
-        let pills = ToggleGroup::new("account-filters", "Account status", items, selected)
-            .small()
-            .on_select(move |index, _, cx| {
-                let _ = owner.update(cx, |manager, cx| manager.set_show(filters[index].0, cx));
-            });
-        window_bar(window, cx)
-            .child(bar_title("Accounts", cx))
-            .child(drag_area().flex_1().h_full())
-            .child(h_flex().flex_none().mr(layout.space(1.5)).child(pills))
-            .child(
-                div()
-                    .min_w(px(120.0))
-                    .w(px(200.0))
-                    .mr(layout.space(1.5))
-                    .child(self.filter.clone()),
-            )
-    }
-
-    fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let accounts = self.account_list();
-        let setups = self
-            .accounts
-            .as_ref()
-            .map(|accounts| accounts.setups().to_vec())
-            .unwrap_or_default();
-        let rows: Vec<(Setup, usize)> = {
-            setups
-                .into_iter()
-                .map(|setup| {
-                    let running = setup
-                        .members
-                        .iter()
-                        .filter(|member| running_entry(&presence(&member.id(), cx)).is_some())
-                        .count();
-                    (setup, running)
-                })
-                .collect()
-        };
-        let selected = match &self.view {
-            View::All => None,
-            View::Setup(name) => rows.iter().position(|(setup, _)| &setup.name == name),
-        };
-        let tertiary = theme.muted_foreground;
-        let total = accounts.len();
-        let all = Tabs::new("all-accounts", "Accounts", 1, move |_| {
-            Tab::new("All accounts").end_slot(
-                div()
-                    .text_caption(typography)
-                    .text_color(tertiary)
-                    .child(total.to_string()),
-            )
-        })
-        .vertical()
-        .selected(if self.view == View::All {
-            0
-        } else {
-            usize::MAX
-        })
-        .on_select({
-            let this = cx.weak_entity();
-            move |_, _, cx| {
-                this.update(cx, |manager, cx| manager.set_view(View::All, cx))
-                    .ok();
-            }
-        });
-        let this = cx.weak_entity();
-        let names: Rc<[String]> = rows.iter().map(|(setup, _)| setup.name.clone()).collect();
-        let labels: Rc<[(SharedString, SharedString)]> = rows
-            .iter()
-            .map(|(setup, running)| {
-                (
-                    setup.name.clone().into(),
-                    format!("{running}/{}", setup.members.len()).into(),
-                )
-            })
-            .collect();
-        let menu_names = names.clone();
-        let list = Tabs::new("setups", "Setups", rows.len(), move |index| {
-            let (title, count) = &labels[index];
-            let this = this.clone();
-            let name = menu_names[index].clone();
-            Tab::new(title.clone())
-                .end_slot(
-                    div()
-                        .text_caption(typography)
-                        .text_color(tertiary)
-                        .child(count.clone()),
-                )
-                .menu(move |_, _| setup_menu(&this, &name))
-        })
-        .vertical()
-        .selected(selected.unwrap_or(usize::MAX))
-        .on_select({
-            let this = cx.weak_entity();
-            move |index, _, cx| {
-                let name = names[index].clone();
-                this.update(cx, |manager, cx| manager.set_view(View::Setup(name), cx))
-                    .ok();
-            }
-        });
-        let empty = rows.is_empty();
-        theme
-            .sidebar_pane()
-            .h_full()
-            .pt(layout.space(2.0))
-            .child(all)
-            .child(
-                div()
-                    .flex_none()
-                    .h(layout.control_lg)
-                    .mt(layout.space(2.0))
-                    .px(layout.space(2.0))
-                    .flex()
-                    .items_center()
-                    .text_caption(typography)
-                    .text_color(theme.muted_foreground)
-                    .child("Setups"),
-            )
-            .child(
-                div()
-                    .id("setups-list")
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
-            )
-            .when(empty, |sidebar| {
-                sidebar.child(
-                    div()
-                        .px(layout.space(2.0))
-                        .text_caption(typography)
-                        .text_color(theme.muted_foreground)
-                        .child("None yet."),
-                )
-            })
-            .child(drag_area().flex_1())
-            .child(
-                div().flex_none().p(layout.space(2.0)).child(
-                    Button::new("new-setup", "New setup")
-                        .variant(Variant::Ghost)
-                        .w_full()
-                        .disabled(self.accounts.is_err())
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .justify_between()
-                                .child("New setup")
-                                .child(div().text_color(theme.muted_foreground).child("⌘N")),
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| this.new_setup(window, cx))),
-                ),
-            )
-    }
-
-    fn header(
-        &self,
-        theme: &Theme,
-        accounts: &[Account],
-        presences: &[Presence],
-        scripts: &[PathBuf],
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let (title, summary, actions) = match self.setup().cloned() {
-            None => (
-                div()
-                    .truncate()
-                    .text_body(typography)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("All accounts")
-                    .into_any_element(),
-                note(
-                    "Select accounts to launch them or run a script.",
-                    true,
-                    theme,
-                )
-                .truncate()
-                .into_any_element(),
-                vec![
-                    Button::new("add-account", "Add account")
-                        .size(Size::Small)
-                        .end_slot(div().text_color(theme.muted_foreground).child("⇧⌘N"))
-                        .disabled(self.accounts.is_err())
-                        .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx)))
-                        .into_any_element(),
-                ],
-            ),
-            Some(setup) => {
-                let faces: Vec<Face> = accounts
-                    .iter()
-                    .zip(presences)
-                    .map(|(account, presence)| face(account, presence))
-                    .collect();
-                let count = |show: Show| faces.iter().filter(|face| face.shown_in(show)).count();
-                let mut parts = vec![format!(
-                    "{}/{} running",
-                    count(Show::Running),
-                    accounts.len()
-                )];
-                match count(Show::Problems) {
-                    0 => {}
-                    1 => parts.push("1 problem".to_owned()),
-                    problems => parts.push(format!("{problems} problems")),
-                }
-                match count(Show::NotOpen) {
-                    0 => {}
-                    closed => parts.push(format!("{closed} not open")),
-                }
-                let renaming = self
-                    .renaming
-                    .as_ref()
-                    .filter(|renaming| renaming.setup == setup.name);
-                let name_slot = match renaming {
-                    Some(renaming) => div()
-                        .min_w(px(120.0))
-                        .w(px(280.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .on_action(cx.listener(|this, _: &ClearSelection, window, cx| {
-                            this.end_rename(true, window, cx)
-                        }))
-                        .child(renaming.input.clone())
-                        .into_any_element(),
-                    None => {
-                        let name = setup.name.clone();
-                        div()
-                            .id("setup-title")
-                            .truncate()
-                            .text_body(typography)
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor(gpui::CursorStyle::IBeam)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.start_rename(&name, window, cx)
-                            }))
-                            .child(setup.name.clone())
-                            .into_any_element()
+    fn keep_clock(&mut self, ticking: bool, cx: &mut Context<Self>) {
+        if !ticking {
+            self.clock = None;
+        } else if self.clock.is_none() {
+            self.clock = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(CLOCK).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
                     }
-                };
-                let title = h_flex()
-                    .min_w_0()
-                    .gap(layout.space(2.0))
-                    .child(name_slot)
-                    .child(note(parts.join(" · "), true, theme).flex_none())
-                    .into_any_element();
-                let summary = match renaming.and_then(|renaming| renaming.error.clone()) {
-                    Some(error) => div()
-                        .text_caption(typography)
-                        .text_color(theme.destructive)
-                        .child(error)
-                        .into_any_element(),
-                    None => {
-                        let this = cx.weak_entity();
-                        let scripts = scripts.to_vec();
-                        let current = setup.script.clone();
-                        let name = setup.name.clone();
-                        let label = current
-                            .as_deref()
-                            .map_or_else(|| "Choose a script".to_owned(), file_name);
-                        let script_menu = DropdownMenu::new("setup-script")
-                            .width(SCRIPT_MENU_WIDTH)
-                            .max_height(px(320.0))
-                            .trigger(
-                                Button::new("setup-script-trigger", label)
-                                    .variant(Variant::Ghost)
-                                    .size(Size::XSmall)
-                                    .text_color(theme.foreground)
-                                    .when_some(setup.script.as_deref(), |button, script| {
-                                        button.tooltip(home_relative(script))
-                                    })
-                                    .end_slot(small_icon(
-                                        Icon::ChevronDown,
-                                        theme.muted_foreground,
-                                    )),
-                            )
-                            .items(move |window, cx| {
-                                script_items(
-                                    &this,
-                                    &scripts,
-                                    Some(current.as_deref()),
-                                    window,
-                                    cx.theme(),
-                                    script_pick(name.clone(), ScriptFor::Setup),
-                                )
-                            });
-                        h_flex()
-                            .min_w_0()
-                            .gap(layout.space(0.5))
-                            .child(note("Runs", true, theme).flex_none())
-                            .child(h_flex().h(typography.secondary_line).child(script_menu))
-                            .child(note("on", true, theme).flex_none())
-                            .child(
-                                h_flex()
-                                    .h(typography.secondary_line)
-                                    .child(self.setup_server_menu(&setup, cx)),
-                            )
-                            .into_any_element()
-                    }
-                };
-                let members_menu = {
-                    let this = cx.weak_entity();
-                    let all = self.account_list();
-                    let setup = setup.clone();
-                    DropdownMenu::new("setup-accounts")
-                        .width(px(220.0))
-                        .max_height(px(360.0))
-                        .align(mira_ui::primitives::Align::End)
-                        .trigger(
-                            Button::new("setup-accounts-trigger", "Accounts")
-                                .variant(Variant::Ghost)
-                                .size(Size::Small)
-                                .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
-                        )
-                        .items(move |_, _| {
-                            all.iter()
-                                .map(|account| {
-                                    let this = this.clone();
-                                    let toggled = account.clone();
-                                    let name = setup.name.clone();
-                                    MenuItem::action(account.name.clone(), move |_, cx| {
-                                        this.update(cx, |manager, cx| {
-                                            manager.toggle_member(&name, &toggled, cx)
-                                        })
-                                        .ok();
-                                    })
-                                    .checked(setup.member(&account.id()).is_some())
-                                    .keep_open()
-                                })
-                                .collect()
-                        })
-                };
-                let mut actions = vec![members_menu.into_any_element()];
-                if presences.iter().any(retryable) {
-                    actions.push(
-                        Button::new("retry-failed", "Retry failed")
-                            .variant(Variant::Ghost)
-                            .size(Size::Small)
-                            .on_click(cx.listener(|this, _, _, cx| this.retry_failed(cx)))
-                            .into_any_element(),
-                    );
                 }
-                actions.push(
-                    Button::new("start-setup", "Start setup")
-                        .size(Size::Small)
-                        .end_slot(div().text_color(theme.muted_foreground).child("⌘⏎"))
-                        .disabled(setup.members.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.start_current(cx)))
-                        .into_any_element(),
-                );
-                (title, summary, actions)
-            }
-        };
-        h_flex()
-            .flex_none()
-            .gap(layout.space(2.0))
-            .px(layout.space(3.0))
-            .pt(layout.space(3.0))
-            .pb(layout.space(1.0))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(layout.space(0.5))
-                    .child(title)
-                    .child(summary),
-            )
-            .children(actions)
-    }
-
-    fn setup_server_menu(&self, setup: &Setup, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme().clone();
-        let this = cx.weak_entity();
-        let name = setup.name.clone();
-        let current = setup.server.clone();
-        let servers = self.servers.list.clone();
-        let label = current
-            .clone()
-            .unwrap_or_else(|| "their servers".to_owned());
-        let pick: PickServer = Rc::new(move |server, _, cx| {
-            this.update(cx, |manager, cx| {
-                manager.set_setup_server(&name, server, cx)
-            })
-            .ok();
-        });
-        DropdownMenu::new("setup-server")
-            .width(px(340.0))
-            .max_height(px(360.0))
-            .trigger(
-                Button::new("setup-server-trigger", label)
-                    .variant(Variant::Ghost)
-                    .size(Size::XSmall)
-                    .text_color(theme.foreground)
-                    .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground)),
-            )
-            .items(move |_, _| {
-                server_items(
-                    "Their own servers",
-                    &servers,
-                    Some(current.as_deref()),
-                    &theme,
-                    &pick,
-                )
-            })
-    }
-
-    fn card(
-        &self,
-        theme: &Theme,
-        account: &Account,
-        face: Face,
-        scripts: &[PathBuf],
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let id = account.id();
-        let checked = self.checked.contains(&id);
-        let focused = self.cursor.as_ref() == Some(&id)
-            && self.focus.is_focused(window)
-            && mira_ui::nav::keyboard_input(window, cx);
-        let line = |line: &Line| {
-            div()
-                .min_w_0()
-                .truncate()
-                .text_caption(typography)
-                .text_color(color(theme, line.mood))
-                .child(line.text.clone())
-        };
-        let open = face.open;
-        let clicked = account.clone();
-        let toggled = id.clone();
-        let fix = face.fix.map(|fix| {
-            let target = account.clone();
-            div()
-                .id(SharedString::from(format!("fix-{}", account.username)))
-                .flex_none()
-                .text_caption(typography)
-                .text_color(theme.foreground)
-                .underline()
-                .cursor_pointer()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| match fix {
-                    Fix::EditLogin => this.edit(Some(&target), cx),
-                    Fix::Restart => this.restart(&target, cx),
-                }))
-                .child(match fix {
-                    Fix::EditLogin => "Edit login",
-                    Fix::Restart => "Restart",
-                })
-        });
-        let card = v_flex()
-            .id(SharedString::from(format!("account-{}", account.username)))
-            .relative()
-            .h_full()
-            .gap(layout.space(1.0))
-            .min_w_0()
-            .px(layout.space(3.0))
-            .py(theme.space(3.0))
-            .rounded(theme.radius.panel)
-            .border_1()
-            .map(|card| {
-                if checked {
-                    card.border_color(theme.primary)
-                        .bg(theme
-                            .primary
-                            .opacity(if theme.dark_mode { 0.1 } else { 0.05 }))
-                } else {
-                    card.border_color(gpui::transparent_black())
-                        .bg(theme.card)
-                        .child(theme.surface_ring(theme.radius.panel))
-                }
-            })
-            .role(Role::CheckBox)
-            .aria_label(account.name.clone())
-            .aria_toggled(if checked {
-                Toggled::True
-            } else {
-                Toggled::False
-            })
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                window.focus(&this.focus, cx);
-                if event.click_count() < 2 {
-                    this.toggle(toggled.clone(), cx);
-                } else if open {
-                    this.show_account(clicked.clone(), cx);
-                } else {
-                    this.launch(vec![clicked.clone()], cx);
-                }
-            }))
-            .child(
-                h_flex()
-                    .gap(layout.space(2.0))
-                    .min_w_0()
-                    .mb(layout.space(0.5))
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(layout.space(2.0))
-                            .child(Checkbox::indicator(
-                                if checked {
-                                    CheckedState::Checked
-                                } else {
-                                    CheckedState::Unchecked
-                                },
-                                theme,
-                            ))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(account.name.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_caption(typography)
-                            .text_color(color(theme, face.state.mood))
-                            .child(face.state.text.clone()),
-                    ),
-            )
-            .child(line(&face.place))
-            .children(face.who.clone().map(|who| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_caption(typography)
-                    .text_color(theme.muted_foreground)
-                    .child(who)
-            }))
-            .children(face.note().map(|note| {
-                match (fix, note.path.clone()) {
-                    (None, Some(path)) => h_flex()
-                        .min_w_0()
-                        .child(
-                            Tooltip::new(
-                                SharedString::from(format!("note-{}", account.username)),
-                                fit_path_to(
-                                    &path,
-                                    theme.layout.card_min - theme.space(6.0),
-                                    window,
-                                    theme,
-                                ),
-                                line(note),
-                            )
-                            .align_start(),
-                        )
-                        .into_any_element(),
-                    (fix, _) => h_flex()
-                        .min_w_0()
-                        .gap(layout.space(1.5))
-                        .child(line(note).flex_shrink(1.0))
-                        .children(fix)
-                        .into_any_element(),
-                }
-            }))
-            .children((face.lines()..CARD_LINES).map(|_| div().h(typography.secondary_line)))
-            .when(focused, |card| {
-                card.child(theme.ring_around(theme.ring, theme.radius.panel, px(1.0)))
-            });
-        ContextMenu::new(
-            SharedString::from(format!("account-menu-{}", account.username)),
-            "Account actions",
-        )
-        .items(account_menu(
-            cx.weak_entity(),
-            account.clone(),
-            if checked && self.checked.len() > 1 {
-                self.checked_accounts()
-            } else {
-                vec![account.clone()]
-            },
-            open,
-            scripts.to_vec(),
-            self.setup().map(|setup| {
-                (
-                    setup.name.clone(),
-                    setup.member(&id).and_then(|member| member.script.clone()),
-                )
-            }),
-        ))
-        .child(card)
-    }
-
-    fn selection_bar(
-        &self,
-        theme: &Theme,
-        selected: Vec<Account>,
-        scripts: Vec<PathBuf>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let count = selected.len();
-        let separator = || {
-            div()
-                .flex_none()
-                .mx(layout.space(1.0))
-                .w(px(1.0))
-                .h(px(16.0))
-                .bg(theme.border)
-        };
-        let bulk = |id: &'static str,
-                    label: &'static str,
-                    run: fn(&mut Manager, Vec<Account>, &mut Context<Manager>),
-                    cx: &mut Context<Self>| {
-            let targets = selected.clone();
-            Button::new(id, label)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .on_click(cx.listener(move |this, _, _, cx| run(this, targets.clone(), cx)))
-        };
-        let this = cx.weak_entity();
-        let targets = selected.clone();
-        let run: Pick = Rc::new(move |manager, script, cx| match script {
-            Some(script) => manager.run(targets.clone(), script, cx),
-            None => manager.run_chosen(targets.clone(), cx),
-        });
-        let run_menu = DropdownMenu::new("run-selected")
-            .width(SCRIPT_MENU_WIDTH)
-            .max_height(px(320.0))
-            .trigger(
-                Button::new("run-selected-trigger", "Run script…")
-                    .variant(Variant::Ghost)
-                    .size(Size::Small),
-            )
-            .items(move |window, cx| {
-                script_items(&this, &scripts, None, window, cx.theme(), run.clone())
-            });
-        let this = cx.weak_entity();
-        let menu_button = |id: &'static str, label: &'static str| {
-            Button::new(id, label)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .end_slot(small_icon(Icon::ChevronDown, theme.muted_foreground))
-        };
-        let targets = selected.clone();
-        let setup_controls: Vec<gpui::AnyElement> = match self.view.clone() {
-            View::All => {
-                let setups: Vec<String> = self
-                    .accounts
-                    .as_ref()
-                    .map(|accounts| {
-                        accounts
-                            .setups()
-                            .iter()
-                            .map(|setup| setup.name.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let add = DropdownMenu::new("add-to-setup")
-                    .width(px(200.0))
-                    .max_height(px(320.0))
-                    .trigger(menu_button("add-to-setup-trigger", "Add to setup"))
-                    .items(move |_, _| {
-                        let mut items: Vec<MenuItem> = setups
-                            .iter()
-                            .map(|setup| {
-                                let added = setup.clone();
-                                targets_item(
-                                    &this,
-                                    &targets,
-                                    setup.clone(),
-                                    move |manager, targets, _, cx| {
-                                        manager.add_to_setup(&added, targets, cx)
-                                    },
-                                )
-                            })
-                            .collect();
-                        if !items.is_empty() {
-                            items.push(MenuItem::separator());
-                        }
-                        items.push(targets_item(
-                            &this,
-                            &targets,
-                            "New setup",
-                            |manager, targets, window, cx| {
-                                manager.new_setup_from(targets, window, cx)
-                            },
-                        ));
-                        items
-                    });
-                vec![add.into_any_element()]
-            }
-            View::Setup(setup) => {
-                let scripts = self.recent_scripts(cx);
-                let ids: Vec<AccountId> = selected.iter().map(Account::id).collect();
-                let picked = setup.clone();
-                let script = DropdownMenu::new("selection-script")
-                    .width(SCRIPT_MENU_WIDTH)
-                    .max_height(px(320.0))
-                    .trigger(menu_button("selection-script-trigger", "Setup script"))
-                    .items(move |window, cx| {
-                        member_script_items(
-                            &this,
-                            &scripts,
-                            &picked,
-                            ids.clone(),
-                            None,
-                            window,
-                            cx.theme(),
-                        )
-                    });
-                vec![script.into_any_element()]
-            }
-        };
-        theme
-            .footer()
-            .flex_wrap()
-            .child(
-                h_flex()
-                    .gap(layout.space(0.5))
-                    .child(
-                        div()
-                            .pl(layout.space(2.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(format!("{count} selected")),
-                    )
-                    .child(
-                        Button::icon("clear-selection", Icon::X, "Clear selection")
-                            .size(Size::Small)
-                            .on_click(cx.listener(|this, _, _, cx| this.clear_selection(cx))),
-                    )
-                    .child(separator())
-                    .child(bulk("launch-selected", "Launch", Manager::launch, cx))
-                    .child(run_menu)
-                    .child(bulk("stop-selected", "Stop", Manager::stop, cx))
-                    .child(bulk("close-selected", "Close", Manager::close, cx)),
-            )
-            .child(h_flex().gap(layout.space(0.5)).children(setup_controls))
-    }
-
-    fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div().flex().flex_1().items_center().justify_center().child(
-            Empty::new("No accounts yet", "Add an account to launch it from here.").action(
-                Button::new("add-first-account", "Add account")
-                    .variant(Variant::Primary)
-                    .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
-            ),
-        )
-    }
-
-    fn form(&self, theme: &Theme, form: &Form, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let (username, password, other) = match form.error.clone() {
-            Some(Problem::Username(message)) => (Some(message), None, None),
-            Some(Problem::Password(message)) => (None, Some(message), None),
-            Some(Problem::Other(message)) => (None, None, Some(message)),
-            None => (None, None, None),
-        };
-        let login = v_flex()
-            .flex_none()
-            .w(px(232.0))
-            .gap(layout.space(4.0))
-            .child(Field::new("Username", form.username.clone()).error(username))
-            .child(Field::new("Password", form.password.clone()).error(password))
-            .child(
-                Field::new("Display name", form.name.clone()).end_slot(
-                    div()
-                        .font_weight(FontWeight::NORMAL)
-                        .text_color(theme.muted_foreground)
-                        .child("Optional"),
-                ),
-            )
-            .children(other.map(|error| {
-                div()
-                    .text_size(typography.secondary)
-                    .text_color(theme.destructive)
-                    .child(error)
             }));
-        let body = h_flex()
-            .items_start()
-            .gap(layout.space(6.0))
-            .child(login)
-            .child(div().flex_1().min_w_0().child(self.server_list(
-                "server",
-                Some(form.server.as_deref()),
-                false,
-                cx,
-            )));
-        let close = cx.listener(|this, _: &(), _, cx| this.close_form(cx));
-        Dialog::new(
-            "account-form",
-            form.open,
-            if form.editing.is_some() {
-                "Edit account"
-            } else {
-                "Add account"
-            },
-        )
-        .width(px(640.0))
-        .body(body)
-        .action(
-            Button::new("cancel", "Cancel")
-                .on_click(cx.listener(|this, _, _, cx| this.close_form(cx))),
-        )
-        .action(
-            Button::new("save", "Save")
-                .variant(Variant::Primary)
-                .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-        )
-        .on_close(move |window, cx| close(&(), window, cx))
-    }
-
-    fn bulk_form(
-        &self,
-        theme: &Theme,
-        bulk: &Bulk,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let title = match bulk.ids.len() {
-            1 => "Edit 1 account".to_owned(),
-            count => format!("Edit {count} accounts"),
-        };
-        let body = v_flex()
-            .gap(layout.space(3.0))
-            .child(self.server_list(
-                "bulk-server",
-                bulk.change.server.as_ref().map(Option::as_deref),
-                true,
-                cx,
-            ))
-            .children(bulk.error.clone().map(|error| {
-                div()
-                    .text_size(typography.secondary)
-                    .text_color(theme.destructive)
-                    .child(error)
-            }));
-        let close = cx.listener(|this, _: &(), _, cx| this.close_bulk(cx));
-        Dialog::new("bulk-form", bulk.open, title)
-            .when(bulk.change.server.is_none(), |dialog| {
-                dialog.description("Mixed keeps each account's own server.")
-            })
-            .body(body)
-            .action(
-                Button::new("bulk-cancel", "Cancel")
-                    .on_click(cx.listener(|this, _, _, cx| this.close_bulk(cx))),
-            )
-            .action(
-                Button::new("bulk-save", "Save")
-                    .variant(Variant::Primary)
-                    .on_click(cx.listener(|this, _, _, cx| this.save_bulk(cx))),
-            )
-            .on_close(move |window, cx| close(&(), window, cx))
-    }
-
-    fn server_list(
-        &self,
-        id: &'static str,
-        current: Option<Option<&str>>,
-        bulk: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layout = cx.theme().layout;
-        let typography = cx.theme().typography;
-        let this = cx.weak_entity();
-        let pick: PickServer = Rc::new(move |server, _, cx| {
-            this.update(cx, |manager, cx| {
-                manager.set_server(server, bulk);
-                cx.notify();
-            })
-            .ok();
-        });
-        let items = server_items(
-            CHOOSE_IN_GAME,
-            &self.servers.list,
-            current,
-            cx.theme(),
-            &pick,
-        );
-        Field::new(
-            "Server",
-            MenuList::new(id, "Server", items).height(SERVER_LIST_HEIGHT),
-        )
-        .description(self.servers.note())
-        .end_slot(
-            h_flex()
-                .h(typography.secondary_line)
-                .child(match self.servers.check {
-                    Check::Idle | Check::Running => div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(layout.control_xs)
-                        .child(Spinner::new("refresh-servers").color(cx.theme().muted_foreground))
-                        .into_any_element(),
-                    _ => Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
-                        .variant(Variant::Ghost)
-                        .size(Size::XSmall)
-                        .disabled(!self.servers.ready())
-                        .on_click(cx.listener(|this, _, _, cx| this.check_servers(cx)))
-                        .into_any_element(),
-                }),
-        )
-    }
-
-    fn confirmation(
-        &self,
-        confirm: &Confirming,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let dismiss = cx.listener(|this, _: &(), _, cx| this.dismiss(cx));
-        let (title, description, actions): (String, String, Vec<gpui::AnyElement>) =
-            match &confirm.ask {
-                Ask::Close { targets, running } => (
-                    match targets.len() {
-                        1 => format!("Close {}?", targets[0].name),
-                        count => format!("Close {count} accounts?"),
-                    },
-                    match (targets.len(), running) {
-                        (1, _) => "This stops its running script and logs it out.".to_owned(),
-                        (_, 1) => "This stops 1 running script and logs them all out.".to_owned(),
-                        (_, count) => {
-                            format!("This stops {count} running scripts and logs them all out.")
-                        }
-                    },
-                    vec![
-                        Button::new(
-                            "confirm-close",
-                            if targets.len() == 1 {
-                                "Close account"
-                            } else {
-                                "Close accounts"
-                            },
-                        )
-                        .variant(Variant::Danger)
-                        .on_click(cx.listener(|this, _, _, cx| this.confirm(true, cx)))
-                        .into_any_element(),
-                    ],
-                ),
-                Ask::Start {
-                    setup, conflicts, ..
-                } => (
-                    format!("Start {setup}?"),
-                    match conflicts.as_slice() {
-                        [one] => format!("{one} is already running another script."),
-                        many => format!("{} are already running other scripts.", join_names(many)),
-                    },
-                    vec![
-                        Button::new(
-                            "confirm-skip",
-                            if conflicts.len() == 1 {
-                                "Leave it running"
-                            } else {
-                                "Leave them running"
-                            },
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.confirm(false, cx)))
-                        .into_any_element(),
-                        Button::new(
-                            "confirm-replace",
-                            if conflicts.len() == 1 {
-                                "Replace script"
-                            } else {
-                                "Replace scripts"
-                            },
-                        )
-                        .variant(Variant::Primary)
-                        .on_click(cx.listener(|this, _, _, cx| this.confirm(true, cx)))
-                        .into_any_element(),
-                    ],
-                ),
-                Ask::Remove { account } => (
-                    format!("Remove {}?", account.name),
-                    format!(
-                        "This deletes the saved login for {} and takes it out of any setups. If \
-                         its tab is open, the tab stays open.",
-                        account.name
-                    ),
-                    vec![
-                        Button::new("confirm-remove", "Remove account")
-                            .variant(Variant::Danger)
-                            .on_click(cx.listener(|this, _, _, cx| this.confirm(true, cx)))
-                            .into_any_element(),
-                    ],
-                ),
-                Ask::Delete { setup } => (
-                    format!("Delete {setup}?"),
-                    format!("The accounts in {setup} stay in Mira. Only the setup is deleted."),
-                    vec![
-                        Button::new("confirm-delete", "Delete setup")
-                            .variant(Variant::Danger)
-                            .on_click(cx.listener(|this, _, _, cx| this.confirm(true, cx)))
-                            .into_any_element(),
-                    ],
-                ),
-            };
-        actions
-            .into_iter()
-            .fold(
-                Dialog::new("confirm", confirm.open, title)
-                    .alert()
-                    .description(description)
-                    .action(
-                        Button::new("confirm-cancel", "Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
-                    ),
-                |dialog, action| dialog.action(action),
-            )
-            .on_close(move |window, cx| dismiss(&(), window, cx))
-    }
-}
-
-fn join_names(names: &[String]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
-fn setup_menu(this: &WeakEntity<Manager>, name: &str) -> Vec<MenuItem> {
-    let item = |label: &'static str, run: fn(&mut Manager, &str, &mut Context<Manager>)| {
-        let this = this.clone();
-        let name = name.to_owned();
-        MenuItem::action(label, move |_, cx| {
-            this.update(cx, |manager, cx| run(manager, &name, cx)).ok();
-        })
-    };
-    vec![
-        {
-            let this = this.clone();
-            let name = name.to_owned();
-            MenuItem::action("Rename", move |window, cx| {
-                this.update(cx, |manager, cx| manager.start_rename(&name, window, cx))
-                    .ok();
-            })
-        },
-        item("Duplicate", |manager, name, cx| {
-            manager.duplicate_setup(name, cx)
-        }),
-        MenuItem::separator(),
-        item("Delete…", |manager, name, cx| {
-            manager.ask(
-                Ask::Delete {
-                    setup: name.to_owned(),
-                },
-                cx,
-            )
-        })
-        .danger(),
-    ]
-}
-
-impl Render for Manager {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let layout = theme.layout;
-        if let View::Setup(name) = &self.view
-            && self.setup().is_none()
-        {
-            let missing = name.clone();
-            tracing::debug!(setup = missing, "the shown setup is gone");
-            self.view = View::All;
         }
-        let accounts = self.view_accounts();
-        let presences = self.presences(&accounts, cx);
-        let faces: Vec<Face> = accounts
-            .iter()
-            .zip(&presences)
-            .map(|(account, presence)| face(account, presence))
-            .collect();
-        let title_bar = self.title_bar(&faces, window, cx);
-        let sidebar = self.sidebar(&theme, cx);
-        let selected = self.checked_accounts();
-        let scripts = self.recent_scripts(cx);
-        self.columns = theme.account_columns(window.viewport_size().width - theme.layout.sidebar);
-        mira_ui::nav::set_scroll_root(&self.grid_scroll, window, cx);
-        let content = match &self.accounts {
-            Err(error) => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .px(layout.space(6.0))
-                .text_color(theme.destructive)
-                .child(format!("Mira couldn't load your accounts: {error}"))
-                .into_any_element(),
-            Ok(all) if all.list().is_empty() => self.empty(cx).into_any_element(),
-            Ok(_) => {
-                let header = self.header(&theme, &accounts, &presences, &scripts, cx);
-                let query = self.filter.read(cx).text().to_owned();
-                let setup = self.setup().cloned();
-                let cards: Vec<_> = accounts
-                    .iter()
-                    .zip(presences.iter().zip(faces))
-                    .filter(|(account, (_, face))| {
-                        face.shown_in(self.show) && face.matches(account, &query)
-                    })
-                    .map(|(account, (presence, face))| {
-                        let plan = setup
-                            .as_ref()
-                            .and_then(|setup| plan_line(setup, &account.id(), presence));
-                        let place = match setup.as_ref().and_then(|setup| setup.server.clone()) {
-                            Some(server) if !face.open => Line::new(server, Mood::Quiet),
-                            _ => face.place,
-                        };
-                        let face = Face {
-                            plan,
-                            place,
-                            ..face
-                        };
-                        self.card(&theme, account, face, &scripts, window, cx)
-                            .into_any_element()
-                    })
-                    .collect();
-                let grid = if cards.is_empty() {
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme.muted_foreground)
-                        .child(match query.trim() {
-                            "" if setup.as_ref().is_some_and(|setup| setup.members.is_empty()) => {
-                                "No accounts in this setup yet. Add some from the Accounts menu."
-                                    .to_owned()
-                            }
-                            "" => "No accounts here.".to_owned(),
-                            query => format!("No accounts match \u{201c}{query}\u{201d}."),
-                        })
-                        .into_any_element()
-                } else {
-                    div()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .child(
-                            div()
-                                .id("accounts-grid")
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .track_scroll(&self.grid_scroll)
-                                .grid()
-                                .grid_cols(self.columns as u16)
-                                .content_start()
-                                .gap(layout.space(2.0))
-                                .px(layout.space(3.0))
-                                .pt(layout.space(2.0))
-                                .pb(theme.space(3.0))
-                                .children(cards),
-                        )
-                        .child(Scrollbar::new(
-                            "accounts-scrollbar",
-                            self.grid_scroll.clone(),
-                        ))
-                        .into_any_element()
-                };
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(header)
-                    .children(self.notice.clone().map(|notice| {
-                        div()
-                            .flex_none()
-                            .px(layout.space(3.0))
-                            .pt(layout.space(2.0))
-                            .child(Alert::new("notice", Tone::Danger, notice))
-                    }))
-                    .child(grid)
-                    .into_any_element()
-            }
-        };
-        let selection_bar = (!selected.is_empty())
-            .then(|| self.selection_bar(&theme, selected, scripts.clone(), cx));
-        let form = self.form.as_ref().map(|form| self.form(&theme, form, cx));
-        let bulk = self
-            .bulk
-            .as_ref()
-            .map(|bulk| self.bulk_form(&theme, bulk, cx));
-        let confirmation = self
-            .confirm
-            .as_ref()
-            .map(|confirm| self.confirmation(confirm, cx));
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .size_full()
-            .window_surface(&theme)
-            .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
-            .id("accounts")
-            .role(Role::Group)
-            .track_focus(&self.focus)
-            .on_action(|_: &CloseSession, window, _| window.remove_window())
-            .when(!self.dialog_open(), |root| {
-                root.on_action(cx.listener(|this, _: &AddAccount, _, cx| this.edit(None, cx)))
-                    .on_action(
-                        cx.listener(|this, _: &NewSetup, window, cx| this.new_setup(window, cx)),
-                    )
-                    .on_action(cx.listener(|this, _: &StartSetup, _, cx| this.start_current(cx)))
-                    .on_action(cx.listener(|this, _: &SelectShown, _, cx| this.select_shown(cx)))
-                    .on_action(
-                        cx.listener(|this, _: &ClearSelection, _, cx| this.clear_selection(cx)),
-                    )
-                    .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                        this.filter.read(cx).focus_handle(cx).focus(window, cx)
-                    }))
-            })
-            .on_key_down(cx.listener(Self::key_down))
-            .child(mira_ui::nav::pointer_probe())
-            .child(title_bar)
-            .child(
-                div().flex().flex_1().min_h_0().child(sidebar).child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .child(content)
-                        .children(selection_bar),
-                ),
-            )
-            .children(form)
-            .children(bulk)
-            .children(confirmation)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn snapshot_selected_accounts_at_opening_and_minimum_size() {
-        let dir = std::env::temp_dir().join(format!("mira-account-layout-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let accounts: Vec<_> = (1..=20)
-            .map(|index| {
-                serde_json::json!({
-                    "name": format!("Battleon party member {index}"),
-                    "username": format!("member{index}"), "password":""
-                })
-            })
-            .collect();
-        let path = dir.join("accounts.json");
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&serde_json::json!({"accounts":accounts,"setups":[]})).unwrap(),
-        )
-        .unwrap();
-        for (name, w, h) in [
-            ("accounts-selected-min", 720.0, 420.0),
-            ("accounts-selected", 1000.0, 600.0),
-        ] {
-            for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
-                crate::settings::init(dir.join("settings.json"), |_| {}, cx);
-                cx.new(|cx| {
-                    let mut manager =
-                        Manager::new(path.clone(), HeaderValue::from_static("test"), window, cx);
-                    manager.checked.extend(
-                        manager
-                            .accounts
-                            .as_ref()
-                            .unwrap()
-                            .list()
-                            .iter()
-                            .take(3)
-                            .map(Account::id),
-                    );
-                    manager
-                })
-            }) {
-                assert!(written.exists());
-            }
-        }
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    fn with_script(entry: &str, phase: ScriptPhase) -> Presence {
-        Presence::Open(Summary {
-            login: Login::Online,
-            place: None,
-            character: None,
-            script: Some(ScriptState {
-                entry: entry.into(),
-                name: file_name(Path::new(entry)).into(),
-                phase,
-            }),
-        })
-    }
-
-    fn online(entry: &str, phase: ScriptPhase) -> Summary {
-        let Presence::Open(summary) = with_script(entry, phase) else {
-            unreachable!()
-        };
-        summary
-    }
-
-    fn disconnected(entry: &str) -> Summary {
-        Summary {
-            login: Login::Disconnected,
-            ..online(entry, ScriptPhase::Running)
-        }
-    }
-
-    fn waiting(open: Option<Summary>) -> Presence {
-        Presence::Waiting {
-            place: 2,
-            of: 3,
-            open,
-        }
-    }
-
-    fn member(username: &str, script: Option<&str>) -> Member {
-        Member {
-            username: username.into(),
-            script: script.map(Into::into),
-        }
-    }
-
-    fn id(username: &str) -> AccountId {
-        AccountId::of(username)
-    }
-
-    #[test]
-    fn a_card_names_the_setups_script_unless_another_script_is_busy_or_failed() {
-        let setup = Setup {
-            name: "Warlord farm".into(),
-            script: Some("/s/warlord.ts".into()),
-            server: None,
-            members: vec![member("main", None)],
-        };
-        let account = Account {
-            name: "Main".into(),
-            username: "main".into(),
-            password: String::new(),
-            server: None,
-        };
-        let note = |presence: Presence| {
-            let face = Face {
-                plan: plan_line(&setup, &account.id(), &presence),
-                ..face(&account, &presence)
-            };
-            face.note()
-                .map(|line| (line.text.to_string(), line.path.clone()))
-        };
-        let planned = Some(("warlord.ts".to_owned(), Some("/s/warlord.ts".into())));
-        assert_eq!(note(Presence::Closed(None)), planned);
-        assert_eq!(
-            note(with_script("/s/hunt.ts", ScriptPhase::Finished)),
-            planned
-        );
-        assert_eq!(
-            note(with_script("/s/hunt.ts", ScriptPhase::Running)),
-            Some(("hunt.ts".to_owned(), Some("/s/hunt.ts".into())))
-        );
-        assert_eq!(
-            note(with_script("/s/warlord.ts", ScriptPhase::Finished)),
-            Some((
-                "warlord.ts finished".to_owned(),
-                Some("/s/warlord.ts".into())
-            ))
-        );
-        assert_eq!(
-            note(Presence::Unopened("No such file".into())),
-            Some(("No such file".to_owned(), None))
-        );
-    }
-
-    #[test]
-    fn starting_a_setup_leaves_matching_runs_alone_and_flags_other_scripts() {
-        let setup = Setup {
-            name: "Warlord farm".into(),
-            script: Some("/s/warlord.ts".into()),
-            server: None,
-            members: vec![
-                member("main", None),
-                member("alt1", None),
-                member("alt2", None),
-                member("alt3", Some("/s/follower.ts")),
-                member("alt4", None),
-                member("alt5", None),
-                member("alt6", None),
-                member("alt7", None),
-                member("gone", None),
-            ],
-        };
-        let presences = HashMap::from([
-            (
-                id("main"),
-                with_script("/s/warlord.ts", ScriptPhase::Running),
-            ),
-            (
-                id("alt1"),
-                with_script("/s/hunt.ts", ScriptPhase::NeedsInput),
-            ),
-            (id("alt2"), with_script("/s/hunt.ts", ScriptPhase::Stopping)),
-            (id("alt3"), Presence::Closed(None)),
-            (
-                id("alt4"),
-                with_script("/s/warlord.ts", ScriptPhase::Failed("x".into())),
-            ),
-            (
-                id("alt5"),
-                Presence::Open(Summary {
-                    login: Login::Disconnected,
-                    place: None,
-                    character: None,
-                    script: Some(ScriptState {
-                        entry: "/s/warlord.ts".into(),
-                        name: "warlord.ts".into(),
-                        phase: ScriptPhase::Running,
-                    }),
-                }),
-            ),
-            (id("alt6"), waiting(Some(disconnected("/s/warlord.ts")))),
-            (
-                id("alt7"),
-                waiting(Some(online("/s/hunt.ts", ScriptPhase::Running))),
-            ),
-        ]);
-        assert_eq!(
-            plan(&setup, &presences, Scope::Everyone),
-            Plan {
-                start: vec![
-                    (id("alt2"), "/s/warlord.ts".into()),
-                    (id("alt3"), "/s/follower.ts".into()),
-                    (id("alt4"), "/s/warlord.ts".into()),
-                ],
-                conflicts: vec![
-                    (id("alt1"), "/s/warlord.ts".into()),
-                    (id("alt7"), "/s/warlord.ts".into()),
-                ],
-                login: vec![id("alt5"), id("alt6")],
-                unscripted: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn a_member_without_a_script_is_reported_not_started() {
-        let setup = Setup {
-            name: "Mules".into(),
-            script: None,
-            server: None,
-            members: vec![member("bank", None), member("alt", Some("/s/sell.ts"))],
-        };
-        let presences = HashMap::from([
-            (id("bank"), Presence::Closed(None)),
-            (id("alt"), Presence::Closed(None)),
-        ]);
-        let plan = plan(&setup, &presences, Scope::Everyone);
-        assert_eq!(plan.unscripted, [id("bank")]);
-        assert_eq!(plan.start, [(id("alt"), "/s/sell.ts".into())]);
-    }
-
-    #[test]
-    fn retrying_a_setup_only_touches_failed_members_without_doubling_scripts() {
-        let setup = Setup {
-            name: "Dailies".into(),
-            script: Some("/s/daily.ts".into()),
-            server: None,
-            members: ["main", "alt1", "alt2", "alt3", "alt4"]
-                .into_iter()
-                .map(|name| member(name, None))
-                .collect(),
-        };
-        let presences = HashMap::from([
-            (
-                id("main"),
-                with_script("/s/daily.ts", ScriptPhase::Finished),
-            ),
-            (id("alt1"), with_script("/s/daily.ts", ScriptPhase::Running)),
-            (
-                id("alt2"),
-                with_script("/s/daily.ts", ScriptPhase::Failed("x".into())),
-            ),
-            (id("alt3"), Presence::Open(disconnected("/s/daily.ts"))),
-            (id("alt4"), Presence::Closed(None)),
-        ]);
-        assert_eq!(
-            plan(&setup, &presences, Scope::Failed),
-            Plan {
-                start: vec![(id("alt2"), "/s/daily.ts".into())],
-                login: vec![id("alt3")],
-                ..Plan::default()
-            }
-        );
-    }
-
-    #[test]
-    fn retry_failed_picks_up_logins_and_scripts_that_failed() {
-        let failed_login = Presence::Open(Summary {
-            login: Login::Failed("Wrong password".into()),
-            place: None,
-            character: None,
-            script: None,
-        });
-        assert!(retryable(&failed_login));
-        assert!(retryable(&Presence::Unopened("no player".into())));
-        assert!(retryable(&with_script(
-            "/s/a.ts",
-            ScriptPhase::Failed("x".into())
-        )));
-        assert!(!retryable(&with_script("/s/a.ts", ScriptPhase::Finished)));
-        assert!(!retryable(&with_script("/s/a.ts", ScriptPhase::NeedsInput)));
-        assert!(!retryable(&Presence::Closed(None)));
-        assert!(retryable(&Presence::Closed(Some(ScriptState {
-            entry: "/s/a.ts".into(),
-            name: "a.ts".into(),
-            phase: ScriptPhase::Failed("x".into()),
-        }))));
-    }
-}
+mod tests;

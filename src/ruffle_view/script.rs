@@ -14,6 +14,10 @@ pub(super) struct CloseTab;
 
 impl EventEmitter<CloseTab> for RuffleView {}
 
+pub(super) struct Finished(pub(super) PathBuf);
+
+impl EventEmitter<Finished> for RuffleView {}
+
 #[derive(Default)]
 pub(super) struct Script {
     loaded: Option<Loaded>,
@@ -31,6 +35,7 @@ struct Loaded {
     launch: Launch,
     name: SharedString,
     phase: Phase,
+    since: Instant,
 }
 
 struct Dialogs {
@@ -102,6 +107,7 @@ impl Script {
             launch,
             name,
             phase,
+            since,
         } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         let phase = match phase {
@@ -123,6 +129,7 @@ impl Script {
             entry: launch.entry.clone(),
             name: name.clone(),
             phase,
+            since: Some(*since),
         })
     }
 
@@ -192,6 +199,7 @@ impl RuffleView {
             launch,
             name,
             phase: Phase::Preparing { _moving: moving },
+            since: Instant::now(),
         });
         self.changed(cx);
     }
@@ -274,6 +282,7 @@ impl RuffleView {
                     launch,
                     name,
                     phase: Phase::Finished(outcome.clone()),
+                    since: Instant::now(),
                 });
                 self.script_ended(outcome, cx);
                 return;
@@ -283,6 +292,7 @@ impl RuffleView {
             launch,
             name,
             phase,
+            since: Instant::now(),
         });
         self.changed(cx);
     }
@@ -337,7 +347,13 @@ impl RuffleView {
         } else {
             self.queue.ended(&outcome, Instant::now());
         }
+        let finished =
+            !interrupted && matches!(outcome, Outcome::Completed | Outcome::Exited { .. });
         if let Some(loaded) = &mut self.script.loaded {
+            loaded.since = Instant::now();
+            if finished {
+                cx.emit(Finished(loaded.launch.entry.clone()));
+            }
             loaded.phase = if interrupted {
                 Phase::Interrupted
             } else {
@@ -387,10 +403,12 @@ impl RuffleView {
         let restart = self.script.restart.take();
         if let Some(Loaded {
             phase: phase @ Phase::Interrupted,
+            since,
             ..
         }) = &mut self.script.loaded
         {
             *phase = Phase::Finished(Outcome::Stopped);
+            *since = Instant::now();
             if restart.is_some_and(|restart| restart.queued) {
                 self.queue.ended(&Outcome::Stopped, Instant::now());
             }
@@ -458,6 +476,7 @@ impl RuffleView {
         };
         let launch = loaded.launch.clone();
         loaded.phase = Phase::Finished(Outcome::Stopped);
+        loaded.since = Instant::now();
         if self.linked_account() != Some(restart.account) {
             if restart.queued {
                 self.queue.ended(&Outcome::Stopped, Instant::now());
