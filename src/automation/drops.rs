@@ -45,7 +45,7 @@ impl Config {
         }
     }
 
-    fn acts_on_unregistered(&self) -> bool {
+    pub(crate) fn acts_on_unregistered(&self) -> bool {
         self.accept_ac
             || self.accept_ac_member_only
             || self.accept_non_ac
