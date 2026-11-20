@@ -196,9 +196,8 @@ impl SessionTab {
 type OpenTool = fn(Entity<Client>, Target, &mut App);
 
 fn tool_menu(client: &WeakEntity<Client>, view: EntityId, title: &SharedString) -> Vec<MenuItem> {
-    let tools: [(&str, OpenTool); 4] = [
+    let tools: [(&str, OpenTool); 3] = [
         ("Environment", super::open_environment),
-        ("Follower", super::open_follower),
         ("Loader/grabber", super::open_loader_grabber),
         ("Packets", super::open_packets),
     ];
@@ -1713,54 +1712,57 @@ mod tests {
         }
     }
 
+    struct SessionRow;
+
+    impl Render for SessionRow {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let row = SessionTab {
+                view: cx.entity_id(),
+                number: 1,
+                title: "Artix".into(),
+                glance: Some(Glance {
+                    label: "Twig".into(),
+                    tone: Tone::Neutral,
+                }),
+                details: Details {
+                    server: Some("Twig".into()),
+                    script: None,
+                    error: None,
+                },
+                hint: None,
+            };
+            div()
+                .size_full()
+                .window_text(&theme)
+                .bg(gpui::black())
+                .child(
+                    div()
+                        .w(theme.layout.sidebar)
+                        .h_full()
+                        .bg(theme.sidebar)
+                        .child(
+                            Tabs::new("sessions", "Tabs", 1, move |_| {
+                                let (view, title) = (row.view, row.title.clone());
+                                row.tab(&theme, true)
+                                    .menu(move |_, _| {
+                                        tool_menu(&WeakEntity::new_invalid(), view, &title)
+                                    })
+                                    .on_close(|_, _| {})
+                            })
+                            .vertical()
+                            .on_reorder(|_, _, _, _| {}),
+                        ),
+                )
+        }
+    }
+
     #[test]
     fn session_hover_card_opens_beside_the_whole_row() {
-        struct Sessions;
-
-        impl Render for Sessions {
-            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-                let theme = cx.theme().clone();
-                let row = SessionTab {
-                    view: cx.entity_id(),
-                    number: 1,
-                    title: "Artix".into(),
-                    glance: Some(Glance {
-                        label: "Twig".into(),
-                        tone: Tone::Neutral,
-                    }),
-                    details: Details {
-                        server: Some("Twig".into()),
-                        script: None,
-                        error: None,
-                    },
-                    hint: None,
-                };
-                div()
-                    .size_full()
-                    .window_text(&theme)
-                    .bg(gpui::black())
-                    .child(
-                        div()
-                            .w(theme.layout.sidebar)
-                            .h_full()
-                            .bg(theme.sidebar)
-                            .child(
-                                Tabs::new("sessions", "Tabs", 1, move |_| {
-                                    row.tab(&theme, true)
-                                        .menu(|_, _| Vec::new())
-                                        .on_close(|_, _| {})
-                                })
-                                .vertical()
-                                .on_reorder(|_, _, _, _| {}),
-                            ),
-                    )
-            }
-        }
-
         mira_ui::snapshot_with(
             "session-hover-card",
             gpui::size(px(600.0), px(150.0)),
-            |_, cx| cx.new(|_| Sessions),
+            |_, cx| cx.new(|_| SessionRow),
             |cx, owner| {
                 let before = cx.capture_screenshot(owner).unwrap();
                 for nudge in [0.0, 1.0] {
@@ -1796,6 +1798,30 @@ mod tests {
                     after.get_pixel(x, y),
                     "row stays uncovered"
                 );
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_session_tool_menu() {
+        mira_ui::snapshot_with(
+            "session-tool-menu",
+            size(px(260.0), px(154.0)),
+            |_, cx| cx.new(|_| SessionRow),
+            |cx, owner| {
+                cx.update_window(owner, |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Right,
+                            position: point(px(42.0), px(16.0)),
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                })
+                .unwrap();
+                cx.run_until_parked();
             },
         );
     }

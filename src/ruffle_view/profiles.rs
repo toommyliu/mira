@@ -1699,7 +1699,7 @@ impl Render for Editor {
             vec![
                 Empty::new(
                     "No combat profiles",
-                    "Make one to choose the skills auto attack, Follower and scripts cast.",
+                    "Make one to choose the skills auto attack and scripts cast.",
                 )
                 .action(
                     Button::new("first-profile", "New profile")

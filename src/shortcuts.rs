@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use gpui::{Action, App, KeyBinding, Keystroke};
 use mira_ui::{components::format_keystroke, keyboard};
+use serde::de::value::StringDeserializer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -66,7 +67,6 @@ pub(crate) enum Shortcut {
     Scripts,
     CombatProfiles,
     Environment,
-    Follower,
     LoaderGrabber,
     Packets,
 }
@@ -74,7 +74,7 @@ pub(crate) enum Shortcut {
 pub(crate) type Overrides = BTreeMap<Shortcut, Option<String>>;
 
 impl Shortcut {
-    pub(crate) const ALL: [Shortcut; 28] = [
+    pub(crate) const ALL: [Shortcut; 27] = [
         Shortcut::LoadScript,
         Shortcut::StartStopScript,
         Shortcut::AutoAttack,
@@ -100,7 +100,6 @@ impl Shortcut {
         Shortcut::Scripts,
         Shortcut::CombatProfiles,
         Shortcut::Environment,
-        Shortcut::Follower,
         Shortcut::LoaderGrabber,
         Shortcut::Packets,
     ];
@@ -154,7 +153,6 @@ impl Shortcut {
             Shortcut::Scripts => "Scripts",
             Shortcut::CombatProfiles => "Combat profiles",
             Shortcut::Environment => "Environment",
-            Shortcut::Follower => "Follower",
             Shortcut::LoaderGrabber => "Loader/grabber",
             Shortcut::Packets => "Packets",
             _ => unreachable!("{self:?} is a game option"),
@@ -194,7 +192,6 @@ impl Shortcut {
             Shortcut::Scripts => Box::new(game::OpenScripts),
             Shortcut::CombatProfiles => Box::new(game::OpenCombatProfiles),
             Shortcut::Environment => Box::new(game::OpenEnvironment),
-            Shortcut::Follower => Box::new(game::OpenFollower),
             Shortcut::LoaderGrabber => Box::new(game::OpenLoaderGrabber),
             Shortcut::Packets => Box::new(game::OpenPackets),
             _ => unreachable!("{self:?} is a game option"),
@@ -254,9 +251,14 @@ pub(crate) fn serialize<S: Serializer>(overrides: &Overrides, to: S) -> Result<S
 }
 
 pub(crate) fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Overrides, D::Error> {
-    let mut saved = Overrides::deserialize(from)?;
-    saved.retain(|shortcut, keys| keys.as_deref() != shortcut.default_keys());
-    Ok(saved)
+    let saved = BTreeMap::<String, Option<String>>::deserialize(from)?;
+    Ok(saved
+        .into_iter()
+        .filter_map(|(name, keys)| {
+            let shortcut = Shortcut::deserialize(StringDeserializer::<D::Error>::new(name)).ok()?;
+            (keys.as_deref() != shortcut.default_keys()).then_some((shortcut, keys))
+        })
+        .collect())
 }
 
 fn set(overrides: &mut Overrides, shortcut: Shortcut, keys: Option<String>) {
@@ -410,7 +412,7 @@ mod tests {
         ));
         std::fs::write(
             &path,
-            r#"{"shortcuts":{"packets":"cmd-shift-k","bank":null,"interfaceOnlyRendering":"cmd-i"}}"#,
+            r#"{"appearance":"light","shortcuts":{"follower":"cmd-shift-f","packets":"cmd-shift-k","bank":null,"interfaceOnlyRendering":"cmd-i"}}"#,
         )
         .unwrap();
         cx.update(|cx| {
@@ -430,6 +432,10 @@ mod tests {
             apply(cx);
             assert_eq!(cx.key_bindings().borrow().bindings().count(), bound);
         });
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["appearance"], "light");
+        assert!(saved["shortcuts"].get("follower").is_none());
         std::fs::remove_file(path).unwrap();
     }
 
