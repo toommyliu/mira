@@ -1250,6 +1250,77 @@ fn clicking_a_tooltip_trigger_leaves_focus_where_it_was(cx: &mut TestAppContext)
     assert!(cx.update(|window, _| focus.is_focused(window)));
 }
 
+struct Cards;
+
+impl Render for Cards {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{Align, HoverCard, Placement, Side};
+        let card = |id: &'static str| {
+            div().flex().w(gpui::px(100.0)).h(gpui::px(30.0)).child(
+                HoverCard::new(id, id)
+                    .placement(Placement::new(Side::Right, Align::Start))
+                    .row("Error", "Stopped", mira_ui::Tone::Danger)
+                    .child(div().size_full()),
+            )
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(card("a"))
+            .child(card("b"))
+    }
+}
+
+#[gpui::test]
+fn hover_cards_wait_for_a_rest_hand_off_without_stacking_and_close_at_once(
+    cx: &mut TestAppContext,
+) {
+    fn move_to(cx: &mut VisualTestContext, x: f32, y: f32) -> (bool, bool) {
+        use gpui::{Modifiers, point, px};
+        cx.simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
+        cx.run_until_parked();
+        (
+            cx.debug_bounds("a-card").is_some(),
+            cx.debug_bounds("b-card").is_some(),
+        )
+    }
+    fn wait(cx: &mut VisualTestContext, millis: u64) {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(millis));
+        cx.run_until_parked();
+    }
+
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|_, _| Cards);
+    cx.run_until_parked();
+    let shown = move_to(cx, 50.0, 15.0);
+    assert_eq!(shown, (false, false), "a passing pointer opens nothing");
+    wait(cx, 1000);
+    let shown = move_to(cx, 50.0, 16.0);
+    assert_eq!(shown, (true, false), "resting on a opens its card");
+    let shown = move_to(cx, 50.0, 45.0);
+    assert_eq!(shown, (false, true), "b takes over at once");
+    move_to(cx, 50.0, 300.0);
+    wait(cx, 150);
+    let shown = move_to(cx, 50.0, 301.0);
+    assert_eq!(
+        shown,
+        (false, false),
+        "b fades out as soon as the pointer leaves"
+    );
+    let shown = move_to(cx, 50.0, 15.0);
+    assert_eq!(shown, (true, false), "a opens at once right after b closed");
+    move_to(cx, 50.0, 300.0);
+    wait(cx, 1000);
+    let shown = move_to(cx, 50.0, 45.0);
+    assert_eq!(
+        shown,
+        (false, false),
+        "b waits again once the group goes cold"
+    );
+}
+
 struct FocusRing {
     root: FocusHandle,
     target: FocusHandle,
