@@ -10,12 +10,13 @@ use gpui::{
     HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, deferred, div,
-    prelude::FluentBuilder as _, px,
+    point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
     Button, Icon, Scrollbar,
     button::{KeyHandler, PressHandler},
+    small_icon,
 };
 use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
@@ -303,7 +304,10 @@ pub(crate) struct MenuState {
     submenu_bounds: Rc<Cell<Bounds<Pixels>>>,
     submenu_rows: RefCell<HashMap<usize, Bounds<Pixels>>>,
     rest_scroll: ScrollHandle,
+    submenu_scroll: ScrollHandle,
     typeahead: Typeahead,
+    hovered: bool,
+    row: Option<FocusHandle>,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_size: Rc<Cell<gpui::Size<Pixels>>>,
     reveal: Cell<bool>,
@@ -324,7 +328,10 @@ impl MenuState {
             submenu_bounds: Rc::default(),
             submenu_rows: RefCell::default(),
             rest_scroll: ScrollHandle::new(),
+            submenu_scroll: ScrollHandle::new(),
             typeahead: Typeahead::default(),
+            hovered: false,
+            row: None,
             trigger_bounds: Rc::default(),
             panel_size: Rc::default(),
             reveal: Cell::new(false),
@@ -481,6 +488,7 @@ pub(crate) fn open(
         menu.highlighted = highlighted;
         menu.reveal.set(true);
         menu.submenu = None;
+        menu.hovered = false;
         menu.position = position;
         menu.return_focus = return_focus;
         cx.notify();
@@ -528,6 +536,7 @@ fn activate(
     index: usize,
     state: &Entity<MenuState>,
     keyboard: bool,
+    shift: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -546,7 +555,8 @@ fn activate(
     let Some(on_select) = meta.on_select.clone() else {
         return;
     };
-    if !meta.keep_open {
+    let held = shift && state.read(cx).row.is_some();
+    if !meta.keep_open && !held {
         close(state, true, window, cx);
     }
     on_select(window, cx);
@@ -592,6 +602,7 @@ fn key_down(
     cx: &mut App,
 ) {
     let key = event.keystroke.key.as_str();
+    let shift = event.keystroke.modifiers.shift;
     state.update(cx, |menu, _| {
         menu.typeahead.end_unless_typed(&event.keystroke)
     });
@@ -616,13 +627,13 @@ fn key_down(
         }
         if activates {
             if let Some(index) = sub_highlight {
-                activate(sub, index, state, true, window, cx);
+                activate(sub, index, state, true, shift, window, cx);
             }
             cx.stop_propagation();
             return;
         }
         if let Some(index) = keyed(event, sub) {
-            activate(sub, index, state, true, window, cx);
+            activate(sub, index, state, true, shift, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -639,7 +650,7 @@ fn key_down(
         return;
     }
     match key {
-        "escape" => close(state, true, window, cx),
+        "escape" => back_to_row(state, window, cx),
         "backspace" | "delete" => {
             if let Some(dismiss) = highlighted.and_then(|index| metas[index].dismiss.clone()) {
                 dismiss(window, cx);
@@ -647,20 +658,23 @@ fn key_down(
         }
         "enter" | "space" if activates => {
             if let Some(index) = highlighted {
-                activate(metas, index, state, true, window, cx);
+                activate(metas, index, state, true, shift, window, cx);
             }
         }
         "left" | "right" => {
             let submenu =
                 highlighted.filter(|&index| key == "right" && metas[index].submenu.is_some());
             match (submenu, kind) {
-                (Some(index), _) => activate(metas, index, state, true, window, cx),
+                (Some(index), _) => activate(metas, index, state, true, shift, window, cx),
                 (None, PopupKind::ListBox) => {}
+                (None, PopupKind::Menu) if key == "left" && state.read(cx).row.is_some() => {
+                    back_to_row(state, window, cx)
+                }
                 (None, PopupKind::Menu) => return,
             }
         }
         _ if let Some(index) = keyed(event, metas) => {
-            activate(metas, index, state, true, window, cx);
+            activate(metas, index, state, true, shift, window, cx);
         }
         _ => {
             let next = Step::from_key(event, Axis::Vertical)
@@ -680,6 +694,16 @@ fn key_down(
         }
     }
     cx.stop_propagation();
+}
+
+fn back_to_row(state: &Entity<MenuState>, window: &mut Window, cx: &mut App) {
+    match state.read(cx).row.clone() {
+        Some(row) => {
+            close(state, false, window, cx);
+            window.focus(&row, cx);
+        }
+        None => close(state, true, window, cx),
+    }
 }
 
 fn reveal_highlighted(
@@ -771,17 +795,19 @@ fn rows(
     items: Vec<MenuItem>,
     metas: &Rc<[Meta]>,
     ((highlighted, submenu), submenu_row): (Cursor, Option<Bounds<Pixels>>),
-    nested: bool,
+    parent: Option<usize>,
     kind: PopupKind,
     state: &Entity<MenuState>,
-    theme: &Theme,
+    cx: &App,
 ) -> Vec<AnyElement> {
+    let theme = cx.theme();
     let layout = theme.layout;
     let typography = theme.typography;
     let gutter = items
         .iter()
         .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
-    let lead = items.iter().any(|item| item.current.is_some());
+    let checks_lead = gutter && items.iter().any(|item| item.shortcut.is_some());
+    let lead = checks_lead || items.iter().any(|item| item.current.is_some());
     let lead_slot = layout.space(3.5);
     let count = metas.iter().filter(|meta| meta.navigable).count();
     let mut position = 0;
@@ -807,13 +833,7 @@ fn rows(
                 ..
             } = item;
             match item_kind {
-                Kind::Separator => div()
-                    .flex_none()
-                    .h(px(1.0))
-                    .mx(layout.space(-1.0))
-                    .my(theme.space(1.0))
-                    .bg(theme.border.opacity(0.5))
-                    .into_any_element(),
+                Kind::Separator => divider(theme).into_any_element(),
                 Kind::Header => div()
                     .flex_none()
                     .px(layout.space(2.0))
@@ -873,8 +893,9 @@ fn rows(
                             .text_color(if lit { fg } else { theme.muted_foreground })
                             .child(content)
                     };
-                    row(index, nested, metas, state, layout)
+                    row(index, parent.is_some(), metas, state, layout)
                         .rounded(theme.radius.control)
+                        .when(!disabled, |row| row.pointer_cursor(theme))
                         .role(role)
                         .aria_label(label.clone())
                         .when_some(
@@ -926,7 +947,13 @@ fn rows(
                                     .justify_center()
                                     .when(current.is_some(), |slot| {
                                         slot.child(div().size(px(6.0)).rounded_full().bg(fg))
-                                    }),
+                                    })
+                                    .when(
+                                        checks_lead
+                                            && checked == Some(true)
+                                            && mark != Mark::Switch,
+                                        |slot| slot.child(Icon::Check),
+                                    ),
                             )
                         })
                         .when_some(start, |row, start| {
@@ -935,9 +962,14 @@ fn rows(
                         .child(body)
                         .when_some(end, |row, end| row.child(trailing(end)))
                         .when_some(shortcut, |row, keys| {
-                            row.child(trailing(keys.into_any_element()))
+                            row.child(
+                                h_flex()
+                                    .flex_none()
+                                    .pl(layout.space(4.0))
+                                    .child(super::Kbd::new(keys).lit(lit || open)),
+                            )
                         })
-                        .when(gutter && mark != Mark::Switch, |row| {
+                        .when(gutter && !checks_lead && mark != Mark::Switch, |row| {
                             row.child(
                                 div().flex_none().w(theme.space(3.0)).when(
                                     checked == Some(true) && mark != Mark::Switch,
@@ -1026,49 +1058,58 @@ fn rows(
 impl RenderOnce for OpenSubmenu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let measured = self.state.read(cx).submenu_bounds.clone();
+        let menu = self.state.read(cx);
+        let measured = menu.submenu_bounds.clone();
         let placement = Placement {
             side_offset: theme.space(1.0),
             align_offset: px(-3.0),
             ..Placement::new(super::Side::Right, Align::Start)
         };
-        let (positioner, from) =
+        let (positioner, _) =
             placement.resolve(self.row, measured.get().size, window.viewport_size());
         let index = self.index;
-        let panel = panel_shell(
-            ("submenu-panel", index),
-            Some(MENU_MAX_HEIGHT.min(window.viewport_size().height - WINDOW_MARGIN * 2.0)),
-            theme,
-        )
-        .role(Role::Menu)
-        .aria_label(self.label)
-        .child(
-            canvas(
-                move |area, window, _| {
-                    if measured.replace(area).size != area.size {
-                        window.refresh();
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0(),
-        )
-        .children(rows(
+        let max_height = MENU_MAX_HEIGHT.min(window.viewport_size().height - WINDOW_MARGIN * 2.0);
+        let scroll = self.state.read(cx).submenu_scroll.clone();
+        let count = self.items.iter().take_while(|item| item.pinned).count();
+        let mut pinned = rows(
             self.items,
             &self.metas,
             ((self.highlighted, None), None),
-            true,
+            Some(self.index),
             PopupKind::Menu,
             &self.state,
-            theme,
-        ));
+            cx,
+        );
+        let rest = pinned.split_off(count);
+        let panel = panel_shell(("submenu-panel", index), None, theme)
+            .max_h(max_height)
+            .role(Role::Menu)
+            .aria_label(self.label)
+            .child(
+                canvas(
+                    move |area, window, _| {
+                        if measured.replace(area).size != area.size {
+                            window.refresh();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .children(pinned)
+            .child(scrolling(
+                ElementId::from(("submenu-rest", index)),
+                max_height,
+                false,
+                rest,
+                &scroll,
+            ));
         let panel = div()
             .relative()
             .child(panel)
             .child(theme.surface_ring(theme.radius.panel));
-        deferred(positioner.child(motion::arrive(("submenu", index), panel, from)))
-            .with_priority(super::layer::POPUP)
+        deferred(positioner.child(panel)).with_priority(super::layer::POPUP)
     }
 }
 
@@ -1100,8 +1141,9 @@ fn row(
                 });
             })
         })
-        .on_click(move |_, window, cx| {
-            activate(&click_metas, index, &click_state, false, window, cx);
+        .on_click(move |event, window, cx| {
+            let shift = event.modifiers().shift;
+            activate(&click_metas, index, &click_state, false, shift, window, cx);
         })
         .when(!nested, |row| {
             let open_state = state.clone();
@@ -1160,13 +1202,14 @@ pub(super) fn popup_panel(
         items,
         &metas,
         ((highlighted, submenu), submenu_row),
-        false,
+        None,
         kind,
         state,
-        theme,
+        cx,
     );
     let rest = pinned.split_off(count);
     panel_shell((id.clone(), "panel"), None, theme)
+        .debug_selector(|| "menu-panel".into())
         .max_h(max_height)
         .child(theme.surface_ring(theme.radius.panel))
         .role(match kind {
@@ -1207,7 +1250,12 @@ pub(crate) fn popup(
 ) -> AnyElement {
     let shell =
         popup_panel(id, items, PopupKind::Menu, max_height, state, window, cx).aria_label(label);
-    let panel = motion::arrive((id.clone(), "popup"), shell, from);
+    let menu = state.read(cx);
+    let panel = if menu.hovered || menu.row.is_some() {
+        shell.into_any_element()
+    } else {
+        motion::arrive((id.clone(), "popup"), shell, from).into_any_element()
+    };
     fading(panel, presence(state, window, cx).unwrap_or(0.0))
 }
 
@@ -1304,10 +1352,10 @@ impl RenderOnce for MenuList {
             self.items,
             &metas,
             ((highlighted, None), None),
-            false,
+            None,
             PopupKind::Menu,
             &state,
-            &theme,
+            cx,
         );
         let rest = pinned.split_off(count);
         div()
@@ -1347,19 +1395,29 @@ impl RenderOnce for MenuList {
     }
 }
 
+pub fn divider(theme: &Theme) -> Div {
+    div()
+        .flex_none()
+        .h(px(1.0))
+        .mx(-PANEL_INSET)
+        .my(PANEL_INSET)
+        .bg(theme.border.opacity(0.5))
+}
+
 pub(crate) fn trigger_handlers(
     state: &Entity<MenuState>,
     items: Option<ItemsBuilder>,
     initial: Option<usize>,
+    beside: bool,
 ) -> (PressHandler, KeyHandler) {
     let press_state = state.clone();
     let key_state = state.clone();
     let press = Rc::new(
         move |_: &gpui::MouseDownEvent, window: &mut Window, cx: &mut App| {
-            if press_state.read(cx).open {
-                close(&press_state, true, window, cx);
-            } else {
+            if !press_state.read(cx).open {
                 open(&press_state, initial, None, window, cx);
+            } else if !beside {
+                close(&press_state, true, window, cx);
             }
             cx.stop_propagation();
         },
@@ -1367,8 +1425,10 @@ pub(crate) fn trigger_handlers(
     let keys = Rc::new(
         move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
             let from_end = match event.keystroke.key.as_str() {
-                "down" | "enter" | "space" => false,
-                "up" => true,
+                "enter" | "space" => false,
+                "right" if beside && !event.keystroke.modifiers.modified() => false,
+                "down" if !beside => false,
+                "up" if !beside => true,
                 _ => return,
             };
             let highlight = initial.or_else(|| {
@@ -1392,6 +1452,7 @@ pub struct DropdownMenu {
     width: Option<Pixels>,
     max_height: Pixels,
     default_open: bool,
+    beside: bool,
     state: Option<Entity<MenuState>>,
 }
 
@@ -1405,12 +1466,51 @@ impl DropdownMenu {
             width: None,
             max_height: MENU_MAX_HEIGHT,
             default_open: false,
+            beside: false,
             state: None,
         }
     }
 
+    pub fn row(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        value: impl Into<SharedString>,
+        cx: &App,
+    ) -> Self {
+        let id = id.into();
+        let theme = cx.theme();
+        let label = label.into();
+        let value = value.into();
+        let trigger = Button::new((id.clone(), "trigger"), format!("{label}: {value}"))
+            .variant(super::button::Variant::Ghost)
+            .w_full()
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .end_slot(
+                h_flex()
+                    .gap(theme.space(1.0))
+                    .text_color(theme.muted_foreground)
+                    .child(div().truncate().child(value))
+                    .child(small_icon(Icon::ChevronRight, theme.muted_foreground)),
+            );
+        let mut menu = Self::new(id)
+            .trigger(trigger)
+            .max_height(SELECT_MAX_HEIGHT)
+            .placement(Placement {
+                side_offset: PANEL_INSET,
+                align_offset: -PANEL_INSET,
+                ..Placement::new(Side::Right, Align::Start)
+            });
+        menu.beside = true;
+        menu
+    }
+
     pub(crate) fn state(mut self, state: Entity<MenuState>) -> Self {
         self.state = Some(state);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.trigger = self.trigger.map(|trigger| trigger.disabled(disabled));
         self
     }
 
@@ -1462,7 +1562,21 @@ impl RenderOnce for DropdownMenu {
             .trigger
             .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Menu"));
         let label = trigger.label().clone();
-        let (press, keys) = trigger_handlers(&state, Some(self.items.clone()), None);
+        let disabled = trigger.is_disabled();
+        let (press, keys) = trigger_handlers(&state, Some(self.items.clone()), None, self.beside);
+        let trigger = if self.beside {
+            let row = match state.read(cx).row.clone() {
+                Some(row) => row,
+                None => {
+                    let row = cx.focus_handle();
+                    state.update(cx, |menu, _| menu.row = Some(row.clone()));
+                    row
+                }
+            };
+            trigger.focus(row)
+        } else {
+            trigger
+        };
         let mut trigger = trigger
             .trigger(is_open, press, keys)
             .attach(trigger_probe(&state).into_any_element());
@@ -1470,6 +1584,7 @@ impl RenderOnce for DropdownMenu {
             let items = (self.items)(window, cx);
             let id = self.id.clone();
             let (width, max_height) = (self.width, self.max_height);
+            let beside = self.beside;
             let on_outside = dismiss(&state);
             trigger = trigger.attach(
                 attach(
@@ -1482,6 +1597,55 @@ impl RenderOnce for DropdownMenu {
                         let panel = popup(&id, label, items, max_height, from, &state, window, cx);
                         match width {
                             Some(width) => div().w(width).child(panel).into_any_element(),
+                            None if beside => {
+                                let leave = state.clone();
+                                div()
+                                    .relative()
+                                    .min_w(px(128.0))
+                                    .child(panel)
+                                    .child(
+                                        canvas(
+                                            |bounds, _, _| bounds,
+                                            move |_, bounds, window, _| {
+                                                let leave = leave.clone();
+                                                window.on_mouse_event(
+                                                    move |event: &gpui::MouseMoveEvent,
+                                                          phase,
+                                                          window,
+                                                          cx| {
+                                                        let menu = leave.read(cx);
+                                                        let at = event.position;
+                                                        let row = menu.trigger_bounds.get();
+                                                        let bridge = Bounds::from_corners(
+                                                            point(
+                                                                row.left().min(bounds.left()),
+                                                                row.top(),
+                                                            ),
+                                                            point(
+                                                                row.right().max(bounds.right()),
+                                                                row.bottom(),
+                                                            ),
+                                                        );
+                                                        if phase == DispatchPhase::Bubble
+                                                            && menu.open
+                                                            && menu.hovered
+                                                            && !bounds.contains(&at)
+                                                            && !bridge.contains(&at)
+                                                        {
+                                                            close(&leave, true, window, cx);
+                                                            leave.update(cx, |menu, _| {
+                                                                menu.closed_at = None
+                                                            });
+                                                        }
+                                                    },
+                                                );
+                                            },
+                                        )
+                                        .absolute()
+                                        .inset_0(),
+                                    )
+                                    .into_any_element()
+                            }
                             None => div()
                                 .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
                                 .child(panel)
@@ -1492,6 +1656,21 @@ impl RenderOnce for DropdownMenu {
                 .into_any_element(),
             );
         }
-        trigger
+        if !self.beside {
+            return trigger.into_any_element();
+        }
+        let reveal = state.clone();
+        div()
+            .id((self.id, "row"))
+            .when(!disabled, |row| {
+                row.on_hover(move |hovered, window, cx| {
+                    if *hovered && !reveal.read(cx).open {
+                        open(&reveal, None, None, window, cx);
+                        reveal.update(cx, |menu, _| menu.hovered = true);
+                    }
+                })
+            })
+            .child(trigger)
+            .into_any_element()
     }
 }
