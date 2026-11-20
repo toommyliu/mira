@@ -9,8 +9,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _, Global, KeyBinding,
-    KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Subscription, Task,
+    App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable as _, Global,
+    KeyBinding, KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Subscription, Task,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, px, size,
 };
 use reqwest::header::HeaderValue;
@@ -19,7 +19,7 @@ use self::run::{Filter, Runs, Start, Stoppable, plan, setup_work, stoppable};
 use super::{
     Client, Updated,
     account_card::{Presence, script_name},
-    client::{self, Layout},
+    client::{self, Home, Layout},
 };
 use mira_ui::primitives::{Input, InputEvent};
 
@@ -142,7 +142,7 @@ pub(crate) struct Manager {
     clock: Option<Task<()>>,
     #[cfg(test)]
     fake: Option<Fake>,
-    watching: Option<[Subscription; 2]>,
+    watching: HashMap<EntityId, [Subscription; 2]>,
     _subscriptions: [Subscription; 4],
 }
 
@@ -266,9 +266,22 @@ enum Ask {
     },
 }
 
-fn game(cx: &App) -> Option<&Client> {
-    let client = client::window(cx)?.entity(cx).ok()?;
-    Some(client.read(cx))
+fn games(cx: &App) -> Vec<&Client> {
+    client::clients(cx)
+        .into_iter()
+        .map(|client| client.read(cx))
+        .collect()
+}
+
+fn window_for(
+    account: &AccountId,
+    home: Option<&Home>,
+    cx: &mut App,
+) -> Option<anyhow::Result<WindowHandle<Client>>> {
+    match client::holding(account, cx) {
+        Some(game) => Some(Ok(game)),
+        None => home.map(|home| client::open(home.clone(), false, cx)),
+    }
 }
 
 fn watch(client: &Entity<Client>, cx: &mut Context<Manager>) -> [Subscription; 2] {
@@ -281,6 +294,16 @@ fn watch(client: &Entity<Client>, cx: &mut Context<Manager>) -> [Subscription; 2
 fn unavailable(error: &anyhow::Error) -> SharedString {
     tracing::error!(%error, "couldn't open the client");
     "Couldn't open the game window.".into()
+}
+
+fn presence_across(clients: &[&Client], account: &AccountId, cx: &App) -> Presence {
+    if let Some(client) = clients.iter().find(|client| client.holds(account, cx)) {
+        return presence(client, account, cx);
+    }
+    if let Some(error) = clients.iter().find_map(|client| client.unopened(account)) {
+        return Presence::Unopened(error);
+    }
+    Presence::Closed(clients.iter().find_map(|client| client.ended(account)))
 }
 
 fn presence(client: &Client, account: &AccountId, cx: &App) -> Presence {
@@ -410,9 +433,10 @@ impl Manager {
             }),
         ];
         cx.default_global::<Runs>();
-        let watching = client::window(cx)
-            .and_then(|window| window.entity(cx).ok())
-            .map(|client| watch(&client, cx));
+        let watching = client::clients(cx)
+            .iter()
+            .map(|client| (client.entity_id(), watch(client, cx)))
+            .collect();
         Self {
             accounts: Accounts::open(path).map_err(Into::into),
             device,
@@ -442,7 +466,9 @@ impl Manager {
     }
 
     fn watch(&mut self, client: &Entity<Client>, cx: &mut Context<Self>) {
-        self.watching = Some(watch(client, cx));
+        let live: HashSet<EntityId> = client::clients(cx).iter().map(Entity::entity_id).collect();
+        self.watching.retain(|id, _| live.contains(id));
+        self.watching.insert(client.entity_id(), watch(client, cx));
         cx.notify();
     }
 
@@ -546,13 +572,12 @@ impl Manager {
                 })
                 .collect();
         }
-        let client = game(cx);
+        let clients = games(cx);
         self.account_list()
             .iter()
             .map(|account| {
                 let id = account.id();
-                let presence =
-                    client.map_or(Presence::Closed(None), |client| presence(client, &id, cx));
+                let presence = presence_across(&clients, &id, cx);
                 (id, presence)
             })
             .collect()
@@ -563,7 +588,7 @@ impl Manager {
         if let Some(fake) = &self.fake {
             return fake.finished.get(account).copied();
         }
-        game(cx)?.finished_at(account, script)
+        client::finished_at(account, script, cx)
     }
 
     fn done(&self, setup: &Setup, cx: &App) -> HashSet<AccountId> {
@@ -601,30 +626,33 @@ impl Manager {
     fn act(
         &mut self,
         targets: Vec<Account>,
-        open: bool,
+        home: Option<Home>,
         cx: &mut Context<Self>,
         act: impl Fn(&mut Client, &Account, &mut Window, &mut Context<Client>),
     ) {
-        let game = match client::window(cx) {
-            Some(game) => Ok(game),
-            None if open => client::open(false, cx),
-            None => return,
-        };
-        let done = game.and_then(|game| {
-            game.update(cx, |client, window, cx| {
-                for account in &targets {
-                    act(client, account, window, cx);
-                }
-            })
-        });
-        self.notice = done.err().map(|error| unavailable(&error));
+        let mut failed = None;
+        for account in &targets {
+            let Some(game) = window_for(&account.id(), home.as_ref(), cx) else {
+                continue;
+            };
+            let done = game.and_then(|game| {
+                game.update(cx, |client, window, cx| act(client, account, window, cx))
+            });
+            if let Err(error) = done {
+                failed = Some(error);
+            }
+        }
+        self.notice = failed.map(|error| unavailable(&error));
         cx.notify();
     }
 
     fn launch(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.act(targets, true, cx, |client, account, window, cx| {
-            client.launch(account, None, window, cx)
-        });
+        self.act(
+            targets,
+            Some(Home::Shared),
+            cx,
+            |client, account, window, cx| client.launch(account, None, window, cx),
+        );
     }
 
     fn remember(&mut self, script: &Path, cx: &mut Context<Self>) {
@@ -668,9 +696,14 @@ impl Manager {
             cx.notify();
             return;
         }
-        self.act(targets, true, cx, |client, account, window, cx| {
-            client.run_script(account, script.clone(), true, None, window, cx)
-        });
+        self.act(
+            targets,
+            Some(Home::Shared),
+            cx,
+            |client, account, window, cx| {
+                client.run_script(account, script.clone(), true, None, window, cx)
+            },
+        );
     }
 
     fn run_chosen(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
@@ -778,7 +811,7 @@ impl Manager {
 
     fn stop_now(&mut self, targets: Vec<AccountId>, cx: &mut Context<Self>) {
         let targets = self.named(&targets);
-        self.act(targets, false, cx, |client, account, _, cx| {
+        self.act(targets, None, cx, |client, account, _, cx| {
             client.stop_script(&account.id(), cx)
         });
     }
@@ -801,13 +834,13 @@ impl Manager {
     }
 
     fn close_now(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        self.act(targets, false, cx, |client, account, window, cx| {
+        self.act(targets, None, cx, |client, account, window, cx| {
             client.close_account(&account.id(), window, cx)
         });
     }
 
     fn show_account(&mut self, account: Account, cx: &mut Context<Self>) {
-        self.act(vec![account], false, cx, |client, account, window, cx| {
+        self.act(vec![account], None, cx, |client, account, window, cx| {
             client.show_account(&account.id(), window, cx)
         });
     }
@@ -826,8 +859,9 @@ impl Manager {
 
     fn restart(&mut self, account: &Account, cx: &mut Context<Self>) {
         let id = account.id();
-        if let Some(client) = client::window(cx).and_then(|window| window.entity(cx).ok()) {
-            client.update(cx, |client, cx| client.restart_script(&id, cx));
+        if let Some(game) = client::holding(&id, cx) {
+            game.update(cx, |client, _, cx| client.restart_script(&id, cx))
+                .ok();
         }
     }
 
@@ -840,9 +874,9 @@ impl Manager {
             .iter()
             .cloned()
             .chain(
-                game(cx)
-                    .map(|client| client.loaded_scripts(cx))
-                    .unwrap_or_default(),
+                games(cx)
+                    .iter()
+                    .flat_map(|client| client.loaded_scripts(cx)),
             )
             .chain(from_setups)
         {
@@ -1142,25 +1176,39 @@ impl Manager {
         if start == Start::Fresh || cx.global::<Runs>().started(&setup.name).is_none() {
             cx.global_mut::<Runs>().start(&setup.name, Instant::now());
         }
-        let grid = setup.launch.grid;
-        let done = if runs.is_empty() && logins.is_empty() {
-            Ok(())
+        let home = if setup.launch.new_window {
+            Home::Setup(setup.name.clone())
         } else {
-            client::open(false, cx).and_then(|game| {
+            Home::Shared
+        };
+        let grid = setup.launch.grid;
+        let work = runs
+            .into_iter()
+            .map(|(account, replace)| (account, Some(replace)))
+            .chain(logins.into_iter().map(|account| (account, None)));
+        let mut failed = None;
+        for (account, replace) in work {
+            let Some(game) = window_for(&account.id(), Some(&home), cx) else {
+                continue;
+            };
+            let done = game.and_then(|game| {
                 game.update(cx, |client, window, cx| {
-                    for (account, replace) in &runs {
-                        client.run_script(account, script.clone(), *replace, None, window, cx);
-                    }
-                    for account in &logins {
-                        client.launch(account, None, window, cx);
+                    match replace {
+                        Some(replace) => {
+                            client.run_script(&account, script.clone(), replace, None, window, cx)
+                        }
+                        None => client.launch(&account, None, window, cx),
                     }
                     if grid {
                         client.set_layout(Layout::Grid, window, cx);
                     }
                 })
-            })
-        };
-        self.notice = done.err().map(|error| unavailable(&error));
+            });
+            if let Err(error) = done {
+                failed = Some(error);
+            }
+        }
+        self.notice = failed.map(|error| unavailable(&error));
         cx.notify();
     }
 
@@ -1230,10 +1278,13 @@ impl Manager {
             .as_ref()
             .filter(|editing| **editing != AccountId::of(draft.username.trim()));
         if let Some(old) = renamed {
-            let client = game(cx);
-            let blocked = if client.is_some_and(|client| client.summary(old, cx).is_some()) {
+            let clients = games(cx);
+            let blocked = if clients
+                .iter()
+                .any(|client| client.summary(old, cx).is_some())
+            {
                 Some("Close this account's tab before changing its username.")
-            } else if client.is_some_and(|client| client.waiting(old).is_some()) {
+            } else if clients.iter().any(|client| client.waiting(old).is_some()) {
                 Some("Stop this account's launch before changing its username.")
             } else {
                 None
@@ -1390,6 +1441,7 @@ impl Manager {
             match accounts.rename_setup(&editing.setup, &name) {
                 Ok(name) => {
                     cx.global_mut::<Runs>().rename(&editing.setup, &name);
+                    client::rename_setup(&editing.setup, &name, cx);
                     if self.view == View::Setup(editing.setup.clone()) {
                         self.view = View::Setup(name);
                     }

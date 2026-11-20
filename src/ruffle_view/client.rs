@@ -18,7 +18,7 @@ use gpui::{
 use super::{
     Changed, Details, Glance, Identified, RuffleView, ScriptPhase, ScriptState, Summary, Target,
     Updated,
-    launches::{self, Launch, Launches},
+    launches::{self, Launch, Launches, Pace},
     manager::OpenManager,
     script::{CloseTab, Finished},
 };
@@ -124,7 +124,6 @@ pub struct Client {
     pacing: bool,
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
-    finished: HashMap<(AccountId, PathBuf), Instant>,
     _activation: Subscription,
 }
 
@@ -241,12 +240,41 @@ fn grid_shape(count: usize) -> (usize, usize) {
     (columns, count.div_ceil(columns).max(1))
 }
 
-struct Game {
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum Home {
+    Shared,
+    Setup(String),
+}
+
+impl Home {
+    fn title(&self) -> SharedString {
+        match self {
+            Home::Shared => "Mira".into(),
+            Home::Setup(name) => name.clone().into(),
+        }
+    }
+}
+
+struct GameWindow {
+    home: Home,
+    handle: WindowHandle<Client>,
+    client: WeakEntity<Client>,
+}
+
+#[derive(Clone)]
+struct Shared {
     data: PathBuf,
     accounts: PathBuf,
     device: reqwest::header::HeaderValue,
     armies: Armies,
-    window: Option<WindowHandle<Client>>,
+    extras: Rc<extras::Store>,
+    pace: Pace,
+}
+
+struct Game {
+    shared: Shared,
+    windows: Vec<GameWindow>,
+    finished: HashMap<(AccountId, PathBuf), Instant>,
 }
 
 impl Global for Game {}
@@ -259,40 +287,106 @@ pub(crate) fn init(
     cx: &mut App,
 ) {
     cx.set_global(Game {
-        data,
-        accounts,
-        device,
-        armies,
-        window: None,
+        shared: Shared {
+            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
+            data,
+            accounts,
+            device,
+            armies,
+            pace: Pace::default(),
+        },
+        windows: Vec::new(),
+        finished: HashMap::new(),
     });
     cx.on_window_closed(|cx, closed| {
-        let game = cx.global::<Game>().window;
-        if game.is_some_and(|game| game.window_id() == closed) {
-            cx.defer(super::close_tools);
-        }
+        let windows = &mut cx.global_mut::<Game>().windows;
+        let Some(index) = windows
+            .iter()
+            .position(|game| game.handle.window_id() == closed)
+        else {
+            return;
+        };
+        let client = windows.remove(index).client.entity_id();
+        cx.defer(move |cx| super::close_tools(client, cx));
     })
     .detach();
 }
 
-pub(crate) fn window(cx: &App) -> Option<WindowHandle<Client>> {
-    cx.try_global::<Game>()?
-        .window
-        .filter(|window| window.entity(cx).is_ok())
+fn live(cx: &App) -> impl Iterator<Item = (&GameWindow, Entity<Client>)> {
+    cx.try_global::<Game>()
+        .into_iter()
+        .flat_map(|game| &game.windows)
+        .filter_map(|game| Some((game, game.client.upgrade()?)))
 }
 
-pub(crate) fn open(blank_tab: bool, cx: &mut App) -> anyhow::Result<WindowHandle<Client>> {
-    if let Some(window) = window(cx) {
-        return Ok(window);
+pub(crate) fn clients(cx: &App) -> Vec<Entity<Client>> {
+    live(cx).map(|(_, client)| client).collect()
+}
+
+pub(crate) fn holding(account: &AccountId, cx: &App) -> Option<WindowHandle<Client>> {
+    live(cx)
+        .find(|(_, client)| client.read(cx).holds(account, cx))
+        .map(|(game, _)| game.handle)
+}
+
+pub(crate) fn finished_at(account: &AccountId, entry: &Path, cx: &App) -> Option<Instant> {
+    cx.try_global::<Game>()?
+        .finished
+        .get(&(account.clone(), entry.to_path_buf()))
+        .copied()
+}
+
+pub(crate) fn current(cx: &mut App) -> anyhow::Result<WindowHandle<Client>> {
+    let frontmost = live(cx).next().map(|(game, _)| game.handle);
+    match frontmost {
+        Some(handle) => Ok(handle),
+        None => open(Home::Shared, true, cx),
     }
-    let game = cx
+}
+
+pub(crate) fn rename_setup(old: &str, name: &str, cx: &mut App) {
+    if !cx.has_global::<Game>() {
+        return;
+    }
+    let Some(window) = cx
+        .global_mut::<Game>()
+        .windows
+        .iter_mut()
+        .find(|game| game.home == Home::Setup(old.to_owned()))
+    else {
+        return;
+    };
+    window.home = Home::Setup(name.to_owned());
+    let (handle, title) = (window.handle, window.home.title());
+    handle
+        .update(cx, |_, window, _| window.set_window_title(&title))
+        .ok();
+}
+
+fn activated(window: gpui::WindowId, cx: &mut App) {
+    let windows = &mut cx.global_mut::<Game>().windows;
+    if let Some(index) = windows
+        .iter()
+        .position(|game| game.handle.window_id() == window)
+    {
+        let game = windows.remove(index);
+        windows.insert(0, game);
+    }
+}
+
+pub(crate) fn open(
+    home: Home,
+    blank_tab: bool,
+    cx: &mut App,
+) -> anyhow::Result<WindowHandle<Client>> {
+    if let Some((game, _)) = live(cx).find(|(game, _)| game.home == home) {
+        return Ok(game.handle);
+    }
+    let shared = cx
         .try_global::<Game>()
-        .ok_or_else(|| anyhow::anyhow!("The client isn't set up"))?;
-    let (data, accounts, device, armies) = (
-        game.data.clone(),
-        game.accounts.clone(),
-        game.device.clone(),
-        game.armies.clone(),
-    );
+        .ok_or_else(|| anyhow::anyhow!("The client isn't set up"))?
+        .shared
+        .clone();
     let chrome = cx.theme().layout.chrome;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -301,7 +395,7 @@ pub(crate) fn open(blank_tab: bool, cx: &mut App) -> anyhow::Result<WindowHandle
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
-            title: Some("Mira".into()),
+            title: Some(home.title()),
             appears_transparent: true,
             traffic_light_position: Some(point(px(12.0), px(12.0))),
         }),
@@ -312,27 +406,39 @@ pub(crate) fn open(blank_tab: bool, cx: &mut App) -> anyhow::Result<WindowHandle
     };
     let window = cx.open_window(options, |window, cx| {
         settings::follow_system(window);
-        let view = Client::new(data, accounts, device, armies, blank_tab, window, cx)
-            .expect("create the AQW player view");
+        let view = Client::new(shared, blank_tab, window, cx).expect("create the AQW player view");
         window.focus(&view.read(cx).focus_handle(cx), cx);
         view
     })?;
-    cx.global_mut::<Game>().window = Some(window);
+    let client = window.entity(cx)?.downgrade();
+    cx.global_mut::<Game>().windows.insert(
+        0,
+        GameWindow {
+            home,
+            handle: window,
+            client,
+        },
+    );
     Ok(window)
 }
 
 impl Client {
-    pub(crate) fn new(
-        data: PathBuf,
-        accounts: PathBuf,
-        device: reqwest::header::HeaderValue,
-        armies: Armies,
+    fn new(
+        shared: Shared,
         blank_tab: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Entity<Client>> {
+        let Shared {
+            data,
+            accounts,
+            device,
+            armies,
+            extras,
+            pace,
+        } = shared;
         let client = cx.new(|cx| Client {
-            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
+            extras,
             data,
             accounts,
             device,
@@ -351,13 +457,14 @@ impl Client {
             shortcut_hints: false,
             shortcut_hint_delay: None,
             status: None,
-            launches: Launches::default(),
+            launches: Launches::paced(pace),
             pacing: false,
             unopened: HashMap::new(),
             ended: HashMap::new(),
-            finished: HashMap::new(),
             _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
-                if !window.is_window_active() {
+                if window.is_window_active() {
+                    activated(window.window_handle().window_id(), cx);
+                } else {
                     this.hide_shortcut_hints(cx);
                 }
             }),
@@ -390,7 +497,6 @@ impl Client {
             pacing: false,
             unopened: HashMap::new(),
             ended: HashMap::new(),
-            finished: HashMap::new(),
             _activation: Subscription::new(|| {}),
         })
     }
@@ -439,9 +545,7 @@ impl Client {
             }),
             _finished: cx.subscribe(&view, |this, view, Finished(entry), cx| {
                 if let Some(account) = view.read(cx).account_id() {
-                    this.finished
-                        .insert((account, entry.clone()), Instant::now());
-                    cx.notify();
+                    this.record_finished(account, entry.clone(), cx);
                 }
             }),
             _close: cx.subscribe_in(&view, window, |this, view, _: &CloseTab, window, cx| {
@@ -457,7 +561,12 @@ impl Client {
 
     fn link(&mut self, view: &Entity<RuffleView>, username: &str, cx: &mut Context<Self>) {
         let id = AccountId::of(username);
-        if self.session_of(&id, cx).is_some() {
+        let this = cx.entity_id();
+        if self.session_of(&id, cx).is_some()
+            || clients(cx)
+                .iter()
+                .any(|client| client.entity_id() != this && client.read(cx).holds(&id, cx))
+        {
             return;
         }
         let accounts = match Accounts::open(self.accounts.clone()) {
@@ -477,6 +586,10 @@ impl Client {
         self.sessions
             .iter()
             .position(|session| session.view.read(cx).account_id().as_ref() == Some(account))
+    }
+
+    pub(crate) fn holds(&self, account: &AccountId, cx: &App) -> bool {
+        self.session_of(account, cx).is_some() || self.launches.position(account).is_some()
     }
 
     pub(crate) fn summary(&self, account: &AccountId, cx: &App) -> Option<Summary> {
@@ -566,10 +679,11 @@ impl Client {
         self.ended.get(account).cloned()
     }
 
-    pub(crate) fn finished_at(&self, account: &AccountId, entry: &Path) -> Option<Instant> {
-        self.finished
-            .get(&(account.clone(), entry.to_path_buf()))
-            .copied()
+    fn record_finished(&mut self, account: AccountId, entry: PathBuf, cx: &mut Context<Self>) {
+        cx.global_mut::<Game>()
+            .finished
+            .insert((account, entry), Instant::now());
+        cx.notify();
     }
 
     pub(crate) fn loaded_scripts(&self, cx: &App) -> Vec<PathBuf> {
@@ -1516,6 +1630,39 @@ mod tests {
         let (_, cx) = cx.add_window_view(|_, _| Shown(client.clone()));
         cx.run_until_parked();
         (client, cx)
+    }
+
+    #[gpui::test]
+    fn a_finished_script_stays_finished_after_its_window_closes(cx: &mut gpui::TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("mira-finished-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+            init(
+                folder.clone(),
+                folder.join("accounts.json"),
+                reqwest::header::HeaderValue::from_static("test"),
+                Armies::new(folder.join("armies")),
+                cx,
+            );
+        });
+        let (account, entry) = (AccountId::of("whomity"), PathBuf::from("daily.ts"));
+        let window = cx
+            .update(|cx| open(Home::Setup("Daily".into()), false, cx))
+            .unwrap();
+        window
+            .update(cx, |client, _, cx| {
+                client.record_finished(account.clone(), entry.clone(), cx)
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        assert!(cx.update(|cx| clients(cx).is_empty()));
+        assert!(cx.update(|cx| finished_at(&account, &entry, cx)).is_some());
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[gpui::test]

@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, Div, Entity, EntityId, ParentElement as _, SharedString, Styled as _,
-    Subscription, Task, Transformation, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
-    radians,
+    Subscription, Task, Transformation, WeakEntity, Window, WindowHandle, div,
+    prelude::FluentBuilder as _, px, radians,
 };
 use mira_ui::{
     ActiveTheme as _, Tone,
@@ -47,6 +47,46 @@ impl ShownTab {
             _watching: Vec::new(),
             _renamed: Subscription::new(|| {}),
         }
+    }
+}
+
+pub(super) fn reuse<T: gpui::Render>(
+    handle: Option<WindowHandle<T>>,
+    client: &Entity<Client>,
+    owner: fn(&T) -> &Entity<Client>,
+    reuse: impl FnOnce(&mut T, &mut Window, &mut Context<T>),
+    cx: &mut App,
+) -> bool {
+    let Some(handle) = handle else {
+        return false;
+    };
+    handle
+        .update(cx, |tool, window, cx| {
+            if owner(tool) != client {
+                window.remove_window();
+                return false;
+            }
+            window.activate_window();
+            reuse(tool, window, cx);
+            true
+        })
+        .unwrap_or(false)
+}
+
+pub(super) fn close<T: gpui::Render>(
+    handle: Option<WindowHandle<T>>,
+    client: EntityId,
+    owner: fn(&T) -> &Entity<Client>,
+    cx: &mut App,
+) {
+    if let Some(handle) = handle {
+        handle
+            .update(cx, |tool, window, _| {
+                if owner(tool).entity_id() == client {
+                    window.remove_window();
+                }
+            })
+            .ok();
     }
 }
 

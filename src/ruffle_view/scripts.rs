@@ -358,10 +358,9 @@ struct Open(WindowHandle<ScriptsWindow>);
 
 impl gpui::Global for Open {}
 
-pub(super) fn close(cx: &mut App) {
-    if let Some(open) = cx.try_global::<Open>().map(|open| open.0) {
-        open.update(cx, |_, window, _| window.remove_window()).ok();
-    }
+pub(super) fn close(client: gpui::EntityId, cx: &mut App) {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    shown_tab::close(open, client, |scripts: &ScriptsWindow| &scripts.client, cx);
 }
 
 pub(crate) fn open(
@@ -371,15 +370,17 @@ pub(crate) fn open(
     target: Target,
     cx: &mut App,
 ) {
-    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
-        && handle
-            .update(cx, |scripts, window, cx| {
-                window.activate_window();
-                scripts.retarget(target, cx);
-                scripts.reopen(window, cx);
-            })
-            .is_ok()
-    {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    if shown_tab::reuse(
+        open,
+        &client,
+        |scripts: &ScriptsWindow| &scripts.client,
+        |scripts, window, cx| {
+            scripts.retarget(target, cx);
+            scripts.reopen(window, cx);
+        },
+        cx,
+    ) {
         return;
     }
     let options = WindowOptions {

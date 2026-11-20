@@ -57,21 +57,22 @@ struct Open(WindowHandle<LoaderGrabber>);
 
 impl gpui::Global for Open {}
 
-pub(super) fn close(cx: &mut App) {
-    if let Some(open) = cx.try_global::<Open>().map(|open| open.0) {
-        open.update(cx, |_, window, _| window.remove_window()).ok();
-    }
+pub(super) fn close(client: gpui::EntityId, cx: &mut App) {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    shown_tab::close(open, client, |grabber: &LoaderGrabber| &grabber.client, cx);
 }
 
 pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
-    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
-        && handle
-            .update(cx, |grabber, window, cx| {
-                window.activate_window();
-                grabber.retarget(target, cx);
-            })
-            .is_ok()
-    {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    if shown_tab::reuse(
+        open,
+        &client,
+        |grabber: &LoaderGrabber| &grabber.client,
+        |grabber, _, cx| {
+            grabber.retarget(target, cx);
+        },
+        cx,
+    ) {
         return;
     }
     let options = WindowOptions {

@@ -54,21 +54,22 @@ struct Open(WindowHandle<Packets>);
 
 impl Global for Open {}
 
-pub(super) fn close(cx: &mut App) {
-    if let Some(open) = cx.try_global::<Open>().map(|open| open.0) {
-        open.update(cx, |_, window, _| window.remove_window()).ok();
-    }
+pub(super) fn close(client: gpui::EntityId, cx: &mut App) {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    shown_tab::close(open, client, |packets: &Packets| &packets.client, cx);
 }
 
 pub(crate) fn open(client: Entity<Client>, target: shown_tab::Target, cx: &mut App) {
-    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0)
-        && handle
-            .update(cx, |packets, window, cx| {
-                window.activate_window();
-                packets.retarget(target, cx);
-            })
-            .is_ok()
-    {
+    let open = cx.try_global::<Open>().map(|open| open.0);
+    if shown_tab::reuse(
+        open,
+        &client,
+        |packets: &Packets| &packets.client,
+        |packets, _, cx| {
+            packets.retarget(target, cx);
+        },
+        cx,
+    ) {
         return;
     }
     let options = WindowOptions {
