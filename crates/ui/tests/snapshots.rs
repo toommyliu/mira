@@ -713,6 +713,44 @@ fn snapshot_popover() {
 }
 
 #[test]
+fn snapshot_server_signal() {
+    scene("server-signal", 380.0, 220.0, |_, cx| {
+        let theme = cx.theme().clone();
+        let row = |name: &'static str, players: &'static str, ping: &'static str, level| {
+            MenuItem::action(name, |_, _| {}).end_slot(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .text_color(theme.muted_foreground)
+                    .child(players)
+                    .child(ping)
+                    .child(mira_ui::primitives::Signal::new(
+                        format!("{name} connection"),
+                        level,
+                    )),
+            )
+        };
+        div()
+            .w(px(340.0))
+            .p(px(4.0))
+            .rounded(px(10.0))
+            .bg(theme.popover)
+            .child(mira_ui::primitives::MenuList::new(
+                "servers",
+                "Servers",
+                vec![
+                    row("Twilly", "862/1000", "66 ms", 3).checked(true),
+                    row("Swordhaven (EU)", "166/1000", "176 ms", 2),
+                    row("Far away", "40/1000", "320 ms", 1),
+                    row("Offline", "Offline", "", 0),
+                ],
+            ))
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_progress_arcs() {
     scene("progress-arcs", 260.0, 90.0, |_, _| {
         div()
