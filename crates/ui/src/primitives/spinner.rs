@@ -43,16 +43,26 @@ impl Spinner {
 impl RenderOnce for Spinner {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let color = self.color.unwrap_or(cx.theme().foreground);
-        let ring = svg()
-            .path(super::Icon::LoaderCircle.path())
-            .flex_none()
-            .size(self.size)
-            .text_color(color);
+        let layer = |path: &'static str, color: Hsla| {
+            svg()
+                .path(path)
+                .absolute()
+                .inset_0()
+                .size(self.size)
+                .text_color(color)
+        };
         div()
             .id(self.id.clone())
             .role(Role::ProgressIndicator)
             .aria_label(self.label)
+            .relative()
             .flex_none()
-            .child(motion::spin(self.id, ring, cx))
+            .size(self.size)
+            .child(layer("icons/spinner-track.svg", color.opacity(0.2)))
+            .child(motion::spin(
+                self.id,
+                layer("icons/spinner-arc.svg", color),
+                cx,
+            ))
     }
 }

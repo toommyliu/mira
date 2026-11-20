@@ -713,6 +713,26 @@ fn snapshot_popover() {
 }
 
 #[test]
+fn snapshot_progress_arcs() {
+    scene("progress-arcs", 260.0, 90.0, |_, _| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(16.0))
+            .child(mira_ui::primitives::Spinner::new("arc-24").size(px(24.0)))
+            .child(mira_ui::primitives::Spinner::new("arc-16"))
+            .child(Button::icon("refresh", Icon::RotateCcw, "Refresh").size(Size::XSmall))
+            .child(
+                Button::icon("refreshing", Icon::RotateCcw, "Refresh")
+                    .size(Size::XSmall)
+                    .busy(true),
+            )
+            .child(Button::new("save", "Save").busy(true))
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_tabs() {
     scene("tabs", 460.0, 260.0, |_, _| {
         div()
