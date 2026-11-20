@@ -335,6 +335,25 @@ pub(crate) fn finished_at(account: &AccountId, entry: &Path, cx: &App) -> Option
         .copied()
 }
 
+pub(crate) fn open_launch_window(cx: &mut App) {
+    if !cx.windows().is_empty() {
+        return;
+    }
+    let Some(game) = cx.try_global::<Game>() else {
+        return;
+    };
+    match settings::start(cx) {
+        settings::Start::Client => {
+            if let Err(error) = open(Home::Shared, true, cx) {
+                tracing::error!(%error, "couldn't open Mira");
+            }
+        }
+        settings::Start::Manager => {
+            super::open_manager(game.shared.accounts.clone(), game.shared.device.clone(), cx);
+        }
+    }
+}
+
 pub(crate) fn current(cx: &mut App) -> anyhow::Result<WindowHandle<Client>> {
     let frontmost = live(cx).next().map(|(game, _)| game.handle);
     match frontmost {
