@@ -6,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, radians,
 };
 use mira_ui::{
-    ActiveTheme as _, Tone,
+    ActiveTheme as _,
     primitives::{
         Button, DropdownMenu, Icon, MenuItem,
         button::{Size, Variant},
@@ -202,12 +202,17 @@ fn tab_menu(
             Button::new("tab-menu-trigger", label)
                 .variant(Variant::Ghost)
                 .size(Size::Small)
+                .shows_value()
                 .flex_shrink(1.0)
                 .min_w_0()
                 .when(pinned, |trigger| {
-                    trigger.start_slot(icon(Icon::Pin, theme.foreground).with_transformation(
-                        Transformation::rotate(radians(std::f32::consts::FRAC_PI_4)),
-                    ))
+                    trigger.start_slot(
+                        icon(Icon::Pin, theme.foreground)
+                            .size(Size::Small.icon_size())
+                            .with_transformation(Transformation::rotate(radians(
+                                std::f32::consts::FRAC_PI_4,
+                            ))),
+                    )
                 })
                 .child(
                     div()
@@ -216,8 +221,7 @@ fn tab_menu(
                         .truncate()
                         .text_color(theme.foreground)
                         .child(shown),
-                )
-                .end_slot(Icon::ChevronDown),
+                ),
         )
         .items(move |_, _| {
             let choose = |choice: Target| {
@@ -240,11 +244,7 @@ fn tab_menu(
                     choose(Target::Pinned(*id)),
                 );
                 if selected == Some(*id) {
-                    item.end_slot(mira_ui::primitives::StatusMark::new(
-                        Icon::CircleDot,
-                        "Active tab",
-                        Tone::Accent,
-                    ))
+                    item.current("Selected tab")
                 } else {
                     item
                 }

@@ -58,7 +58,7 @@ impl Size {
         }
     }
 
-    fn icon_size(self) -> Pixels {
+    pub fn icon_size(self) -> Pixels {
         px(match self {
             Self::XSmall => 10.0,
             Self::Small => 12.0,
@@ -95,6 +95,7 @@ pub struct Button {
     value: Option<SharedString>,
     joined: Option<Joined>,
     swatch: bool,
+    shows_value: bool,
     style: StyleRefinement,
 }
 
@@ -124,6 +125,7 @@ impl Button {
             value: None,
             joined: None,
             swatch: false,
+            shows_value: false,
             style: StyleRefinement::default(),
         }
     }
@@ -148,6 +150,11 @@ impl Button {
 
     pub fn end_slot(mut self, element: impl IntoElement) -> Self {
         self.end = Some(element.into_any_element());
+        self
+    }
+
+    pub fn shows_value(mut self) -> Self {
+        self.shows_value = true;
         self
     }
 
@@ -343,7 +350,7 @@ impl RenderOnce for Button {
         };
         let nudge = !inert && self.expanded.is_none() && !cx.reduce_motion();
         let has_start = self.start.is_some();
-        let has_end = self.end.is_some();
+        let has_end = self.end.is_some() || self.shows_value;
         let height = self.size.height(theme.layout);
         let icon_only = self.icon.is_some() && self.children.is_empty();
         let icon_size = self.icon_size.unwrap_or(self.size.icon_size());
@@ -384,6 +391,9 @@ impl RenderOnce for Button {
             })
             .when_some(self.end, |content, end| {
                 content.child(h_flex().flex_none().child(end))
+            })
+            .when(self.shows_value, |content| {
+                content.child(icon(Icon::ChevronDown, theme.muted_foreground).size(icon_size))
             });
         let mut button = h_flex()
             .id(self.id.clone())
@@ -436,7 +446,11 @@ impl RenderOnce for Button {
             } else {
                 typography.body_line
             })
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(if self.shows_value {
+                FontWeight::NORMAL
+            } else {
+                FontWeight::MEDIUM
+            })
             .text_color(fg)
             .group(FACE_GROUP)
             .when(self.disabled, |button| button.opacity(DISABLED_OPACITY))
