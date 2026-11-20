@@ -1,6 +1,6 @@
 use gpui::{
     AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, px, size,
+    Styled as _, Window, div, point, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Tone,
@@ -100,8 +100,38 @@ fn hover(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32
     }
 }
 
+fn assert_centered_checkbox_marks(
+    cx: &mut gpui::HeadlessAppContext,
+    owner: gpui::AnyWindowHandle,
+    scale: u32,
+) {
+    cx.update_window(owner, |_, window, cx| {
+        window.set_scale_factor(scale as f32);
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
+    let image = cx.capture_screenshot(owner).unwrap();
+    let last = point(16 * scale - 1, 16 * scale - 1);
+    for (name, top) in [("check", 22), ("minus", 50)] {
+        let fill = image.get_pixel(18 * scale, (top + 8) * scale)[0];
+        let mut first_ink = last;
+        let mut last_ink = point(0, 0);
+        for y in 2 * scale..14 * scale {
+            for x in 2 * scale..14 * scale {
+                let pixel = image.get_pixel(16 * scale + x, top * scale + y)[0];
+                if pixel.abs_diff(fill) > 64 {
+                    first_ink = first_ink.min(&point(x, y));
+                    last_ink = last_ink.max(&point(x, y));
+                }
+            }
+        }
+        assert!(first_ink.x <= last_ink.x, "missing {name} at {scale}×");
+        assert_eq!(first_ink, last - last_ink, "{name} margins at {scale}×");
+    }
+}
+
 #[test]
-fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
+fn checkbox_centers_its_marks_and_keeps_its_solid_rounded_edge_on_hover() {
     mira_ui::snapshot_with(
         "checkbox-hover",
         size(px(160.0), px(104.0)),
@@ -123,6 +153,9 @@ fn checked_checkbox_keeps_its_solid_rounded_edge_on_hover() {
         },
         |cx, owner| {
             hover(cx, owner, 24.0, 30.0);
+            for scale in [1, 2] {
+                assert_centered_checkbox_marks(cx, owner, scale);
+            }
             let image = cx.capture_screenshot(owner).unwrap();
             let scale = image.width() / 160;
             let pixel = |x, y| image.get_pixel(x * scale, y * scale);
