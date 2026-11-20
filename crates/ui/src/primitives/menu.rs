@@ -9,8 +9,8 @@ use gpui::{
     Anchored, AnyElement, App, Bounds, Context, DispatchPhase, Div, ElementId, Entity, FocusHandle,
     HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, RenderOnce, Role, ScrollHandle, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Toggled, Window, canvas, deferred, div,
-    point, prelude::FluentBuilder as _, px,
+    Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Toggled, Window, canvas,
+    deferred, div, point, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -31,7 +31,7 @@ pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>
 
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
 pub(crate) const SELECT_MAX_HEIGHT: Pixels = px(288.0);
-const PANEL_INSET: Pixels = px(4.0);
+pub(crate) const PANEL_INSET: Pixels = px(4.0);
 pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -314,10 +314,26 @@ pub(crate) struct MenuState {
     closed_at: Option<Instant>,
     pointer: Option<Point<Pixels>>,
     started: bool,
+    pub(crate) opened_from_keyboard: bool,
+    _activation: Subscription,
 }
 
 impl MenuState {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let activation = cx.observe_window_activation(window, |menu, window, cx| {
+            if window.is_window_active() || !menu.open {
+                return;
+            }
+            menu.open = false;
+            menu.closed_at = None;
+            menu.submenu = None;
+            if let Some(focus) = menu.return_focus.take()
+                && menu.focus.contains_focused(window, cx)
+            {
+                window.focus(&focus, cx);
+            }
+            cx.notify();
+        });
         Self {
             open: false,
             highlighted: None,
@@ -338,6 +354,8 @@ impl MenuState {
             closed_at: None,
             pointer: None,
             started: false,
+            opened_from_keyboard: false,
+            _activation: activation,
         }
     }
 
@@ -462,7 +480,7 @@ pub(crate) fn state(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<MenuState> {
-    let state = window.use_keyed_state((id.clone(), "menu"), cx, |_, cx| MenuState::new(cx));
+    let state = window.use_keyed_state((id.clone(), "menu"), cx, MenuState::new);
     if default_open && !state.read(cx).started {
         state.update(cx, |menu, _| {
             menu.started = true;
