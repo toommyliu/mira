@@ -9,13 +9,15 @@ use gpui::{
 };
 
 use mira_ui::{
-    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _, h_flex, motion,
+    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _,
+    components::Disclosure,
+    h_flex, motion,
     nav::{self, Axis, Step, Typeahead},
     primitives::{
-        Button, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric, PopoverClose,
-        Scrollbar, Select, SelectOption, Spinner, Switch,
+        Button, DropdownMenu, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric,
+        PopoverClose, Scrollbar, Spinner, Switch,
         button::{Size, Variant},
-        icon,
+        divider, icon,
     },
     theme::DISABLED_OPACITY,
     v_flex,
@@ -24,7 +26,8 @@ use mira_ui::{
 use super::RuffleView;
 use crate::{
     automation::{
-        auto_relogin::Phase,
+        auto_attack,
+        auto_relogin::{self, Phase},
         game_settings::{FrameRate, RenderingMode, Settings as GameSettings},
         settings::Automation,
     },
@@ -56,6 +59,10 @@ const MAX_NUMBER: u32 = 999;
 const MAX_TEXT: usize = 32;
 const VISIBLE_CELLS: f32 = 10.5;
 const SCROLLBAR_CLEARANCE: Pixels = px(2.0);
+const OPTIONS_WIDTH: f32 = 440.0;
+const COLUMN_GAP: f32 = 6.0;
+const AUTOMATION_WIDTH: f32 = 248.0;
+const RELOGIN_NUMBER_WIDTH: f32 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Setting {
@@ -79,12 +86,6 @@ impl Setting {
         Setting::FrameRate,
         Setting::CustomName,
         Setting::CustomGuild,
-    ];
-    const RELOGIN: [Setting; 4] = [
-        Setting::Delay,
-        Setting::Retries,
-        Setting::Backoff,
-        Setting::BackoffCap,
     ];
 
     fn label(self) -> &'static str {
@@ -130,11 +131,7 @@ impl Setting {
                 }),
                 None => input.max_length(MAX_TEXT),
             };
-            let input = if self.pill() { input.pill() } else { input };
-            match self.unit() {
-                Some(unit) => input.suffix(unit),
-                None => input,
-            }
+            if self.pill() { input.pill() } else { input }
         })
     }
 
@@ -264,20 +261,6 @@ pub(crate) enum GameOption {
 }
 
 impl GameOption {
-    const ALL: [GameOption; 11] = [
-        GameOption::InfiniteRange,
-        GameOption::ProvokeCell,
-        GameOption::EnemyMagnet,
-        GameOption::HidePlayers,
-        GameOption::SkipCutscenes,
-        GameOption::Animations,
-        GameOption::Collisions,
-        GameOption::Ads,
-        GameOption::AntiCounter,
-        GameOption::AntiAfk,
-        GameOption::AutoZone,
-    ];
-
     pub(crate) fn label(self) -> &'static str {
         match self {
             GameOption::InfiniteRange => "Infinite range",
@@ -288,8 +271,8 @@ impl GameOption {
             GameOption::Animations => "Animations",
             GameOption::Collisions => "Collisions",
             GameOption::Ads => "Ads",
-            GameOption::AntiCounter => "Anti counter",
-            GameOption::AntiAfk => "Anti AFK",
+            GameOption::AntiCounter => "Anti-counter",
+            GameOption::AntiAfk => "Anti-AFK",
             GameOption::AutoZone => "Auto zone",
         }
     }
@@ -310,6 +293,31 @@ impl GameOption {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+enum Gameplay {
+    Option(GameOption),
+    Rendering,
+    WalkSpeed,
+    FrameRate,
+}
+
+const GAMEPLAY: [Gameplay; 14] = [
+    Gameplay::Option(GameOption::InfiniteRange),
+    Gameplay::Option(GameOption::ProvokeCell),
+    Gameplay::Option(GameOption::EnemyMagnet),
+    Gameplay::Rendering,
+    Gameplay::Option(GameOption::HidePlayers),
+    Gameplay::Option(GameOption::SkipCutscenes),
+    Gameplay::Option(GameOption::Animations),
+    Gameplay::Option(GameOption::Collisions),
+    Gameplay::Option(GameOption::AntiCounter),
+    Gameplay::Option(GameOption::AutoZone),
+    Gameplay::Option(GameOption::Ads),
+    Gameplay::Option(GameOption::AntiAfk),
+    Gameplay::WalkSpeed,
+    Gameplay::FrameRate,
+];
 
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = mira, no_json)]
@@ -736,8 +744,7 @@ fn relogin_value(view: &RuffleView) -> Option<Detail> {
 
 fn status(phase: &Phase) -> Option<String> {
     match phase {
-        Phase::Off => None,
-        Phase::Armed => Some("Watching the connection".into()),
+        Phase::Off | Phase::Armed => None,
         Phase::Waiting => Some("Connection lost, waiting to log in".into()),
         Phase::Attempt { attempt, of } => Some(format!("Logging in, attempt {attempt} of {of}")),
         Phase::Backoff { attempt, of } => Some(format!(
@@ -860,7 +867,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
                 Err(_) => div().into_any_element(),
             }
         })
-        .popover(
+        .row_popover(
             trigger(
                 "auto-relogin",
                 "Auto relogin",
@@ -876,19 +883,21 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
                 }
             },
         )
-        .child(super::client::bar_separator(cx))
-        .button(script_button(bar.script, this.clone()))
-        .child(super::client::drag_area().flex_1())
-        .menu(
+        .row_popover(
             trigger("auto-attack", "Auto attack", None, Some(bar.attack), cx),
             {
                 let this = this.clone();
-                move |_, cx| {
-                    this.read_with(cx, |view, cx| attack_menu(&this, view, cx))
-                        .unwrap_or_default()
+                move |close, _, cx| match this.read_with(cx, |view, _| {
+                    (view.automation.auto_attack(), view.in_game())
+                }) {
+                    Ok((attack, live)) => attack_panel(attack, live, &this, close, cx),
+                    Err(_) => div().into_any_element(),
                 }
             },
         )
+        .child(super::client::bar_separator(cx))
+        .button(script_button(bar.script, this.clone()))
+        .child(super::client::drag_area().flex_1())
         .popover(
             trigger("jump", "Jump", None, None, cx).disabled(!bar.live),
             {
@@ -953,42 +962,85 @@ fn windows_menu(cx: &App) -> Vec<MenuItem> {
         .collect()
 }
 
-fn attack_menu(this: &WeakEntity<RuffleView>, view: &RuffleView, cx: &App) -> Vec<MenuItem> {
-    let attack = view.automation.auto_attack();
-    let library = combat_profiles::library(cx);
-    let mut items = vec![
-        MenuItem::switch(
-            "Auto attack",
-            attack.enabled,
-            act(this, RuffleView::toggle_auto_attack),
-        )
-        .disabled(!view.in_game()),
-        MenuItem::separator(),
-        MenuItem::header("Profile"),
-    ];
-    let names = std::iter::once(None).chain(library.names().map(|name| Some(name.to_owned())));
-    items.extend(names.map(|name| {
-        let selected = match (&name, &attack.profile) {
-            (None, None) => true,
-            (Some(name), Some(chosen)) => profiles::same_name(name, chosen),
-            _ => false,
+fn attack_panel(
+    attack: auto_attack::Settings,
+    live: bool,
+    this: &WeakEntity<RuffleView>,
+    close: &PopoverClose,
+    cx: &App,
+) -> AnyElement {
+    let header = {
+        let this = this.clone();
+        let switch = Switch::new("auto-attack-enabled", "Auto attack", attack.enabled)
+            .trailing()
+            .disabled(!live)
+            .on_toggle(move |on, _, cx| {
+                update(&this, cx, |view, cx| {
+                    view.change_auto_attack(|settings| settings.enabled = on, cx)
+                })
+            });
+        let switch = match shortcuts::keys_for(&ToggleAutoAttack, cx) {
+            Some(keys) => switch.end_slot(Kbd::new(keys)),
+            None => switch,
         };
-        let label = name.clone().unwrap_or_else(|| profiles::GENERIC.to_owned());
-        MenuItem::radio(
-            label,
-            selected,
-            act(this, move |view, cx| {
-                let name = name.clone();
-                view.change_auto_attack(|settings| settings.profile = name, cx)
-            }),
-        )
-    }));
-    let editing = attack.profile;
-    items.push(MenuItem::separator());
-    items.push(MenuItem::action("Edit profiles…", move |_, cx| {
-        super::open_combat_profiles(editing.clone(), cx)
-    }));
-    items
+        div().px(cx.theme().space(2.0)).child(switch)
+    };
+    let current = attack
+        .profile
+        .clone()
+        .unwrap_or_else(|| profiles::GENERIC.to_owned());
+    let profile = {
+        let this = this.clone();
+        let chosen = attack.profile.clone();
+        DropdownMenu::row("profile", "Profile", current, cx).items(move |_, cx| {
+            let library = combat_profiles::library(cx);
+            let names =
+                std::iter::once(None).chain(library.names().map(|name| Some(name.to_owned())));
+            names
+                .map(|name| {
+                    let selected = match (&name, &chosen) {
+                        (None, None) => true,
+                        (Some(name), Some(chosen)) => profiles::same_name(name, chosen),
+                        _ => false,
+                    };
+                    let label = name.clone().unwrap_or_else(|| profiles::GENERIC.to_owned());
+                    MenuItem::radio(
+                        label,
+                        selected,
+                        act(&this, move |view, cx| {
+                            let name = name.clone();
+                            view.change_auto_attack(|settings| settings.profile = name, cx)
+                        }),
+                    )
+                })
+                .collect()
+        })
+    };
+    let edit = {
+        let close = close.clone();
+        let editing = attack.profile;
+        Button::new("edit-profiles", "Edit profiles…")
+            .variant(Variant::Ghost)
+            .w_full()
+            .child(div().flex_1().min_w_0().truncate().child("Edit profiles…"))
+            .on_click(move |_, window, cx| {
+                close.close(window, cx);
+                super::open_combat_profiles(editing.clone(), cx)
+            })
+    };
+    automation_rows(cx)
+        .child(header)
+        .child(profile)
+        .child(divider(cx.theme()))
+        .child(edit)
+        .into_any_element()
+}
+
+fn automation_rows(cx: &App) -> gpui::Div {
+    v_flex()
+        .w(px(AUTOMATION_WIDTH))
+        .max_w_full()
+        .gap(cx.theme().space(0.5))
 }
 
 fn heading(title: &'static str, cx: &App) -> impl IntoElement {
@@ -1020,7 +1072,7 @@ fn pair(
     div()
         .grid()
         .grid_cols(2)
-        .gap(layout.space(3.0))
+        .gap(layout.space(COLUMN_GAP))
         .child(div().min_w_0().child(left))
         .child(div().min_w_0().child(right))
 }
@@ -1083,9 +1135,10 @@ fn reset_button(
         Icon::RotateCcw,
         format!("Reset {}", setting.label().to_lowercase()),
     )
-    .size(Size::XSmall)
+    .size(Size::Small)
+    .tooltip("Reset")
     .disabled(disabled)
-    .when(disabled || setting.pill(), Button::hide_tooltip)
+    .when(disabled, Button::hide_tooltip)
     .on_click(move |_, _, cx| update(&this, cx, |view, cx| view.reset(setting, cx)))
 }
 
@@ -1105,7 +1158,8 @@ fn options_panel(
         inputs,
     } = options;
     let mut settings = automation.game_settings();
-    let switches = GameOption::ALL.map(|option| {
+    let mode = settings.rendering.mode();
+    let mut switch = |option: GameOption, cx: &App| {
         let this = this.clone();
         let switch = Switch::new(
             SharedString::from(format!("{option:?}")),
@@ -1118,44 +1172,45 @@ fn options_panel(
                 view.change_game_settings(|settings| *option.field(settings) = on, cx)
             })
         });
-        h_flex()
-            .justify_between()
-            .gap(layout.space(2.0))
-            .child(switch)
-            .children(shortcuts::keys_for(&ToggleOption(option), cx).map(Kbd::new))
-    });
-    let mode = settings.rendering.mode();
+        let switch = switch.trailing();
+        let switch = match shortcuts::keys_for(&ToggleOption(option), cx) {
+            Some(keys) => switch.end_slot(Kbd::new(keys)),
+            None => switch,
+        };
+        div().min_w_0().child(switch).into_any_element()
+    };
     let rendering = {
         let this = this.clone();
-        Select::new(
-            "rendering",
-            "Rendering",
-            RenderingMode::ALL.map(|mode| {
-                let option = SelectOption::new(mode.label());
-                let keys = match mode {
-                    RenderingMode::Full => None,
-                    RenderingMode::InterfaceOnly => {
-                        shortcuts::keys_for(&ToggleInterfaceRendering, cx)
-                    }
-                    RenderingMode::Minimal => shortcuts::keys_for(&ToggleMinimalRendering, cx),
-                };
-                match keys {
-                    Some(keys) => option.end_slot(Kbd::new(keys)),
-                    None => option,
-                }
-            }),
-            RenderingMode::ALL.iter().position(|each| *each == mode),
-        )
-        .width(px(150.0))
-        .disabled(!live)
-        .on_select(move |index, _, cx| {
-            update(&this, cx, |view, cx| {
-                view.change_game_settings(
-                    |settings| settings.rendering.set(RenderingMode::ALL[index]),
-                    cx,
-                )
+        DropdownMenu::row("rendering", "Rendering", mode.label(), cx)
+            .disabled(!live)
+            .items(move |_, cx| {
+                RenderingMode::ALL
+                    .map(|choice| {
+                        let this = this.clone();
+                        let item = MenuItem::radio(choice.label(), choice == mode, move |_, cx| {
+                            update(&this, cx, |view, cx| {
+                                view.change_game_settings(
+                                    |settings| settings.rendering.set(choice),
+                                    cx,
+                                )
+                            })
+                        });
+                        let keys = match choice {
+                            RenderingMode::Full => None,
+                            RenderingMode::InterfaceOnly => {
+                                shortcuts::keys_for(&ToggleInterfaceRendering, cx)
+                            }
+                            RenderingMode::Minimal => {
+                                shortcuts::keys_for(&ToggleMinimalRendering, cx)
+                            }
+                        };
+                        match keys {
+                            Some(keys) => item.shortcut(keys),
+                            None => item,
+                        }
+                    })
+                    .into()
             })
-        })
     };
     for (setting, placeholder) in [(Setting::CustomName, name), (Setting::CustomGuild, guild)] {
         inputs
@@ -1171,13 +1226,15 @@ fn options_panel(
     let chip = |setting: Setting, window: &mut Window, cx: &mut App| {
         let enabled = setting.enabled(&automation, live);
         h_flex()
+            .min_w_0()
+            .min_h(layout.control)
             .justify_between()
             .gap(layout.space(2.0))
             .child(row_label(setting.label(), enabled))
             .child(
                 h_flex()
                     .flex_none()
-                    .gap(layout.space(1.0))
+                    .gap(layout.space(0.5))
                     .child(reset_button(setting, &automation, enabled, this))
                     .child(div().w(px(44.0)).child(setting_input(
                         setting,
@@ -1189,8 +1246,25 @@ fn options_panel(
                     ))),
             )
     };
-    let walk_speed = chip(Setting::WalkSpeed, window, cx);
-    let frame_rate = chip(Setting::FrameRate, window, cx);
+    let mut walk_speed = Some(chip(Setting::WalkSpeed, window, cx));
+    let mut frame_rate = Some(chip(Setting::FrameRate, window, cx));
+    let mut rendering = Some(rendering);
+    let mut cell = |cell: Gameplay, cx: &App| match cell {
+        Gameplay::Option(option) => switch(option, cx),
+        Gameplay::Rendering => div()
+            .min_w_0()
+            .child(div().mx(-layout.space(2.0)).children(rendering.take()))
+            .into_any_element(),
+        Gameplay::WalkSpeed => div()
+            .pt(layout.space(1.5))
+            .children(walk_speed.take())
+            .into_any_element(),
+        Gameplay::FrameRate => div()
+            .pt(layout.space(1.5))
+            .children(frame_rate.take())
+            .into_any_element(),
+    };
+    let cells = GAMEPLAY.map(|each| cell(each, cx));
     let custom_name = field(Setting::CustomName, window, cx);
     let custom_guild = field(Setting::CustomGuild, window, cx);
     let command = |id: &'static str, label: &'static str, command: Command| {
@@ -1206,7 +1280,7 @@ fn options_panel(
             })
     };
     v_flex()
-        .w(px(320.0))
+        .w(px(OPTIONS_WIDTH))
         .max_w_full()
         .debug_selector(|| "options-form".into())
         .gap(layout.space(3.0))
@@ -1218,21 +1292,8 @@ fn options_panel(
                     div()
                         .grid()
                         .grid_cols(2)
-                        .gap_x(layout.space(3.0))
-                        .children(switches),
-                )
-                .child(
-                    v_flex()
-                        .gap(layout.space(1.5))
-                        .pt(layout.space(1.5))
-                        .child(
-                            h_flex()
-                                .justify_between()
-                                .gap(layout.space(3.0))
-                                .child(row_label("Rendering", live))
-                                .child(rendering),
-                        )
-                        .child(pair(layout, walk_speed, frame_rate)),
+                        .gap_x(layout.space(COLUMN_GAP))
+                        .children(cells),
                 ),
         )
         .child(
@@ -1242,14 +1303,19 @@ fn options_panel(
                 .child(pair(layout, custom_name, custom_guild)),
         )
         .child(
-            h_flex()
-                .gap(layout.space(1.5))
-                .child(command("reload-map", "Reload map", Command::ReloadMap))
-                .child(command(
-                    "set-spawnpoint",
-                    "Set spawnpoint",
-                    Command::SetSpawnPoint,
-                )),
+            v_flex()
+                .gap(layout.space(2.0))
+                .child(heading("Actions", cx))
+                .child(
+                    h_flex()
+                        .gap(layout.space(1.5))
+                        .child(command("reload-map", "Reload map", Command::ReloadMap))
+                        .child(command(
+                            "set-spawnpoint",
+                            "Set spawnpoint",
+                            Command::SetSpawnPoint,
+                        )),
+                ),
         )
         .into_any_element()
 }
@@ -1268,68 +1334,100 @@ fn relogin_panel(
     {
         servers.push(saved.clone());
     }
-    let selected = match &settings.server {
-        None => Some(0),
-        Some(saved) => servers
-            .iter()
-            .position(|server| server == saved)
-            .map(|index| index + 1),
-    };
-    let toggle = {
+    let theme = cx.theme().clone();
+    let typography = theme.typography;
+    let header = {
         let this = this.clone();
-        Switch::new("auto-relogin-enabled", "Auto relogin", settings.enabled).on_toggle(
-            move |on, _, cx| {
+        let switch = Switch::new("auto-relogin-enabled", "Auto relogin", settings.enabled)
+            .trailing()
+            .when_some(relogin.status, Switch::description)
+            .on_toggle(move |on, _, cx| {
                 update(&this, cx, |view, cx| {
                     view.change_auto_relogin(|settings| settings.enabled = on, cx)
                 })
-            },
-        )
+            });
+        div().px(layout.space(2.0)).child(switch)
     };
     let server = {
         let this = this.clone();
-        let choices = servers.clone();
-        let options = std::iter::once(SharedString::from(LAST_SERVER))
-            .chain(servers.into_iter().map(Into::into));
-        Select::new("server", "Server", options, selected)
-            .full_width()
-            .on_select(move |index, _, cx| {
-                let server = index.checked_sub(1).map(|index| choices[index].clone());
-                update(&this, cx, |view, cx| {
-                    view.change_auto_relogin(|settings| settings.server = server, cx)
+        let current = settings.server.clone();
+        let value = current.clone().unwrap_or_else(|| LAST_SERVER.to_owned());
+        DropdownMenu::row("server", "Server", value, cx).items(move |_, _| {
+            let choices = std::iter::once(None).chain(servers.iter().cloned().map(Some));
+            choices
+                .map(|server| {
+                    let this = this.clone();
+                    let label = server.clone().unwrap_or_else(|| LAST_SERVER.to_owned());
+                    MenuItem::radio(label, server == current, move |_, cx| {
+                        let server = server.clone();
+                        update(&this, cx, |view, cx| {
+                            view.change_auto_relogin(|settings| settings.server = server, cx)
+                        })
+                    })
                 })
-            })
-    };
-    let [delay, retries, backoff, backoff_cap] = Setting::RELOGIN.map(|setting| {
-        let enabled = setting.editable(&relogin.automation);
-        setting_field(
-            setting,
-            &relogin.automation,
-            enabled,
-            &relogin.inputs,
-            window,
-            cx,
-        )
-    });
-    v_flex()
-        .w(px(264.0))
-        .max_w_full()
-        .gap(layout.space(3.0))
-        .child(match relogin.status {
-            Some(status) => toggle.description(status),
-            None => toggle,
+                .collect()
         })
-        .child(
-            Field::new("Server", server).when(relogin.servers.is_empty(), |field| {
-                field.description("Log in to list the other servers")
-            }),
-        )
-        .child(
-            v_flex()
-                .gap(layout.space(2.0))
-                .child(heading("Retry schedule", cx))
-                .child(pair(layout, delay, retries))
-                .child(pair(layout, backoff, backoff_cap)),
-        )
+    };
+    let row = || h_flex().h(layout.control).px(layout.space(2.0));
+    let server_hint = relogin.servers.is_empty().then(|| {
+        div()
+            .px(layout.space(2.0))
+            .pb(layout.space(1.0))
+            .text_caption(typography)
+            .text_color(theme.muted_foreground)
+            .child("Log in to list the other servers")
+    });
+    let number = |setting: Setting, window: &mut Window, cx: &mut App| {
+        let enabled = setting.editable(&relogin.automation);
+        row()
+            .justify_between()
+            .gap(layout.space(2.0))
+            .child(row_label(setting.label(), enabled))
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap(layout.space(1.5))
+                    .child(div().w(px(RELOGIN_NUMBER_WIDTH)).child(setting_input(
+                        setting,
+                        &relogin.automation,
+                        enabled,
+                        &relogin.inputs,
+                        window,
+                        cx,
+                    )))
+                    .child(
+                        div()
+                            .w(layout.space(3.0))
+                            .text_color(theme.muted_foreground)
+                            .children(setting.unit()),
+                    ),
+            )
+    };
+    let defaults = auto_relogin::Settings::default();
+    let advanced = window.use_keyed_state("relogin-advanced", cx, |_, _| {
+        settings.backoff_seconds != defaults.backoff_seconds
+            || settings.backoff_cap_seconds != defaults.backoff_cap_seconds
+    });
+    let open = *advanced.read(cx);
+    let disclosure = Disclosure::new("relogin-advanced-toggle", "Advanced", open).on_toggle(
+        move |open, _, cx| {
+            advanced.update(cx, |advanced, cx| {
+                *advanced = open;
+                cx.notify();
+            })
+        },
+    );
+    automation_rows(cx)
+        .child(header)
+        .child(server)
+        .children(server_hint)
+        .child(number(Setting::Delay, window, cx))
+        .child(number(Setting::Retries, window, cx))
+        .child(row().child(disclosure))
+        .when(open, |rows| {
+            rows.child(number(Setting::Backoff, window, cx))
+                .child(number(Setting::BackoffCap, window, cx))
+        })
         .into_any_element()
 }
 
@@ -1645,6 +1743,7 @@ mod tests {
 
     struct Scene {
         title: &'static str,
+        rows: bool,
         panel: Panel,
     }
 
@@ -1654,6 +1753,22 @@ mod tests {
             let layout = theme.layout;
             let typography = theme.typography;
             let panel = self.panel.clone();
+            let entry = Button::new("entry", self.title)
+                .variant(Variant::Ghost)
+                .size(Size::Small);
+            let content = move |close: &PopoverClose, window: &mut Window, cx: &mut App| {
+                panel(close, window, cx)
+            };
+            let bar = Menubar::new("bar", "Game")
+                .h(cx.theme().layout.chrome)
+                .px(layout.space(1.5))
+                .border_b_1()
+                .border_color(theme.border);
+            let bar = if self.rows {
+                bar.row_popover(entry, content)
+            } else {
+                bar.popover(entry, content)
+            };
             div()
                 .key_context(mira_ui::FOCUS_SCOPE)
                 .size_full()
@@ -1661,20 +1776,7 @@ mod tests {
                 .text_color(theme.foreground)
                 .font_family(mira_ui::theme::UI_FONT)
                 .text_body(typography)
-                .child(
-                    Menubar::new("bar", "Game")
-                        .h(cx.theme().layout.chrome)
-                        .px(layout.space(1.5))
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .popover(
-                            Button::new("entry", self.title)
-                                .variant(Variant::Ghost)
-                                .size(Size::Small),
-                            move |close, window, cx| panel(close, window, cx),
-                        )
-                        .default_open(0),
-                )
+                .child(bar.default_open(0))
         }
     }
 
@@ -1689,10 +1791,18 @@ mod tests {
     }
 
     fn options_scene(automation: Automation, inputs: Inputs) -> Scene {
+        options_scene_with(automation, inputs, true)
+    }
+
+    fn options_scene_with(automation: Automation, inputs: Inputs, live: bool) -> Scene {
         Scene {
             title: "Options",
+            rows: false,
             panel: Rc::new(move |close, window, cx| {
-                let options = in_game_options(&automation, &inputs);
+                let options = Options {
+                    live,
+                    ..in_game_options(&automation, &inputs)
+                };
                 options_panel(options, &WeakEntity::new_invalid(), close, window, cx)
             }),
         }
@@ -1702,14 +1812,86 @@ mod tests {
     fn options_form_fits_inside_its_panel(cx: &mut gpui::TestAppContext) {
         cx.update(mira_ui::init);
         let (_, cx) = cx.add_window_view(|_, cx| options_fixture(RenderingMode::Full, cx));
-        cx.simulate_resize(gpui::size(px(460.0), px(520.0)));
+        cx.simulate_resize(gpui::size(px(500.0), px(520.0)));
         cx.run_until_parked();
         let panel = cx.debug_bounds("popover-panel").unwrap();
         let form = cx.debug_bounds("options-form").unwrap();
-        assert_eq!(form.size.width, px(320.0), "two-column form width");
+        assert_eq!(form.size.width, px(OPTIONS_WIDTH), "two-column form width");
         let inset = form.left() - panel.left();
         assert!(inset > Pixels::ZERO);
         assert_eq!(panel.right() - form.right(), inset, "inline form padding");
+    }
+
+    #[gpui::test]
+    fn automation_popovers_keep_focus_rings_clear_of_their_neighbors(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(mira_ui::init);
+        let (row, gap, inset, divider, described) = (28.0, 2.0, 4.0, 9.0, 46.0);
+        let (_, attack) =
+            cx.add_window_view(|_, cx| attack_fixture("attack-rows", &["Farming"], true, cx));
+        attack.run_until_parked();
+        assert_eq!(
+            attack.debug_bounds("popover-panel").unwrap().size.height,
+            px(inset + row + gap + row + gap + divider + gap + row + inset),
+            "Auto attack, Profile, a divider and Edit profiles…"
+        );
+        let (_, relogin) =
+            cx.add_window_view(|_, cx| relogin_fixture(false, vec!["Twilly".into()], cx));
+        relogin.run_until_parked();
+        assert_eq!(
+            relogin.debug_bounds("popover-panel").unwrap().size.height,
+            px(inset + described + (gap + row) * 4.0 + inset),
+            "Auto relogin with its status, then Server, Delay, Retries and Advanced"
+        );
+    }
+
+    #[gpui::test]
+    fn relogin_numbers_keep_up_down_and_escape_before_the_popover(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let inputs = cx.update(Inputs::new);
+        let (_, cx) = cx.add_window_view(|window, _| {
+            window.activate_window();
+            relogin_scene(false, vec!["Twilly".into()], inputs.clone())
+        });
+        cx.run_until_parked();
+        let keys = |keys: &[&str], cx: &mut gpui::VisualTestContext| {
+            for key in keys {
+                cx.simulate_keystrokes(key);
+                cx.run_until_parked();
+            }
+        };
+        let focused = |setting: Setting, cx: &mut gpui::VisualTestContext| {
+            let handle = cx.update(|_, cx| inputs.get(setting).focus_handle(cx));
+            cx.update(|window, _| handle.is_focused(window))
+        };
+        let delay = inputs.get(Setting::Delay).clone();
+        keys(&["down", "down", "down", "up", "up", "down"], cx);
+        assert!(focused(Setting::Delay, cx));
+        assert_eq!(delay.read_with(cx, |input, _| input.text().to_owned()), "4");
+
+        keys(&["escape"], cx);
+        assert_eq!(delay.read_with(cx, |input, _| input.text().to_owned()), "3");
+        assert!(!focused(Setting::Delay, cx), "Escape leaves the field");
+        assert!(
+            cx.debug_bounds("popover-panel").is_some(),
+            "and keeps the popover"
+        );
+        keys(&["down"], cx);
+        assert!(
+            focused(Setting::Retries, cx),
+            "Down continues from the field it left"
+        );
+        keys(&["escape", "shift-tab"], cx);
+        assert!(
+            focused(Setting::Delay, cx),
+            "Shift-Tab continues from it too"
+        );
+        keys(&["escape", "escape"], cx);
+        assert!(cx.debug_bounds("popover-panel").is_none());
     }
 
     #[gpui::test]
@@ -1734,16 +1916,18 @@ mod tests {
             cx.run_until_parked();
         };
 
-        tab_from(Setting::WalkSpeed, "tab", cx);
+        tab_from(Setting::CustomName, "shift-tab", cx);
         assert!(focused(Setting::FrameRate, cx));
 
         automation.update_game_settings(|settings| settings.rendering.set(RenderingMode::Minimal));
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
-        tab_from(Setting::WalkSpeed, "tab", cx);
-        assert!(focused(Setting::CustomName, cx));
         tab_from(Setting::CustomName, "shift-tab", cx);
-        assert!(focused(Setting::WalkSpeed, cx));
+        assert!(!focused(Setting::FrameRate, cx));
+        assert!(!focused(Setting::CustomName, cx));
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert!(focused(Setting::CustomName, cx));
     }
 
     #[gpui::test]
@@ -1774,7 +1958,7 @@ mod tests {
     }
 
     fn snapshot(name: &str, height: f32, scene: impl Fn(&mut App) -> Scene + 'static) {
-        for path in mira_ui::snapshot(name, gpui::size(px(460.0), px(height)), move |_, cx| {
+        for path in mira_ui::snapshot(name, gpui::size(px(500.0), px(height)), move |_, cx| {
             let scene = scene(cx);
             cx.new(|_| scene)
         }) {
@@ -1783,12 +1967,29 @@ mod tests {
     }
 
     fn options_fixture(rendering: RenderingMode, cx: &mut App) -> Scene {
+        options_fixture_with(rendering, true, cx)
+    }
+
+    fn options_fixture_with(rendering: RenderingMode, live: bool, cx: &mut App) -> Scene {
         crate::settings::init(
             std::env::temp_dir().join("mira-options-snapshot-settings.json"),
             |_| {},
             cx,
         );
         shortcuts::apply(cx);
+        cx.bind_keys([
+            gpui::KeyBinding::new(
+                "ctrl-alt-shift-cmd-k",
+                ToggleOption(GameOption::SkipCutscenes),
+                None,
+            ),
+            gpui::KeyBinding::new(
+                "ctrl-alt-shift-cmd-e",
+                ToggleOption(GameOption::EnemyMagnet),
+                None,
+            ),
+            gpui::KeyBinding::new("ctrl-alt-shift-cmd-u", ToggleInterfaceRendering, None),
+        ]);
         let automation = Automation::default();
         automation.set_frame_rate(30);
         automation.update_game_settings(|settings| {
@@ -1797,7 +1998,7 @@ mod tests {
             settings.walk_speed = 12;
             settings.rendering.set(rendering);
         });
-        options_scene(automation, Inputs::new(cx))
+        options_scene_with(automation, Inputs::new(cx), live)
     }
 
     #[test]
@@ -1808,6 +2009,32 @@ mod tests {
         snapshot("game-options-minimal", 520.0, |cx| {
             options_fixture(RenderingMode::Minimal, cx)
         });
+        snapshot("game-options-offline", 520.0, |cx| {
+            options_fixture_with(RenderingMode::InterfaceOnly, false, cx)
+        });
+        mira_ui::snapshot_with(
+            "game-options-rendering",
+            gpui::size(px(800.0), px(520.0)),
+            |_, cx| {
+                let scene = options_fixture(RenderingMode::Full, cx);
+                cx.new(|_| scene)
+            },
+            |cx, window| {
+                for x in [340.0, 341.0] {
+                    cx.update_window(window, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: gpui::point(px(x), px(110.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+            },
+        );
     }
 
     struct WindowsMenu;
@@ -1851,28 +2078,228 @@ mod tests {
         }
     }
 
+    fn attack_fixture(name: &str, names: &[&str], live: bool, cx: &mut App) -> Scene {
+        let mut library = profiles::Library::default();
+        for name in names {
+            library.put(None, (*name).into(), profiles::Profile::generic());
+        }
+        let path = std::env::temp_dir().join(format!("mira-{name}-snapshot-profiles.json"));
+        std::fs::write(&path, library.to_json()).unwrap();
+        combat_profiles::init(path, cx);
+        cx.bind_keys([gpui::KeyBinding::new("alt-a", ToggleAutoAttack, None)]);
+        Scene {
+            title: "Auto attack",
+            rows: true,
+            panel: Rc::new(move |close, _, cx| {
+                let attack = auto_attack::Settings {
+                    enabled: live,
+                    profile: Some("Ultra speaker".into()),
+                };
+                attack_panel(attack, live, &WeakEntity::new_invalid(), close, cx)
+            }),
+        }
+    }
+
     #[test]
-    fn snapshot_relogin() {
-        snapshot("game-relogin", 400.0, |cx| {
-            let automation = Automation::default();
-            automation.update_auto_relogin(|settings| {
-                settings.enabled = true;
+    fn snapshot_attack() {
+        let few: &[&str] = &["Daily boss", "Farming", "Ultra speaker"];
+        let many: &[&str] = &[
+            "Champion drakath",
+            "Daily boss",
+            "Farming",
+            "Grim challenge",
+            "Legion farming",
+            "Ultra dage",
+            "Ultra drago",
+            "Ultra engineer",
+            "Ultra speaker",
+            "Ultra warden",
+            "Void solo",
+        ];
+        snapshot("game-attack", 240.0, move |cx| {
+            attack_fixture("game-attack", few, true, cx)
+        });
+        snapshot("game-attack-offline", 240.0, move |cx| {
+            attack_fixture("game-attack-offline", few, false, cx)
+        });
+        let cases: [(&str, &[&str], &[&str], f32); 3] = [
+            ("game-attack-profiles", few, &[], 240.0),
+            ("game-attack-profiles-many", many, &[], 480.0),
+            ("game-attack-profiles-typed", many, &["u"], 480.0),
+        ];
+        for (name, names, keys, height) in cases {
+            mira_ui::snapshot_with(
+                name,
+                gpui::size(px(560.0), px(height)),
+                move |_, cx| {
+                    let scene = attack_fixture(name, names, true, cx);
+                    cx.new(|_| scene)
+                },
+                move |cx, window| {
+                    cx.update_window(window, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseDown(MouseDownEvent {
+                                button: gpui::MouseButton::Left,
+                                position: gpui::point(px(150.0), px(ATTACK_PROFILE_Y)),
+                                click_count: 1,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    for key in keys {
+                        cx.update_window(window, |_, window, cx| {
+                            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                    }
+                },
+            );
+        }
+        let rows: [(&str, Option<f32>, &[&str]); 3] = [
+            ("game-attack-hover", Some(ATTACK_SWITCH_Y), &[]),
+            ("game-attack-focus", None, &["down"]),
+            ("game-attack-focus-profile", None, &["down", "down"]),
+        ];
+        for (name, hover, keys) in rows {
+            mira_ui::snapshot_with(
+                name,
+                gpui::size(px(500.0), px(160.0)),
+                move |_, cx| {
+                    let scene = attack_fixture(name, few, true, cx);
+                    cx.new(|_| scene)
+                },
+                move |cx, window| {
+                    for x in hover.map_or(Vec::new(), |_| vec![150.0, 151.0]) {
+                        cx.update_window(window, |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(x), px(hover.unwrap_or_default())),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                    }
+                    for key in keys {
+                        cx.update_window(window, |_, window, cx| {
+                            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                    }
+                },
+            );
+        }
+    }
+
+    const ATTACK_SWITCH_Y: f32 = 56.0;
+    const ATTACK_PROFILE_Y: f32 = 84.0;
+
+    fn relogin_fixture(tuned: bool, servers: Vec<String>, cx: &mut App) -> Scene {
+        relogin_scene(tuned, servers, Inputs::new(cx))
+    }
+
+    fn relogin_scene(tuned: bool, servers: Vec<String>, inputs: Inputs) -> Scene {
+        let automation = Automation::default();
+        automation.update_auto_relogin(|settings| {
+            settings.enabled = true;
+            if tuned {
+                settings.backoff_seconds = 10;
+            } else {
                 settings.server = Some("Twilly".into());
-            });
-            let inputs = Inputs::new(cx);
-            Scene {
-                title: "Auto relogin",
-                panel: Rc::new(move |_, window, cx| {
-                    let relogin = Relogin {
-                        automation: automation.clone(),
-                        status: status(&Phase::Attempt { attempt: 2, of: 3 }),
-                        servers: vec!["Artix".into(), "Twilly".into(), "Yorumi".into()],
-                        inputs: inputs.clone(),
-                    };
-                    relogin_panel(relogin, &WeakEntity::new_invalid(), window, cx)
-                }),
             }
         });
+        let phase = if tuned {
+            Phase::Armed
+        } else {
+            Phase::Attempt { attempt: 2, of: 3 }
+        };
+        Scene {
+            title: "Auto relogin",
+            rows: true,
+            panel: Rc::new(move |_, window, cx| {
+                let relogin = Relogin {
+                    automation: automation.clone(),
+                    status: status(&phase),
+                    servers: servers.clone(),
+                    inputs: inputs.clone(),
+                };
+                relogin_panel(relogin, &WeakEntity::new_invalid(), window, cx)
+            }),
+        }
+    }
+
+    #[test]
+    fn snapshot_relogin() {
+        let few = || ["Artix", "Twilly", "Yorumi"].map(String::from).to_vec();
+        snapshot("game-relogin", 400.0, move |cx| {
+            relogin_fixture(false, few(), cx)
+        });
+        snapshot("game-relogin-advanced", 400.0, |cx| {
+            relogin_fixture(true, Vec::new(), cx)
+        });
+        for (name, keys) in [
+            ("game-relogin-focus-server", &["down", "down"][..]),
+            ("game-relogin-focus-delay", &["down", "down", "down"][..]),
+        ] {
+            mira_ui::snapshot_after(
+                name,
+                gpui::size(px(500.0), px(260.0)),
+                keys,
+                move |_, cx| {
+                    let scene = relogin_fixture(false, few(), cx);
+                    cx.new(|_| scene)
+                },
+            );
+        }
+        let many = || {
+            [
+                "Alteon",
+                "Artix",
+                "Espada",
+                "Galanoth",
+                "Gravelyn",
+                "Safiria",
+                "Sepulchure",
+                "Sir Ver",
+                "Swordhaven (EU)",
+                "Twig",
+                "Twilly",
+                "Yokai (SEA)",
+                "Yorumi",
+            ]
+            .map(String::from)
+            .to_vec()
+        };
+        mira_ui::snapshot_with(
+            "game-relogin-servers",
+            gpui::size(px(560.0), px(460.0)),
+            move |_, cx| {
+                let scene = relogin_fixture(false, many(), cx);
+                cx.new(|_| scene)
+            },
+            |cx, window| {
+                cx.update_window(window, |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseDown(MouseDownEvent {
+                            button: gpui::MouseButton::Left,
+                            position: gpui::point(px(150.0), px(102.0)),
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                })
+                .unwrap();
+                cx.run_until_parked();
+            },
+        );
     }
 
     struct Bars(fn() -> Vec<Bar>);
@@ -1940,6 +2367,7 @@ mod tests {
             };
             Scene {
                 title: "Jump",
+                rows: false,
                 panel: Rc::new(move |close, window, cx| {
                     jump_panel(
                         Some(location.clone()),
