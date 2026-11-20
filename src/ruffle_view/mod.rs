@@ -108,6 +108,7 @@ pub struct RuffleView {
     settings_account: Option<AccountId>,
     extras: Rc<extras::Store>,
     auto_relogin: auto_relogin::Phase,
+    login_captured: bool,
     servers: Vec<String>,
     bar: game_bar::BarState,
     bar_inset: Pixels,
@@ -227,6 +228,9 @@ impl RuffleView {
                                         }
                                         auto_relogin::Report::Servers(servers) => {
                                             this.servers = servers
+                                        }
+                                        auto_relogin::Report::LoginCaptured => {
+                                            this.login_captured = true
                                         }
                                     }
                                     cx.notify();
@@ -420,6 +424,7 @@ impl RuffleView {
                 settings_account: None,
                 extras,
                 auto_relogin: auto_relogin::Phase::Off,
+                login_captured: false,
                 servers: Vec::new(),
                 bar: game_bar::BarState::new(window, cx),
                 bar_inset: Pixels::ZERO,
