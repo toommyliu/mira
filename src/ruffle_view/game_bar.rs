@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Instant};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, Focusable as _, FontWeight,
@@ -10,7 +10,7 @@ use gpui::{
 
 use mira_ui::{
     ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _, h_flex, motion,
-    nav::{self, Axis, Step},
+    nav::{self, Axis, Step, Typeahead},
     primitives::{
         Button, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric, PopoverClose,
         Scrollbar, Select, SelectOption, Spinner, Switch,
@@ -596,15 +596,27 @@ fn current_spot(location: &Location) -> Spot {
     }
 }
 
-fn jump_key(location: &Location, at: Option<Spot>, event: &KeyDownEvent) -> Option<JumpKey> {
+fn jump_key(
+    location: &Location,
+    at: Option<Spot>,
+    event: &KeyDownEvent,
+    typeahead: &mut Typeahead,
+) -> Option<JumpKey> {
+    let now = Instant::now();
+    typeahead.end_unless_typed(&event.keystroke);
     let len = |column| match column {
         Column::Cell => location.cells.len(),
         Column::Pad => PADS.len(),
     };
-    let labels = |column| -> Vec<(usize, String)> {
+    let labels = |column| -> Vec<(usize, &str)> {
         match column {
-            Column::Cell => location.cells.iter().cloned().enumerate().collect(),
-            Column::Pad => PADS.iter().map(|pad| pad.to_string()).enumerate().collect(),
+            Column::Cell => location
+                .cells
+                .iter()
+                .map(String::as_str)
+                .enumerate()
+                .collect(),
+            Column::Pad => PADS.iter().copied().enumerate().collect(),
         }
     };
     let key = event.keystroke.key.as_str();
@@ -622,14 +634,17 @@ fn jump_key(location: &Location, at: Option<Spot>, event: &KeyDownEvent) -> Opti
         if across.is_some() || Step::from_key(event, Axis::Vertical).is_some() {
             return Some(JumpKey::Move(start));
         }
-        return nav::typeahead(key, labels(start.column).into_iter(), None).map(|row| {
-            JumpKey::Move(Spot {
-                column: start.column,
-                row,
-            })
-        });
+        let labels = labels(start.column).into_iter();
+        return typeahead
+            .find(&event.keystroke, now, labels, None)
+            .map(|row| {
+                JumpKey::Move(Spot {
+                    column: start.column,
+                    row,
+                })
+            });
     };
-    if key == "enter" || key == "space" {
+    if key == "enter" || (key == "space" && !typeahead.typing(now)) {
         let (cell, pad) = match at.column {
             Column::Cell => (location.cells[at.row].clone(), location.pad.clone()),
             Column::Pad => (location.cell.clone(), PADS[at.row].to_string()),
@@ -650,7 +665,10 @@ fn jump_key(location: &Location, at: Option<Spot>, event: &KeyDownEvent) -> Opti
     }
     Step::from_key(event, Axis::Vertical)
         .and_then(|step| nav::step(Some(at.row), len(at.column), step, true, |_| true))
-        .or_else(|| nav::typeahead(key, labels(at.column).into_iter(), Some(at.row)))
+        .or_else(|| {
+            let labels = labels(at.column).into_iter();
+            typeahead.find(&event.keystroke, now, labels, Some(at.row))
+        })
         .map(|row| {
             JumpKey::Move(Spot {
                 column: at.column,
@@ -1340,6 +1358,7 @@ fn jump_panel(
     };
     let theme = cx.theme().clone();
     let spot = window.use_keyed_state("jump-spot", cx, |_, _| current_spot(&location));
+    let typeahead = window.use_keyed_state("jump-typeahead", cx, |_, _| Typeahead::default());
     let start = *spot.read(cx);
     let cells_scroll = window
         .use_keyed_state("jump-cells", cx, |_, _| {
@@ -1373,7 +1392,11 @@ fn jump_panel(
             travel.clone(),
         );
         move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| -> bool {
-            match jump_key(&location, Some(*spot.read(cx)), event) {
+            let at = *spot.read(cx);
+            let key = typeahead.update(cx, |typeahead, _| {
+                jump_key(&location, Some(at), event, typeahead)
+            });
+            match key {
                 Some(JumpKey::Move(next)) => {
                     spot.update(cx, |spot, cx| {
                         *spot = next;
@@ -1543,11 +1566,11 @@ mod tests {
 
     fn press(location: &Location, at: Option<Spot>, key: &'static str) -> Option<JumpKey> {
         let event = KeyDownEvent {
-            keystroke: gpui::Keystroke::parse(key).unwrap(),
+            keystroke: gpui::Keystroke::parse(key).unwrap().with_simulated_ime(),
             is_held: false,
             prefer_character_input: false,
         };
-        jump_key(location, at, &event)
+        jump_key(location, at, &event, &mut Typeahead::default())
     }
 
     #[test]

@@ -1,8 +1,8 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Div, ElementId, FocusHandle, FontWeight, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement, Pixels, RenderOnce, Role, ScrollEvent, ScrollHandle,
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role, ScrollEvent, ScrollHandle,
     ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
@@ -10,7 +10,7 @@ use gpui::{
 use super::{Flow, Pose, Scrollbar, Sortable};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
-    nav::{self, Axis, Step},
+    nav::{self, Axis, Step, Typeahead},
     theme::tabular,
     v_flex,
 };
@@ -94,6 +94,7 @@ struct Options {
     selected: Option<usize>,
     ring: bool,
     focus: FocusHandle,
+    typeahead: Entity<Typeahead>,
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
     uniform: bool,
@@ -111,10 +112,14 @@ impl Options {
                 count,
                 row,
                 selected,
+                typeahead,
                 on_select,
                 on_activate,
                 ..
             } = &options;
+            typeahead.update(cx, |typeahead, _| {
+                typeahead.end_unless_typed(&event.keystroke)
+            });
             if event.keystroke.key == "enter" {
                 if let (Some(index), Some(on_activate)) = (selected, on_activate) {
                     on_activate(*index, window, cx);
@@ -125,14 +130,17 @@ impl Options {
             let next = Step::from_key(event, Axis::Vertical)
                 .and_then(|step| nav::step(*selected, *count, step, false, |i| row(i).selectable()))
                 .or_else(|| {
-                    nav::typeahead(
-                        &event.keystroke.key,
-                        (0..*count)
-                            .map(|i| (i, row(i)))
-                            .filter(|(_, item)| item.selectable())
-                            .map(|(i, item)| (i, item.label.to_string())),
-                        *selected,
-                    )
+                    typeahead.update(cx, |typeahead, _| {
+                        typeahead.find(
+                            &event.keystroke,
+                            Instant::now(),
+                            (0..*count)
+                                .map(|i| (i, row(i)))
+                                .filter(|(_, item)| item.selectable())
+                                .map(|(i, item)| (i, item.label)),
+                            *selected,
+                        )
+                    })
                 });
             let Some(next) = next else {
                 return;
@@ -385,6 +393,9 @@ impl RenderOnce for List {
             selected: self.selected,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus,
+            typeahead: window.use_keyed_state((self.id.clone(), "typeahead"), cx, |_, _| {
+                Typeahead::default()
+            }),
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: false,
@@ -506,6 +517,9 @@ impl RenderOnce for VirtualList {
             selected: self.selected,
             ring: nav::keyboard_focused(&focus, window, cx),
             focus,
+            typeahead: window.use_keyed_state((self.id.clone(), "typeahead"), cx, |_, _| {
+                Typeahead::default()
+            }),
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: true,
