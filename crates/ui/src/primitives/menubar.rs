@@ -13,13 +13,13 @@ use super::{
     popover::{self, Content},
 };
 use crate::{
-    FOCUS_SCOPE, h_flex, motion,
+    ActiveTheme as _, FOCUS_SCOPE, h_flex, motion,
     nav::{self, Step},
 };
 
 enum Panel {
     Menu(ItemsBuilder),
-    Popover(Content),
+    Popover { content: Content, rows: bool },
 }
 
 struct Entry {
@@ -69,13 +69,25 @@ impl Menubar {
     }
 
     pub fn popover(
-        mut self,
+        self,
         trigger: Button,
         content: impl Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
+        self.panel(trigger, Rc::new(content), false)
+    }
+
+    pub fn row_popover(
+        self,
+        trigger: Button,
+        content: impl Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        self.panel(trigger, Rc::new(content), true)
+    }
+
+    fn panel(mut self, trigger: Button, content: Content, rows: bool) -> Self {
         self.slots.push(Slot::Entry(Box::new(Entry {
             trigger,
-            panel: Some(Panel::Popover(Rc::new(content))),
+            panel: Some(Panel::Popover { content, rows }),
         })));
         self
     }
@@ -171,6 +183,7 @@ impl Bar {
             ),
             None => menu::open(&self.states[index], highlight, None, window, cx),
         }
+        self.states[index].update(cx, |menu, _| menu.opened_from_keyboard = keyboard);
     }
 
     fn key_down(&self, event: &KeyDownEvent, window: &mut Window, cx: &mut App) {
@@ -238,7 +251,7 @@ impl Menubar {
             bar.panels.push(entry.panel.is_some());
             bar.menus.push(match &entry.panel {
                 Some(Panel::Menu(items)) => Some(items.clone()),
-                Some(Panel::Popover(_)) | None => None,
+                Some(Panel::Popover { .. }) | None => None,
             });
         }
         let bar = Rc::new(bar);
@@ -345,8 +358,8 @@ fn render_entry(
         .trigger(is_open, press, keys)
         .attach(menu::trigger_probe(&state).into_any_element())
         .attach(hover.into_any_element());
-    if let Panel::Popover(_) = panel {
-        popover::focus_first_on_open(&id, &state, window, cx);
+    if let Panel::Popover { rows, .. } = &panel {
+        popover::focus_first_on_open(&id, &state, *rows, window, cx);
     }
     let Some(shown) = menu::presence(&state, window, cx) else {
         return trigger.into_any_element();
@@ -377,10 +390,16 @@ fn render_entry(
                 },
             )
         }
-        Panel::Popover(content) => {
+        Panel::Popover { content, rows } => {
             let close = PopoverClose::returning_focus(state.clone());
             let content = content(&close, window, cx);
-            let panel = popover::panel(&id, label, close, None, window, cx).child(content);
+            let panel = popover::panel(&id, label, close.clone(), None, window, cx);
+            let panel = if rows {
+                popover::rows(panel, &id, &close, window, cx)
+            } else {
+                panel.p(cx.theme().space(3.0))
+            }
+            .child(content);
             menu::attach(
                 super::Placement::menubar(),
                 &state,

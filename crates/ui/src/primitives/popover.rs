@@ -1,4 +1,7 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
@@ -7,11 +10,14 @@ use gpui::{
 };
 
 use super::{
-    Align, Button, Placement, Side,
+    Align, Button, Placement, Side, input,
     menu::{self, MenuState},
     placement::COLLISION_MARGIN,
 };
-use crate::{ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, motion, nav};
+use crate::{
+    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, motion,
+    nav::{self, Axis, Step},
+};
 
 pub(crate) type Content = Rc<dyn Fn(&PopoverClose, &mut Window, &mut App) -> AnyElement>;
 
@@ -39,6 +45,7 @@ impl PopoverClose {
 pub(crate) fn focus_first_on_open(
     id: &ElementId,
     state: &Entity<MenuState>,
+    rows: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -53,8 +60,39 @@ pub(crate) fn focus_first_on_open(
         .read(cx)
         .clone();
     if was_open.replace(is_open) != is_open && is_open {
-        window.defer(cx, move |window, cx| nav::focus_first(&panel, window, cx));
+        let pointer = rows && !state.read(cx).opened_from_keyboard;
+        window.defer(cx, move |window, cx| {
+            if pointer {
+                window.focus(&panel, cx);
+            } else {
+                nav::focus_first(&panel, window, cx);
+            }
+        });
     }
+}
+
+type LeftField = Rc<RefCell<Option<FocusHandle>>>;
+
+fn left_field(id: &ElementId, window: &mut Window, cx: &mut App) -> LeftField {
+    window
+        .use_keyed_state((id.clone(), "left-field"), cx, |_, _| LeftField::default())
+        .read(cx)
+        .clone()
+}
+
+fn resume(panel: &FocusHandle, left: &LeftField, window: &mut Window, cx: &mut App) {
+    if panel.is_focused(window)
+        && let Some(field) = left.borrow_mut().take()
+    {
+        window.focus(&field, cx);
+    }
+}
+
+fn editing(window: &Window) -> bool {
+    window
+        .context_stack()
+        .iter()
+        .any(|context| context.contains(input::CONTEXT))
 }
 
 pub(crate) fn panel(
@@ -62,13 +100,15 @@ pub(crate) fn panel(
     label: SharedString,
     close: PopoverClose,
     width: Option<Pixels>,
-    window: &Window,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> Stateful<Div> {
+    let left = left_field(id, window, cx);
     let theme = cx.theme();
     let available = (window.viewport_size().width - COLLISION_MARGIN * 2.0).max(Pixels::ZERO);
     let focus = close.state.read(cx).focus();
-    let (next, previous) = (focus.clone(), focus.clone());
+    let (next, previous, panel) = (focus.clone(), focus.clone(), focus.clone());
+    let (next_left, previous_left) = (left.clone(), left.clone());
     div()
         .id((id.clone(), "panel"))
         .debug_selector(|| "popover-panel".into())
@@ -77,25 +117,63 @@ pub(crate) fn panel(
         .occlude()
         .key_context(FOCUS_SCOPE)
         .track_focus(&focus)
-        .on_action(move |_: &FocusNext, window, cx| nav::trap_tab(&next, false, window, cx))
-        .on_action(move |_: &FocusPrevious, window, cx| nav::trap_tab(&previous, true, window, cx))
+        .on_action(move |_: &FocusNext, window, cx| {
+            resume(&next, &next_left, window, cx);
+            nav::trap_tab(&next, false, window, cx)
+        })
+        .on_action(move |_: &FocusPrevious, window, cx| {
+            resume(&previous, &previous_left, window, cx);
+            nav::trap_tab(&previous, true, window, cx)
+        })
         .on_key_down(move |event, window, cx| {
-            if event.keystroke.key == "escape" {
-                close.close(window, cx);
-                cx.stop_propagation();
+            if event.keystroke.key != "escape" {
+                return;
             }
+            if editing(window) {
+                *left.borrow_mut() = window.focused(cx);
+                window.focus(&panel, cx);
+            } else {
+                close.close(window, cx);
+            }
+            cx.stop_propagation();
         })
         .max_w(available)
-        .map(|panel| match width {
-            Some(width) => panel.w(width),
-            None => panel.min_w(POPOVER_WIDTH.min(available)),
-        })
+        .when_some(width, |panel, width| panel.w(width))
         .p(theme.space(2.5))
         .rounded(theme.radius.panel)
         .bg(theme.popover)
         .text_color(theme.popover_foreground)
         .shadow(theme.popup_shadow())
         .child(theme.surface_ring(theme.radius.panel))
+}
+
+pub(crate) fn rows(
+    panel: Stateful<Div>,
+    id: &ElementId,
+    close: &PopoverClose,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let left = left_field(id, window, cx);
+    let focus = close.state.read(cx).focus();
+    panel
+        .p(menu::PANEL_INSET)
+        .on_key_down(move |event, window, cx| {
+            let Some(step) = Step::from_key(event, Axis::Vertical) else {
+                return;
+            };
+            resume(&focus, &left, window, cx);
+            match step {
+                Step::Next => nav::trap_tab(&focus, false, window, cx),
+                Step::Prev => nav::trap_tab(&focus, true, window, cx),
+                Step::First | Step::PageUp => nav::focus_first(&focus, window, cx),
+                Step::Last | Step::PageDown => {
+                    nav::focus_first(&focus, window, cx);
+                    nav::trap_tab(&focus, true, window, cx);
+                }
+            }
+            cx.stop_propagation();
+        })
 }
 
 #[derive(IntoElement)]
@@ -173,7 +251,7 @@ impl RenderOnce for Popover {
             state: state.clone(),
             focus: Some(trigger_focus.clone()),
         };
-        focus_first_on_open(&self.id, &state, window, cx);
+        focus_first_on_open(&self.id, &state, false, window, cx);
         let is_open = state.read(cx).is_open();
         let press_state = state.clone();
         let press_close = closer.clone();

@@ -2264,6 +2264,205 @@ fn menubar_hands_the_dismissing_press_to_on_dismiss(cx: &mut TestAppContext) {
     assert!(bar.chosen().is_empty());
 }
 
+struct AttackBar {
+    focus: FocusHandle,
+    chosen: Rc<std::cell::RefCell<Vec<&'static str>>>,
+}
+
+impl Render for AttackBar {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        use mira_ui::primitives::{Menubar, Switch, button::Variant};
+        let chosen = self.chosen.clone();
+        let pick = move |name: &'static str| {
+            let chosen = chosen.clone();
+            move || chosen.borrow_mut().push(name)
+        };
+        let (switch, generic, farming, edit) = (
+            pick("switch"),
+            pick("generic"),
+            pick("farming"),
+            pick("edit"),
+        );
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(mira_ui::nav::pointer_probe())
+            .child(
+                Menubar::new("bar", "Game")
+                    .row_popover(
+                        Button::new("attack", "Auto attack").w(px(80.0)),
+                        move |_, _, cx| {
+                            let (switch, generic, farming, edit) = (
+                                switch.clone(),
+                                generic.clone(),
+                                farming.clone(),
+                                edit.clone(),
+                            );
+                            mira_ui::v_flex()
+                                .w(px(240.0))
+                                .child(
+                                    Switch::new("enabled", "Auto attack", false)
+                                        .trailing()
+                                        .on_toggle(move |_, _, _| switch()),
+                                )
+                                .child(
+                                    DropdownMenu::row("profile", "Profile", "Generic", cx).items(
+                                        move |_, _| {
+                                            let (generic, farming) =
+                                                (generic.clone(), farming.clone());
+                                            vec![
+                                                MenuItem::radio("Generic", true, move |_, _| {
+                                                    generic()
+                                                }),
+                                                MenuItem::radio("Farming", false, move |_, _| {
+                                                    farming()
+                                                }),
+                                            ]
+                                        },
+                                    ),
+                                )
+                                .child(
+                                    Button::new("edit", "Edit profiles…")
+                                        .variant(Variant::Ghost)
+                                        .w_full()
+                                        .on_click(move |_, _, _| edit()),
+                                )
+                                .into_any_element()
+                        },
+                    )
+                    .menu(Button::new("windows", "Windows").w(px(80.0)), |_, _| {
+                        vec![MenuItem::action("Packets", |_, _| {})]
+                    }),
+            )
+    }
+}
+
+fn attack_bar(
+    cx: &mut TestAppContext,
+) -> (
+    Rc<std::cell::RefCell<Vec<&'static str>>>,
+    &mut VisualTestContext,
+) {
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let chosen = Rc::default();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        AttackBar {
+            focus,
+            chosen: Rc::clone(&chosen),
+        }
+    });
+    cx.run_until_parked();
+    (chosen, cx)
+}
+
+#[gpui::test]
+fn arrows_move_between_the_rows_of_a_row_popover(cx: &mut TestAppContext) {
+    let (chosen, cx) = attack_bar(cx);
+    for keys in [
+        "tab enter down down enter",
+        "down space",
+        "up up enter down enter",
+        "end enter home space",
+    ] {
+        for key in keys.split(' ') {
+            press(cx, key);
+        }
+    }
+    assert_eq!(
+        *chosen.borrow(),
+        ["edit", "switch", "farming", "edit", "switch"],
+        "Down passes over the Profile row, the ends wrap, and Return opens Profile"
+    );
+}
+
+#[gpui::test]
+fn an_open_popover_closes_when_its_window_stops_being_active(cx: &mut TestAppContext) {
+    let (_, cx) = attack_bar(cx);
+    press(cx, "tab");
+    press(cx, "enter");
+    assert!(cx.debug_bounds("popover-panel").is_some());
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("popover-panel").is_none(),
+        "a popover left open behind another window would still react to the pointer"
+    );
+}
+
+#[gpui::test]
+fn arrows_continue_from_a_clicked_row_in_a_row_popover(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    let (chosen, cx) = attack_bar(cx);
+    press(cx, "tab");
+    press(cx, "enter");
+    let panel = cx.debug_bounds("popover-panel").unwrap();
+    cx.simulate_click(
+        point(panel.left() + px(40.0), panel.top() + px(18.0)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    for key in ["down", "down", "enter"] {
+        press(cx, key);
+    }
+    assert_eq!(*chosen.borrow(), ["switch", "edit"]);
+}
+
+#[gpui::test]
+fn a_row_popover_left_behind_another_window_returns_focus_to_its_trigger(cx: &mut TestAppContext) {
+    let (_, cx) = attack_bar(cx);
+    for key in ["tab", "enter", "down", "enter"] {
+        press(cx, key);
+    }
+    cx.deactivate_window();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("popover-panel").is_none());
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("popover-panel").is_some(),
+        "Return on the trigger reopens the popover"
+    );
+}
+
+#[gpui::test]
+fn a_row_popover_reached_by_hover_starts_like_a_clicked_one(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    let (chosen, cx) = attack_bar(cx);
+    for key in ["tab", "right", "enter"] {
+        press(cx, key);
+    }
+    for x in [40.0, 41.0] {
+        cx.simulate_mouse_move(point(px(x), px(13.0)), None, Modifiers::none());
+        cx.run_until_parked();
+    }
+    assert!(cx.debug_bounds("popover-panel").is_some());
+    press(cx, "down");
+    press(cx, "space");
+    assert_eq!(*chosen.borrow(), ["switch"]);
+}
+
+#[gpui::test]
+fn the_first_arrow_in_a_clicked_row_popover_lands_on_an_end_row(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    let (chosen, cx) = attack_bar(cx);
+    for keys in ["down space escape", "up enter"] {
+        cx.simulate_click(point(px(40.0), px(13.0)), Modifiers::none());
+        cx.run_until_parked();
+        for key in keys.split(' ') {
+            press(cx, key);
+        }
+    }
+    assert_eq!(*chosen.borrow(), ["switch", "edit"]);
+}
+
 struct SafeStart {
     focus: FocusHandle,
     toggled: Rc<Cell<usize>>,
