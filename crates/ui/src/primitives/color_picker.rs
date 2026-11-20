@@ -260,10 +260,16 @@ impl RenderOnce for ColorPicker {
                 .border_color(theme.foreground.opacity(0.15))
                 .into_any_element(),
         );
+        let width = Self::width(&theme);
+        let swatch_end = px(1.0) + theme.space(1.0) + SWATCH;
         let id = self.id.clone();
         let popover = Popover::new((self.id.clone(), "popover"))
             .trigger(swatch)
-            .placement(Placement::new(Side::Bottom, Align::Start))
+            .placement(Placement {
+                side_offset: px(4.0) + (height - SWATCH) / 2.0,
+                align_offset: width - swatch_end,
+                ..Placement::new(Side::Bottom, Align::End)
+            })
             .width(AREA_WIDTH + PANEL_INSET * 2.0)
             .inset(PANEL_INSET)
             .content(move |_, window, cx| panel(&id, &picker, window, cx).into_any_element());
@@ -271,6 +277,7 @@ impl RenderOnce for ColorPicker {
             .id(self.id.clone())
             .relative()
             .flex_none()
+            .w(width)
             .h(height)
             .pl(theme.space(1.0))
             .pr(theme.space(2.0))
