@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     prelude::FluentBuilder as _, px,
 };
 
@@ -54,8 +54,7 @@ impl RenderOnce for Disclosure {
         } else {
             Icon::ChevronRight
         };
-        let toggle = self.on_toggle.clone();
-        let keyed = self.on_toggle;
+        let toggle = self.on_toggle;
         h_flex()
             .id(self.id)
             .role(Role::Button)
@@ -87,14 +86,6 @@ impl RenderOnce for Disclosure {
             })
             .when_some(toggle, |row, toggle| {
                 row.on_click(move |_, window, cx| toggle(!open, window, cx))
-            })
-            .when_some(keyed, |row, toggle| {
-                row.on_key_down(move |event: &KeyDownEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        toggle(!open, window, cx);
-                        cx.stop_propagation();
-                    }
-                })
             })
     }
 }
