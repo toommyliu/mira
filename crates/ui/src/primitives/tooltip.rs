@@ -102,13 +102,6 @@ impl Kind {
         }
     }
 
-    fn close_delay(self) -> Duration {
-        match self {
-            Kind::Tooltip => Duration::from_millis(120),
-            Kind::Card => Duration::ZERO,
-        }
-    }
-
     fn arrival(self) -> Duration {
         match self {
             Kind::Tooltip => motion::TRAVEL,
@@ -146,16 +139,12 @@ enum Phase {
     Hidden,
     Waiting { _timer: Task<()> },
     Open,
-    Lingering { _timer: Task<()> },
     Leaving { since: Instant, _timer: Task<()> },
 }
 
 impl Phase {
     fn on_screen(&self) -> bool {
-        matches!(
-            self,
-            Phase::Open | Phase::Lingering { .. } | Phase::Leaving { .. }
-        )
+        matches!(self, Phase::Open | Phase::Leaving { .. })
     }
 }
 
@@ -207,9 +196,8 @@ impl Tip {
             Phase::Hidden | Phase::Leaving { .. } if over == Over::Trigger && entered => {
                 Some(self.approach(cx))
             }
-            Phase::Lingering { .. } if hovered => Some(Phase::Open),
             Phase::Waiting { .. } if !hovered => Some(Phase::Hidden),
-            Phase::Open if !hovered => Some(self.withdraw(cx)),
+            Phase::Open if !hovered => Some(self.close(cx)),
             _ => None,
         };
         if let Some(next) = next {
@@ -225,17 +213,6 @@ impl Tip {
         } else {
             Phase::Waiting {
                 _timer: after(delay, |tip, cx| tip.phase = tip.open(cx), cx),
-            }
-        }
-    }
-
-    fn withdraw(&mut self, cx: &mut Context<Self>) -> Phase {
-        let delay = self.kind.close_delay();
-        if delay.is_zero() {
-            self.close(cx)
-        } else {
-            Phase::Lingering {
-                _timer: after(delay, |tip, cx| tip.phase = tip.close(cx), cx),
             }
         }
     }
@@ -296,7 +273,7 @@ impl Tip {
         self.dismissed = true;
         self.over_panel = false;
         match self.phase {
-            Phase::Open | Phase::Lingering { .. } => self.phase = self.fade(cx),
+            Phase::Open => self.phase = self.fade(cx),
             Phase::Waiting { .. } => self.phase = Phase::Hidden,
             Phase::Hidden | Phase::Leaving { .. } => {}
         }
@@ -354,7 +331,7 @@ pub(crate) fn hover(
         }
         tip.focused = focused;
         let (presence, enter) = match tip.phase {
-            Phase::Open | Phase::Lingering { .. } => (Some(1.0), !tip.instant),
+            Phase::Open => (Some(1.0), !tip.instant),
             _ if focused && !tip.dismissed => (Some(1.0), false),
             Phase::Leaving { since, .. } => (motion::leaving(since, window, cx), false),
             Phase::Hidden | Phase::Waiting { .. } => (None, false),
@@ -406,8 +383,10 @@ pub(crate) fn hover(
                 .relative()
                 .max_w(viewport.width - COLLISION_MARGIN * 2.0)
                 .opacity(presence)
-                .on_hover(move |over, _, cx| {
-                    tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))
+                .when(matches!(kind, Kind::Card), |panel| {
+                    panel.on_hover(move |over, _, cx| {
+                        tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))
+                    })
                 })
                 .child(content)
                 .child(
