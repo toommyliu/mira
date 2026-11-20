@@ -57,6 +57,10 @@ impl Queue {
         self.entries.iter().find(|entry| entry.running())
     }
 
+    pub(super) fn ahead(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.waiting()).count()
+    }
+
     pub(super) fn waits_for(&self, script: &Path) -> bool {
         self.entries
             .iter()
@@ -220,6 +224,18 @@ mod tests {
             message: "boom".into(),
             stack: None,
         }
+    }
+
+    #[test]
+    fn only_scripts_still_waiting_count_as_ahead_of_the_running_one() {
+        let mut queue = queue(&["/a.ts"]);
+        start(&mut queue);
+        queue.ended(&Outcome::Stopped, Instant::now());
+        queue.add(PathBuf::from("/a.ts"), Values::new());
+        start(&mut queue);
+        assert_eq!(queue.ahead(), 0);
+        queue.add(PathBuf::from("/b.ts"), Values::new());
+        assert_eq!(queue.ahead(), 1);
     }
 
     #[test]
