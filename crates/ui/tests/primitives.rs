@@ -1352,6 +1352,38 @@ fn clicking_a_tooltip_trigger_leaves_focus_where_it_was(cx: &mut TestAppContext)
     assert!(cx.update(|window, _| focus.is_focused(window)));
 }
 
+#[gpui::test]
+fn a_tooltip_fades_as_soon_as_the_pointer_leaves_its_trigger(cx: &mut TestAppContext) {
+    fn move_to(cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+        cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+    fn gone_after_fade(cx: &mut VisualTestContext) -> bool {
+        cx.executor()
+            .advance_clock(mira_ui::motion::LEAVE + std::time::Duration::from_millis(1));
+        cx.run_until_parked();
+        cx.debug_bounds("tip-tooltip").is_none()
+    }
+
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        TooltipBesideFocus { focus }
+    });
+    cx.run_until_parked();
+    let trigger = gpui::point(gpui::px(13.0), gpui::px(13.0));
+
+    move_to(cx, trigger);
+    let panel = cx.debug_bounds("tip-tooltip").expect("hovering opens it");
+    move_to(cx, gpui::point(gpui::px(200.0), gpui::px(200.0)));
+    assert!(gone_after_fade(cx), "leaving for empty space");
+
+    move_to(cx, trigger);
+    move_to(cx, panel.center());
+    assert!(gone_after_fade(cx), "leaving onto the tooltip itself");
+}
+
 struct Cards;
 
 impl Render for Cards {
@@ -1596,38 +1628,6 @@ fn releasing_a_row_where_it_started_reorders_nothing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn pinned_rows_stay_first(cx: &mut TestAppContext) {
     let (moves, cx) = rows(1, 1, cx);
-#[gpui::test]
-fn a_tooltip_fades_as_soon_as_the_pointer_leaves_its_trigger(cx: &mut TestAppContext) {
-    fn move_to(cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>) {
-        cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
-        cx.run_until_parked();
-    }
-    fn gone_after_fade(cx: &mut VisualTestContext) -> bool {
-        cx.executor()
-            .advance_clock(mira_ui::motion::LEAVE + std::time::Duration::from_millis(1));
-        cx.run_until_parked();
-        cx.debug_bounds("tip-tooltip").is_none()
-    }
-
-    cx.update(mira_ui::init);
-    let (_, cx) = cx.add_window_view(|window, cx| {
-        let focus = cx.focus_handle();
-        window.activate_window();
-        TooltipBesideFocus { focus }
-    });
-    cx.run_until_parked();
-    let trigger = gpui::point(gpui::px(13.0), gpui::px(13.0));
-
-    move_to(cx, trigger);
-    let panel = cx.debug_bounds("tip-tooltip").expect("hovering opens it");
-    move_to(cx, gpui::point(gpui::px(200.0), gpui::px(200.0)));
-    assert!(gone_after_fade(cx), "leaving for empty space");
-
-    move_to(cx, trigger);
-    move_to(cx, panel.center());
-    assert!(gone_after_fade(cx), "leaving onto the tooltip itself");
-}
-
     lift(cx, 10.0, 10.0, 60.0);
     release(cx, 10.0, 60.0);
     lift(cx, 10.0, 50.0, -100.0);
