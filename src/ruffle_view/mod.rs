@@ -59,8 +59,9 @@ pub(crate) use account::{
     Changed, Details, Glance, Identified, Login, ScriptPhase, ScriptState, Summary, Updated,
 };
 pub(crate) use client::{
-    Client, CloseSession, NewSession, NextSession, PreviousSession, ToggleGrid, ToggleSidebar,
-    bar_title, bind_keys, drag_area, init as init_client, open as open_client, window_bar,
+    Client, CloseSession, Home, NewSession, NextSession, PreviousSession, ToggleGrid,
+    ToggleSidebar, bar_title, bind_keys, current as current_client, drag_area, init as init_client,
+    open as open_client, window_bar,
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use follower::{OpenFollower, open as open_follower};
@@ -77,12 +78,12 @@ pub(crate) use profiles::{
 pub(crate) use scripts::{LoadScript, OpenScripts, load as load_script, open as open_scripts};
 pub(crate) use shown_tab::Target;
 
-fn close_tools(cx: &mut gpui::App) {
-    scripts::close(cx);
-    environment::close(cx);
-    follower::close(cx);
-    loader_grabber::close(cx);
-    packets::close(cx);
+fn close_tools(client: gpui::EntityId, cx: &mut gpui::App) {
+    scripts::close(client, cx);
+    environment::close(client, cx);
+    follower::close(client, cx);
+    loader_grabber::close(client, cx);
+    packets::close(client, cx);
 }
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);

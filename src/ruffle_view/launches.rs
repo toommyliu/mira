@@ -1,6 +1,8 @@
 use std::{
+    cell::Cell,
     collections::VecDeque,
     path::PathBuf,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -16,13 +18,23 @@ pub(super) struct Launch {
     pub(super) server: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct Pace(Rc<Cell<Option<Instant>>>);
+
 #[derive(Default)]
 pub(super) struct Launches {
     waiting: VecDeque<Launch>,
-    next: Option<Instant>,
+    next: Pace,
 }
 
 impl Launches {
+    pub(super) fn paced(next: Pace) -> Self {
+        Self {
+            waiting: VecDeque::new(),
+            next,
+        }
+    }
+
     pub(super) fn add(&mut self, launch: Launch) {
         let Some(waiting) = self
             .waiting
@@ -71,16 +83,18 @@ impl Launches {
         }
         Some(
             self.next
+                .0
+                .get()
                 .map_or(Duration::ZERO, |next| next.saturating_duration_since(now)),
         )
     }
 
     pub(super) fn take_due(&mut self, now: Instant, jitter: Duration) -> Option<Launch> {
-        if self.next.is_some_and(|next| now < next) {
+        if self.next.0.get().is_some_and(|next| now < next) {
             return None;
         }
         let launch = self.waiting.pop_front()?;
-        self.next = Some(now + GAP + jitter);
+        self.next.0.set(Some(now + GAP + jitter));
         Some(launch)
     }
 }
@@ -144,6 +158,20 @@ mod tests {
                 .take_due(start + GAP + jitter, Duration::ZERO)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn queues_sharing_a_pace_take_turns() {
+        let start = Instant::now();
+        let pace = Pace::default();
+        let mut first = Launches::paced(pace.clone());
+        let mut second = Launches::paced(pace);
+        first.add(queued("main", None, false));
+        second.add(queued("alt1", None, false));
+        assert_eq!(names(&mut first, start).as_deref(), Some("main"));
+        assert_eq!(names(&mut second, start + GAP / 2), None);
+        assert_eq!(second.wait(start + GAP / 2), Some(GAP / 2));
+        assert_eq!(names(&mut second, start + GAP).as_deref(), Some("alt1"));
     }
 
     #[test]

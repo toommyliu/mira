@@ -7,13 +7,17 @@ use std::{
 use gpui::{AppContext as _, Context, Size, Window, px, size};
 use reqwest::header::HeaderValue;
 
-use super::{Fake, Manager, View, run::Runs};
+use super::{
+    Fake, Manager, View,
+    run::{Runs, Start},
+};
 use crate::{
     accounts::{Account, AccountId},
     ruffle_view::{
         Login, ScriptPhase, ScriptState, Summary,
         account::{Character, Place},
         account_card::Presence,
+        client,
     },
 };
 
@@ -720,5 +724,48 @@ fn arrow_keys_in_a_setup_being_edited_scroll_the_cursor_into_view(cx: &mut gpui:
     cx.simulate_keystrokes("down");
     cx.run_until_parked();
     assert!(cursor_in_view(cx));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn a_setup_set_to_open_in_a_new_window_launches_there_and_leaves_open_accounts_where_they_are(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (manager, cx, dir) = open_manager("new-window", View::All, cx);
+    cx.update(|_, cx| {
+        client::init(
+            dir.clone(),
+            dir.join("accounts.json"),
+            HeaderValue::from_static("test"),
+            crate::army::Armies::new(dir.join("armies")),
+            cx,
+        )
+    });
+    let start = |cx: &mut gpui::VisualTestContext| {
+        manager.update(cx, |manager, cx| {
+            manager.start_setup("Warlord farm", Start::Fresh, None, None, cx)
+        });
+    };
+    let window = |username: &str, cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, cx| client::holding(&id(username), cx).map(|game| game.window_id()))
+    };
+    manager.update(cx, |manager, cx| {
+        manager.fake = None;
+        let alone = accounts(manager, &["whomity", "burner"]);
+        manager.launch(alone, cx);
+    });
+    start(cx);
+    let shared = window("burner", cx).unwrap();
+    let setup = window("kiddion", cx).unwrap();
+    assert_ne!(setup, shared);
+    assert_eq!(window("whomity", cx), Some(shared));
+    manager.update(cx, |manager, cx| {
+        let kiddion = accounts(manager, &["kiddion"]);
+        manager.close_now(kiddion, cx);
+    });
+    assert_eq!(window("kiddion", cx), None);
+    start(cx);
+    assert_eq!(window("kiddion", cx), Some(setup));
+    assert_eq!(cx.update(|_, cx| client::clients(cx).len()), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
