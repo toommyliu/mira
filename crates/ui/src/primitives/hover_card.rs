@@ -6,11 +6,14 @@ use gpui::{
 use super::tooltip;
 use crate::Tone;
 
-const MAX_LINES: usize = 3;
+enum Value {
+    Text(SharedString, Tone),
+    Path(SharedString),
+}
 
 pub(super) struct Card {
     title: SharedString,
-    rows: Vec<(SharedString, SharedString, Tone)>,
+    rows: Vec<(SharedString, Value)>,
 }
 
 #[derive(IntoElement)]
@@ -45,7 +48,20 @@ impl HoverCard {
         text: impl Into<SharedString>,
         tone: Tone,
     ) -> Self {
-        self.card.rows.push((label.into(), text.into(), tone));
+        self.card
+            .rows
+            .push((label.into(), Value::Text(text.into(), tone)));
+        self
+    }
+
+    pub fn path_row(
+        mut self,
+        label: impl Into<SharedString>,
+        path: impl Into<SharedString>,
+    ) -> Self {
+        self.card
+            .rows
+            .push((label.into(), Value::Path(path.into())));
         self
     }
 
@@ -105,7 +121,19 @@ pub(super) fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
                 .text_color(theme.foreground)
                 .child(card.title),
         )
-        .children(card.rows.into_iter().map(|(label, text, tone)| {
+        .children(card.rows.into_iter().map(|(label, value)| {
+            let cell = div().flex_1().min_w_0().text_color(theme.foreground);
+            let cell = match value {
+                Value::Path(path) => cell.child(path),
+                Value::Text(text, tone) => cell
+                    .line_clamp(3)
+                    .text_ellipsis()
+                    .text_color(match tone {
+                        Tone::Neutral => theme.foreground,
+                        tone => theme.tone(tone).2,
+                    })
+                    .child(text),
+            };
             div()
                 .flex()
                 .gap(layout.space(3.0))
@@ -118,17 +146,6 @@ pub(super) fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
                         .text_color(theme.muted_foreground)
                         .child(label),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .line_clamp(MAX_LINES)
-                        .text_ellipsis()
-                        .text_color(match tone {
-                            Tone::Neutral => theme.foreground,
-                            tone => theme.tone(tone).2,
-                        })
-                        .child(text),
-                )
+                .child(cell)
         }))
 }

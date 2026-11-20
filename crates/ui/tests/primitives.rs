@@ -1944,7 +1944,7 @@ struct Profiles {
 
 impl Render for Profiles {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use mira_ui::primitives::{MenuItem, Tab, Tabs};
+        use mira_ui::primitives::{HoverCard, MenuItem, Tab, Tabs};
         let chosen = self.chosen.clone();
         let this = cx.weak_entity();
         div()
@@ -1954,7 +1954,9 @@ impl Render for Profiles {
             .child(
                 Tabs::new("profiles", "Profiles", 3, move |index| {
                     let chosen = chosen.clone();
-                    Tab::new(["Generic", "Farming", "Boss"][index])
+                    let name = ["Generic", "Farming", "Boss"][index];
+                    Tab::new(name)
+                        .hover_card(HoverCard::new(("details", index), name))
                         .start_slot(
                             div()
                                 .size(gpui::px(4.0))
@@ -1999,14 +2001,22 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
 
     press(cx, "tab");
     press(cx, "down");
+    assert!(cx.debug_bounds("details-1-card").is_some());
     press(cx, "shift-f10");
+    assert!(cx.debug_bounds("details-1-card").is_none());
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1"]);
 
     let third = cx.debug_bounds("profile-2").unwrap().center();
+    cx.simulate_mouse_move(third, None, Modifiers::none());
+    cx.run_until_parked();
     cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("details-2-card").is_none());
     press(cx, "down");
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1", "rename 2"]);

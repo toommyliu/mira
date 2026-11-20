@@ -184,7 +184,7 @@ impl SessionTab {
             card = card.row("Server", server.clone(), Tone::Neutral);
         }
         if let Some(script) = script {
-            card = card.row("Script", script.clone(), Tone::Neutral);
+            card = card.path_row("Script", script.clone());
         }
         if let Some(error) = error {
             card = card.row("Error", error.clone(), Tone::Danger);
@@ -1750,7 +1750,7 @@ mod tests {
                 }),
                 details: Details {
                     server: Some("Twig".into()),
-                    script: None,
+                    script: Some("daily.ts".into()),
                     error: None,
                 },
                 hint: None,
