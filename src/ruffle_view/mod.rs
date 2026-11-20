@@ -58,9 +58,9 @@ pub(crate) use account::{
     Changed, Details, Glance, Identified, Login, ScriptPhase, ScriptState, Summary, Updated,
 };
 pub(crate) use client::{
-    Client, CloseSession, Home, NewSession, NextSession, PreviousSession, ToggleGrid,
-    ToggleSidebar, bar_title, bind_keys, current as current_client, drag_area, init as init_client,
-    open as open_client, window_bar,
+    Client, CloseSession, NewSession, NextSession, PreviousSession, ToggleGrid, ToggleSidebar,
+    bar_title, bind_keys, current as current_client, drag_area, init as init_client,
+    open_launch_window, window_bar,
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use game_bar::{

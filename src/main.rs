@@ -46,7 +46,9 @@ fn main() -> anyhow::Result<()> {
     let armies = army::Armies::new(documents.join("armies"));
     let scripts = documents.join("scripts");
     let types = data.join("types");
-    mira_platform::application()
+    let app = mira_platform::application();
+    app.on_reopen(ruffle_view::open_launch_window);
+    app.with_quit_mode(gpui::QuitMode::Explicit)
         .with_assets(mira_ui::Assets)
         .run(move |cx| {
             // AppKit termination does not unwind main's stack.
@@ -82,20 +84,11 @@ fn main() -> anyhow::Result<()> {
             app_menu::set_menus(cx);
             let accounts = data.join("accounts.json");
             ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
-            let main = match settings::start(cx) {
-                settings::Start::Client => ruffle_view::open_client(ruffle_view::Home::Shared, true, cx)
-                    .map(|client| client.into())
-                    .inspect_err(|error| tracing::error!(%error, "couldn't open Mira"))
-                    .ok(),
-                settings::Start::Manager => {
-                    ruffle_view::open_manager(accounts.clone(), device.clone(), cx)
-                        .map(|manager| manager.into())
-                }
-            };
-            let Some(main) = main.map(|main: gpui::AnyWindowHandle| main.window_id()) else {
+            ruffle_view::open_launch_window(cx);
+            if cx.windows().is_empty() {
                 cx.quit();
                 return;
-            };
+            }
             let (load_folder, load_types) = (scripts.clone(), types.clone());
             cx.on_action(move |_: &ruffle_view::LoadScript, cx| {
                 let (folder, types) = (load_folder.clone(), load_types.clone());
@@ -149,12 +142,6 @@ fn main() -> anyhow::Result<()> {
                     ruffle_view::open_manager(accounts, device, cx);
                 });
             });
-            cx.on_window_closed(move |cx, closed| {
-                if closed == main || cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
             cx.activate(true);
         });
     Ok(())
