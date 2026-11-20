@@ -664,6 +664,49 @@ fn open_manager<'a>(
     (manager, cx, dir)
 }
 
+#[test]
+fn reopening_mira_opens_the_configured_window_only_when_all_windows_are_closed() {
+    let mut cx = gpui::TestAppContext::single();
+    let dir = std::env::temp_dir().join(format!("mira-reopen-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let settings = dir.join("settings.json");
+    std::fs::write(&settings, r#"{"start":"manager"}"#).unwrap();
+    let client = cx.update(|cx| {
+        mira_ui::init(cx);
+        crate::settings::init(settings, |_| {}, cx);
+        client::init(
+            dir.clone(),
+            dir.join("accounts.json"),
+            HeaderValue::from_static("test"),
+            crate::army::Armies::new(dir.join("armies")),
+            cx,
+        );
+        client::open(client::Home::Shared, false, cx).unwrap()
+    });
+    cx.update(client::open_launch_window);
+    assert_eq!(cx.windows(), [client.into()]);
+    cx.update(|cx| {
+        crate::ruffle_view::open_packets(
+            client.entity(cx).unwrap(),
+            crate::ruffle_view::Target::Selected,
+            cx,
+        );
+    });
+    assert_eq!(cx.windows().len(), 2);
+    client
+        .update(&mut cx, |_, window, _| window.remove_window())
+        .unwrap();
+    assert!(cx.windows().is_empty());
+
+    cx.update(client::open_launch_window);
+    let [manager] = cx.windows().try_into().unwrap();
+    assert!(manager.downcast::<Manager>().is_some());
+    cx.update(client::open_launch_window);
+    assert_eq!(cx.windows(), [manager]);
+    cx.quit();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[gpui::test]
 fn start_with_remembers_the_script_only_once_the_start_goes_ahead(cx: &mut gpui::TestAppContext) {
     let (manager, cx, dir) = open_manager("start-with", View::All, cx);
