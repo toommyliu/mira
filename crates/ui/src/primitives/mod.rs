@@ -74,7 +74,7 @@ pub use spinner::Spinner;
 pub use switch::Switch;
 pub use table::{Column, Sort, Table};
 pub use tabs::{Tab, Tabs};
-pub use toast::{Toast, Toaster};
+pub use toast::{Toast, ToastId, Toaster};
 pub use toggle_group::{ToggleGroup, ToggleItem};
 pub use tooltip::Tooltip;
 pub use tree::{Tree, TreeNode};

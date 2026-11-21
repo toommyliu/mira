@@ -32,6 +32,12 @@ impl From<String> for Failure {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Installed {
+    pub(crate) dir: String,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Updated {
     Current,
     Edited(Edits),
@@ -42,7 +48,7 @@ pub(crate) async fn install(
     github: &GitHub,
     store: &Store,
     locator: &Locator,
-) -> Result<String, Failure> {
+) -> Result<Installed, Failure> {
     let label = format!("{}/{}", locator.owner, locator.repo);
     let repository = github
         .repository(&locator.owner, &locator.repo)
@@ -63,7 +69,7 @@ pub(crate) async fn install(
         path: locator.path.clone(),
     };
     let head = head(github, &source).await?;
-    let (staged, files) = fetch(github, store, &source, &head).await?;
+    let (staged, files, manifest) = fetch(github, store, &source, &head).await?;
     let mut dir = format!("{}-{}", source.owner, source.repo);
     if let Some((_, last)) = source.path.split_last() {
         dir = format!("{dir}-{last}");
@@ -86,7 +92,10 @@ pub(crate) async fn install(
             )),
             StoreError::Io(error) => Failure::Other(format!("Couldn't install it: {error}.")),
         })?;
-    Ok(dir)
+    Ok(Installed {
+        dir,
+        name: manifest.name,
+    })
 }
 
 pub(crate) async fn check(github: &GitHub, receipt: &Receipt) -> Result<Option<Head>, String> {
@@ -126,7 +135,7 @@ pub(crate) async fn update(
     let Some((source, head)) = latest(github, &receipt).await? else {
         return Ok(Updated::Current);
     };
-    let (staged, files) = fetch(github, store, &source, &head)
+    let (staged, files, _) = fetch(github, store, &source, &head)
         .await
         .map_err(|failure| failure.to_string())?;
     if !overwrite_edits {
@@ -185,7 +194,7 @@ async fn fetch(
     store: &Store,
     source: &Source,
     head: &Head,
-) -> Result<(Staged, archive::Files), Failure> {
+) -> Result<(Staged, archive::Files, Manifest), Failure> {
     let label = source.label();
     let manifest_path = source
         .path
@@ -209,7 +218,7 @@ async fn fetch(
         }
         Err(error) => return Err(Failure::Other(explain(error, github, &label))),
     };
-    Manifest::parse(&manifest).map_err(|error| Failure::Other(error.to_string()))?;
+    let parsed = Manifest::parse(&manifest).map_err(|error| Failure::Other(error.to_string()))?;
     let staged = store
         .stage()
         .map_err(|error| Failure::Other(format!("Couldn't prepare the download: {error}.")))?;
@@ -238,7 +247,7 @@ async fn fetch(
     if !has_scripts(&unpacked.join("scripts")) {
         return Err(Failure::Other(NO_SCRIPTS.into()));
     }
-    Ok((staged, files))
+    Ok((staged, files, parsed))
 }
 
 fn has_scripts(dir: &Path) -> bool {
@@ -440,7 +449,10 @@ mod tests {
         let github = world.github(None);
         assert_eq!(
             install(&github, &world.store, &dailies()).await,
-            Ok("o-r-dailies".into())
+            Ok(Installed {
+                dir: "o-r-dailies".into(),
+                name: "Dailies".into()
+            })
         );
         let installed = world.store.package("o-r-dailies");
         assert_eq!(
@@ -549,7 +561,10 @@ mod tests {
             &[("package.json", MANIFEST), ("scripts/spin.ts", "spin")],
         );
         let github = world.github(None);
-        let dir = install(&github, &world.store, &dailies()).await.unwrap();
+        let dir = install(&github, &world.store, &dailies())
+            .await
+            .unwrap()
+            .dir;
 
         world.fake.route(
             "/repositories/42",
@@ -596,7 +611,10 @@ mod tests {
             &[("package.json", MANIFEST), ("scripts/spin.ts", "spin")],
         );
         let github = world.github(None);
-        let dir = install(&github, &world.store, &dailies()).await.unwrap();
+        let dir = install(&github, &world.store, &dailies())
+            .await
+            .unwrap()
+            .dir;
         let installed = world.store.package(&dir);
         let receipt = || Receipt::read(&installed).unwrap().unwrap();
         assert_eq!(check(&github, &receipt()).await, Ok(None));

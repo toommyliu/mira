@@ -17,7 +17,7 @@ pub(crate) use bundled::Recommended;
 #[cfg(test)]
 pub(crate) use github::Locator;
 pub(crate) use manifest::{Manifest, ManifestError};
-pub(crate) use service::{Failure, Updated};
+pub(crate) use service::{Failure, Installed, Updated};
 #[cfg(test)]
 pub(crate) use state::init_against;
 pub(crate) use state::{Activity, Status, init, packages, start};
