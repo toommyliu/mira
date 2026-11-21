@@ -93,56 +93,13 @@ fn main() -> anyhow::Result<()> {
                 cx.quit();
                 return;
             }
-            let (load_folder, load_types) = (scripts.clone(), types.clone());
-            cx.on_action(move |_: &ruffle_view::LoadScript, cx| {
-                let (folder, types) = (load_folder.clone(), load_types.clone());
-                cx.defer(move |cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::load_script(client, folder, types, cx);
-                    }
-                });
-            });
-            cx.on_action(move |_: &ruffle_view::OpenScripts, cx| {
-                let (folder, types) = (scripts.clone(), types.clone());
-                cx.defer(move |cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::open_scripts(
-                            client,
-                            folder,
-                            types,
-                            ruffle_view::Target::Selected,
-                            cx,
-                        );
-                    }
-                });
-            });
+            ruffle_view::init_tools(scripts, types, cx);
             cx.on_action(|_: &ruffle_view::OpenClient, cx| {
                 cx.defer(|cx| match ruffle_view::current_client(cx) {
                     Ok(window) => {
                         let _ = window.update(cx, |_, window, _| window.activate_window());
                     }
                     Err(error) => tracing::error!(%error, "couldn't open the client"),
-                });
-            });
-            cx.on_action(|_: &ruffle_view::OpenEnvironment, cx| {
-                cx.defer(|cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::open_environment(client, ruffle_view::Target::Selected, cx);
-                    }
-                });
-            });
-            cx.on_action(|_: &ruffle_view::OpenLoaderGrabber, cx| {
-                cx.defer(|cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::open_loader_grabber(client, ruffle_view::Target::Selected, cx);
-                    }
-                });
-            });
-            cx.on_action(|_: &ruffle_view::OpenPackets, cx| {
-                cx.defer(|cx| {
-                    if let Some(client) = client(cx) {
-                        ruffle_view::open_packets(client, ruffle_view::Target::Selected, cx);
-                    }
                 });
             });
             cx.on_action(|_: &ruffle_view::OpenCombatProfiles, cx| {
@@ -157,13 +114,6 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
         });
     Ok(())
-}
-
-fn client(cx: &mut gpui::App) -> Option<gpui::Entity<ruffle_view::Client>> {
-    ruffle_view::current_client(cx)
-        .and_then(|window| window.entity(cx))
-        .inspect_err(|error| tracing::error!(%error, "couldn't open the client"))
-        .ok()
 }
 
 fn settings_changed(cx: &mut gpui::App) {
