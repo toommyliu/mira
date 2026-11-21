@@ -172,24 +172,11 @@ impl PackageDialogs {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(Updated::Current) => {
-                        this.toast(format!("{name} is up to date"), Tone::Neutral, None, cx);
-                    }
                     Ok(Updated::Edited(edits)) => {
                         this.confirm = Some(Confirm { dir, name, edits });
                     }
-                    Ok(Updated::Replaced) => {
-                        this.toast(format!("Updated {name}"), Tone::Success, None, cx);
-                        cx.emit(PackageEvent::Changed);
-                    }
-                    Err(message) => {
-                        this.toast(
-                            format!("Couldn't update {name}"),
-                            Tone::Danger,
-                            Some(message),
-                            cx,
-                        );
-                    }
+                    Ok(Updated::Replaced) => cx.emit(PackageEvent::Changed),
+                    Ok(Updated::Current) | Err(_) => {}
                 }
                 cx.notify();
             });
