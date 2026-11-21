@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail, ensure};
 use objc2_foundation::{
-    NSFileManager, NSFileManagerItemReplacementOptions, NSSearchPathDirectory,
+    NSBundle, NSFileManager, NSFileManagerItemReplacementOptions, NSSearchPathDirectory,
     NSSearchPathDomainMask, NSString, NSURL,
 };
 use semver::Version;
@@ -16,12 +16,15 @@ use semver::Version;
 const APP: &str = "Mira.app";
 
 pub(super) fn locate() -> Result<PathBuf, Option<String>> {
-    let exe = std::env::current_exe().map_err(|error| Some(error.to_string()))?;
-    let app = exe
-        .ancestors()
-        .nth(3)
-        .filter(|app| !cfg!(debug_assertions) && app.extension().is_some_and(|e| e == "app"))
-        .ok_or(None)?;
+    let bundle = NSBundle::mainBundle();
+    if cfg!(debug_assertions)
+        || bundle
+            .bundleIdentifier()
+            .is_none_or(|id| id.to_string() != "local.mira.app")
+    {
+        return Err(None);
+    }
+    let app = PathBuf::from(bundle.bundlePath().to_string());
     if app
         .components()
         .any(|c| c.as_os_str() == "AppTranslocation")
@@ -35,7 +38,7 @@ pub(super) fn locate() -> Result<PathBuf, Option<String>> {
             folder.display()
         )));
     }
-    Ok(app.to_path_buf())
+    Ok(app)
 }
 
 fn writable(path: &Path) -> bool {
