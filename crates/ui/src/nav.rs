@@ -14,7 +14,7 @@ const REVEAL_MARGIN: Pixels = px(24.0);
 struct Reveal {
     pending: bool,
     roots: HashMap<WindowId, ScrollHandle>,
-    panes: Vec<ScrollHandle>,
+    panes: Vec<(ScrollHandle, Pixels)>,
 }
 
 impl Global for Reveal {}
@@ -76,8 +76,16 @@ pub fn keyboard_input(window: &Window, cx: &App) -> bool {
 }
 
 pub fn pane_start(handle: ScrollHandle) -> impl IntoElement {
+    pane_start_above(handle, Pixels::ZERO)
+}
+
+pub fn pane_start_above(handle: ScrollHandle, covered: Pixels) -> impl IntoElement {
     canvas(
-        move |_, _, cx| cx.default_global::<Reveal>().panes.push(handle.clone()),
+        move |_, _, cx| {
+            cx.default_global::<Reveal>()
+                .panes
+                .push((handle.clone(), covered))
+        },
         |_, _, _, _| {},
     )
     .absolute()
@@ -104,11 +112,11 @@ fn reveal(target: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
     if !state.pending {
         return;
     }
-    let Some(root) = state.panes.last().cloned().or_else(|| {
+    let Some((root, covered)) = state.panes.last().cloned().or_else(|| {
         state
             .roots
             .get(&window.window_handle().window_id())
-            .cloned()
+            .map(|root| (root.clone(), Pixels::ZERO))
     }) else {
         return;
     };
@@ -118,10 +126,10 @@ fn reveal(target: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         return;
     }
     let mut offset = root.offset();
-    let margin =
-        REVEAL_MARGIN.min(((viewport.size.height - target.size.height) / 2.0).max(px(0.0)));
+    let visible = viewport.size.height - covered;
+    let margin = REVEAL_MARGIN.min(((visible - target.size.height) / 2.0).max(px(0.0)));
     let top = viewport.top() + margin;
-    let bottom = viewport.bottom() - margin;
+    let bottom = viewport.bottom() - covered.max(margin);
     if target.top() < top {
         offset.y += top - target.top();
     } else if target.bottom() > bottom {
