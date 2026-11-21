@@ -18,8 +18,8 @@ pub(crate) use bundled::{Recommended, resources};
 #[cfg(test)]
 pub(crate) use github::Locator;
 pub(crate) use manifest::{Manifest, ManifestError};
-pub(crate) use service::{Failure, Updated};
-pub(crate) use skua::{FOLDER as SKUA_FOLDER, listed as skua_listed};
+pub(crate) use service::{Failure, Installed, Updated};
+pub(crate) use skua::{FOLDER as SKUA_FOLDER, NAME as SKUA_NAME, listed as skua_listed};
 #[cfg(test)]
 pub(crate) use state::init_against;
 pub(crate) use state::{Activity, Status, init, packages, start};

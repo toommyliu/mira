@@ -24,9 +24,9 @@ use mira_ui::{
     components::{Disclosure, Empty},
     h_flex,
     primitives::{
-        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
+        Alert, Align, Badge, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
-        Tab, Tabs, VirtualList,
+        Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
         icon,
     },
@@ -53,7 +53,9 @@ use crate::{
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
-    scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
+    scripting::{
+        self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
+    },
     settings, shortcuts,
 };
 
@@ -77,23 +79,57 @@ const PADDING: Pixels = px(16.0);
 const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
+const SHOWN_TAGS: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
     path: PathBuf,
     name: SharedString,
+    description: Option<SharedString>,
+    tags: Arc<[SharedString]>,
     folder: Option<SharedString>,
     source: Option<usize>,
+    searched: SharedString,
 }
 
 impl Entry {
-    fn matches(&self, query: &str) -> bool {
-        self.name.to_lowercase().contains(query)
-            || self
-                .folder
-                .as_ref()
-                .is_some_and(|folder| folder.to_lowercase().contains(query))
+    fn new(
+        path: PathBuf,
+        name: SharedString,
+        folder: Option<SharedString>,
+        description: Option<SharedString>,
+        tags: Arc<[SharedString]>,
+    ) -> Self {
+        let file = file_name(&path);
+        let searched = [name.as_ref(), file.as_str()]
+            .into_iter()
+            .chain(folder.as_deref())
+            .chain(description.as_deref())
+            .chain(tags.iter().map(AsRef::as_ref))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase()
+            .into();
+        Self {
+            path,
+            name,
+            description,
+            tags,
+            folder,
+            source: None,
+            searched,
+        }
     }
+
+    fn matches(&self, query: &str) -> bool {
+        self.searched.contains(query)
+    }
+}
+
+struct About {
+    name: SharedString,
+    description: Option<SharedString>,
+    tags: Arc<[SharedString]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,7 +285,7 @@ fn skua_package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
     let scripts = skua_entries(&root);
     let source = Source {
         root,
-        name: "Skua scripts".into(),
+        name: packages::SKUA_NAME.into(),
         kind: SourceKind::Skua { origin },
         problem,
         scripts: 0,
@@ -260,18 +296,15 @@ fn skua_package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
 fn skua_entries(root: &Path) -> io::Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = packages::skua_listed(root)?
         .into_iter()
-        .filter_map(|relative| {
-            let path = root.join(relative.as_str());
-            let (folder, name) = match relative.split_last()? {
-                (folder, name) if folder.is_root() => (None, name.to_owned()),
-                (folder, name) => (Some(folder.to_string().into()), name.to_owned()),
-            };
-            Some(Entry {
-                path,
-                name: name.into(),
-                folder,
-                source: None,
-            })
+        .filter_map(|listed| {
+            let (folder, _) = listed.path.split_last()?;
+            Some(Entry::new(
+                root.join(listed.path.as_str()),
+                listed.name.into(),
+                (!folder.is_root()).then(|| folder.to_string().into()),
+                listed.description.map(Into::into),
+                listed.tags.into_iter().map(SharedString::from).collect(),
+            ))
         })
         .collect();
     entries.sort_by_cached_key(|entry| {
@@ -382,12 +415,17 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
                 .ok()
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .map(|folder| folder.display().to_string().into());
-            entries.push(Entry {
-                name: name.to_owned().into(),
-                folder,
+            let meta = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| scripting::read_meta(&path, &text))
+                .unwrap_or_default();
+            entries.push(Entry::new(
                 path,
-                source: None,
-            });
+                meta.name.unwrap_or_else(|| name.to_owned()).into(),
+                folder,
+                meta.description.map(Into::into),
+                Arc::default(),
+            ));
         }
     }
     Ok(())
@@ -617,6 +655,7 @@ pub(super) struct ScriptsWindow {
     error_cursor: Option<usize>,
     source_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
+    toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 6],
 }
@@ -629,6 +668,7 @@ enum FormKey {
 
 struct Form {
     generation: u64,
+    meta: Meta,
     state: FormState,
 }
 
@@ -661,7 +701,8 @@ impl ScriptsWindow {
                 .search()
         });
         let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
-        let package_dialogs = cx.new(|cx| PackageDialogs::new(cx));
+        let toasts = Toaster::new(window, cx);
+        let package_dialogs = cx.new(|cx| PackageDialogs::new(toasts.clone(), cx));
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
@@ -736,6 +777,7 @@ impl ScriptsWindow {
             error_cursor: None,
             source_scroll: ScrollHandle::new(),
             package_dialogs,
+            toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
         };
@@ -861,6 +903,10 @@ impl ScriptsWindow {
             let scanned = scanned.await;
             let _ = this.update(cx, |this, cx| {
                 let first = this.library.is_none();
+                let kept = match this.rows(cx).get(this.selected) {
+                    Some(Row::Script(entry)) => Some(entry.path.clone()),
+                    _ => None,
+                };
                 this.library = Some(scanned);
                 if this.scope(cx).is_none() {
                     this.page = Page::Library(None);
@@ -869,7 +915,12 @@ impl ScriptsWindow {
                     this.select_last_run(cx);
                 }
                 let rows = this.rows(cx);
-                if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
+                if let Some(index) = kept.and_then(|path| {
+                    rows.iter()
+                        .position(|row| matches!(row, Row::Script(entry) if entry.path == path))
+                }) {
+                    this.selected = index;
+                } else if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
                     this.selected = first_script(&rows);
                 }
                 cx.notify();
@@ -1272,6 +1323,7 @@ impl ScriptsWindow {
                 let this = toggles.clone();
                 h_flex()
                     .flex_none()
+                    .h(layout.control)
                     .justify_between()
                     .pl(layout.space(4.0))
                     .pr(layout.space(2.0))
@@ -1291,6 +1343,10 @@ impl ScriptsWindow {
             .packages_open
             .then(|| self.source_list("packages", "Packages", installed, theme, cx));
         let busy = packages::packages(cx).read(cx).activity().is_some();
+        let installing = matches!(
+            packages::packages(cx).read(cx).activity(),
+            Some(packages::Activity::Installing)
+        );
         let dialogs = self.package_dialogs.clone();
         let sources = v_flex()
             .child(
@@ -1321,6 +1377,7 @@ impl ScriptsWindow {
                         .child(
                             Button::icon("install-package", Icon::Plus, "Install package")
                                 .size(Size::Small)
+                                .busy(installing)
                                 .disabled(busy)
                                 .on_click(move |_, window, cx| {
                                     dialogs
@@ -1355,10 +1412,12 @@ impl ScriptsWindow {
                     .flex()
                     .flex_col()
                     .min_h_0()
+                    .my(-RING_ROOM)
                     .child(
                         div()
                             .id("sources")
                             .min_h_0()
+                            .py(RING_ROOM)
                             .overflow_y_scroll()
                             .track_scroll(&self.source_scroll)
                             .child(sources),
@@ -1563,12 +1622,13 @@ impl ScriptsWindow {
 
     fn target(&self, cx: &App) -> Option<Entry> {
         if let Some(path) = &self.chosen {
-            return Some(Entry {
-                name: file_name(path).into(),
-                path: path.clone(),
-                folder: None,
-                source: None,
-            });
+            return Some(Entry::new(
+                path.clone(),
+                file_name(path).into(),
+                None,
+                None,
+                Arc::default(),
+            ));
         }
         let rows = self.rows(cx);
         match rows.get(self.selected.min(rows.len().saturating_sub(1))) {
@@ -1600,7 +1660,7 @@ impl ScriptsWindow {
             })?;
             scripting::extract(&display, &script, &text).map_err(|error| match error {
                 ExtractError::Syntax(message) => ("This script has a syntax error", message),
-                ExtractError::Inputs(message) => ("This script's inputs are invalid", message),
+                ExtractError::Meta(message) => ("This script's meta is invalid", message),
             })
         });
         let generation = self.generation;
@@ -1667,7 +1727,15 @@ impl ScriptsWindow {
                             Err(("This Skua script can't start", message)),
                             cx,
                         ),
-                        Ok(definition) => this.loaded(key, generation, Ok(definition), cx),
+                        Ok(definition) => this.loaded(
+                            key,
+                            generation,
+                            Ok(Declared {
+                                meta: Meta::default(),
+                                inputs: Ok(definition),
+                            }),
+                            cx,
+                        ),
                     }
                     cx.notify();
                 });
@@ -1710,14 +1778,22 @@ impl ScriptsWindow {
         &mut self,
         key: FormKey,
         generation: u64,
-        read: Result<Option<Definition>, (&'static str, String)>,
+        read: Result<Declared, (&'static str, String)>,
         cx: &mut Context<Self>,
     ) {
+        let (meta, read) = match read {
+            Ok(Declared { meta, inputs }) => (
+                meta,
+                inputs.map_err(|message| ("This script's inputs are invalid", message)),
+            ),
+            Err(broken) => (Meta::default(), Err(broken)),
+        };
         if let Some(form) = self.forms.get_mut(&key)
             && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
             && definition == read
         {
             form.generation = generation;
+            form.meta = meta;
             return;
         }
         let state = match read {
@@ -1780,7 +1856,14 @@ impl ScriptsWindow {
             ) => Some(values(definition, drafts)),
             _ => None,
         };
-        self.forms.insert(key.clone(), Form { generation, state });
+        self.forms.insert(
+            key.clone(),
+            Form {
+                generation,
+                meta,
+                state,
+            },
+        );
         if let Some(edited) = checked {
             self.store_entry(&key, edited, cx);
         }
@@ -2242,6 +2325,27 @@ impl ScriptsWindow {
             .into_any_element()
     }
 
+    fn about(&self, path: &Path, key: &FormKey) -> About {
+        let meta = self.forms.get(key).map(|form| &form.meta);
+        let listed = self
+            .library
+            .iter()
+            .flat_map(|library| &library.entries)
+            .find(|entry| entry.path == path);
+        About {
+            name: meta
+                .and_then(|meta| meta.name.clone())
+                .map(SharedString::from)
+                .or_else(|| listed.map(|entry| entry.name.clone()))
+                .unwrap_or_else(|| file_name(path).into()),
+            description: meta
+                .and_then(|meta| meta.description.clone())
+                .map(SharedString::from)
+                .or_else(|| listed.and_then(|entry| entry.description.clone())),
+            tags: listed.map(|entry| entry.tags.clone()).unwrap_or_default(),
+        }
+    }
+
     fn script_detail(
         &self,
         theme: &Theme,
@@ -2251,10 +2355,14 @@ impl ScriptsWindow {
         let entry = entry?;
         let errors = self.input_errors(&entry.path, cx);
         let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
+        let key = FormKey::Script(entry.path.clone());
+        let about = self.about(&entry.path, &key);
         Some(Detail {
-            heading: heading(theme, entry.name.clone(), home_relative(&entry.path), None)
+            heading: heading(theme, about.name.clone(), home_relative(&entry.path), None)
                 .into_any_element(),
-            body: self.inputs(theme, &FormKey::Script(entry.path.clone()), cx),
+            body: about_body(theme, &about)
+                .chain(self.inputs(theme, &key, cx))
+                .collect(),
             bar,
         })
     }
@@ -2272,6 +2380,7 @@ impl ScriptsWindow {
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
+        let about = self.about(&queued.script, &key);
         let body = match self.forms.get(&key).map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
@@ -2297,7 +2406,7 @@ impl ScriptsWindow {
         Some(Detail {
             heading: heading(
                 theme,
-                file_name(&queued.script).into(),
+                about.name.clone(),
                 home_relative(&queued.script),
                 Some(
                     Button::new("queued-remove", "Remove")
@@ -2309,13 +2418,12 @@ impl ScriptsWindow {
                 ),
             )
             .into_any_element(),
-            body: failed
-                .map(|message| {
+            body: about_body(theme, &about)
+                .chain(failed.map(|message| {
                     Alert::new("queued-failed", Tone::Danger, "Failed")
                         .body(message)
                         .into_any_element()
-                })
-                .into_iter()
+                }))
                 .chain(body)
                 .collect(),
             bar: None,
@@ -2336,10 +2444,9 @@ impl ScriptsWindow {
         let rows: Rc<[QueueRow]> = queue
             .iter()
             .map(|queued| {
-                let form = self
-                    .forms
-                    .get(&FormKey::Entry(queued.id))
-                    .map(|form| &form.state);
+                let key = FormKey::Entry(queued.id);
+                let name = self.about(&queued.script, &key).name;
+                let form = self.forms.get(&key).map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
                         Some(FormState::Broken { .. }) => Some("Can't start".into()),
@@ -2367,7 +2474,7 @@ impl ScriptsWindow {
                     None => text_width,
                 };
                 QueueRow {
-                    name: file_name(&queued.script).into(),
+                    name,
                     folder: fit_path_to(&folder, room, window, theme),
                     meta,
                 }
@@ -2825,7 +2932,9 @@ impl Render for ScriptsWindow {
                 "Script logs",
                 "Coming soon. Until then, script output goes to mira.log.",
             )),
-        };
+        }
+        .relative()
+        .child(Toaster::layer(&self.toasts, window, cx));
         let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
         let footer =
             match page {
@@ -3011,13 +3120,30 @@ fn heading(
         .children(action)
 }
 
-fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
+fn about_body(theme: &Theme, about: &About) -> impl Iterator<Item = AnyElement> {
+    let description = about
+        .description
+        .clone()
+        .map(|description| muted(theme, description).into_any_element());
+    let hidden = about.tags.len().saturating_sub(SHOWN_TAGS);
+    let tags = (!about.tags.is_empty()).then(|| {
+        h_flex()
+            .flex_wrap()
+            .gap(theme.space(1.0))
+            .children(about.tags.iter().take(SHOWN_TAGS).cloned().map(Badge::new))
+            .children((hidden > 0).then(|| Badge::new(format!("+{hidden}"))))
+            .into_any_element()
+    });
+    description.into_iter().chain(tags)
+}
+
+fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
     let typography = theme.typography;
     div()
         .text_size(typography.body)
         .line_height(typography.body_line)
         .text_color(theme.muted_foreground)
-        .child(text)
+        .child(text.into())
 }
 
 struct QueueRow {
@@ -3139,7 +3265,10 @@ mod tests {
             Library::default()
         );
         for (file, contents) in [
-            ("scripts/zeta.ts", ""),
+            (
+                "scripts/zeta.ts",
+                "export const meta = { name: \"Alchemy\", description: \"Brews potions.\" } satisfies Meta;",
+            ),
             ("scripts/Alpha.js", ""),
             ("scripts/notes.txt", ""),
             ("scripts/types.d.ts", ""),
@@ -3147,7 +3276,7 @@ mod tests {
             ("scripts/farming/hunt.ts", ""),
             ("scripts/node_modules/lib/index.js", ""),
             ("scripts/.git/hook.js", ""),
-            ("community/daily.ts", ""),
+            ("community/daily.ts", "export const meta = { name: 5 };"),
             ("community/bosses/dage.ts", ""),
             (
                 "authoring/package.json",
@@ -3178,9 +3307,10 @@ mod tests {
             ("skua/Scripts/.mira-install.json", RECEIPT),
             (
                 "skua/Scripts/scripts.json",
-                r#"[{"name":"null","path":"CoreBots.cs"},{"name":"Free Daily Boost","path":"Dailies/FreeDailyBoost.cs"},{"name":"Gone","path":"Gone.cs"},{"name":"Escape","path":"../outside.cs"}]"#,
+                r#"[{"name":"null","path":"CoreBots.cs"},{"name":"Free Daily Boost","description":"Claims the free daily boost.","tags":["daily","boost","null","","Daily"],"path":"Dailies/FreeDailyBoost.cs"},{"name":"No details","description":"null","tags":["null"],"path":"Other/NoDetails.cs"},{"name":"Gone","path":"Gone.cs"},{"name":"Escape","path":"../outside.cs"}]"#,
             ),
             ("skua/Scripts/CoreBots.cs", ""),
+            ("skua/Scripts/Other/NoDetails.cs", ""),
             ("skua/Scripts/Dailies/FreeDailyBoost.cs", ""),
             ("skua/outside.cs", ""),
         ] {
@@ -3202,15 +3332,38 @@ mod tests {
         assert_eq!(
             listed,
             [
+                (None, None, "Alchemy"),
                 (None, None, "Alpha.js"),
-                (None, None, "zeta.ts"),
                 (None, Some("farming"), "daily.mts"),
                 (None, Some("farming"), "hunt.ts"),
                 (Some(0), None, "daily.ts"),
                 (Some(0), Some("bosses"), "dage.ts"),
                 (Some(2), None, "draft.ts"),
                 (Some(4), None, "spin.ts"),
-                (Some(8), Some("Dailies"), "FreeDailyBoost.cs"),
+                (Some(8), Some("Dailies"), "Free Daily Boost"),
+                (Some(8), Some("Other"), "No details"),
+            ]
+        );
+        assert_eq!(
+            library.entries[0].description.as_deref(),
+            Some("Brews potions.")
+        );
+        let skua_details: Vec<(Option<&str>, Vec<&str>)> = library
+            .entries
+            .iter()
+            .filter(|entry| entry.source == Some(8))
+            .map(|entry| {
+                (
+                    entry.description.as_deref(),
+                    entry.tags.iter().map(|tag| tag.as_ref()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            skua_details,
+            [
+                (Some("Claims the free daily boost."), vec!["daily", "boost"]),
+                (None, vec![]),
             ]
         );
         let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
@@ -3268,7 +3421,7 @@ mod tests {
                     ),
                     0
                 ),
-                (skua.as_path(), "Skua scripts", None, 1),
+                (skua.as_path(), "Skua scripts", None, 2),
             ]
         );
         for index in [3, 5, 7] {
@@ -3293,10 +3446,14 @@ mod tests {
     #[test]
     fn search_and_the_chosen_source_narrow_the_list() {
         let entry = |name: &str, folder: Option<&str>, source: Option<usize>| Entry {
-            path: PathBuf::from(name),
-            name: name.to_owned().into(),
-            folder: folder.map(|folder| folder.to_owned().into()),
             source,
+            ..Entry::new(
+                PathBuf::from(name),
+                name.to_owned().into(),
+                folder.map(|folder| folder.to_owned().into()),
+                None,
+                Arc::default(),
+            )
         };
         let source = |name: &str| Source {
             root: PathBuf::from(name),
@@ -3308,9 +3465,24 @@ mod tests {
         let library = Library {
             entries: vec![
                 entry("daily.ts", None, None),
-                entry("hunt.ts", None, None),
+                Entry::new(
+                    PathBuf::from("hunt.ts"),
+                    "Frogzard hunt".into(),
+                    None,
+                    None,
+                    Arc::default(),
+                ),
                 entry("daily.ts", Some("weekly"), Some(0)),
-                entry("dage.ts", None, Some(0)),
+                Entry {
+                    source: Some(0),
+                    ..Entry::new(
+                        PathBuf::from("dage.ts"),
+                        "dage.ts".into(),
+                        None,
+                        Some("Fights Dage the Evil.".into()),
+                        Arc::from(["Legion".into(), "boss".into()]),
+                    )
+                },
                 entry("spin.ts", None, Some(1)),
             ],
             sources: vec![source("community"), source("dailies"), source("unplugged")],
@@ -3329,7 +3501,7 @@ mod tests {
             names(""),
             [
                 "daily.ts",
-                "hunt.ts",
+                "Frogzard hunt",
                 "[community]",
                 "daily.ts",
                 "dage.ts",
@@ -3340,8 +3512,12 @@ mod tests {
         assert_eq!(names("daily"), ["daily.ts", "[community]", "daily.ts"]);
         assert_eq!(names("dailies"), ["[dailies]", "spin.ts"]);
         assert_eq!(names("weekly"), ["[community]", "daily.ts"]);
+        assert_eq!(names("frogzard"), ["Frogzard hunt"]);
+        assert_eq!(names("hunt.ts"), ["Frogzard hunt"]);
+        assert_eq!(names("the evil"), ["[community]", "dage.ts"]);
+        assert_eq!(names("legion"), ["[community]", "dage.ts"]);
         assert!(names("zzz").is_empty());
-        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "hunt.ts"]);
+        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "Frogzard hunt"]);
         assert_eq!(names_in("", Scope::Source(0)), ["daily.ts", "dage.ts"]);
         assert_eq!(names_in("", Scope::Source(1)), ["spin.ts"]);
     }
@@ -3444,7 +3620,7 @@ mod tests {
             ("skua/Scripts/.mira-install.json", skua_receipt.as_str()),
             (
                 "skua/Scripts/scripts.json",
-                r#"[{"name":"Free Daily Boost","path":"Dailies/FreeDailyBoost.cs"}]"#,
+                r#"[{"name":"Free Daily Boost","description":"Claims the daily boost reward you pick.","tags":["daily","boost","free"],"path":"Dailies/FreeDailyBoost.cs"}]"#,
             ),
             ("skua/Scripts/Dailies/FreeDailyBoost.cs", ""),
         ] {
@@ -3500,7 +3676,7 @@ mod tests {
                 });
             })
         };
-        let shots: [(&str, Interaction); 10] = [
+        let shots: [(&str, Interaction); 11] = [
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
@@ -3508,6 +3684,67 @@ mod tests {
                         scripts.folders_open = false;
                         cx.notify();
                     })
+                }),
+            ),
+            (
+                "scripts-sources-packages-focused",
+                Box::new({
+                    let middle = 218;
+                    let collapse = pointer(
+                        gpui::point(px(40.0), px(middle as f32)),
+                        Some(gpui::MouseButton::Left),
+                    );
+                    move |cx, window| {
+                        update_scripts(cx, window, |scripts, cx| {
+                            scripts.folders_open = false;
+                            cx.notify();
+                        });
+                        collapse(cx, window);
+                        update_scripts(cx, window, |scripts, _| {
+                            assert!(!scripts.packages_open, "the click collapses Packages")
+                        });
+                        for key in ["shift-tab", "tab"] {
+                            cx.update_window(window, |_, window, cx| {
+                                window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
+                            })
+                            .unwrap();
+                            cx.run_until_parked();
+                        }
+                        let image = cx.capture_screenshot(window).unwrap();
+                        let scale = image.width() / WIDTH as u32;
+                        let middle = middle * scale;
+                        let row: Vec<_> = (0..image.width())
+                            .map(|x| *image.get_pixel(x, middle))
+                            .collect();
+                        let background = row[0];
+                        let edge = row
+                            .iter()
+                            .position(|pixel| *pixel != background)
+                            .expect("the focus ring around Packages");
+                        let ring = row[edge + scale as usize];
+                        let inside = edge
+                            + row[edge..]
+                                .iter()
+                                .position(|pixel| *pixel == background)
+                                .unwrap();
+                        let gap = row[inside..]
+                            .iter()
+                            .position(|pixel| *pixel != background)
+                            .unwrap();
+                        assert!(
+                            gap >= 3 * scale as usize,
+                            "the focus ring touches the Packages label"
+                        );
+                        let column = edge as u32 + 30 * scale;
+                        let stroke = |rows: std::ops::Range<u32>| {
+                            rows.filter(|&y| *image.get_pixel(column, y) == ring)
+                                .count()
+                        };
+                        let above = stroke(middle - 16 * scale..middle);
+                        let below = stroke(middle..middle + 16 * scale);
+                        assert!(above > 0, "the focus ring has no top edge");
+                        assert_eq!(above, below, "the sidebar clips the focus ring");
+                    }
                 }),
             ),
             ("scripts-sources", Box::new(|_, _| {})),
@@ -3542,7 +3779,7 @@ mod tests {
             ("scripts-source-skua", select(temp.join("skua/Scripts"))),
             (
                 "scripts-updates-card",
-                Box::new(pointer(gpui::point(px(159.0), px(335.0)), None)),
+                Box::new(pointer(gpui::point(px(159.0), px(341.0)), None)),
             ),
         ];
         for (name, interact) in shots {
@@ -3659,7 +3896,15 @@ mod tests {
             let shown = key.clone();
             let definition = definition.clone();
             scripts.update(cx, |scripts, cx| {
-                scripts.loaded(shown, 0, Ok(Some(definition)), cx)
+                scripts.loaded(
+                    shown,
+                    0,
+                    Ok(Declared {
+                        meta: Meta::default(),
+                        inputs: Ok(Some(definition)),
+                    }),
+                    cx,
+                )
             });
             cx.new(|_| SkuaInputs(scripts, key))
         }) {
@@ -3815,7 +4060,7 @@ mod tests {
         ("scripts/legion/daily-quests/ultras/temple.ts", ""),
         (
             "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
-            "",
+            r#"export const meta = { name: "Void Highlord farm" };"#,
         ),
         (
             "packages/community/package.json",
@@ -3864,6 +4109,43 @@ mod tests {
             NESTED,
             |scripts| scripts.page = Page::Library(Some(scripts.packages.join("community"))),
         );
+    }
+
+    #[test]
+    fn snapshot_toasts_in_the_pane() {
+        use mira_ui::primitives::Toast;
+
+        for (name, toast) in [
+            (
+                "scripts-toast-installing-min",
+                Toast::new("Installing package…").loading(),
+            ),
+            (
+                "scripts-toast-installed-min",
+                Toast::new("Installed Dailies").tone(Tone::Success),
+            ),
+            (
+                "scripts-toast-failed-min",
+                Toast::new("Couldn't install package")
+                    .body(
+                        "Couldn't find o/missing. If it's private, add a GitHub token in Settings.",
+                    )
+                    .tone(Tone::Danger),
+            ),
+        ] {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                |_| {},
+                move |cx, window| {
+                    update_scripts(cx, window, |scripts, cx| {
+                        Toaster::push(&scripts.toasts, toast.clone(), cx);
+                    })
+                },
+            );
+        }
     }
 
     #[test]
@@ -4052,6 +4334,71 @@ mod tests {
                 assert!(written.exists(), "{} was not written", written.display());
             }
         }
+    }
+
+    #[gpui::test]
+    fn a_package_appearing_above_the_selection_keeps_it(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-rescan-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "");
+        write("packages/zeta/package.json", r#"{"name":"Zeta","mira":{}}"#);
+        write("packages/zeta/scripts/spin.ts", "");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let spin = temp.join("packages/zeta/scripts/spin.ts");
+        scripts.update(cx, |scripts, cx| {
+            let rows = scripts.rows(cx);
+            scripts.selected = rows
+                .iter()
+                .position(|row| matches!(row, Row::Script(entry) if entry.path == spin))
+                .unwrap();
+        });
+
+        write(
+            "packages/alpha/package.json",
+            r#"{"name":"Alpha","mira":{}}"#,
+        );
+        write("packages/alpha/scripts/daily.ts", "");
+        let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
+        dialogs.update(cx, |_, cx| cx.emit(PackageEvent::Changed));
+        cx.run_until_parked();
+        let daily = temp.join("packages/alpha/scripts/daily.ts");
+        scripts.read_with(cx, |scripts, cx| {
+            assert!(
+                scripts
+                    .rows(cx)
+                    .iter()
+                    .any(|row| matches!(row, Row::Script(entry) if entry.path == daily))
+            );
+            assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
+        });
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[gpui::test]

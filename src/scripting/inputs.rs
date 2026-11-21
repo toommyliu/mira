@@ -304,11 +304,9 @@ pub(crate) fn extract(display: &str, path: &Path, text: &str) -> Result<Declared
     Ok(Declared { meta, inputs })
 }
 
-pub(crate) fn display_name(path: &Path, text: &str) -> Option<String> {
+pub(crate) fn read_meta(path: &Path, text: &str) -> Option<Meta> {
     let allocator = Allocator::default();
-    declared_meta(&parse(&allocator, path, text).ok()?)
-        .ok()?
-        .name
+    declared_meta(&parse(&allocator, path, text).ok()?).ok()
 }
 
 fn parse<'a>(allocator: &'a Allocator, path: &Path, text: &'a str) -> Result<Program<'a>, Error> {
@@ -1041,7 +1039,8 @@ mod tests {
 
     #[test]
     fn the_display_name_survives_broken_inputs_but_not_a_broken_file() {
-        let name = |source: &str| display_name(Path::new("hunt.ts"), source);
+        let name =
+            |source: &str| read_meta(Path::new("hunt.ts"), source).and_then(|meta| meta.name);
         assert_eq!(
             name("export const meta = { name: \"Hunt\" };\nexport const inputs = { kills: {} };"),
             Some("Hunt".into())

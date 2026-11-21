@@ -11,7 +11,7 @@ use super::{
     Kind, Sha,
     bundled::{self, Recommended},
     github::{API, GitHub, Locator},
-    service::{self, Failure, Updated},
+    service::{self, Failure, Installed, Updated},
     skua,
     store::{self, Store},
     token,
@@ -192,7 +192,7 @@ impl Packages {
         link: &str,
         branch: &str,
         cx: &mut Context<Self>,
-    ) -> Task<Result<PathBuf, Failure>> {
+    ) -> Task<Result<Installed, Failure>> {
         match Locator::parse(link, branch) {
             Ok(locator) => self.install(locator, cx),
             Err(message) => Task::ready(Err(Failure::Other(message))),
@@ -203,7 +203,7 @@ impl Packages {
         &mut self,
         locator: Locator,
         cx: &mut Context<Self>,
-    ) -> Task<Result<PathBuf, Failure>> {
+    ) -> Task<Result<Installed, Failure>> {
         let store = self.store(Kind::of(&locator)).clone();
         self.start(Activity::Installing, cx, async move |github| {
             service::install(&github, &store, &locator).await
