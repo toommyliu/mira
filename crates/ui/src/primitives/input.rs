@@ -980,17 +980,16 @@ impl Render for Input {
                 } else {
                     theme.ring
                 };
+                let halo = if self.invalid {
+                    theme.invalid_halo()
+                } else {
+                    color.opacity(0.3)
+                };
                 match frame {
-                    Frame::Boxed => field.child(theme.halo(
-                        if self.invalid {
-                            theme.invalid_halo()
-                        } else {
-                            color.opacity(0.3)
-                        },
-                        radius,
-                        px(1.0),
-                        px(2.0),
-                    )),
+                    Frame::Boxed if focused => {
+                        field.child(theme.halo(halo, radius, px(1.0), px(2.0)))
+                    }
+                    Frame::Boxed => field.child(theme.outline(halo, radius, px(1.0), px(2.0))),
                     Frame::Bare => field.child(
                         div()
                             .absolute()
