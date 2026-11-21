@@ -58,6 +58,7 @@ fn menus(cx: &App) -> Vec<Menu> {
     vec![
         Menu::new("Mira").items([
             MenuItem::action("About Mira", About),
+            MenuItem::action("Check for Updates…", crate::updates::CheckForUpdates),
             MenuItem::separator(),
             MenuItem::action("Settings…", settings::OpenSettings),
             MenuItem::separator(),
