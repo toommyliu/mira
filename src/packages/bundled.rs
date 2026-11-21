@@ -196,7 +196,7 @@ mod tests {
         );
         assert!(recommended(&resources, &store).is_empty());
 
-        store.remove("toommyliu-mira-weekly").unwrap();
+        store.uninstall("toommyliu-mira-weekly").unwrap();
         seed(&resources, &store).unwrap();
         assert!(!store.package("toommyliu-mira-weekly").exists());
         let left = recommended(&resources, &store);

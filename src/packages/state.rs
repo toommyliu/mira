@@ -238,7 +238,7 @@ impl Packages {
         })
     }
 
-    pub(crate) fn remove(
+    pub(crate) fn uninstall(
         &mut self,
         dir: String,
         cx: &mut Context<Self>,
@@ -249,7 +249,7 @@ impl Packages {
             cx,
             async move |_, store| {
                 store
-                    .remove(&target)
+                    .uninstall(&target)
                     .map_err(|error| format!("Couldn't move it to the Trash: {error}."))
             },
         );
@@ -348,6 +348,40 @@ mod tests {
         assert_eq!(early, Err(Failure::Other(BUSY.into())));
         cx.run_until_parked();
         packages.read_with(cx, |packages, _| assert_eq!(packages.activity(), None));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
+    async fn uninstall_clears_update_status_and_skips_the_package_in_future_checks(
+        cx: &mut TestAppContext,
+    ) {
+        let root = scratch("state");
+        let (_bin, trash) = Bin::new(&root);
+        let store = Store::new(root.join("packages"), trash);
+        let (staged, files) = stage_files(&store, &[("package.json", "{}"), ("scripts/a.ts", "a")]);
+        store.publish(staged, "o-r", &receipt(files)).unwrap();
+        let fake = Fake::start();
+        let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
+        let (uninstall, check) = packages.update(cx, |packages, cx| {
+            packages.mark("o-r", Status::Available);
+            let uninstall = packages.uninstall("o-r".into(), cx);
+            assert_eq!(packages.activity(), Some(&Activity::Removing("o-r".into())));
+            (uninstall, packages.check(false, cx))
+        });
+        assert_eq!(check.await, Err(BUSY.into()));
+        assert_eq!(uninstall.await, Ok(()));
+        assert!(!root.join("packages/o-r").exists());
+        packages.read_with(cx, |packages, _| {
+            assert_eq!(packages.activity(), None);
+            assert_eq!(packages.status("o-r"), None);
+        });
+        assert_eq!(
+            packages
+                .update(cx, |packages, cx| packages.check(false, cx))
+                .await,
+            Ok(Checked::default())
+        );
+        assert!(fake.requests().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
