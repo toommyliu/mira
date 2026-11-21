@@ -12,7 +12,6 @@ use mira_ui::{
         button::{Joined, Size, Variant},
     },
     snapshot,
-    theme::UI_FONT,
 };
 
 type PaintScene = Box<dyn Fn(&mut Window, &mut Context<Scene>) -> gpui::AnyElement>;
@@ -44,7 +43,7 @@ impl Render for Scene {
             .p(layout.space(4.0))
             .bg(theme.background)
             .text_color(theme.foreground)
-            .font_family(UI_FONT)
+            .font_family(theme.font_family.clone())
             .text_size(typography.body)
             .child((self.0)(window, cx))
     }
@@ -1206,7 +1205,7 @@ impl Render for Form {
             .p(layout.space(4.0))
             .bg(theme.background)
             .text_color(theme.foreground)
-            .font_family(UI_FONT)
+            .font_family(theme.font_family.clone())
             .text_size(typography.body)
             .flex()
             .gap(layout.space(4.0))

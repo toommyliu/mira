@@ -323,7 +323,7 @@ mod tests {
                 .size_full()
                 .bg(theme.background)
                 .text_color(theme.foreground)
-                .font_family(mira_ui::theme::UI_FONT)
+                .font_family(theme.font_family.clone())
                 .child(title_bar(tool, Some(menu), window, cx))
         }
     }

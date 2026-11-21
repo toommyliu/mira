@@ -5,8 +5,8 @@ use gpui::{
 use serde::{Deserialize, Serialize};
 
 pub const DISABLED_OPACITY: f32 = 0.5;
-pub const UI_FONT: &str = "Inter";
-pub const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
+pub(crate) const SYSTEM_SANS: &str = ".SystemUIFont";
+pub(crate) const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
 
 pub const TEXT_BODY: Pixels = px(13.0);
 pub const TEXT_CAPTION: Pixels = px(11.0);
@@ -267,7 +267,7 @@ impl Theme {
         let ring = pair(0.708, 0.556);
         Self {
             dark_mode: dark,
-            font_family: UI_FONT.into(),
+            font_family: SYSTEM_SANS.into(),
             mono_family: SYSTEM_MONO.into(),
             typography: Typography::default(),
             layout: Layout::default(),
