@@ -3,27 +3,62 @@ use std::{fs, io, path::Path};
 use super::{PackagePath, bundled::Recommended, github::Locator};
 
 pub(crate) const FOLDER: &str = "Scripts";
+pub(crate) const NAME: &str = "Skua scripts";
 const OWNER: &str = "auqw";
 const REPO: &str = "Scripts";
 const BRANCH: &str = "Skua";
 
-pub(crate) fn listed(root: &Path) -> io::Result<Vec<PackagePath>> {
+pub(crate) struct Listed {
+    pub(crate) path: PackagePath,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) tags: Vec<String>,
+}
+
+pub(crate) fn listed(root: &Path) -> io::Result<Vec<Listed>> {
     #[derive(serde::Deserialize)]
-    struct Listed {
+    struct Raw {
         name: Option<String>,
+        description: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
         path: String,
     }
-    let listed: Vec<Listed> =
+    let raw: Vec<Raw> =
         serde_json::from_slice(&fs::read(root.join("scripts.json"))?).map_err(io::Error::other)?;
-    Ok(listed
+    Ok(raw
         .into_iter()
-        .filter(|listed| listed.name.as_deref().is_some_and(|name| name != "null"))
-        .filter_map(|listed| PackagePath::parse(&listed.path))
-        .filter(|path| {
+        .filter_map(|raw| {
+            let name = known(raw.name)?;
+            let path = PackagePath::parse(&raw.path)?;
             let file = root.join(path.as_str());
-            crate::scripting::is_skua(&file) && file.is_file()
+            if !(crate::scripting::is_skua(&file) && file.is_file()) {
+                return None;
+            }
+            let mut tags: Vec<String> = Vec::new();
+            for tag in raw
+                .tags
+                .into_iter()
+                .flatten()
+                .filter_map(|tag| known(Some(tag)))
+            {
+                if !tags.iter().any(|kept| kept.eq_ignore_ascii_case(&tag)) {
+                    tags.push(tag);
+                }
+            }
+            Some(Listed {
+                path,
+                name,
+                description: known(raw.description),
+                tags,
+            })
         })
         .collect())
+}
+
+fn known(text: Option<String>) -> Option<String> {
+    let text = text?.trim().to_owned();
+    (!text.is_empty() && !text.eq_ignore_ascii_case("null")).then_some(text)
 }
 
 pub(super) fn is(locator: &Locator) -> bool {
@@ -38,7 +73,7 @@ pub(super) fn is(locator: &Locator) -> bool {
 
 pub(super) fn recommended() -> Recommended {
     Recommended {
-        name: "Skua scripts".into(),
+        name: NAME.into(),
         description: Some("Experimental. Skua's library of C# scripts. Needs .NET 10.".into()),
         locator: Locator {
             owner: OWNER.into(),
