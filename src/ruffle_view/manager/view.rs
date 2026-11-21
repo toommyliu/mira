@@ -745,6 +745,7 @@ impl Manager {
             )
             .child(
                 h_flex()
+                    .min_h(theme.typography.secondary_line)
                     .gap(layout.space(3.0))
                     .px(layout.space(3.0))
                     .pt(layout.space(1.5))
@@ -1818,7 +1819,7 @@ impl Manager {
                 server_items(&servers, Some(current.as_deref()), cx.theme(), &pick)
             });
         let checking = matches!(self.servers.check, Check::Idle | Check::Running);
-        let refresh = Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
+        let refresh = Button::icon("refresh-servers", Icon::RefreshCw, "Refresh servers")
             .variant(Variant::Ghost)
             .size(Size::XSmall)
             .icon_size(px(14.0))

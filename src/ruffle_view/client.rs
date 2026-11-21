@@ -1063,8 +1063,6 @@ impl Client {
             .py(layout.space(2.0))
             .rounded(theme.radius.panel)
             .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
             .shadow(theme.popup_shadow())
             .child(theme.surface_ring(theme.radius.panel))
             .text_size(typography.body)
