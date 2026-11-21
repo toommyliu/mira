@@ -1811,6 +1811,90 @@ fn hover_cards_wait_for_a_rest_hand_off_without_stacking_and_close_at_once(
     );
 }
 
+struct CardOverPane {
+    pane: gpui::ScrollHandle,
+    hovered: Rc<Cell<bool>>,
+}
+
+impl Render for CardOverPane {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        use mira_ui::primitives::{Align, HoverCard, Placement, Side};
+        let hovered = self.hovered.clone();
+        div()
+            .size_full()
+            .flex()
+            .child(
+                div().flex_none().w(px(100.0)).h(px(30.0)).flex().child(
+                    HoverCard::new("card", "Card")
+                        .placement(Placement::new(Side::Right, Align::Start))
+                        .row("Error", "Stopped", mira_ui::Tone::Danger)
+                        .child(div().size_full()),
+                ),
+            )
+            .child(
+                div()
+                    .id("pane")
+                    .flex_1()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane)
+                    .on_hover(move |over, _, _| {
+                        if *over {
+                            hovered.set(true);
+                        }
+                    })
+                    .children((0..40).map(|index| div().h(px(40.0)).child(format!("Row {index}")))),
+            )
+    }
+}
+
+#[gpui::test]
+fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let pane = gpui::ScrollHandle::new();
+    let hovered = Rc::new(Cell::new(false));
+    let (_, cx) = cx.add_window_view({
+        let (pane, hovered) = (pane.clone(), hovered.clone());
+        move |window, _| {
+            window.activate_window();
+            CardOverPane { pane, hovered }
+        }
+    });
+    cx.run_until_parked();
+    cx.simulate_mouse_move(point(px(50.0), px(15.0)), None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(1000));
+    cx.run_until_parked();
+    cx.simulate_mouse_move(point(px(50.0), px(16.0)), None, Modifiers::none());
+    cx.run_until_parked();
+    let card = cx
+        .debug_bounds("card-card")
+        .expect("resting opens the card");
+    hovered.set(false);
+
+    cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_event(ScrollEvent {
+        position: card.center(),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("card-card").is_some(),
+        "the card stays open while pointed at"
+    );
+    assert_eq!(
+        pane.offset().y,
+        px(0.0),
+        "the wheel scrolled the pane under the card"
+    );
+    assert!(!hovered.get(), "the pane under the card saw the pointer");
+}
+
 struct FocusRing {
     root: FocusHandle,
     target: FocusHandle,
