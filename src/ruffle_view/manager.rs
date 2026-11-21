@@ -405,6 +405,8 @@ impl Manager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+            .detach();
         let focus = cx.focus_handle();
         let search = cx.new(|cx| {
             Input::new("Filter accounts", cx)

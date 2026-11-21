@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -sm)" != "Darwin arm64" ]; then
+    echo 'Package Mira on an Apple silicon Mac.' >&2
+    exit 1
+fi
+scripts/build-app --release
+app=target/Mira.app
+version=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
+out="target/releases/$version"
+rm -rf "$out"
+mkdir -p "$out"
+codesign --force --deep --sign - "$app"
+ditto -c -k --keepParent "$app" "$out/Mira.zip"
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+ditto "$app" "$stage/Mira.app"
+ln -s /Applications "$stage/Applications"
+hdiutil create -quiet -volname Mira -srcfolder "$stage" -format UDZO "$out/Mira.dmg"
+echo "Packaged Mira $version in $out"

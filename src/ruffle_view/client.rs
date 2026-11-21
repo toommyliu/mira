@@ -322,6 +322,12 @@ pub(crate) fn clients(cx: &App) -> Vec<Entity<Client>> {
     live(cx).map(|(_, client)| client).collect()
 }
 
+pub(crate) fn open_tabs(cx: &App) -> usize {
+    live(cx)
+        .map(|(_, client)| client.read(cx).sessions.len())
+        .sum()
+}
+
 pub(crate) fn holding(account: &AccountId, cx: &App) -> Option<WindowHandle<Client>> {
     live(cx)
         .find(|(_, client)| client.read(cx).holds(account, cx))
@@ -455,37 +461,41 @@ impl Client {
             extras,
             pace,
         } = shared;
-        let client = cx.new(|cx| Client {
-            extras,
-            data,
-            accounts,
-            device,
-            armies,
-            sessions: Vec::new(),
-            active: 0,
-            layout: Layout::Single,
-            sidebar: if settings::sidebar(cx) {
-                Sidebar::Full
-            } else {
-                Sidebar::Hidden
-            },
-            numbered: 0,
-            focus: cx.focus_handle(),
-            tab_scroll: ScrollHandle::new(),
-            shortcut_hints: false,
-            shortcut_hint_delay: None,
-            status: None,
-            launches: Launches::paced(pace),
-            pacing: false,
-            unopened: HashMap::new(),
-            ended: HashMap::new(),
-            _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
-                if window.is_window_active() {
-                    activated(window.window_handle().window_id(), cx);
+        let client = cx.new(|cx| {
+            cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+                .detach();
+            Client {
+                extras,
+                data,
+                accounts,
+                device,
+                armies,
+                sessions: Vec::new(),
+                active: 0,
+                layout: Layout::Single,
+                sidebar: if settings::sidebar(cx) {
+                    Sidebar::Full
                 } else {
-                    this.hide_shortcut_hints(cx);
-                }
-            }),
+                    Sidebar::Hidden
+                },
+                numbered: 0,
+                focus: cx.focus_handle(),
+                tab_scroll: ScrollHandle::new(),
+                shortcut_hints: false,
+                shortcut_hint_delay: None,
+                status: None,
+                launches: Launches::paced(pace),
+                pacing: false,
+                unopened: HashMap::new(),
+                ended: HashMap::new(),
+                _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+                    if window.is_window_active() {
+                        activated(window.window_handle().window_id(), cx);
+                    } else {
+                        this.hide_shortcut_hints(cx);
+                    }
+                }),
+            }
         });
         if blank_tab {
             client.update(cx, |client, cx| client.open_session(None, window, cx))?;
@@ -495,27 +505,31 @@ impl Client {
 
     #[cfg(test)]
     pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
-        cx.new(|cx| Client {
-            extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
-            data: folder.to_path_buf(),
-            accounts: folder.join("accounts.json"),
-            device: reqwest::header::HeaderValue::from_static("test"),
-            armies: Armies::new(folder.join("armies")),
-            sessions: Vec::new(),
-            active: 0,
-            layout: Layout::Single,
-            sidebar: Sidebar::Hidden,
-            numbered: 0,
-            focus: cx.focus_handle(),
-            tab_scroll: ScrollHandle::new(),
-            shortcut_hints: false,
-            shortcut_hint_delay: None,
-            status: None,
-            launches: Launches::default(),
-            pacing: false,
-            unopened: HashMap::new(),
-            ended: HashMap::new(),
-            _activation: Subscription::new(|| {}),
+        cx.new(|cx| {
+            cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+                .detach();
+            Client {
+                extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
+                data: folder.to_path_buf(),
+                accounts: folder.join("accounts.json"),
+                device: reqwest::header::HeaderValue::from_static("test"),
+                armies: Armies::new(folder.join("armies")),
+                sessions: Vec::new(),
+                active: 0,
+                layout: Layout::Single,
+                sidebar: Sidebar::Hidden,
+                numbered: 0,
+                focus: cx.focus_handle(),
+                tab_scroll: ScrollHandle::new(),
+                shortcut_hints: false,
+                shortcut_hint_delay: None,
+                status: None,
+                launches: Launches::default(),
+                pacing: false,
+                unopened: HashMap::new(),
+                ended: HashMap::new(),
+                _activation: Subscription::new(|| {}),
+            }
         })
     }
 
@@ -1182,32 +1196,36 @@ impl Client {
             .child(div().flex_none().child(tabs))
             .child(drag_area().flex_1())
             .child(
-                div().flex_none().p(layout.space(2.0)).child(
-                    Button::new("manager", "Manager")
-                        .variant(Variant::Ghost)
-                        .w_full()
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .justify_between()
-                                .child("Manager")
-                                .children(
-                                    window
-                                        .highest_precedence_binding_for_action(&OpenManager)
-                                        .and_then(|binding| {
-                                            Some(format_keystroke(
-                                                binding.keystrokes().first()?.inner(),
-                                            ))
-                                        })
-                                        .map(|keys| {
-                                            div().text_color(theme.muted_foreground).child(keys)
-                                        }),
-                                ),
-                        )
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(OpenManager), cx)
-                        }),
-                ),
+                div()
+                    .flex_none()
+                    .p(layout.space(2.0))
+                    .children(crate::updates::sidebar_row(cx))
+                    .child(
+                        Button::new("manager", "Manager")
+                            .variant(Variant::Ghost)
+                            .w_full()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .justify_between()
+                                    .child("Manager")
+                                    .children(
+                                        window
+                                            .highest_precedence_binding_for_action(&OpenManager)
+                                            .and_then(|binding| {
+                                                Some(format_keystroke(
+                                                    binding.keystrokes().first()?.inner(),
+                                                ))
+                                            })
+                                            .map(|keys| {
+                                                div().text_color(theme.muted_foreground).child(keys)
+                                            }),
+                                    ),
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(OpenManager), cx)
+                            }),
+                    ),
             )
     }
 
@@ -1732,6 +1750,59 @@ mod tests {
             },
         ) {
             assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    #[gpui::test]
+    fn the_sidebar_offers_an_update_found_after_it_rendered(cx: &mut gpui::TestAppContext) {
+        let (client, cx) = client_window(cx);
+        client.update(cx, |client, cx| {
+            client.sidebar = Sidebar::Full;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("sidebar-update").is_none());
+        cx.update(|_, cx| {
+            cx.set_global(crate::updates::Updates::available_preview(
+                semver::Version::new(0, 2, 0),
+                None,
+            ))
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("sidebar-update").is_some());
+    }
+
+    #[test]
+    fn snapshot_sidebar_updates() {
+        use crate::updates::Updates;
+        use semver::Version;
+        let update = |state: &str| {
+            let next = Version::new(0, 2, 0);
+            match state {
+                "available" => Updates::available_preview(next, None),
+                "downloading" => Updates::Downloading {
+                    version: next,
+                    progress: 0.4,
+                },
+                "ready" => Updates::ready_preview(next),
+                _ => Updates::available_preview(next, Some("Couldn’t download Mira 0.2.0".into())),
+            }
+        };
+        for state in ["available", "downloading", "ready", "download-failed"] {
+            let folder = crate::storyboard::scratch(&format!("client-update-{state}"));
+            for path in mira_ui::snapshot(
+                &format!("client-update-{state}"),
+                gpui::size(px(720.0), px(360.0)),
+                move |_, cx| {
+                    crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                    cx.set_global(update(state));
+                    let client = Client::empty_for_tests(&folder, cx);
+                    client.update(cx, |client, _| client.sidebar = Sidebar::Full);
+                    cx.new(|_| Shown(client))
+                },
+            ) {
+                assert!(path.exists(), "{} was not written", path.display());
+            }
         }
     }
 

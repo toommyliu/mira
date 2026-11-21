@@ -24,6 +24,7 @@ mod setups;
 mod shortcuts;
 #[cfg(any(test, feature = "storyboard"))]
 mod storyboard;
+mod updates;
 
 use std::{iter, path::PathBuf};
 
@@ -60,6 +61,7 @@ fn main() -> anyhow::Result<()> {
             mira_ui::init(cx);
             app_menu::init(cx);
             quit::init(cx);
+            updates::init(cx);
             ruffle_view::bind_keys(cx);
             ruffle_view::bind_profile_keys(cx);
             settings::init(data.join("settings.json"), settings_changed, cx);
@@ -70,6 +72,7 @@ fn main() -> anyhow::Result<()> {
             script_inputs::init(data.join("script-inputs.json"), cx);
             packages::init(documents.join("packages"), data.join("github-token"), cx);
             packages::start(cx);
+            updates::start(cx);
             let installed = types.clone();
             let folders: Vec<_> = iter::once(scripts.clone())
                 .chain(settings::script_folders(cx).iter().cloned())
