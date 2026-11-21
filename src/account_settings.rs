@@ -124,6 +124,27 @@ impl Store {
         fs::rename(temporary, path)
     }
 
+    pub(crate) fn rename(&mut self, from: &AccountId, to: &AccountId) -> io::Result<()> {
+        let (old, new) = (self.path_of(from)?, self.path_of(to)?);
+        match fs::rename(old, &new) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => remove_file(&new)?,
+            result => result?,
+        }
+        match self.accounts.remove(from) {
+            Some(settings) => self.accounts.insert(to.clone(), settings),
+            None => self.accounts.remove(to),
+        };
+        Ok(())
+    }
+
+    pub(crate) fn forget(&mut self, account: &AccountId) -> io::Result<()> {
+        self.accounts.remove(account);
+        let Ok(path) = self.path_of(account) else {
+            return Ok(());
+        };
+        remove_file(&path)
+    }
+
     fn move_auto_attack_profile(&mut self, from: &str, to: Option<&str>) -> io::Result<()> {
         let using: Vec<AccountId> = self
             .accounts
@@ -157,6 +178,13 @@ impl Store {
     }
 }
 
+fn remove_file(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 fn load(path: &Path) -> AccountSettings {
     let loaded = fs::read(path).and_then(|bytes| Ok(serde_json::from_slice(&bytes)?));
     loaded.unwrap_or_else(|error| {
@@ -176,6 +204,18 @@ pub(crate) fn get(account: &AccountId, cx: &App) -> AccountSettings {
 pub(crate) fn change(account: &AccountId, cx: &mut App, edit: impl FnOnce(&mut AccountSettings)) {
     if let Err(error) = cx.global_mut::<Store>().change(account, edit) {
         tracing::error!(%error, "couldn't save account settings");
+    }
+}
+
+pub(crate) fn rename(from: &AccountId, to: &AccountId, cx: &mut App) {
+    if let Err(error) = cx.global_mut::<Store>().rename(from, to) {
+        tracing::error!(%error, "couldn't move account settings to the new username");
+    }
+}
+
+pub(crate) fn forget(account: &AccountId, cx: &mut App) {
+    if let Err(error) = cx.global_mut::<Store>().forget(account) {
+        tracing::error!(%error, "couldn't delete a removed account's settings");
     }
 }
 
@@ -312,6 +352,41 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert!(!folder.exists());
+    }
+
+    #[test]
+    fn settings_follow_a_username_change_and_go_away_with_the_account() {
+        let folder = temporary_folder();
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("robert.json"),
+            r#"{"options": {"frameRate": 12}}"#,
+        )
+        .unwrap();
+        let mut store = Store::open(folder.clone());
+        let (alice, alicia, bob, robert) = (
+            AccountId::of("alice"),
+            AccountId::of("alicia"),
+            AccountId::of("bob"),
+            AccountId::of("robert"),
+        );
+        store
+            .change(&alice, |settings| settings.options.frame_rate = Some(30))
+            .unwrap();
+        store.rename(&alice, &alicia).unwrap();
+        store.rename(&bob, &robert).unwrap();
+        assert_eq!(store.get(&alicia).options.frame_rate, Some(30));
+        assert_eq!(store.get(&robert), AccountSettings::default());
+        assert_eq!(files(&folder), ["alicia.json"]);
+        assert_eq!(
+            Store::open(folder.clone()).get(&alicia).options.frame_rate,
+            Some(30)
+        );
+        store.forget(&alicia).unwrap();
+        store.forget(&alicia).unwrap();
+        assert_eq!(store.get(&alicia), AccountSettings::default());
+        assert!(files(&folder).is_empty());
+        fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]

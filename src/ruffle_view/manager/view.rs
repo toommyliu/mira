@@ -1999,8 +1999,8 @@ impl Manager {
             Ask::Remove { account } => (
                 format!("Remove {}?", account.name),
                 format!(
-                    "This deletes the saved login for {} and takes it out of any setups. If its \
-                     tab is open, the tab stays open.",
+                    "This deletes the saved login and settings for {} and takes it out of any \
+                     setups. If its tab is open, the tab stays open.",
                     account.name
                 ),
                 vec![
