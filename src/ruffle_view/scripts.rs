@@ -10,10 +10,10 @@ use std::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    PathPromptOptions, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, TextRun, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder as _, px, size,
+    Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, TextRun, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle,
+    WindowOptions, actions, div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _,
+    px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
@@ -29,6 +29,8 @@ use mira_ui::{
     theme::RING_ROOM,
     v_flex,
 };
+
+use crate::file_panel::{self, Pick};
 
 use super::{
     Changed, Client, RuffleView,
@@ -517,9 +519,9 @@ pub(crate) fn open(
 pub(crate) fn load(client: Entity<Client>, folder: PathBuf, types: PathBuf, cx: &mut App) {
     open(client, folder, types, Target::Selected, cx);
     if let Some(handle) = cx.try_global::<Open>().map(|open| open.0) {
-        let _ = handle.update(cx, |scripts, _, cx| {
+        let _ = handle.update(cx, |scripts, window, cx| {
             if scripts.shown.is_some() && !scripts.running(cx) {
-                scripts.choose_file(cx);
+                scripts.choose_file(window, cx);
             }
         });
     }
@@ -907,26 +909,19 @@ impl ScriptsWindow {
         }
     }
 
-    fn choose_file(&mut self, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Choose".into()),
-        });
+    fn choose_file(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(Pick::File, "Choose", window, cx);
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = chosen.await else {
+            let Some(path) = chosen.await else {
                 return;
             };
-            if let Some(path) = paths.into_iter().next() {
-                let _ = this.update(cx, |this, cx| {
-                    if !matches!(this.page, Page::Library(_)) {
-                        this.set_page(Page::Library(None), cx);
-                    }
-                    this.chosen = Some(path);
-                    cx.notify();
-                });
-            }
+            let _ = this.update(cx, |this, cx| {
+                if !matches!(this.page, Page::Library(_)) {
+                    this.set_page(Page::Library(None), cx);
+                }
+                this.chosen = Some(path);
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -941,18 +936,10 @@ impl ScriptsWindow {
         cx.open_with_system(folder);
     }
 
-    fn add_folder(&mut self, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Add".into()),
-        });
+    fn add_folder(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(Pick::Folder, "Add", window, cx);
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = chosen.await else {
-                return;
-            };
-            let Some(folder) = paths.into_iter().next() else {
+            let Some(folder) = chosen.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -970,18 +957,10 @@ impl ScriptsWindow {
         self.rescan(cx);
     }
 
-    fn locate_folder(&mut self, old: PathBuf, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose".into()),
-        });
+    fn locate_folder(&mut self, old: PathBuf, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(Pick::Folder, "Choose", window, cx);
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = chosen.await else {
-                return;
-            };
-            let Some(folder) = paths.into_iter().next() else {
+            let Some(folder) = chosen.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -1114,7 +1093,7 @@ impl ScriptsWindow {
                         .map(|keys| div().text_color(theme.muted_foreground).child(keys)),
                 ),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.choose_file(window, cx)))
     }
 
     fn pending_updates(&self, cx: &App) -> Vec<Pending> {
@@ -1267,7 +1246,7 @@ impl ScriptsWindow {
                 .child(
                     Button::icon("add-folder", Icon::Plus, "Add folder")
                         .size(Size::Small)
-                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
                 ),
             )
             .children(folders)
@@ -2320,7 +2299,7 @@ impl ScriptsWindow {
         .action(
             Button::new("empty-add", "Add folder…")
                 .size(Size::Small)
-                .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
         )
     }
 
@@ -2360,9 +2339,9 @@ impl ScriptsWindow {
                 Empty::new(format!("Can't load {}", source.name), problem.clone()).action(
                     Button::new("empty-source-locate", "Locate…")
                         .size(Size::Small)
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.locate_folder(root.clone(), cx)),
-                        ),
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.locate_folder(root.clone(), window, cx)
+                        })),
                 )
             }
             (Some(problem), SourceKind::Package { .. }) => {

@@ -10,8 +10,8 @@ use std::{
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable as _, Global,
-    KeyBinding, KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Subscription, Task,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, px, size,
+    KeyBinding, KeyDownEvent, ScrollHandle, SharedString, Subscription, Task, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, px, size,
 };
 use reqwest::header::HeaderValue;
 
@@ -25,7 +25,7 @@ use mira_ui::primitives::{Input, InputEvent};
 
 use crate::{
     accounts::{Account, AccountId, Accounts, Change, Draft, Invalid, SaveError, SetupError},
-    net, script_inputs,
+    file_panel, net, script_inputs,
     setups::{Launch, Member, Setup},
 };
 
@@ -352,21 +352,6 @@ fn input(
         input.set_text(text, cx);
         input
     })
-}
-
-fn choose_script(cx: &mut Context<Manager>) -> impl Future<Output = Option<PathBuf>> + use<> {
-    let chosen = cx.prompt_for_paths(PathPromptOptions {
-        files: true,
-        directories: false,
-        multiple: false,
-        prompt: Some("Choose".into()),
-    });
-    async move {
-        let Ok(Ok(Some(paths))) = chosen.await else {
-            return None;
-        };
-        paths.into_iter().next()
-    }
 }
 
 fn common_script(scripts: &[PathBuf]) -> Option<PathBuf> {
@@ -708,8 +693,8 @@ impl Manager {
         );
     }
 
-    fn run_chosen(&mut self, targets: Vec<Account>, cx: &mut Context<Self>) {
-        let chosen = choose_script(cx);
+    fn run_chosen(&mut self, targets: Vec<Account>, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(file_panel::Pick::File, "Choose", window, cx);
         cx.spawn(async move |this, cx| {
             let Some(script) = chosen.await else {
                 return;
@@ -1487,8 +1472,8 @@ impl Manager {
         self.change_setup(name, cx, |setup| setup.script = script);
     }
 
-    fn choose_setup_script(&mut self, name: String, cx: &mut Context<Self>) {
-        let chosen = choose_script(cx);
+    fn choose_setup_script(&mut self, name: String, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(file_panel::Pick::File, "Choose", window, cx);
         cx.spawn(async move |this, cx| {
             let Some(script) = chosen.await else {
                 return;
@@ -1500,8 +1485,8 @@ impl Manager {
         .detach();
     }
 
-    fn choose_start(&mut self, name: String, cx: &mut Context<Self>) {
-        let chosen = choose_script(cx);
+    fn choose_start(&mut self, name: String, window: &Window, cx: &mut Context<Self>) {
+        let chosen = file_panel::open(file_panel::Pick::File, "Choose", window, cx);
         cx.spawn(async move |this, cx| {
             let Some(script) = chosen.await else {
                 return;

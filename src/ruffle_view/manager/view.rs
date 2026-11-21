@@ -234,9 +234,9 @@ fn targets_item(
 }
 
 fn run_pick(targets: Vec<Account>) -> Pick {
-    Rc::new(move |manager, script, _, cx| match script {
+    Rc::new(move |manager, script, window, cx| match script {
         Some(script) => manager.run(targets.clone(), script, cx),
-        None => manager.run_chosen(targets.clone(), cx),
+        None => manager.run_chosen(targets.clone(), window, cx),
     })
 }
 
@@ -771,9 +771,9 @@ impl Manager {
                 items.push(MenuItem::separator());
             }
             let start_name = name.clone();
-            let pick: Pick = Rc::new(move |manager, script, _, cx| match script {
+            let pick: Pick = Rc::new(move |manager, script, window, cx| match script {
                 Some(script) => manager.start_with(&start_name, script, cx),
-                None => manager.choose_start(start_name.clone(), cx),
+                None => manager.choose_start(start_name.clone(), window, cx),
             });
             items.extend(script_items(
                 &this,
@@ -914,9 +914,9 @@ impl Manager {
                 let pick_name = name.clone();
                 let none_name = name.clone();
                 let this_none = this.clone();
-                let pick: Pick = Rc::new(move |manager, script, _, cx| match script {
+                let pick: Pick = Rc::new(move |manager, script, window, cx| match script {
                     Some(script) => manager.set_setup_script(&pick_name, Some(script), cx),
-                    None => manager.choose_setup_script(pick_name.clone(), cx),
+                    None => manager.choose_setup_script(pick_name.clone(), window, cx),
                 });
                 let mut items = vec![
                     MenuItem::action("None", move |_, cx| {
