@@ -29,7 +29,8 @@ mod world;
 pub(crate) use calls::{CallId, Calls, RunId, ToPlayer, answer};
 pub(crate) use dialog::{Dialog, Request as DialogRequest, ToDialogs};
 pub(crate) use inputs::{
-    Definition, ExtractError, Field, Kind, Supplied, Values, check_number, extract, number,
+    Declared, Definition, ExtractError, Field, Kind, Meta, Supplied, Values, check_number,
+    display_name, extract, number,
 };
 pub(crate) use limits::Limits;
 pub(crate) use modules::runnable;

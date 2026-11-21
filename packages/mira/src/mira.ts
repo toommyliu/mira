@@ -788,6 +788,8 @@ export type Input =
 
 export type Inputs = { readonly [key: string]: Input };
 
+export type Meta = { readonly name?: string; readonly description?: string };
+
 type InputValue<F> = F extends { readonly type: "number" }
   ? number
   : F extends { readonly type: "boolean" }

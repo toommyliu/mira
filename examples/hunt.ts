@@ -1,4 +1,9 @@
-import { Combat, Player, Script, type Inputs } from "mira";
+import { Combat, Player, Script, type Inputs, type Meta } from "mira";
+
+export const meta = {
+  name: "Hunt",
+  description: "Kills a monster until you reach the kill count, waiting out respawns.",
+} satisfies Meta;
 
 export const inputs = {
   monster: {
