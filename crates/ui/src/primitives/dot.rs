@@ -33,7 +33,7 @@ impl RenderOnce for Dot {
             Tone::Success => (super::Icon::CircleCheck, "Succeeded"),
             Tone::Warning => (super::Icon::TriangleAlert, "Warning"),
             Tone::Attention => (super::Icon::TriangleAlert, "Needs attention"),
-            Tone::Danger => (super::Icon::OctagonX, "Problem"),
+            Tone::Danger => (super::Icon::CircleAlert, "Problem"),
         };
         StatusMark::new(mark, label, self.tone).render_mark(cx)
     }
@@ -88,7 +88,7 @@ impl RenderOnce for StatusDot {
             Activity::Running => (super::Icon::CircleDot, cx.theme().foreground),
             Activity::Waiting => (super::Icon::LoaderCircle, cx.theme().muted_foreground),
             Activity::Stopped => (super::Icon::CircleStop, cx.theme().muted_foreground),
-            Activity::Failed => (super::Icon::OctagonX, cx.theme().destructive),
+            Activity::Failed => (super::Icon::CircleAlert, cx.theme().destructive),
         };
         let glyph = super::icon(mark, ink);
         if self.activity == Activity::Waiting {
