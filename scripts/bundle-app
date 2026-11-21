@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+name=Mira
+identifier=local.mira.app
+icon=Mira
+if [ "${1-}" = --dev ]; then
+    name='Mira (Dev)'
+    identifier=local.mira.dev
+    icon=MiraDev
+    shift
+fi
+if [ "$#" -ne 3 ]; then
+    printf 'Usage: %s [--dev] <executable> <app> <version>\n' "$0" >&2
+    exit 2
+fi
+source="$(cd "$(dirname "$0")/.." && pwd)/assets/$icon.icon"
+mkdir -p "$2/Contents/MacOS" "$2/Contents/Resources"
+contents=$(cd "$2/Contents" && pwd)
+version=$3
+cp -c "$1" "$contents/MacOS/mira"
+if [ ! -e "$contents/Resources/Assets.car" ] || [ -n "$(find "$source" "$0" -newer "$contents/Resources/Assets.car")" ]; then
+    icon_plist=$(mktemp)
+    trap 'rm -f "$icon_plist"' EXIT
+    # actool resolves relative paths against its background agent's working directory.
+    if ! log=$(xcrun actool "$source" --compile "$contents/Resources" --platform macosx --target-device mac \
+        --minimum-deployment-target 11.0 --app-icon "$icon" --output-partial-info-plist "$icon_plist" \
+        --output-format human-readable-text --errors --warnings); then
+        printf '%s\n' "$log" >&2
+        exit 1
+    fi
+fi
+cat > "$contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>$name</string>
+    <key>CFBundleIdentifier</key><string>$identifier</string>
+    <key>CFBundleExecutable</key><string>mira</string>
+    <key>CFBundleIconFile</key><string>$icon</string>
+    <key>CFBundleIconName</key><string>$icon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$version</string>
+    <key>CFBundleVersion</key><string>$version</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
