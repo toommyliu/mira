@@ -741,6 +741,33 @@ fn snapshot_long_notices() {
 }
 
 #[test]
+fn snapshot_toasts_fit_their_text() {
+    let shots: [(&str, fn() -> Vec<mira_ui::primitives::Toast>); 2] = [
+        ("toast-short", || {
+            vec![mira_ui::primitives::Toast::new("1 update available").tone(Tone::Accent)]
+        }),
+        ("toast-action", || {
+            vec![mira_ui::primitives::Toast::new("Removed Dailies").action("Undo", |_, _| {})]
+        }),
+    ];
+    for (name, toasts) in shots {
+        for path in snapshot(name, size(px(560.0), px(160.0)), move |window, cx| {
+            let stack = mira_ui::primitives::Toaster::new(window, cx);
+            for toast in toasts() {
+                mira_ui::primitives::Toaster::push(&stack, toast, cx);
+            }
+            Scene::open(
+                move |window, cx| mira_ui::primitives::Toaster::layer(&stack, window, cx),
+                window,
+                cx,
+            )
+        }) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+}
+
+#[test]
 fn snapshot_popover_tab() {
     scene_after_keys(
         "popover-tab",
