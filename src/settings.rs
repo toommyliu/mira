@@ -978,27 +978,27 @@ impl SettingsWindow {
                     }),
                 )),
             ),
-            Block::Section(Section::titled("Updates").row(Row::new(
-                "Check automatically",
-                Some("Look for new versions at launch and every 4 hours."),
-                Switch::new(
-                    "check-updates-automatically",
+            Block::Section(
+                Section::titled("Updates").row(Row::new(
                     "Check automatically",
-                    !settings.skip_update_checks,
-                )
-                .hide_label()
-                .on_toggle(|on, _, cx| {
-                    change(cx, |settings| settings.skip_update_checks = !on);
-                    if on {
-                        crate::updates::Updates::check(false, cx);
-                    }
-                }),
-            ))),
+                    Some("Look for new versions at launch and every 4 hours."),
+                    Switch::new(
+                        "check-updates-automatically",
+                        "Check automatically",
+                        !settings.skip_update_checks,
+                    )
+                    .hide_label()
+                    .on_toggle(|on, _, cx| {
+                        change(cx, |settings| settings.skip_update_checks = !on);
+                        if on {
+                            crate::updates::Updates::check(false, cx);
+                        }
+                    }),
+                )),
+            ),
             Block::Section(Section::titled("GitHub").row(Row::new(
                 "Token",
-                Some(
-                    "Access private script packages and raise GitHub's rate limit for packages and updates.",
-                ),
+                Some("For private script packages and higher GitHub rate limits."),
                 div().w(px(200.0)).child(self.github_token.clone()),
             ))),
         ]
