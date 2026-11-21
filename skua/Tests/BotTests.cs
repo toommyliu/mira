@@ -19,6 +19,26 @@ public class BotTests
     }
 
     [Fact]
+    public void Joining_a_map_takes_the_room_from_the_scripts_options_and_not_mira()
+    {
+        var game = new Offline();
+        var bot = game.Bot();
+
+        bot.Map.Join("yulgar");
+        bot.Options.PrivateRooms = true;
+        bot.Options.PrivateNumber = 4242;
+        bot.Map.Join("tercessuinotlim");
+        bot.Map.Join("bludrut-9999");
+        bot.Options.PrivateNumber = 0;
+        bot.Map.Join("battleon");
+
+        var joins = game.Calls.Where(call => (string?)call["op"] == "joinMap").ToList();
+        Assert.Equal(["yulgar", "tercessuinotlim-4242", "bludrut-9999", "battleon-100000"],
+            joins.Select(call => (string?)call["map"]));
+        Assert.All(joins, call => Assert.Equal("public", (string?)call["rooms"]?["kind"]));
+    }
+
+    [Fact]
     public async Task Waiting_for_a_value_matches_an_equal_value()
     {
         var bot = Offline.Bot();
