@@ -8,7 +8,7 @@ use gpui::{
 use mira_ui::{
     ActiveTheme as _, StyledExt as _, Tone, h_flex,
     primitives::{
-        Alert, Button, Dialog, Input, InputEvent, Toast, Toaster,
+        Alert, Button, Dialog, Input, InputEvent,
         button::{Size, Variant},
     },
     v_flex,
@@ -42,6 +42,7 @@ struct Confirm {
 struct Uninstall {
     dir: String,
     name: SharedString,
+    error: Option<SharedString>,
 }
 
 #[derive(Clone)]
@@ -53,7 +54,6 @@ pub(super) struct Pending {
 }
 
 pub(super) struct PackageDialogs {
-    pub(super) toasts: Entity<Toaster>,
     install: Option<Install>,
     confirm: Option<Confirm>,
     uninstall: Option<Uninstall>,
@@ -65,27 +65,8 @@ pub(super) struct PackageDialogs {
 impl EventEmitter<PackageEvent> for PackageDialogs {}
 
 impl PackageDialogs {
-    fn toast(
-        &self,
-        title: impl Into<SharedString>,
-        tone: Tone,
-        body: Option<String>,
-        cx: &mut gpui::App,
-    ) {
-        let toast = Toast::new(title).tone(tone);
-        Toaster::push(
-            &self.toasts,
-            match body {
-                Some(body) => toast.body(body),
-                None => toast,
-            },
-            cx,
-        );
-    }
-
-    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            toasts: Toaster::new(window, cx),
             install: None,
             confirm: None,
             uninstall: None,
@@ -164,7 +145,6 @@ impl PackageDialogs {
                 }
                 Err(Failure::AlreadyInstalled(dir)) => {
                     this.close_install(cx);
-                    this.toast("Already installed", Tone::Neutral, None, cx);
                     cx.emit(PackageEvent::Installed(dir));
                 }
                 Err(Failure::Other(message)) => {
@@ -241,7 +221,11 @@ impl PackageDialogs {
         name: SharedString,
         cx: &mut Context<Self>,
     ) {
-        self.uninstall = Some(Uninstall { dir, name });
+        self.uninstall = Some(Uninstall {
+            dir,
+            name,
+            error: None,
+        });
         cx.notify();
     }
 
@@ -251,21 +235,26 @@ impl PackageDialogs {
     }
 
     fn confirm_uninstall(&mut self, cx: &mut Context<Self>) {
-        let Some(Uninstall { dir, name }) = self.uninstall.take() else {
+        let Some(uninstall) = &mut self.uninstall else {
             return;
         };
+        uninstall.error = None;
+        let dir = uninstall.dir.clone();
         let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(dir, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                let toast = match result {
-                    Ok(()) => Toast::new(format!("Moved {name} to the Trash")),
-                    Err(message) => Toast::new(format!("Couldn't uninstall {name}"))
-                        .tone(Tone::Danger)
-                        .body(message),
-                };
-                Toaster::push(&this.toasts, toast, cx);
-                cx.emit(PackageEvent::Changed);
+                match result {
+                    Ok(()) => {
+                        this.uninstall = None;
+                        cx.emit(PackageEvent::Changed);
+                    }
+                    Err(message) => {
+                        if let Some(uninstall) = &mut this.uninstall {
+                            uninstall.error = Some(message.into());
+                        }
+                    }
+                }
                 cx.notify();
             });
         })
@@ -411,6 +400,19 @@ impl Render for PackageDialogs {
             .as_ref()
             .map(|uninstall| format!("Uninstall {}?", uninstall.name))
             .unwrap_or_default();
+        let removing = self.uninstall.as_ref().is_some_and(|uninstall| {
+            matches!(
+                packages::packages(cx).read(cx).activity(),
+                Some(Activity::Removing(dir)) if *dir == uninstall.dir
+            )
+        });
+        let uninstall_error = self
+            .uninstall
+            .as_ref()
+            .and_then(|uninstall| uninstall.error.clone())
+            .map(|error| {
+                Alert::new("uninstall-error", Tone::Danger, "Couldn't uninstall").body(error)
+            });
         let review_title = match self.review.as_deref() {
             Some([pending]) => format!("Update {}?", pending.name),
             Some(pending) => format!("Update {} packages?", pending.len()),
@@ -504,13 +506,17 @@ impl Render for PackageDialogs {
                     .description(
                         "Mira stops listing and updating it, and its files go to the Trash.",
                     )
+                    .when_some(uninstall_error, |dialog, error| dialog.body(error))
                     .action(
                         Button::new("cancel-uninstall", "Cancel")
                             .on_click(cx.listener(|this, _, _, cx| this.close_uninstall(cx))),
                     )
                     .action(
-                        Button::new("confirm-uninstall", "Uninstall")
-                            .variant(Variant::Danger)
+                        Button::new(
+                            "confirm-uninstall",
+                            if removing { "Uninstalling…" } else { "Uninstall" },
+                        )
+                        .variant(Variant::Danger)
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| this.confirm_uninstall(cx))),
                     )
@@ -568,7 +574,7 @@ mod tests {
             let scratch = std::env::temp_dir().join(format!("mira-{name}"));
             packages::init(scratch.join("packages"), scratch.join("token"), cx);
             cx.new(|cx| {
-                let mut dialogs = PackageDialogs::new(window, cx);
+                let mut dialogs = PackageDialogs::new(cx);
                 prepare(&mut dialogs, window, cx);
                 dialogs
             })
@@ -634,9 +640,9 @@ mod tests {
         }
         let fake = crate::packages::fake::Fake::start();
         cx.update(mira_ui::init);
-        let (dialogs, cx) = cx.add_window_view(|window, cx| {
+        let (dialogs, cx) = cx.add_window_view(|_, cx| {
             packages::init_against(fake.url(), root.join("packages"), cx);
-            PackageDialogs::new(window, cx)
+            PackageDialogs::new(cx)
         });
         let pending = |dir: &str| Pending {
             dir: dir.into(),
@@ -665,6 +671,38 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[gpui::test]
+    fn a_failed_uninstall_keeps_its_dialog_open_with_the_error(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mira-uninstall-{:x}", u64::from_ne_bytes(random)));
+        std::fs::create_dir_all(root.join("packages")).unwrap();
+        let fake = crate::packages::fake::Fake::start();
+        cx.update(mira_ui::init);
+        let (dialogs, cx) = cx.add_window_view(|_, cx| {
+            packages::init_against(fake.url(), root.join("packages"), cx);
+            PackageDialogs::new(cx)
+        });
+        dialogs.update(cx, |dialogs, cx| {
+            dialogs.open_uninstall("gone".into(), "Gone".into(), cx);
+            dialogs.confirm_uninstall(cx);
+        });
+        cx.run_until_parked();
+        dialogs.read_with(cx, |dialogs, _| {
+            let uninstall = dialogs.uninstall.as_ref().expect("the dialog stays open");
+            assert!(
+                uninstall
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.starts_with("Couldn't move it to the Trash")),
+                "{:?}",
+                uninstall.error
+            );
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn snapshot_review_updates() {
         dialogs("review-package-updates", |dialogs, _, cx| {
@@ -688,6 +726,13 @@ mod tests {
     fn snapshot_uninstall_package() {
         dialogs("uninstall-package", |dialogs, _, cx| {
             dialogs.open_uninstall("toommyliu-mira-dailies".into(), "Dailies".into(), cx);
+        });
+        dialogs("uninstall-package-error", |dialogs, _, cx| {
+            dialogs.open_uninstall("toommyliu-mira-dailies".into(), "Dailies".into(), cx);
+            if let Some(uninstall) = &mut dialogs.uninstall {
+                uninstall.error =
+                    Some("Couldn't move it to the Trash: Operation not permitted.".into());
+            }
         });
     }
 
