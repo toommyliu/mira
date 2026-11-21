@@ -134,23 +134,6 @@ impl RenderOnce for Checkbox {
                     .when(!self.disabled && !filled, |mark| {
                         mark.group_hover("checkbox", |style| style.border_color(theme.ring))
                     })
-                    .when(!self.disabled, |mark| {
-                        mark.group_active("checkbox", |style| {
-                            style.bg(theme.pressed(
-                                theme.background,
-                                if filled {
-                                    theme.primary
-                                } else {
-                                    theme.input_fill()
-                                },
-                                if filled {
-                                    theme.primary_foreground
-                                } else {
-                                    theme.foreground
-                                },
-                            ))
-                        })
-                    })
                     .when(ring, |control| {
                         control.border_color(theme.ring).child(theme.ring_around(
                             theme.ring,

@@ -652,6 +652,7 @@ fn snapshot_select_opens_immediately_on_the_side_with_room() {
                 )
             },
             |cx, owner| {
+                move_pointer(cx, owner, 112.0, trigger_top as f32 + 14.0);
                 let closed = cx.capture_screenshot(owner).unwrap();
                 let first = cx
                     .update_window(owner, |_, window, cx| {

@@ -416,13 +416,6 @@ impl Render {
             .when(!current && pose == Pose::Rest, |tab| {
                 tab.hover(|style| style.bg(hover_fill))
             })
-            .active(|style| {
-                style.bg(theme.pressed(
-                    theme.sidebar,
-                    theme.sidebar_accent,
-                    theme.sidebar_foreground,
-                ))
-            })
             .when(current && self.ring, |tab| {
                 tab.child(
                     div()

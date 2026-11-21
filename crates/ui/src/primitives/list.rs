@@ -1,11 +1,10 @@
 use std::{rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role,
-    ScrollEvent, ScrollHandle, ScrollStrategy, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder as _, px, uniform_list,
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role, ScrollEvent, ScrollHandle,
+    ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use super::{Flow, Pose, Scrollbar, Sortable};
@@ -101,7 +100,6 @@ struct Options {
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
     uniform: bool,
-    surface: Hsla,
     theme: Theme,
 }
 
@@ -237,20 +235,17 @@ impl Options {
                 row.hover(|style| style.bg(theme.muted.opacity(0.5)))
             })
             .when(!disabled, |row| {
-                row.active(|style| {
-                    style.bg(theme.pressed(self.surface, theme.muted, theme.foreground))
-                })
-                .pointer_cursor(theme)
-                .on_click(move |event, window, cx| {
-                    window.focus(&focus, cx);
-                    if event.click_count() >= 2
-                        && let Some(on_activate) = &on_activate
-                    {
-                        on_activate(index, window, cx);
-                    } else if let Some(on_select) = &on_select {
-                        on_select(index, window, cx);
-                    }
-                })
+                row.pointer_cursor(theme)
+                    .on_click(move |event, window, cx| {
+                        window.focus(&focus, cx);
+                        if event.click_count() >= 2
+                            && let Some(on_activate) = &on_activate
+                        {
+                            on_activate(index, window, cx);
+                        } else if let Some(on_select) = &on_select {
+                            on_select(index, window, cx);
+                        }
+                    })
             })
             .when_some(item.start, |row, start| {
                 row.child(h_flex().flex_none().child(start))
@@ -288,10 +283,6 @@ impl Options {
                 )
             })
     }
-}
-
-fn surface(flush: bool, theme: &Theme) -> Hsla {
-    if flush { theme.background } else { theme.card }
 }
 
 fn scroll_into_view(scroll: &ScrollHandle, index: usize, inset: Pixels) {
@@ -431,7 +422,6 @@ impl RenderOnce for List {
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: false,
-            surface: surface(self.flush, cx.theme()),
             theme: cx.theme().clone(),
         };
         let reveal = scroll.clone();
@@ -576,7 +566,6 @@ impl RenderOnce for VirtualList {
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: true,
-            surface: surface(self.flush, cx.theme()),
             theme: cx.theme().clone(),
         };
         let shown = window.use_keyed_state((self.id.clone(), "shown"), cx, |_, _| None);

@@ -218,9 +218,6 @@ impl RenderOnce for Tree {
                     .when(lit && ring, |item| {
                         item.child(theme.focus_ring(theme.radius.control))
                     })
-                    .active(|style| {
-                        style.bg(theme.pressed(theme.card, theme.muted, theme.foreground))
-                    })
                     .when(!lit, |item| {
                         item.hover(|style| style.bg(theme.muted.opacity(0.5)))
                     })

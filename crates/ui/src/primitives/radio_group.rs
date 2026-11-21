@@ -164,21 +164,6 @@ impl RenderOnce for RadioGroup {
                     })
                     .when(!disabled, |dot| {
                         dot.group_hover("radio", |style| style.border_color(theme.ring))
-                            .group_active("radio", |style| {
-                                style.bg(theme.pressed(
-                                    theme.background,
-                                    if checked {
-                                        theme.primary
-                                    } else {
-                                        theme.input_fill()
-                                    },
-                                    if checked {
-                                        theme.primary_foreground
-                                    } else {
-                                        theme.foreground
-                                    },
-                                ))
-                            })
                     })
                     .when(checked && ring, |dot| {
                         dot.border_color(theme.ring).child(theme.halo(

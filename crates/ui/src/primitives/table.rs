@@ -261,15 +261,7 @@ impl RenderOnce for Table {
                             })
                             .relative()
                             .when_some(on_select, |row, on_select| {
-                                row.active(|style| {
-                                    style.bg(theme.pressed(
-                                        theme.card,
-                                        theme.muted,
-                                        theme.foreground,
-                                    ))
-                                })
-                                .pointer_cursor(&theme)
-                                .on_click(move |_, window, cx| {
+                                row.pointer_cursor(&theme).on_click(move |_, window, cx| {
                                     window.focus(&focus, cx);
                                     on_select(index, window, cx);
                                 })

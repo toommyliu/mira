@@ -928,11 +928,6 @@ fn rows(
                         .when(two_line, |row| row.py(layout.space(1.0)))
                         .text_color(fg)
                         .when(disabled, |row| row.opacity(crate::theme::DISABLED_OPACITY))
-                        .when(!disabled, |row| {
-                            row.active(|style| {
-                                style.bg(theme.pressed(theme.popover, theme.accent, fg))
-                            })
-                        })
                         .when(lead, |row| {
                             row.child(
                                 h_flex()
