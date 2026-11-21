@@ -976,7 +976,7 @@ impl Editor {
                     let (icon, label) = match tone {
                         Tone::Accent => (Icon::FilePlus2, "New draft"),
                         Tone::Warning => (Icon::Pencil, "Unsaved changes"),
-                        _ => (Icon::OctagonX, "Invalid draft"),
+                        _ => (Icon::CircleAlert, "Invalid draft"),
                     };
                     mira_ui::primitives::StatusMark::new(icon, label, *tone)
                 });
