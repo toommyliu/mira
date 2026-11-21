@@ -4,7 +4,7 @@ use oxc::{
     allocator::Allocator,
     ast::ast::{
         ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
-        PropertyKey, Statement, UnaryOperator, VariableDeclarationKind,
+        Program, PropertyKey, Statement, UnaryOperator, VariableDeclarationKind,
     },
     parser::Parser,
     span::{GetSpan as _, SourceType},
@@ -230,16 +230,28 @@ pub(crate) fn describe(script: &str, problems: &[Problem]) -> String {
     )
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Meta {
+    pub(crate) name: Option<String>,
+    pub(crate) description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Declared {
+    pub(crate) meta: Meta,
+    pub(crate) inputs: Result<Option<Definition>, String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ExtractError {
     Syntax(String),
-    Inputs(String),
+    Meta(String),
 }
 
 impl ExtractError {
     pub(crate) fn into_message(self) -> String {
         match self {
-            Self::Syntax(message) | Self::Inputs(message) => message,
+            Self::Syntax(message) | Self::Meta(message) => message,
         }
     }
 }
@@ -250,7 +262,10 @@ pub(super) fn prepare(
     text: &str,
     supplied: &Supplied,
 ) -> Result<Values, String> {
-    let Some(definition) = extract(display, path, text).map_err(ExtractError::into_message)? else {
+    let Some(definition) = extract(display, path, text)
+        .map_err(ExtractError::into_message)?
+        .inputs?
+    else {
         return Ok(Values::new());
     };
     match supplied {
@@ -263,11 +278,27 @@ pub(super) fn prepare(
     }
 }
 
-pub(crate) fn extract(
-    display: &str,
-    path: &Path,
-    text: &str,
-) -> Result<Option<Definition>, ExtractError> {
+pub(crate) fn extract(display: &str, path: &Path, text: &str) -> Result<Declared, ExtractError> {
+    let located = |error: Error| {
+        let (row, column) = position(text, error.offset as usize);
+        format!("{display}:{row}:{column}: {}", error.message)
+    };
+    let allocator = Allocator::default();
+    let program =
+        parse(&allocator, path, text).map_err(|error| ExtractError::Syntax(located(error)))?;
+    let meta = declared_meta(&program).map_err(|error| ExtractError::Meta(located(error)))?;
+    let inputs = declared_inputs(&program).map_err(located);
+    Ok(Declared { meta, inputs })
+}
+
+pub(crate) fn display_name(path: &Path, text: &str) -> Option<String> {
+    let allocator = Allocator::default();
+    declared_meta(&parse(&allocator, path, text).ok()?)
+        .ok()?
+        .name
+}
+
+fn parse<'a>(allocator: &'a Allocator, path: &Path, text: &'a str) -> Result<Program<'a>, Error> {
     let typescript = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -277,40 +308,42 @@ pub(crate) fn extract(
     } else {
         SourceType::mjs()
     };
-    let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, text, source_type).parse();
-    let located = |offset: u32, message: &str| {
-        let (row, column) = position(text, offset as usize);
-        format!("{display}:{row}:{column}: {message}")
-    };
+    let parsed = Parser::new(allocator, text, source_type).parse();
     if let Some(diagnostic) = parsed.diagnostics.first() {
         let offset = diagnostic.labels.first().map_or(0, |label| label.offset());
-        return Err(ExtractError::Syntax(located(offset, &diagnostic.message)));
+        return Err(error(offset, diagnostic.message.to_string()));
     }
-    let mut found: Option<&Expression> = None;
-    for statement in &parsed.program.body {
+    Ok(parsed.program)
+}
+
+fn exported<'b, 'a>(
+    program: &'b Program<'a>,
+    name: &str,
+) -> Result<Option<&'b Expression<'a>>, Error> {
+    let mut found = None;
+    for statement in &program.body {
         let misdeclared = match statement {
             Statement::ExportNamedDeclaration(export) => export
                 .specifiers
                 .iter()
-                .find(|specifier| specifier.exported.name().as_str() == "inputs")
+                .find(|specifier| specifier.exported.name().as_str() == name)
                 .map(|specifier| specifier.span.start),
             Statement::ExportFromDeclaration(export) => export
                 .specifiers
                 .iter()
-                .find(|specifier| specifier.exported.name().as_str() == "inputs")
+                .find(|specifier| specifier.exported.name().as_str() == name)
                 .map(|specifier| specifier.span.start),
             Statement::ExportAllDeclaration(export) => export
                 .exported
                 .as_ref()
-                .filter(|exported| exported.name().as_str() == "inputs")
+                .filter(|exported| exported.name().as_str() == name)
                 .map(|_| export.span.start),
             Statement::ExportDeclaration(export) => match &export.declaration {
                 Declaration::VariableDeclaration(variables) => {
                     let mut misdeclared = None;
                     for declarator in &variables.declarations {
                         let names = declarator.id.get_binding_identifiers();
-                        if !names.iter().any(|name| name.name.as_str() == "inputs") {
+                        if !names.iter().any(|binding| binding.name.as_str() == name) {
                             continue;
                         }
                         let plain = declarator.id.get_identifier_name().is_some()
@@ -333,36 +366,84 @@ pub(crate) fn extract(
                 Declaration::FunctionDeclaration(function) => function
                     .id
                     .as_ref()
-                    .filter(|id| id.name.as_str() == "inputs")
+                    .filter(|id| id.name.as_str() == name)
                     .map(|_| function.span.start),
                 Declaration::ClassDeclaration(class) => class
                     .id
                     .as_ref()
-                    .filter(|id| id.name.as_str() == "inputs")
+                    .filter(|id| id.name.as_str() == name)
                     .map(|_| class.span.start),
                 _ => None,
             },
             _ => None,
         };
         if let Some(offset) = misdeclared {
-            return Err(ExtractError::Inputs(located(
+            return Err(error(
                 offset,
-                "declare inputs as `export const inputs = { ... }`",
-            )));
+                format!("declare {name} as `export const {name} = {{ ... }}`"),
+            ));
         }
     }
-    let Some(init) = found else {
+    Ok(found)
+}
+
+fn declared_inputs(program: &Program) -> Result<Option<Definition>, Error> {
+    let Some(init) = exported(program, "inputs")? else {
         return Ok(None);
     };
     let Expression::ObjectExpression(object) = init.get_inner_expression() else {
-        return Err(ExtractError::Inputs(located(
+        return Err(error(
             init.span().start,
             "inputs must be an object literal like `{ kills: { type: \"number\", label: \"Kills\" } }`",
-        )));
+        ));
     };
-    definition(object)
-        .map(|definition| (!definition.0.is_empty()).then_some(definition))
-        .map_err(|error| ExtractError::Inputs(located(error.offset, &error.message)))
+    definition(object).map(|definition| (!definition.0.is_empty()).then_some(definition))
+}
+
+fn declared_meta(program: &Program) -> Result<Meta, Error> {
+    let mut meta = Meta::default();
+    let Some(init) = exported(program, "meta")? else {
+        return Ok(meta);
+    };
+    let Expression::ObjectExpression(object) = init.get_inner_expression() else {
+        return Err(error(
+            init.span().start,
+            "meta must be an object literal like `{ name: \"Hunt\" }`",
+        ));
+    };
+    for property in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            continue;
+        };
+        let key = match &property.key {
+            _ if property.computed => None,
+            PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.as_str()),
+            PropertyKey::StringLiteral(literal) => literal.value.as_str(),
+            _ => None,
+        };
+        let (key, slot) = match key {
+            Some(key @ "name") => (key, &mut meta.name),
+            Some(key @ "description") => (key, &mut meta.description),
+            _ => continue,
+        };
+        let path = format!("meta.{key}");
+        if slot.is_some() {
+            return Err(error(
+                property.key.span().start,
+                format!("{path} is declared twice"),
+            ));
+        }
+        let value = &property.value;
+        let at = value.span().start;
+        let Ok(Literal::Text(text)) = literal(value, &path) else {
+            return Err(error(at, format!("{path} must be written out as text")));
+        };
+        if text.trim().is_empty() {
+            return Err(error(at, format!("{path} can't be empty")));
+        }
+        *slot = Some(text);
+    }
+    Ok(meta)
 }
 
 pub(super) fn position(text: &str, offset: usize) -> (usize, usize) {
@@ -763,7 +844,9 @@ mod tests {
     use super::*;
 
     fn read(source: &str) -> Result<Option<Definition>, String> {
-        extract("hunt.ts", Path::new("hunt.ts"), source).map_err(ExtractError::into_message)
+        extract("hunt.ts", Path::new("hunt.ts"), source)
+            .map_err(ExtractError::into_message)
+            .and_then(|declared| declared.inputs)
     }
 
     fn fields(source: &str) -> Vec<Field> {
@@ -874,6 +957,90 @@ mod tests {
     }
 
     #[test]
+    fn meta_names_and_describes_a_script_without_running_it() {
+        let source = r#"
+            import { type Meta } from "mira";
+            console.log("top level");
+            export const meta = {
+              name: "Frogzard hunt",
+              description: `Kills Frogzards until you reach a kill count.`,
+            } satisfies Meta;
+            export const inputs = { kills: { type: "number", label: "Kills" } };
+            export default function* () {}
+        "#;
+        let declared = extract("hunt.ts", Path::new("hunt.ts"), source).unwrap();
+        assert_eq!(
+            declared.meta,
+            Meta {
+                name: Some("Frogzard hunt".into()),
+                description: Some("Kills Frogzards until you reach a kill count.".into()),
+            }
+        );
+        assert_eq!(declared.inputs.unwrap().unwrap().0[0].key, "kills");
+        let broken = extract(
+            "hunt.ts",
+            Path::new("hunt.ts"),
+            "export const meta = { name: \"Hunt\", description: \"Kills.\" };\nexport const inputs = { kills: {} };",
+        )
+        .unwrap();
+        assert_eq!(broken.meta.description.as_deref(), Some("Kills."));
+        assert_eq!(
+            broken.inputs,
+            Err("hunt.ts:2:32: inputs.kills needs a type: \"string\", \"number\", \"boolean\" or \"select\"".into())
+        );
+        assert!(matches!(
+            extract(
+                "hunt.ts",
+                Path::new("hunt.ts"),
+                "export const meta = { name: 5 };\nexport const inputs = { kills: {} };",
+            ),
+            Err(ExtractError::Meta(_))
+        ));
+        assert_eq!(
+            extract(
+                "hunt.js",
+                Path::new("hunt.js"),
+                "export const meta = { ...base, [key]: 1, author, link() {}, 7: \"x\", name: \"Hunt\", tags: [\"farm\"], by: someone };"
+            )
+            .unwrap()
+            .meta,
+            Meta {
+                name: Some("Hunt".into()),
+                description: None,
+            }
+        );
+        assert_eq!(
+            extract(
+                "hunt.ts",
+                Path::new("hunt.ts"),
+                "export default function* () {}"
+            )
+            .unwrap()
+            .meta,
+            Meta::default()
+        );
+        assert!(matches!(
+            extract("hunt.ts", Path::new("hunt.ts"), "export let meta = {};"),
+            Err(ExtractError::Meta(_))
+        ));
+    }
+
+    #[test]
+    fn the_display_name_survives_broken_inputs_but_not_a_broken_file() {
+        let name = |source: &str| display_name(Path::new("hunt.ts"), source);
+        assert_eq!(
+            name("export const meta = { name: \"Hunt\" };\nexport const inputs = { kills: {} };"),
+            Some("Hunt".into())
+        );
+        assert_eq!(
+            name("export const meta = { description: \"Kills.\" };"),
+            None
+        );
+        assert_eq!(name("export const meta = { name: 5 };"), None);
+        assert_eq!(name("export const meta = { name: \"Hunt\" };\nArmy."), None);
+    }
+
+    #[test]
     fn a_syntax_error_is_not_blamed_on_the_inputs() {
         let source = "import { Army } from \"mira\";\n\nArmy.\n\nexport default function* () {}\n";
         let error = extract("army.ts", Path::new("army.ts"), source).unwrap_err();
@@ -883,7 +1050,7 @@ mod tests {
         assert!(message.starts_with("army.ts:5:"), "{message}");
         assert!(matches!(
             extract("hunt.ts", Path::new("hunt.ts"), "export let inputs = {};"),
-            Err(ExtractError::Inputs(_))
+            Ok(Declared { inputs: Err(_), .. })
         ));
     }
 
@@ -891,7 +1058,11 @@ mod tests {
     fn plain_javascript_entries_declare_inputs_the_same_way() {
         let source = "export const inputs = { kills: { type: \"number\", label: \"Kills\" } };";
         for name in ["hunt.js", "hunt.mjs", "hunt.mts"] {
-            let definition = extract(name, Path::new(name), source).unwrap().unwrap();
+            let definition = extract(name, Path::new(name), source)
+                .unwrap()
+                .inputs
+                .unwrap()
+                .unwrap();
             assert_eq!(definition.0[0].key, "kills", "{name}");
         }
     }
@@ -1032,6 +1203,34 @@ mod tests {
                 "inputs.day.default lists an option twice",
             ),
             ("export const inputs = {", "hunt.ts:1:"),
+            (
+                "export const meta = makeMeta();",
+                "hunt.ts:1:21: meta must be an object literal",
+            ),
+            (
+                "export let meta = {};",
+                "hunt.ts:1:12: declare meta as `export const meta = { ... }`",
+            ),
+            (
+                "export const meta = { name: 5 };",
+                "hunt.ts:1:29: meta.name must be written out as text",
+            ),
+            (
+                "export const meta = { name: `Hunt ${n}` };",
+                "meta.name must be written out as text",
+            ),
+            (
+                "export const meta = { description: \" \" };",
+                "meta.description can't be empty",
+            ),
+            (
+                "const name = \"Hunt\";\nexport const meta = { name };",
+                "hunt.ts:2:23: meta.name must be written out as text",
+            ),
+            (
+                "export const meta = { name: \"A\", name: \"B\" };",
+                "meta.name is declared twice",
+            ),
         ];
         for (source, expected) in cases {
             let error = read(source).expect_err(source);

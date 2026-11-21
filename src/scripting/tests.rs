@@ -402,7 +402,7 @@ export default function* () {
 }
 
 #[test]
-fn missing_or_invalid_inputs_stop_the_script_before_any_of_it_runs() {
+fn bad_inputs_or_meta_stop_the_script_before_any_of_it_runs() {
     let files = [("hunt.ts", HUNT_INPUTS), ("describe.ts", DESCRIBE)];
     let missing = run_with_inputs(&files, supplied(json!({})));
     assert_eq!(
@@ -430,6 +430,19 @@ fn missing_or_invalid_inputs_stop_the_script_before_any_of_it_runs() {
         "hunt.ts:2:83: inputs.kills.default must be at least 1"
     );
     assert!(broken.logs.is_empty(), "{:?}", broken.logs);
+
+    let unnamed = run_with_inputs(
+        &[(
+            "hunt.ts",
+            "console.log(\"ran\");\nexport const meta = { name: \"\" };\nexport default function* () {}\n",
+        )],
+        supplied(json!({})),
+    );
+    assert_eq!(
+        failure(&unnamed.outcome).0,
+        "hunt.ts:2:29: meta.name can't be empty"
+    );
+    assert!(unnamed.logs.is_empty(), "{:?}", unnamed.logs);
 }
 
 #[test]
