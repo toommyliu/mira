@@ -436,12 +436,12 @@ pub(crate) fn hover(
 fn panel(label: SharedString, theme: &Theme) -> Div {
     div()
         .max_w(px(320.0))
-        .py(theme.space(1.5))
-        .px(theme.space(3.0))
-        .rounded(theme.radius.control)
+        .py(theme.space(1.0))
+        .px(theme.space(2.0))
+        .rounded(theme.radius.small)
         .bg(theme.foreground)
         .text_color(theme.background)
-        .text_size(theme.typography.body)
+        .text_size(theme.typography.secondary)
         .line_height(theme.typography.secondary_line)
         .child(label)
 }
