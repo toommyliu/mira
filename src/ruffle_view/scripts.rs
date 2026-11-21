@@ -437,7 +437,6 @@ struct SourceRow {
     scripts: Option<usize>,
     release: Option<(&'static str, SharedString)>,
     state: Option<SourceState>,
-    experimental: bool,
 }
 
 fn release(kind: &SourceKind) -> Option<(&'static str, SharedString)> {
@@ -1058,7 +1057,6 @@ impl ScriptsWindow {
             }),
             release: None,
             state: None,
-            experimental: false,
         };
         let packages = packages::packages(cx).read(cx);
         let (folders, installed): (Vec<&Source>, Vec<&Source>) = library
@@ -1092,7 +1090,6 @@ impl ScriptsWindow {
                 scripts: source.problem.is_none().then_some(source.scripts),
                 release: release(&source.kind),
                 state,
-                experimental: matches!(source.kind, SourceKind::Skua { .. }),
             }
         };
         let qualify = |mut rows: Vec<SourceRow>, segments: fn(&Path) -> Vec<String>| {
@@ -1473,21 +1470,15 @@ impl ScriptsWindow {
                         .min_h(layout.control_sm)
                         .gap(layout.space(2.0))
                         .child(
-                            h_flex()
+                            div()
+                                .id("source-title")
+                                .role(gpui::Role::Heading)
+                                .aria_level(1)
                                 .flex_1()
                                 .min_w_0()
-                                .gap(layout.space(2.0))
-                                .child(
-                                    div()
-                                        .id("source-title")
-                                        .role(gpui::Role::Heading)
-                                        .aria_level(1)
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_title(typography)
-                                        .child(row.name.clone()),
-                                )
-                                .when(row.experimental, |title| title.child(experimental_badge())),
+                                .truncate()
+                                .text_title(typography)
+                                .child(row.name.clone()),
                         )
                         .children(update)
                         .children(show)
