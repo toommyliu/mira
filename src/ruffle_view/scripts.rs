@@ -17,12 +17,12 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
-    components::{Disclosure, Empty},
+    components::{Disclosure, Empty, StatusLabel},
     h_flex,
     primitives::{
-        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
-        InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
-        Tab, Tabs, Toaster, VirtualList,
+        Activity, Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon,
+        Input, InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side,
+        Switch, Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
         icon,
     },
@@ -33,7 +33,7 @@ use mira_ui::{
 use crate::file_panel::{self, Pick};
 
 use super::{
-    Changed, Client, RuffleView,
+    Changed, Client, RuffleView, ScriptPhase,
     account::file_name,
     client::{CloseSession, drag_area},
     form::{note, row, row_label},
@@ -72,7 +72,6 @@ const HEIGHT: f32 = 560.0;
 const MIN_WIDTH: f32 = 800.0;
 const MIN_HEIGHT: f32 = 400.0;
 const PADDING: Pixels = px(16.0);
-const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
 
@@ -737,20 +736,32 @@ impl ScriptsWindow {
         self.view()?.read(cx).settings_account.clone()
     }
 
-    fn status(&self, theme: &Theme, cx: &App) -> Option<(SharedString, Hsla)> {
-        if self.shown.is_none() {
-            return Some(("No tabs open".into(), theme.muted_foreground));
-        }
+    fn run_status(&self, cx: &App) -> Option<RunStatus> {
         let script = &self.view()?.read(cx).script;
-        let text = script.status()?.into();
-        let color = if script.running() {
-            theme.foreground
-        } else if script.failed() {
-            theme.destructive
-        } else {
-            theme.muted_foreground
+        let state = script.state()?;
+        let activity = match state.phase {
+            ScriptPhase::Running => Activity::Running,
+            ScriptPhase::NeedsInput => Activity::NeedsYou,
+            ScriptPhase::Queued | ScriptPhase::Stopping => Activity::Waiting,
+            ScriptPhase::Finished => Activity::Idle,
+            ScriptPhase::Stopped => Activity::Stopped,
+            ScriptPhase::Failed(_) => Activity::Failed,
         };
-        Some((text, color))
+        let failure = match &state.phase {
+            ScriptPhase::Failed(message) => Some(Failure {
+                title: format!("{} failed", state.name).into(),
+                script: home_relative(&state.entry),
+                message: message.clone(),
+            }),
+            _ => None,
+        };
+        Some(RunStatus {
+            text: script.status()?.into(),
+            activity,
+            failure,
+            stop: (script.stoppable() && state.phase != ScriptPhase::Stopping)
+                .then_some(state.name),
+        })
     }
 
     fn set_private_rooms(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2586,7 +2597,7 @@ impl Render for ScriptsWindow {
             .all(|entry| self.entry_ready(entry.id));
         let finished = queue.len() > unfinished;
         let skippable = queue.iter().any(queue::Entry::running);
-        let status = self.status(&theme, cx);
+        let status = self.run_status(cx);
         let private = matches!(
             self.options(cx).map(|options| options.rooms),
             Some(Rooms::Private { .. })
@@ -2602,19 +2613,24 @@ impl Render for ScriptsWindow {
             window,
             cx,
         )
-        .children(status.map(|(status, color)| {
-            div()
-                .id("script-status")
-                .role(gpui::Role::Status)
-                .aria_label(status.clone())
-                .min_w_0()
-                .max_w(px(360.0))
-                .pr(PADDING)
-                .truncate()
-                .text_size(typography.secondary)
-                .text_color(color)
-                .child(status)
-        }));
+        .map(|header| match status {
+            Some(status) => header.child(run_status(
+                status,
+                cx.listener(|this, _, _, cx| this.stop(cx)),
+                &theme,
+            )),
+            None if !has_tab => header.child(
+                div()
+                    .id("script-status")
+                    .role(gpui::Role::Status)
+                    .aria_label("No tabs open")
+                    .pr(PADDING)
+                    .text_size(typography.secondary)
+                    .text_color(theme.muted_foreground)
+                    .child("No tabs open"),
+            ),
+            None => header,
+        });
         let no_scripts = matches!(
             &self.library,
             Some(library) if library.entries.is_empty() && library.sources.is_empty()
@@ -2757,16 +2773,13 @@ impl Render for ScriptsWindow {
                                 .disabled(!has_tab || !valid)
                                 .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
                         )
-                        .child(div().flex_none().w(RUN_WIDTH).child(if running {
-                            Button::new("stop", "Stop")
-                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-                        } else {
+                        .child(
                             Button::new("run", "Run")
                                 .end_slot(mira_ui::primitives::Kbd::hint("⏎"))
                                 .variant(Variant::Primary)
-                                .disabled(!has_tab || !valid)
-                                .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
-                        })),
+                                .disabled(!has_tab || !valid || running)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx))),
+                        ),
                 ),
                 Page::Queue => Some(
                     footer
@@ -2845,6 +2858,51 @@ impl Render for ScriptsWindow {
             )
             .child(self.package_dialogs.clone())
     }
+}
+
+struct RunStatus {
+    text: SharedString,
+    activity: Activity,
+    stop: Option<SharedString>,
+    failure: Option<Failure>,
+}
+
+struct Failure {
+    title: SharedString,
+    script: SharedString,
+    message: SharedString,
+}
+
+fn run_status(
+    status: RunStatus,
+    stop: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    theme: &Theme,
+) -> Div {
+    h_flex()
+        .min_w_0()
+        .max_w(px(360.0))
+        .gap(theme.space(2.0))
+        .pr(theme.space(3.0))
+        .child(
+            StatusLabel::new("script-status", status.activity, status.text)
+                .single_line()
+                .when_some(status.failure, |label, failure| {
+                    label.details(
+                        HoverCard::new("script-failure", failure.title)
+                            .placement(Placement::new(Side::Bottom, Align::End))
+                            .path_row("Script", failure.script)
+                            .body(failure.message),
+                    )
+                }),
+        )
+        .children(status.stop.map(|name| {
+            Button::new("script-stop", format!("Stop {name}"))
+                .variant(Variant::Outline)
+                .size(Size::Small)
+                .flex_none()
+                .child("Stop")
+                .on_click(stop)
+        }))
 }
 
 struct Detail {
@@ -3835,6 +3893,119 @@ mod tests {
         for (name, files, setup) in pages {
             snapshot_window(name, (MIN_WIDTH, MIN_HEIGHT), "Alt 1", files, setup);
         }
+    }
+
+    const LONG_ERROR: &str = "Couldn't find Ultra Avatar Tyndarius in r4 of ultratyndarius after 30 seconds. Check that the cell matches the map and that the monster spawns while you're in the room.
+Cells visited: Enter, r1, r2, r3, r4.";
+
+    struct Headers {
+        client: Entity<Client>,
+        shown: ShownTab,
+        statuses: Vec<(String, Activity, bool)>,
+    }
+
+    impl Render for Headers {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            v_flex()
+                .size_full()
+                .window_surface(&theme)
+                .children(self.statuses.iter().map(|(text, activity, stoppable)| {
+                    let failure = text.strip_prefix("hunt failed: ").map(|message| Failure {
+                        title: "hunt failed".into(),
+                        script: "~/Documents/Mira/scripts/hunt.ts".into(),
+                        message: message.to_owned().into(),
+                    });
+                    shown_tab::header(
+                        "Scripts",
+                        &self.client,
+                        Some(&self.shown),
+                        Target::Selected,
+                        |_, _, _| {},
+                        window,
+                        cx,
+                    )
+                    .child(run_status(
+                        RunStatus {
+                            text: text.clone().into(),
+                            activity: *activity,
+                            stop: stoppable.then_some("hunt".into()),
+                            failure,
+                        },
+                        |_, _, _| {},
+                        &theme,
+                    ))
+                }))
+        }
+    }
+
+    fn snapshot_headers(
+        name: &str,
+        height: f32,
+        statuses: Vec<(String, Activity, bool)>,
+        interact: impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle),
+    ) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-headers-{:x}", u64::from_ne_bytes(random)));
+        let size = gpui::size(px(MIN_WIDTH), px(height));
+        let build = |_: &mut Window, cx: &mut App| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            cx.new(|cx| Headers {
+                client: Client::empty_for_tests(&temp, cx),
+                shown: ShownTab::fake("Alt 1", crate::automation::settings::Automation::default()),
+                statuses: statuses.clone(),
+            })
+        };
+        for written in mira_ui::snapshot_with(name, size, build, interact) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_run_status_in_the_header() {
+        let statuses = [
+            ("Running hunt".to_owned(), Activity::Running, true),
+            (
+                "hunt is waiting for you".to_owned(),
+                Activity::NeedsYou,
+                true,
+            ),
+            ("Stopping hunt".to_owned(), Activity::Waiting, false),
+            ("hunt stopped".to_owned(), Activity::Stopped, false),
+            (
+                "hunt failed: Bank is full".to_owned(),
+                Activity::Failed,
+                false,
+            ),
+            (
+                format!("hunt failed: {LONG_ERROR}"),
+                Activity::Failed,
+                false,
+            ),
+            (
+                "Running void-highlord-farm-with-a-very-long-script-name".to_owned(),
+                Activity::Running,
+                true,
+            ),
+        ];
+        snapshot_headers(
+            "scripts-run-status",
+            statuses.len() as f32 * 38.0,
+            statuses.into(),
+            |_, _| {},
+        );
+        snapshot_headers(
+            "scripts-run-status-failure",
+            320.0,
+            vec![(
+                format!("hunt failed: {LONG_ERROR}"),
+                Activity::Failed,
+                false,
+            )],
+            pointer(gpui::point(px(MIN_WIDTH - 200.0), px(19.0)), None),
+        );
     }
 
     struct QueuePage {
