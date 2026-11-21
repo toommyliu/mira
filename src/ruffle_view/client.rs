@@ -42,6 +42,7 @@ use crate::{
 actions!(
     mira,
     [
+        OpenClient,
         NewSession,
         CloseSession,
         NextSession,

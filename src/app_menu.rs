@@ -70,12 +70,7 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Quit Mira", Quit),
         ]),
-        Menu::new("File").items([
-            MenuItem::action("New Tab", game::NewSession),
-            MenuItem::action("Load Script…", game::LoadScript),
-            MenuItem::separator(),
-            MenuItem::action("Close", game::CloseSession),
-        ]),
+        Menu::new("File").items([MenuItem::action("Close Window", game::CloseSession)]),
         Menu::new("Edit").items([
             MenuItem::os_action("Undo", text_field::Undo, OsAction::Undo),
             MenuItem::os_action("Redo", text_field::Redo, OsAction::Redo),
@@ -90,17 +85,22 @@ fn menus(cx: &App) -> Vec<Menu> {
         Menu::new("View").items([
             settings::appearance_menu(cx),
             MenuItem::separator(),
-            MenuItem::action("Toggle Sidebar", game::ToggleSidebar),
-            MenuItem::action("Toggle Grid View", game::ToggleGrid),
+            MenuItem::action("Sidebar", game::ToggleSidebar),
+            MenuItem::action("Grid View", game::ToggleGrid),
+            MenuItem::separator(),
+            MenuItem::action("Client", game::OpenClient),
+            MenuItem::action("Manager", game::OpenManager),
+            MenuItem::action("Scripts", game::OpenScripts),
+            MenuItem::action("Combat Profiles", game::OpenCombatProfiles),
+            MenuItem::action("Environment", game::OpenEnvironment),
+            MenuItem::action("Loader/Grabber", game::OpenLoaderGrabber),
+            MenuItem::action("Packets", game::OpenPackets),
             MenuItem::separator(),
             MenuItem::action("Toggle Full Screen", ToggleFullScreen),
         ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
-            MenuItem::separator(),
-            MenuItem::action("Next Tab", game::NextSession),
-            MenuItem::action("Previous Tab", game::PreviousSession),
         ]),
     ]
 }
