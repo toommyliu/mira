@@ -63,7 +63,7 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
                 .icon_size(px(14.0))
                 .busy(matches!(state, Updates::Checking))
                 .disabled(matches!(state, Updates::Unavailable(_)))
-                .on_click(|_, _, cx| Updates::check(true, cx));
+                .on_click(|_, _, cx| Updates::check(true, cx).detach());
             match state {
                 Updates::Unavailable(None) => button.hide_tooltip(),
                 Updates::Unavailable(Some(reason)) => button.tooltip(reason.clone()),
@@ -142,6 +142,19 @@ fn parse_notes(text: &str) -> Notes {
         );
     }
     notes
+}
+
+pub(super) fn plain_notes(text: &str) -> String {
+    let notes = parse_notes(text);
+    let mut lines = notes.summary;
+    lines.extend(notes.items.into_iter().map(|(lead, text)| match lead {
+        Some(lead) => format!("• {lead} {text}"),
+        None => format!("• {text}"),
+    }));
+    if notes.more > 0 {
+        lines.push(format!("• and {} more", notes.more));
+    }
+    lines.join("\n")
 }
 
 fn with_notes(card: HoverCard, text: &str) -> HoverCard {
@@ -376,5 +389,11 @@ mod tests {
         assert_eq!(notes.items.len(), NOTES);
         assert_eq!(notes.more, 2);
         assert!(notes.items.iter().all(|(_, text)| !text.contains("feat:")));
+        assert_eq!(
+            plain_notes(
+                "- **Sidebar.** Click to download.\n- Fixes a crash.\n<details>\n- feat: x\n"
+            ),
+            "• Sidebar. Click to download.\n• Fixes a crash."
+        );
     }
 }
