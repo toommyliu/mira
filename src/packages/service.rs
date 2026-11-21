@@ -774,7 +774,7 @@ mod tests {
             name,
         } = install(&github, &world.store, &root).await.unwrap();
         assert_eq!(installed, world.store.package("Scripts"));
-        assert_eq!(name, "Skua scripts");
+        assert_eq!(name, "Skua");
         assert_eq!(
             fs::read_to_string(installed.join("Story/Intro.cs")).unwrap(),
             "class Intro {}"

@@ -3669,7 +3669,7 @@ mod tests {
                     ),
                     0
                 ),
-                (skua.as_path(), "Skua scripts", None, 2),
+                (skua.as_path(), "Skua", None, 2),
             ]
         );
         for index in [3, 5, 7] {
