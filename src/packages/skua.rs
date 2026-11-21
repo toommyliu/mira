@@ -3,7 +3,7 @@ use std::{fs, io, path::Path};
 use super::{PackagePath, bundled::Recommended, github::Locator};
 
 pub(crate) const FOLDER: &str = "Scripts";
-pub(crate) const NAME: &str = "Skua scripts";
+pub(crate) const NAME: &str = "Skua";
 const OWNER: &str = "auqw";
 const REPO: &str = "Scripts";
 const BRANCH: &str = "Skua";
@@ -74,7 +74,7 @@ pub(super) fn is(locator: &Locator) -> bool {
 pub(super) fn recommended() -> Recommended {
     Recommended {
         name: NAME.into(),
-        description: Some("Experimental. Skua's library of C# scripts. Needs .NET 10.".into()),
+        description: Some("Run Skua scripts in Mira. Experimental, and needs .NET 10.".into()),
         locator: Locator {
             owner: OWNER.into(),
             repo: REPO.into(),

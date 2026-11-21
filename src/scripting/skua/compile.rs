@@ -16,7 +16,7 @@ use crate::packages::SKUA_FOLDER;
 const POLL: Duration = Duration::from_millis(25);
 const TIMEOUT: Duration = Duration::from_secs(120);
 const LISTED_DIAGNOSTICS: usize = 8;
-const OUTSIDE: &str = "Skua scripts run from the Skua scripts package.";
+const OUTSIDE: &str = "Skua scripts run from the Skua package.";
 
 static COMPILING: Mutex<()> = Mutex::new(());
 
