@@ -1777,7 +1777,7 @@ mod tests {
                 .size_full()
                 .bg(theme.background)
                 .text_color(theme.foreground)
-                .font_family(mira_ui::theme::UI_FONT)
+                .font_family(theme.font_family.clone())
                 .text_body(typography)
                 .child(bar.default_open(0))
         }
@@ -2051,7 +2051,7 @@ mod tests {
                 .size_full()
                 .bg(theme.background)
                 .text_color(theme.foreground)
-                .font_family(mira_ui::theme::UI_FONT)
+                .font_family(theme.font_family.clone())
                 .text_body(typography)
                 .child(
                     Menubar::new("bar", "Game")
@@ -2317,7 +2317,7 @@ mod tests {
                 .gap(layout.space(2.0))
                 .bg(theme.card)
                 .text_color(theme.foreground)
-                .font_family(mira_ui::theme::UI_FONT)
+                .font_family(theme.font_family.clone())
                 .text_body(typography)
                 .children((self.0)().into_iter().enumerate().map(|(index, bar)| {
                     div()

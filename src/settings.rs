@@ -24,7 +24,7 @@ use mira_ui::{
         button::{Size, Variant as ButtonVariant},
     },
     theme::Typography,
-    theme::{UI_FONT, parse_hex, to_hex},
+    theme::{parse_hex, to_hex},
     v_flex,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -907,7 +907,7 @@ impl SettingsWindow {
             system
                 .all_font_names()
                 .into_iter()
-                .filter(|name| !name.starts_with('.') && name != UI_FONT)
+                .filter(|name| !name.starts_with('.'))
                 .collect::<Vec<_>>()
         });
         cx.spawn(async move |this, cx| {
@@ -1049,7 +1049,7 @@ impl SettingsWindow {
                         font_select(
                             "font",
                             "Interface font",
-                            &[("Inter", None), ("System", Some(".SystemUIFont"))],
+                            &[("System", None)],
                             &self.fonts,
                             settings.font.as_deref(),
                             |settings, font| settings.font = font,

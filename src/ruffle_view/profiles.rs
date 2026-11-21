@@ -1886,10 +1886,10 @@ mod tests {
     struct Host(Entity<Editor>);
 
     impl Render for Host {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .font_family(mira_ui::theme::UI_FONT)
+                .font_family(cx.theme().font_family.clone())
                 .child(self.0.clone())
         }
     }
