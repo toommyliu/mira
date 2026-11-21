@@ -26,7 +26,6 @@ pub const FOCUS_SCOPE: &str = "FocusScope";
 actions!(ui, [FocusNext, FocusPrevious]);
 
 pub fn init(cx: &mut App) {
-    register_fonts(cx.text_system());
     cx.set_global(Theme::for_window(cx.window_appearance()));
     nav::track_input(cx);
     primitives::input::bind_keys(cx);
@@ -56,55 +55,17 @@ fn move_focus(backwards: bool, cx: &mut App) {
     });
 }
 
-fn register_fonts(system: &gpui::TextSystem) {
-    let inter = include_bytes!("../assets/fonts/Inter.ttf");
-    system
-        .add_fonts(vec![std::borrow::Cow::Borrowed(inter)])
-        .expect("register bundled Inter");
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn bundled_inter_shapes_regular_and_medium_at_their_native_widths() {
-        use gpui::PlatformTextSystem as _;
-        let platform = std::sync::Arc::new(mira_platform::AppleTextSystem::new());
-        let system = gpui::TextSystem::new(platform.clone());
-        super::register_fonts(&system);
-        let sample = "Accounts and combat profiles";
-        for (weight, expected) in [
-            (gpui::FontWeight::NORMAL, 184.114),
-            (gpui::FontWeight::MEDIUM, 186.243),
-        ] {
-            let mut font = gpui::font(crate::theme::UI_FONT);
-            font.weight = weight;
-            let run = gpui::FontRun {
-                len: sample.len(),
-                font_id: system.resolve_font(&font),
-            };
-            let width = f32::from(
-                platform
-                    .layout_line(sample, crate::theme::TEXT_BODY, &[run])
-                    .width,
-            );
-            assert!(
-                (width - expected).abs() < 0.05,
-                "Inter {} at 13 px shaped to {width} px, expected {expected}",
-                weight.0
-            );
-        }
-    }
-
     #[test]
     fn font_smoothing_thickens_light_text_most_and_off_draws_every_color_alike() {
         use gpui::PlatformTextSystem as _;
         let platform = std::sync::Arc::new(mira_platform::AppleTextSystem::new());
         let system = gpui::TextSystem::new(platform.clone());
-        super::register_fonts(&system);
-        let font_id = system.resolve_font(&gpui::font(crate::theme::UI_FONT));
+        let font_id = system.resolve_font(&gpui::font(crate::theme::SYSTEM_SANS));
         let glyph_id = platform
             .glyph_for_char(font_id, 'a')
-            .expect("Inter has an a");
+            .expect("the system font has an a");
         let ink = |color: gpui::Hsla| -> u64 {
             let params = gpui::RenderGlyphParams {
                 font_id,

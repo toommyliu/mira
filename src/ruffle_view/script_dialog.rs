@@ -399,7 +399,7 @@ mod tests {
     use gpui::{
         Bounds, KeyUpEvent, Keystroke, Modifiers, Pixels, TestAppContext, VisualTestContext, point,
     };
-    use mira_ui::{FOCUS_SCOPE, theme::UI_FONT};
+    use mira_ui::FOCUS_SCOPE;
     use serde_json::{Value as Json, json};
 
     use super::*;
@@ -419,7 +419,7 @@ mod tests {
                 .size_full()
                 .bg(theme.background)
                 .text_color(theme.foreground)
-                .font_family(UI_FONT)
+                .font_family(theme.font_family.clone())
                 .text_size(typography.body)
                 .child(self.dialogs.clone())
         }
