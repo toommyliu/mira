@@ -3285,6 +3285,61 @@ fn scrolling_a_popup_over_a_pane_leaves_the_panes_scrollbar_hidden(cx: &mut Test
     assert!(cx.debug_bounds("scrollbar-thumb").is_some());
 }
 
+struct WatchedList(Rc<std::cell::RefCell<Vec<std::ops::Range<usize>>>>);
+
+impl Render for WatchedList {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        use mira_ui::primitives::{ListItem, VirtualList};
+        let seen = self.0.clone();
+        div().size_full().child(
+            VirtualList::new("watched", "Watched", 200, |index| {
+                ListItem::new(format!("Row {index}"))
+            })
+            .height(px(200.0))
+            .on_visible(move |range, _, _| seen.borrow_mut().push(range)),
+        )
+    }
+}
+
+#[gpui::test]
+fn a_virtual_list_reports_the_rows_it_shows_as_it_scrolls(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (_, cx) = cx.add_window_view({
+        let seen = seen.clone();
+        move |window, _| {
+            window.activate_window();
+            WatchedList(seen)
+        }
+    });
+    cx.run_until_parked();
+    let first = seen
+        .borrow()
+        .last()
+        .cloned()
+        .expect("the list reports its rows");
+    assert_eq!(first.start, 0);
+    assert!(first.len() < 20, "{first:?}");
+    cx.simulate_event(ScrollEvent {
+        position: point(px(100.0), px(100.0)),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-2000.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let scrolled = seen.borrow().last().cloned().unwrap();
+    assert!(scrolled.start > first.end, "{scrolled:?} after {first:?}");
+    assert!(scrolled.len() < 20, "{scrolled:?}");
+    assert!(
+        seen.borrow().iter().all(|range| range.len() > 1),
+        "the row measured for sizing isn't a shown range: {:?}",
+        seen.borrow()
+    );
+}
+
 struct PreviewsAboveTheFold {
     focus: FocusHandle,
     pane: gpui::ScrollHandle,
