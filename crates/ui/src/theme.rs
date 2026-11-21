@@ -83,7 +83,6 @@ pub struct Layout {
     pub split_forms: Pixels,
     pub split_packets: Pixels,
     pub card_min: Pixels,
-    pub script_list_max: Pixels,
 }
 impl Default for Layout {
     fn default() -> Self {
@@ -108,7 +107,6 @@ impl Default for Layout {
             split_forms: px(560.0),
             split_packets: px(760.0),
             card_min: px(240.0),
-            script_list_max: px(288.0),
         }
     }
 }

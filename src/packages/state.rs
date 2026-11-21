@@ -3,6 +3,7 @@ use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use super::{
+    Sha,
     bundled::{self, Recommended},
     github::{API, GitHub, Locator},
     service::{self, Failure, Updated},
@@ -22,7 +23,7 @@ pub(crate) enum Activity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
-    Available,
+    Available(Sha),
     Failed(String),
 }
 
@@ -53,6 +54,13 @@ pub(crate) fn init(root: PathBuf, token_path: PathBuf, cx: &mut App) {
     });
     let store = Store::new(root, Arc::new(store::move_to_trash));
     let packages = cx.new(|_| Packages::new(API.into(), store, token_path, token));
+    cx.set_global(Shared(packages));
+}
+
+#[cfg(test)]
+pub(crate) fn init_against(api: String, root: PathBuf, cx: &mut App) {
+    let store = Store::new(root, Arc::new(store::move_to_trash));
+    let packages = cx.new(|_| Packages::new(api, store, PathBuf::new(), None));
     cx.set_global(Shared(packages));
 }
 
@@ -119,12 +127,6 @@ impl Packages {
         self.status.insert(dir.to_owned(), status);
     }
 
-    pub(crate) fn any_available(&self) -> bool {
-        self.status
-            .values()
-            .any(|status| *status == Status::Available)
-    }
-
     pub(crate) fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
@@ -183,9 +185,9 @@ impl Packages {
                 let mut checked = Checked::default();
                 for (dir, result) in results {
                     match result {
-                        Ok(Some(_)) => {
+                        Ok(Some(head)) => {
                             checked.available += 1;
-                            this.status.insert(dir, Status::Available);
+                            this.status.insert(dir, Status::Available(head.commit));
                         }
                         Ok(None) => {
                             this.status.remove(&dir);
@@ -363,7 +365,10 @@ mod tests {
         let fake = Fake::start();
         let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
         let (uninstall, check) = packages.update(cx, |packages, cx| {
-            packages.mark("o-r", Status::Available);
+            packages.mark(
+                "o-r",
+                Status::Available(Sha::parse(&"c".repeat(40)).unwrap()),
+            );
             let uninstall = packages.uninstall("o-r".into(), cx);
             assert_eq!(packages.activity(), Some(&Activity::Removing("o-r".into())));
             (uninstall, packages.check(false, cx))
@@ -428,9 +433,11 @@ mod tests {
             })
         );
         packages.read_with(cx, |packages, _| {
-            assert_eq!(packages.status("o-r"), Some(&Status::Available));
+            assert_eq!(
+                packages.status("o-r"),
+                Some(&Status::Available(Sha::parse(&newer).unwrap()))
+            );
             assert_eq!(packages.status("o-gone"), None);
-            assert!(packages.any_available());
             assert_eq!(packages.activity(), None);
         });
 

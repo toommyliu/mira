@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
@@ -13,7 +15,7 @@ use mira_ui::{
 };
 
 use super::form::note;
-use crate::packages::{self, Activity, Checked, Edits, Failure, Recommended, Updated};
+use crate::packages::{self, Activity, Edits, Failure, Recommended, Updated};
 
 const WIDTH: f32 = 440.0;
 const LISTED_EDITS: usize = 8;
@@ -37,10 +39,26 @@ struct Confirm {
     edits: Edits,
 }
 
+struct Uninstall {
+    dir: String,
+    name: SharedString,
+}
+
+#[derive(Clone)]
+pub(super) struct Pending {
+    pub(super) dir: String,
+    pub(super) name: SharedString,
+    pub(super) from: SharedString,
+    pub(super) to: SharedString,
+}
+
 pub(super) struct PackageDialogs {
     pub(super) toasts: Entity<Toaster>,
     install: Option<Install>,
     confirm: Option<Confirm>,
+    uninstall: Option<Uninstall>,
+    review: Option<Vec<Pending>>,
+    queue: VecDeque<(String, SharedString)>,
     _packages: Subscription,
 }
 
@@ -70,6 +88,9 @@ impl PackageDialogs {
             toasts: Toaster::new(window, cx),
             install: None,
             confirm: None,
+            uninstall: None,
+            review: None,
+            queue: VecDeque::new(),
             _packages: cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
         }
     }
@@ -175,8 +196,11 @@ impl PackageDialogs {
                     Ok(Updated::Edited(edits)) => {
                         this.confirm = Some(Confirm { dir, name, edits });
                     }
-                    Ok(Updated::Replaced) => cx.emit(PackageEvent::Changed),
-                    Ok(Updated::Current) | Err(_) => {}
+                    Ok(Updated::Replaced) => {
+                        cx.emit(PackageEvent::Changed);
+                        this.advance(cx);
+                    }
+                    Ok(Updated::Current) | Err(_) => this.advance(cx),
                 }
                 cx.notify();
             });
@@ -184,28 +208,65 @@ impl PackageDialogs {
         .detach();
     }
 
-    pub(super) fn remove(&mut self, dir: String, name: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn review_updates(&mut self, pending: Vec<Pending>, cx: &mut Context<Self>) {
+        self.review = (!pending.is_empty()).then_some(pending);
+        cx.notify();
+    }
+
+    fn update_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(review) = self.review.take() {
+            self.queue = review
+                .into_iter()
+                .map(|pending| (pending.dir, pending.name))
+                .collect();
+            self.advance(cx);
+        }
+    }
+
+    fn advance(&mut self, cx: &mut Context<Self>) {
+        if let Some((dir, name)) = self.queue.pop_front() {
+            self.update(dir, name, false, cx);
+        }
+    }
+
+    fn skip_edited(&mut self, cx: &mut Context<Self>) {
+        self.confirm = None;
+        self.advance(cx);
+        cx.notify();
+    }
+
+    pub(super) fn open_uninstall(
+        &mut self,
+        dir: String,
+        name: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        self.uninstall = Some(Uninstall { dir, name });
+        cx.notify();
+    }
+
+    fn close_uninstall(&mut self, cx: &mut Context<Self>) {
+        self.uninstall = None;
+        cx.notify();
+    }
+
+    fn confirm_uninstall(&mut self, cx: &mut Context<Self>) {
+        let Some(Uninstall { dir, name }) = self.uninstall.take() else {
+            return;
+        };
         let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(dir, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => {
-                    this.toast(
-                        format!("Moved {name} to the Trash"),
-                        Tone::Neutral,
-                        None,
-                        cx,
-                    );
-                    cx.emit(PackageEvent::Changed);
-                }
-                Err(message) => {
-                    this.toast(
-                        format!("Couldn't remove {name}"),
-                        Tone::Danger,
-                        Some(message),
-                        cx,
-                    );
-                }
+            let _ = this.update(cx, |this, cx| {
+                let toast = match result {
+                    Ok(()) => Toast::new(format!("Moved {name} to the Trash")),
+                    Err(message) => Toast::new(format!("Couldn't uninstall {name}"))
+                        .tone(Tone::Danger)
+                        .body(message),
+                };
+                Toaster::push(&this.toasts, toast, cx);
+                cx.emit(PackageEvent::Changed);
+                cx.notify();
             });
         })
         .detach();
@@ -213,42 +274,10 @@ impl PackageDialogs {
 
     pub(super) fn check(&mut self, cx: &mut Context<Self>) {
         let task = packages::packages(cx).update(cx, |packages, cx| packages.check(false, cx));
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(Checked { failed, .. }) if failed > 0 => this.toast(
-                    if failed == 1 {
-                        "Couldn't check 1 package".to_owned()
-                    } else {
-                        format!("Couldn't check {failed} packages")
-                    },
-                    Tone::Danger,
-                    Some("Open Sources to see why.".into()),
-                    cx,
-                ),
-                Ok(Checked { available: 0, .. }) => {
-                    this.toast("Your packages are up to date", Tone::Neutral, None, cx);
-                }
-                Ok(Checked { available: 1, .. }) => {
-                    this.toast("1 update available", Tone::Accent, None, cx);
-                }
-                Ok(Checked { available, .. }) => {
-                    this.toast(
-                        format!("{available} updates available"),
-                        Tone::Accent,
-                        None,
-                        cx,
-                    );
-                }
-                Err(message) => {
-                    this.toast(
-                        "Couldn't check for updates",
-                        Tone::Danger,
-                        Some(message),
-                        cx,
-                    );
-                }
-            });
+        cx.spawn(async move |_, _| {
+            if let Err(message) = task.await {
+                tracing::warn!(%message, "couldn't check packages for updates");
+            }
         })
         .detach();
     }
@@ -377,6 +406,45 @@ impl Render for PackageDialogs {
             .as_ref()
             .map(|confirm| format!("Update {}?", confirm.name))
             .unwrap_or_default();
+        let uninstall_title = self
+            .uninstall
+            .as_ref()
+            .map(|uninstall| format!("Uninstall {}?", uninstall.name))
+            .unwrap_or_default();
+        let review_title = match self.review.as_deref() {
+            Some([pending]) => format!("Update {}?", pending.name),
+            Some(pending) => format!("Update {} packages?", pending.len()),
+            None => String::new(),
+        };
+        let review = self.review.as_ref().map(|pending| {
+            v_flex()
+                .gap(layout.space(1.0))
+                .children(pending.iter().map(|pending| {
+                    h_flex()
+                        .justify_between()
+                        .gap(layout.space(3.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_title(typography)
+                                .child(pending.name.clone()),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_none()
+                                .gap(layout.space(1.0))
+                                .font_family(theme.mono_family.clone())
+                                .text_size(typography.mono)
+                                .text_color(theme.muted_foreground)
+                                .child(pending.from.clone())
+                                .child("→")
+                                .child(
+                                    div().text_color(theme.foreground).child(pending.to.clone()),
+                                ),
+                        )
+                }))
+        });
         div()
             .child(
                 Dialog::new("install-package", self.install.is_some(), "Install package")
@@ -409,12 +477,10 @@ impl Render for PackageDialogs {
                         "You changed these files since installing. Updating replaces them, and your copy goes to the Trash.",
                     )
                     .when_some(confirm, |dialog, body| dialog.body(body))
-                    .action(Button::new("keep-edits", "Cancel").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.confirm = None;
-                            cx.notify();
-                        },
-                    )))
+                    .action(
+                        Button::new("keep-edits", "Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.skip_edited(cx))),
+                    )
                     .action(
                         Button::new("overwrite-edits", "Update")
                             .variant(Variant::Primary)
@@ -428,8 +494,55 @@ impl Render for PackageDialogs {
                     .on_close({
                         let this = cx.weak_entity();
                         move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.skip_edited(cx));
+                        }
+                    }),
+            )
+            .child(
+                Dialog::new("uninstall-package", self.uninstall.is_some(), uninstall_title)
+                    .alert()
+                    .description(
+                        "Mira stops listing and updating it, and its files go to the Trash.",
+                    )
+                    .action(
+                        Button::new("cancel-uninstall", "Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_uninstall(cx))),
+                    )
+                    .action(
+                        Button::new("confirm-uninstall", "Uninstall")
+                            .variant(Variant::Danger)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_uninstall(cx))),
+                    )
+                    .on_close({
+                        let this = cx.weak_entity();
+                        move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.close_uninstall(cx));
+                        }
+                    }),
+            )
+            .child(
+                Dialog::new("review-updates", self.review.is_some(), review_title)
+                    .alert()
+                    .description("Each package is replaced with its newest version from GitHub.")
+                    .when_some(review, |dialog, body| dialog.body(body))
+                    .action(Button::new("cancel-updates", "Cancel").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.review = None;
+                            cx.notify();
+                        },
+                    )))
+                    .action(
+                        Button::new("confirm-updates", "Update")
+                            .variant(Variant::Primary)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.update_all(cx))),
+                    )
+                    .on_close({
+                        let this = cx.weak_entity();
+                        move |_, cx| {
                             let _ = this.update(cx, |this, cx| {
-                                this.confirm = None;
+                                this.review = None;
                                 cx.notify();
                             });
                         }
@@ -503,6 +616,78 @@ mod tests {
                 "This isn't a Mira script package. Its package.json needs a \u{201c}mira\u{201d} field."
                     .into(),
             );
+        });
+    }
+
+    #[gpui::test]
+    fn update_all_updates_each_package_in_turn(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mira-update-all-{:x}", u64::from_ne_bytes(random)));
+        let receipt = r#"{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"1111111111111111111111111111111111111111","tree":"2222222222222222222222222222222222222222","files":{}}"#;
+        for dir in ["first", "second"] {
+            let package = root.join("packages").join(dir);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(package.join("package.json"), r#"{"name":"P","mira":{}}"#).unwrap();
+            std::fs::write(package.join(crate::packages::RECEIPT), receipt).unwrap();
+        }
+        let fake = crate::packages::fake::Fake::start();
+        cx.update(mira_ui::init);
+        let (dialogs, cx) = cx.add_window_view(|window, cx| {
+            packages::init_against(fake.url(), root.join("packages"), cx);
+            PackageDialogs::new(window, cx)
+        });
+        let pending = |dir: &str| Pending {
+            dir: dir.into(),
+            name: dir.to_owned().into(),
+            from: "1111111".into(),
+            to: "3333333".into(),
+        };
+        dialogs.update(cx, |dialogs, cx| {
+            dialogs.review_updates(vec![pending("first"), pending("second")], cx);
+            dialogs.update_all(cx);
+        });
+        cx.run_until_parked();
+        let packages = cx.update(|_, cx| packages::packages(cx));
+        packages.read_with(cx, |packages, _| {
+            for dir in ["first", "second"] {
+                assert!(
+                    matches!(
+                        packages.status(dir),
+                        Some(packages::Status::Failed(message)) if message.starts_with("Couldn't find o/r")
+                    ),
+                    "{dir}: {:?}",
+                    packages.status(dir)
+                );
+            }
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_review_updates() {
+        dialogs("review-package-updates", |dialogs, _, cx| {
+            let pending = |dir: &str, name: &str, from: &str, to: &str| Pending {
+                dir: dir.into(),
+                name: name.to_owned().into(),
+                from: from.to_owned().into(),
+                to: to.to_owned().into(),
+            };
+            dialogs.review_updates(
+                vec![
+                    pending("toommyliu-mira-dailies", "Dailies", "4e1c2f0", "9a8b7c6"),
+                    pending("farming", "Farming", "1d2e3f4", "5a6b7c8"),
+                ],
+                cx,
+            );
+        });
+    }
+
+    #[test]
+    fn snapshot_uninstall_package() {
+        dialogs("uninstall-package", |dialogs, _, cx| {
+            dialogs.open_uninstall("toommyliu-mira-dailies".into(), "Dailies".into(), cx);
         });
     }
 

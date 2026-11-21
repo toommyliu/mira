@@ -8,19 +8,23 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable as _,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
     FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
     PathPromptOptions, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Task, TextRun, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
+    WindowHandle, WindowOptions, actions, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone, h_flex,
+    ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
+    components::{Disclosure, Empty},
+    h_flex,
     primitives::{
-        Alert, Align, Badge, Button, Checkbox, CheckedState, Dot, DropdownMenu, Icon, Input,
-        InputEvent, List, ListItem, MenuItem, Popover, Scrollbar, Select, Switch, Tab, Tabs,
-        Toaster, VirtualList,
+        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
+        InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
+        Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
+        icon,
     },
     theme::RING_ROOM,
     v_flex,
@@ -29,9 +33,9 @@ use mira_ui::{
 use super::{
     Changed, Client, RuffleView,
     account::file_name,
-    client::CloseSession,
-    form::{note, row, row_label, switch_row},
-    package_dialogs::{PackageDialogs, PackageEvent},
+    client::{CloseSession, drag_area},
+    form::{note, row, row_label},
+    package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
     script::failure,
     script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
@@ -44,7 +48,7 @@ use crate::{
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
     scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
-    settings,
+    settings, shortcuts,
 };
 
 actions!(mira, [OpenScripts, LoadScript, AddToQueue]);
@@ -59,18 +63,13 @@ pub(super) fn bind_keys(cx: &mut App) {
     )]);
 }
 
-const WIDTH: f32 = 720.0;
-const HEIGHT: f32 = 500.0;
-const MIN_WIDTH: f32 = 600.0;
-const MIN_HEIGHT: f32 = 360.0;
+const WIDTH: f32 = 880.0;
+const HEIGHT: f32 = 560.0;
+const MIN_WIDTH: f32 = 800.0;
+const MIN_HEIGHT: f32 = 400.0;
 const PADDING: Pixels = px(16.0);
-const SEARCH_WIDTH: Pixels = px(260.0);
-const PANES_WIDTH: Pixels = px(180.0);
 const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
-const FILTER_WIDTH: Pixels = px(300.0);
-const FILTER_HEIGHT: Pixels = px(280.0);
-const FILTER_PATH_WIDTH: Pixels = px(220.0);
 const PATIENCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,7 +137,6 @@ impl Library {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
-    DefaultFolder,
     Source(usize),
     Script(Entry),
 }
@@ -159,16 +157,9 @@ fn library_rows(library: &Library, query: &str, scope: Scope) -> Vec<Row> {
             .cloned()
             .map(Row::Script)
     };
-    let headed = |heading: Row, source: Option<usize>| -> Vec<Row> {
-        let rows: Vec<Row> = scripts(source).collect();
-        if rows.is_empty() {
-            return rows;
-        }
-        iter::once(heading).chain(rows).collect()
-    };
     match scope {
-        Scope::BuiltIn => return headed(Row::DefaultFolder, None),
-        Scope::Source(index) => return headed(Row::Source(index), Some(index)),
+        Scope::BuiltIn => return scripts(None).collect(),
+        Scope::Source(index) => return scripts(Some(index)).collect(),
         Scope::All => {}
     }
     let mut rows: Vec<Row> = scripts(None).collect();
@@ -181,7 +172,7 @@ fn library_rows(library: &Library, query: &str, scope: Scope) -> Vec<Row> {
             .cloned()
             .map(Row::Script)
             .collect();
-        if named || !scripts.is_empty() {
+        if !scripts.is_empty() {
             rows.push(Row::Source(index));
             rows.extend(scripts);
         }
@@ -348,10 +339,123 @@ pub(super) fn home_relative(path: &Path) -> SharedString {
         .into()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pane {
-    Library,
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Page {
+    Library(Option<PathBuf>),
     Queue,
+    Log,
+}
+
+const PAGES: [Page; 3] = [Page::Library(None), Page::Queue, Page::Log];
+
+#[derive(Clone)]
+enum SourceState {
+    Problem(SharedString),
+    UpdateAvailable,
+    UpdateFailed(SharedString),
+}
+
+impl SourceState {
+    fn description(&self) -> SharedString {
+        match self {
+            SourceState::Problem(text) | SourceState::UpdateFailed(text) => text.clone(),
+            SourceState::UpdateAvailable => "Update available".into(),
+        }
+    }
+}
+
+struct SourceRow {
+    root: PathBuf,
+    name: SharedString,
+    qualifier: Option<SharedString>,
+    description: Option<SharedString>,
+    path: SharedString,
+    scripts: Option<usize>,
+    release: Option<(&'static str, SharedString)>,
+    state: Option<SourceState>,
+}
+
+fn release(kind: &SourceKind) -> Option<(&'static str, SharedString)> {
+    match kind {
+        SourceKind::Package {
+            version: Some(version),
+            ..
+        } => Some(("Version", version.clone())),
+        SourceKind::Package {
+            origin: Some(origin),
+            ..
+        } => Some(("Commit", origin.commit.clone().into())),
+        _ => None,
+    }
+}
+
+fn qualifiers(rows: &[(SharedString, Vec<String>)]) -> Vec<Option<SharedString>> {
+    let suffix = |segments: &[String], depth: usize| {
+        let mut taken: Vec<&str> = segments.iter().take(depth).map(String::as_str).collect();
+        taken.reverse();
+        taken.join("/")
+    };
+    rows.iter()
+        .map(|(name, segments)| {
+            let rivals: Vec<&[String]> = rows
+                .iter()
+                .filter(|(other, _)| other == name)
+                .map(|(_, segments)| segments.as_slice())
+                .collect();
+            if rivals.len() < 2 {
+                return None;
+            }
+            let deepest = rivals.iter().map(|segments| segments.len()).max()?;
+            let depth = (1..=deepest)
+                .find(|&depth| {
+                    let mine = suffix(segments, depth);
+                    rivals
+                        .iter()
+                        .filter(|other| suffix(other, depth) == mine)
+                        .count()
+                        == 1
+                })
+                .unwrap_or(deepest);
+            Some(suffix(segments, depth).into())
+        })
+        .collect()
+}
+
+fn parent_segments(root: &Path) -> Vec<String> {
+    root.parent()
+        .map(|parent| {
+            home_relative(parent)
+                .split('/')
+                .rev()
+                .filter(|segment| !segment.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn dir_name(root: &Path) -> String {
+    root.file_name()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn source_mark(theme: &Theme, state: &SourceState) -> Option<impl IntoElement> {
+    let (glyph, label, tone) = match state {
+        SourceState::Problem(_) => (Icon::CircleAlert, "Problem", Tone::Danger),
+        SourceState::UpdateFailed(_) => (Icon::TriangleAlert, "Update problem", Tone::Warning),
+        SourceState::UpdateAvailable => return None,
+    };
+    Some(
+        div()
+            .id(label)
+            .role(gpui::Role::Image)
+            .aria_label(label)
+            .flex_none()
+            .flex()
+            .items_center()
+            .child(icon(glyph, theme.tone(tone).0).size(px(12.0))),
+    )
 }
 
 struct Open(WindowHandle<ScriptsWindow>);
@@ -434,8 +538,9 @@ pub(super) struct ScriptsWindow {
     search: Entity<Input>,
     room: Entity<Input>,
     selected: usize,
-    filter: Option<PathBuf>,
-    pane: Pane,
+    page: Page,
+    folders_open: bool,
+    packages_open: bool,
     queued: usize,
     chosen: Option<PathBuf>,
     forms: HashMap<FormKey, Form>,
@@ -444,6 +549,8 @@ pub(super) struct ScriptsWindow {
     waiting: Option<(PathBuf, Instant, Task<()>)>,
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
+    error_cursor: Option<usize>,
+    source_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 6],
@@ -494,8 +601,7 @@ impl ScriptsWindow {
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
                 if let PackageEvent::Installed(dir) = event {
-                    this.pane = Pane::Library;
-                    this.filter = Some(this.packages.join(dir));
+                    this.set_page(Page::Library(Some(this.packages.join(dir))), cx);
                 }
                 this.generation += 1;
                 this.rescan(cx);
@@ -503,7 +609,6 @@ impl ScriptsWindow {
             cx.observe(&client, |this, _, cx| this.show(cx)),
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Changed => {
-                    this.pane = Pane::Library;
                     this.chosen = None;
                     this.selected = first_script(&this.rows(cx));
                     cx.notify();
@@ -549,8 +654,9 @@ impl ScriptsWindow {
             search,
             room,
             selected: 0,
-            filter: None,
-            pane: Pane::Library,
+            page: Page::Library(None),
+            folders_open: true,
+            packages_open: true,
             queued: 0,
             chosen: None,
             forms: HashMap::new(),
@@ -559,6 +665,8 @@ impl ScriptsWindow {
             waiting: None,
             displayed: None,
             detail_scroll: ScrollHandle::new(),
+            error_cursor: None,
+            source_scroll: ScrollHandle::new(),
             package_dialogs,
             _view_changes: None,
             _subscriptions: subscriptions,
@@ -616,20 +724,20 @@ impl ScriptsWindow {
         self.view()?.read(cx).settings_account.clone()
     }
 
-    fn status(&self, theme: &Theme, cx: &App) -> (SharedString, Hsla) {
+    fn status(&self, theme: &Theme, cx: &App) -> Option<(SharedString, Hsla)> {
         if self.shown.is_none() {
-            return ("No tabs open".into(), theme.muted_foreground);
+            return Some(("No tabs open".into(), theme.muted_foreground));
         }
-        let Some(view) = self.view() else {
-            return ("Nothing running".into(), theme.muted_foreground);
+        let script = &self.view()?.read(cx).script;
+        let text = script.status()?.into();
+        let color = if script.running() {
+            theme.foreground
+        } else if script.failed() {
+            theme.destructive
+        } else {
+            theme.muted_foreground
         };
-        let script = &view.read(cx).script;
-        match script.status() {
-            Some(text) if script.running() => (text.into(), theme.foreground),
-            Some(text) if script.failed() => (text.into(), theme.destructive),
-            Some(text) => (text.into(), theme.muted_foreground),
-            None => ("Nothing running".into(), theme.muted_foreground),
-        }
+        Some((text, color))
     }
 
     fn set_private_rooms(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -685,6 +793,9 @@ impl ScriptsWindow {
             let _ = this.update(cx, |this, cx| {
                 let first = this.library.is_none();
                 this.library = Some(scanned);
+                if this.scope(cx).is_none() {
+                    this.page = Page::Library(None);
+                }
                 if first {
                     this.select_last_run(cx);
                 }
@@ -711,33 +822,49 @@ impl ScriptsWindow {
     }
 
     fn rows(&self, cx: &App) -> Rc<[Row]> {
-        let Some(library) = &self.library else {
+        let (Some(library), Some(scope)) = (&self.library, self.scope(cx)) else {
             return Rc::new([]);
         };
         let query = self.search.read(cx).text().trim().to_lowercase();
-        library_rows(library, &query, self.scope()).into()
+        library_rows(library, &query, scope).into()
     }
 
-    fn scope(&self) -> Scope {
-        let Some(filter) = &self.filter else {
-            return Scope::All;
+    fn searching(&self, cx: &App) -> bool {
+        !self.search.read(cx).text().trim().is_empty()
+    }
+
+    fn shown_page(&self, cx: &App) -> Page {
+        if self.searching(cx) {
+            Page::Library(None)
+        } else {
+            self.page.clone()
+        }
+    }
+
+    fn scope(&self, cx: &App) -> Option<Scope> {
+        let Page::Library(Some(root)) = self.shown_page(cx) else {
+            return Some(Scope::All);
         };
-        if *filter == self.folder {
-            return Scope::BuiltIn;
+        if root == self.folder {
+            return Some(Scope::BuiltIn);
         }
         self.library
-            .as_ref()
-            .and_then(|library| {
-                library
-                    .sources
-                    .iter()
-                    .position(|source| source.root == *filter)
-            })
-            .map_or(Scope::All, Scope::Source)
+            .as_ref()?
+            .sources
+            .iter()
+            .position(|source| source.root == root)
+            .map(Scope::Source)
     }
 
-    fn set_filter(&mut self, filter: Option<PathBuf>, cx: &mut Context<Self>) {
-        self.filter = filter;
+    fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        let searching = self.searching(cx);
+        if page == self.page && !searching {
+            return;
+        }
+        if searching {
+            self.search.update(cx, |search, cx| search.set_text("", cx));
+        }
+        self.page = page;
         self.chosen = None;
         self.selected = first_script(&self.rows(cx));
         cx.notify();
@@ -793,7 +920,9 @@ impl ScriptsWindow {
             };
             if let Some(path) = paths.into_iter().next() {
                 let _ = this.update(cx, |this, cx| {
-                    this.pane = Pane::Library;
+                    if !matches!(this.page, Page::Library(_)) {
+                        this.set_page(Page::Library(None), cx);
+                    }
                     this.chosen = Some(path);
                     cx.notify();
                 });
@@ -865,282 +994,535 @@ impl ScriptsWindow {
         .detach();
     }
 
-    fn filter(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<DropdownMenu> {
-        if self.library.as_ref()?.sources.is_empty() {
-            return None;
-        }
-        let this = cx.entity().downgrade();
-        Some(
-            DropdownMenu::new("filter")
-                .trigger(
-                    Button::new("filter", "Filter")
-                        .pressed(self.filter.is_some())
-                        .end_slot(
-                            div()
-                                .text_color(theme.muted_foreground)
-                                .child(Icon::ChevronDown),
-                        ),
-                )
-                .align(Align::End)
-                .width(FILTER_WIDTH)
-                .max_height(FILTER_HEIGHT)
-                .items(move |window, cx| {
-                    this.upgrade()
-                        .map(|scripts| scripts.read(cx).filter_items(&this, window, cx.theme()))
-                        .unwrap_or_default()
-                }),
+    fn source_rows(&self, cx: &App) -> (Vec<SourceRow>, Vec<SourceRow>) {
+        let library = self.library.as_ref();
+        let built_in = SourceRow {
+            root: self.folder.clone(),
+            name: dir_name(&self.folder).into(),
+            qualifier: None,
+            description: None,
+            path: home_relative(&self.folder),
+            scripts: library.map(|library| {
+                library
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.source.is_none())
+                    .count()
+            }),
+            release: None,
+            state: None,
+        };
+        let packages = packages::packages(cx).read(cx);
+        let (folders, installed): (Vec<&Source>, Vec<&Source>) = library
+            .map_or(&[][..], |library| library.sources.as_slice())
+            .iter()
+            .partition(|source| source.kind == SourceKind::Folder);
+        let row = |source: &Source| {
+            let status = match source.kind {
+                SourceKind::Folder => None,
+                SourceKind::Package { .. } => packages.status(&dir_name(&source.root)),
+            };
+            let state = match (&source.problem, status) {
+                (Some(problem), _) => Some(SourceState::Problem(problem.clone())),
+                (None, Some(Status::Available(_))) => Some(SourceState::UpdateAvailable),
+                (None, Some(Status::Failed(message))) => {
+                    Some(SourceState::UpdateFailed(message.clone().into()))
+                }
+                (None, None) => None,
+            };
+            SourceRow {
+                root: source.root.clone(),
+                name: source.name.clone(),
+                qualifier: None,
+                description: match &source.kind {
+                    SourceKind::Package { description, .. } => description.clone(),
+                    SourceKind::Folder => None,
+                },
+                path: home_relative(&source.root),
+                scripts: source.problem.is_none().then_some(source.scripts),
+                release: release(&source.kind),
+                state,
+            }
+        };
+        let qualify = |mut rows: Vec<SourceRow>, segments: fn(&Path) -> Vec<String>| {
+            let keys: Vec<(SharedString, Vec<String>)> = rows
+                .iter()
+                .map(|row| (row.name.clone(), segments(&row.root)))
+                .collect();
+            for (row, qualifier) in rows.iter_mut().zip(qualifiers(&keys)) {
+                row.qualifier = qualifier;
+            }
+            rows
+        };
+        (
+            qualify(
+                iter::once(built_in)
+                    .chain(folders.into_iter().map(row))
+                    .collect(),
+                parent_segments,
+            ),
+            qualify(installed.into_iter().map(row).collect(), |root| {
+                vec![dir_name(root)]
+            }),
         )
     }
 
-    fn filter_items(
-        &self,
-        this: &WeakEntity<Self>,
-        window: &Window,
-        theme: &Theme,
-    ) -> Vec<MenuItem> {
-        let Some(library) = &self.library else {
-            return Vec::new();
-        };
-        let choose = |label: SharedString, filter: Option<PathBuf>| {
-            let this = this.clone();
-            let checked = self.filter == filter;
-            MenuItem::radio(label, checked, move |_, cx| {
-                let _ = this.update(cx, |this, cx| this.set_filter(filter.clone(), cx));
-            })
-        };
-        let source = |label: SharedString, root: &Path, count: SharedString| {
-            choose(label, Some(root.to_owned()))
-                .description(fit_path_to(
-                    &home_relative(root),
-                    FILTER_PATH_WIDTH,
-                    window,
-                    theme,
-                ))
-                .end_slot(count)
-        };
-        let built_in = library
-            .entries
-            .iter()
-            .filter(|entry| entry.source.is_none())
-            .count();
-        let mut items = vec![
-            choose("All sources".into(), None)
-                .end_slot(SharedString::from(library.entries.len().to_string())),
-            MenuItem::separator(),
-            MenuItem::header("Folders"),
-            source(
-                "Default folder".into(),
-                &self.folder,
-                built_in.to_string().into(),
-            ),
-        ];
-        let mut packages = Vec::new();
-        for added in &library.sources {
-            let count = added
-                .problem
-                .clone()
-                .unwrap_or_else(|| added.scripts.to_string().into());
-            let item = source(added.name.clone(), &added.root, count);
-            match added.kind {
-                SourceKind::Folder => items.push(item),
-                SourceKind::Package { .. } => packages.push(item),
-            }
-        }
-        if !packages.is_empty() {
-            items.push(MenuItem::separator());
-            items.push(MenuItem::header("Packages"));
-            items.extend(packages);
-        }
-        items
-    }
-
-    fn sources(&self, cx: &mut Context<Self>) -> DropdownMenu {
-        let this = cx.entity().downgrade();
-        let troubled = self.library.as_ref().is_some_and(|library| {
-            library
-                .sources
-                .iter()
-                .any(|source| source.problem.is_some())
-        });
-        let updates = packages::packages(cx).read(cx).any_available();
-        let dot = match (troubled, updates) {
-            (true, _) => Some(Tone::Danger),
-            (false, true) => Some(Tone::Accent),
-            (false, false) => None,
-        };
-        DropdownMenu::new("sources")
-            .trigger(
-                Button::new("sources", "Sources")
-                    .when_some(dot, |button, tone| button.start_slot(Dot::new(tone)))
-                    .end_slot(Icon::ChevronDown),
-            )
-            .items(move |_, cx| {
-                this.upgrade()
-                    .map(|scripts| scripts.read(cx).source_items(&this, cx))
-                    .unwrap_or_default()
-            })
-    }
-
-    fn source_items(&self, this: &WeakEntity<Self>, cx: &App) -> Vec<MenuItem> {
-        let act =
-            |label: &'static str, root: &Path, f: fn(&mut Self, PathBuf, &mut Context<Self>)| {
-                let this = this.clone();
-                let root = root.to_owned();
-                MenuItem::action(label, move |_, cx| {
-                    let _ = this.update(cx, |this, cx| f(this, root.clone(), cx));
-                })
-            };
-        let show = |root: &Path| {
-            act("Show in Finder", root, |this, root, cx| {
-                this.show_folder(&root, cx)
-            })
-        };
-        let remove = |root: &Path| {
-            act("Remove from library", root, |this, root, cx| {
-                this.remove_folder(&root, cx)
-            })
-        };
-        let locate = |root: &Path| act("Locate…", root, Self::locate_folder);
-        let sources = self
+    fn source_actions(&self, root: &Path, this: &WeakEntity<Self>, cx: &App) -> Vec<MenuItem> {
+        let source = self
             .library
             .as_ref()
-            .map_or(&[][..], |library| library.sources.as_slice());
-        let mut items = vec![
-            MenuItem::header("Folders"),
-            MenuItem::submenu(home_relative(&self.folder), vec![show(&self.folder)]),
-        ];
-        let mut packages = Vec::new();
-        for source in sources {
-            match &source.kind {
-                SourceKind::Folder => {
-                    let path = home_relative(&source.root);
-                    let item = match &source.problem {
-                        None => {
-                            MenuItem::submenu(path, vec![show(&source.root), remove(&source.root)])
-                        }
-                        Some(problem) => MenuItem::submenu(
-                            path,
-                            vec![locate(&source.root), remove(&source.root)],
-                        )
-                        .start_slot(Dot::new(Tone::Danger))
-                        .description(problem.clone()),
-                    };
-                    items.push(item);
-                }
-                SourceKind::Package {
-                    version, origin, ..
-                } => packages.push(self.package_item(source, version, origin, &show, cx)),
-            }
+            .and_then(|library| library.sources.iter().find(|source| source.root == root));
+        let Some(source) = source else {
+            return Vec::new();
+        };
+        let SourceKind::Package { origin, .. } = &source.kind else {
+            let this = this.clone();
+            let root = root.to_owned();
+            return vec![MenuItem::action("Remove from library", move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.remove_folder(&root, cx));
+            })];
+        };
+        let mut items = Vec::new();
+        if let Some(origin) = origin {
+            let url = origin.url.clone();
+            items.push(MenuItem::action("Open on GitHub", move |_, cx| {
+                cx.open_url(&url);
+            }));
         }
-        let add = this.clone();
-        items.push(MenuItem::action("Add folder…", move |_, cx| {
-            let _ = add.update(cx, |this, cx| this.add_folder(cx));
-        }));
-        items.push(MenuItem::separator());
-        items.push(MenuItem::header("Packages"));
-        items.extend(packages);
-        let state = packages::packages(cx).read(cx);
-        let busy = state.activity().is_some();
         let dialogs = self.package_dialogs.clone();
+        let (dir, name) = (dir_name(&source.root), source.name.clone());
         items.push(
-            MenuItem::action("Install package…", move |window, cx| {
-                dialogs.update(cx, |dialogs, cx| dialogs.open_install(window, cx));
+            MenuItem::action("Uninstall…", move |_, cx| {
+                dialogs.update(cx, |dialogs, cx| {
+                    dialogs.open_uninstall(dir.clone(), name.clone(), cx)
+                });
             })
-            .disabled(busy),
-        );
-        let installed = sources.iter().any(|source| {
-            matches!(
-                source.kind,
-                SourceKind::Package {
-                    origin: Some(_),
-                    ..
-                }
-            )
-        });
-        let checking = matches!(state.activity(), Some(packages::Activity::Checking));
-        let dialogs = self.package_dialogs.clone();
-        items.push(
-            MenuItem::action(
-                if checking {
-                    "Checking for updates…"
-                } else {
-                    "Check for updates"
-                },
-                move |_, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)),
-            )
-            .disabled(busy || !installed),
+            .disabled(packages::packages(cx).read(cx).activity().is_some()),
         );
         items
     }
 
-    fn package_item(
-        &self,
-        source: &Source,
-        version: &Option<SharedString>,
-        origin: &Option<Origin>,
-        show: &dyn Fn(&Path) -> MenuItem,
-        cx: &App,
-    ) -> MenuItem {
-        let state = packages::packages(cx).read(cx);
-        let busy = state.activity().is_some();
-        let dir = source
-            .root
-            .file_name()
-            .map(|dir| dir.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let name = source.name.clone();
-        let mut actions = vec![show(&source.root)];
-        if let Some(origin) = origin {
-            let url = origin.url.clone();
-            actions.push(MenuItem::action("Open on GitHub", move |_, cx| {
-                cx.open_url(&url);
-            }));
-            let dialogs = self.package_dialogs.clone();
-            let (dir, name) = (dir.clone(), name.clone());
-            actions.push(
-                MenuItem::action("Update", move |_, cx| {
-                    dialogs.update(cx, |dialogs, cx| {
-                        dialogs.update(dir.clone(), name.clone(), false, cx)
-                    });
-                })
-                .disabled(busy),
-            );
-        }
-        let dialogs = self.package_dialogs.clone();
-        let target = dir.clone();
-        actions.push(
-            MenuItem::action("Move to Trash", move |_, cx| {
-                dialogs.update(cx, |dialogs, cx| {
-                    dialogs.remove(target.clone(), name.clone(), cx)
-                });
-            })
-            .disabled(busy),
-        );
-        let item = MenuItem::submenu(source.name.clone(), actions);
-        let label = version
-            .clone()
-            .or_else(|| origin.as_ref().map(|origin| origin.commit.clone().into()));
-        let item = match label {
-            Some(label) => item.end_slot(Badge::new(label)),
-            None => item,
-        };
-        match (&source.problem, state.status(&dir)) {
-            (Some(problem), _) => item
-                .start_slot(Dot::new(Tone::Danger))
-                .description(problem.clone()),
-            (None, Some(Status::Available)) => item
-                .start_slot(Dot::new(Tone::Accent))
-                .description("Update available"),
-            (None, Some(Status::Failed(message))) => item
-                .start_slot(Dot::new(Tone::Warning))
-                .description(message.clone()),
-            (None, None) => item,
-        }
+    fn open_file(&self, theme: &Theme, cx: &mut Context<Self>) -> Button {
+        let label = "Open file…";
+        Button::new("open-file", label)
+            .variant(Variant::Ghost)
+            .w_full()
+            .disabled(self.shown.is_none() || self.running(cx))
+            .child(
+                h_flex().flex_1().justify_between().child(label).children(
+                    shortcuts::keys_for(&LoadScript, cx)
+                        .map(|keys| div().text_color(theme.muted_foreground).child(keys)),
+                ),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx)))
     }
 
-    fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
-        self.pane = pane;
-        cx.notify();
+    fn pending_updates(&self, cx: &App) -> Vec<Pending> {
+        let state = packages::packages(cx).read(cx);
+        self.library
+            .iter()
+            .flat_map(|library| &library.sources)
+            .filter_map(|source| {
+                let SourceKind::Package {
+                    origin: Some(origin),
+                    ..
+                } = &source.kind
+                else {
+                    return None;
+                };
+                let dir = dir_name(&source.root);
+                let Some(Status::Available(to)) = state.status(&dir) else {
+                    return None;
+                };
+                Some(Pending {
+                    dir,
+                    name: source.name.clone(),
+                    from: origin.commit.clone().into(),
+                    to: to.short().to_owned().into(),
+                })
+            })
+            .collect()
+    }
+
+    fn check_for_updates(&self, cx: &App) -> AnyElement {
+        let state = packages::packages(cx).read(cx);
+        let working = matches!(
+            state.activity(),
+            Some(packages::Activity::Checking | packages::Activity::Updating(_))
+        );
+        let pending = self.pending_updates(cx);
+        if !pending.is_empty() {
+            let title = match pending.len() {
+                1 => SharedString::from("1 update available"),
+                count => format!("{count} updates available").into(),
+            };
+            let card = pending.iter().fold(
+                HoverCard::new("updates-card", title)
+                    .placement(Placement::new(Side::Right, Align::Start)),
+                |card, pending| {
+                    card.row(
+                        pending.name.clone(),
+                        format!("{} → {}", pending.from, pending.to),
+                        Tone::Neutral,
+                    )
+                },
+            );
+            let dialogs = self.package_dialogs.clone();
+            return card
+                .child(
+                    Button::icon("review-updates", Icon::Download, "Review updates")
+                        .size(Size::Small)
+                        .hide_tooltip()
+                        .busy(working)
+                        .disabled(state.activity().is_some())
+                        .on_click(move |_, _, cx| {
+                            dialogs.update(cx, |dialogs, cx| {
+                                dialogs.review_updates(pending.clone(), cx)
+                            })
+                        }),
+                )
+                .into_any_element();
+        }
+        let installed = self.library.as_ref().is_some_and(|library| {
+            library.sources.iter().any(|source| {
+                matches!(
+                    source.kind,
+                    SourceKind::Package {
+                        origin: Some(_),
+                        ..
+                    }
+                )
+            })
+        });
+        let dialogs = self.package_dialogs.clone();
+        Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
+            .size(Size::Small)
+            .busy(working)
+            .disabled(state.activity().is_some() || !installed)
+            .on_click(move |_, _, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)))
+            .into_any_element()
+    }
+
+    fn sidebar(&self, theme: &Theme, unfinished: usize, cx: &mut Context<Self>) -> Div {
+        let layout = theme.layout;
+        let current = (!self.searching(cx)).then_some(&self.page);
+        let total = self.library.as_ref().map(|library| library.entries.len());
+        let this = cx.weak_entity();
+        let pages = Tabs::new("pages", "Views", PAGES.len(), move |index| {
+            let (label, count) = match PAGES[index] {
+                Page::Library(_) => ("Library", total),
+                Page::Queue => ("Queue", (unfinished > 0).then_some(unfinished)),
+                Page::Log => ("Log", None),
+            };
+            match count {
+                Some(count) => Tab::new(label).end_slot(SharedString::from(count.to_string())),
+                None => Tab::new(label),
+            }
+        })
+        .page_sidebar()
+        .small()
+        .selected(
+            current
+                .and_then(|page| PAGES.iter().position(|shown| shown == page))
+                .unwrap_or(usize::MAX),
+        )
+        .on_select(move |index, _, cx| {
+            let _ = this.update(cx, |this, cx| this.set_page(PAGES[index].clone(), cx));
+        });
+        let (folders, installed) = self.source_rows(cx);
+        let toggles = cx.weak_entity();
+        let caption =
+            |id: &'static str, label: &'static str, open: bool, set: fn(&mut Self, bool)| {
+                let this = toggles.clone();
+                h_flex()
+                    .flex_none()
+                    .justify_between()
+                    .pl(layout.space(4.0))
+                    .pr(layout.space(2.0))
+                    .child(Disclosure::new(id, label, open).caption().on_toggle(
+                        move |open, _, cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                set(this, open);
+                                cx.notify();
+                            });
+                        },
+                    ))
+            };
+        let folders = self
+            .folders_open
+            .then(|| self.source_list("folders", "Folders", folders, theme, cx));
+        let installed = self
+            .packages_open
+            .then(|| self.source_list("packages", "Packages", installed, theme, cx));
+        let busy = packages::packages(cx).read(cx).activity().is_some();
+        let dialogs = self.package_dialogs.clone();
+        let sources = v_flex()
+            .child(
+                caption(
+                    "folders-toggle",
+                    "Folders",
+                    self.folders_open,
+                    |this, open| this.folders_open = open,
+                )
+                .child(
+                    Button::icon("add-folder", Icon::Plus, "Add folder")
+                        .size(Size::Small)
+                        .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+                ),
+            )
+            .children(folders)
+            .child(
+                caption(
+                    "packages-toggle",
+                    "Packages",
+                    self.packages_open,
+                    |this, open| this.packages_open = open,
+                )
+                .child(
+                    h_flex()
+                        .gap(layout.space(1.0))
+                        .child(self.check_for_updates(cx))
+                        .child(
+                            Button::icon("install-package", Icon::Plus, "Install package")
+                                .size(Size::Small)
+                                .disabled(busy)
+                                .on_click(move |_, window, cx| {
+                                    dialogs
+                                        .update(cx, |dialogs, cx| dialogs.open_install(window, cx))
+                                }),
+                        ),
+                ),
+            )
+            .children(installed);
+        theme
+            .sidebar_pane()
+            .h_full()
+            .child(
+                div()
+                    .flex_none()
+                    .p(layout.space(2.0))
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        let by = match event.keystroke.key.as_str() {
+                            "up" => -1,
+                            "down" => 1,
+                            _ => return,
+                        };
+                        this.step(by, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(self.search.clone()),
+            )
+            .child(pages)
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("sources")
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.source_scroll)
+                            .child(sources),
+                    )
+                    .child(
+                        Scrollbar::new("sources-scrollbar", self.source_scroll.clone())
+                            .persistent(),
+                    ),
+            )
+            .child(drag_area().flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .p(layout.space(2.0))
+                    .child(self.open_file(theme, cx)),
+            )
+    }
+
+    fn source_header(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let layout = theme.layout;
+        let typography = theme.typography;
+        let Page::Library(Some(root)) = self.shown_page(cx) else {
+            return None;
+        };
+        let (folders, installed) = self.source_rows(cx);
+        let package = installed.iter().any(|row| row.root == root);
+        let row = folders
+            .into_iter()
+            .chain(installed)
+            .find(|row| row.root == root)?;
+        let state = packages::packages(cx).read(cx);
+        let dir = dir_name(&row.root);
+        let updating = matches!(state.activity(), Some(packages::Activity::Updating(updating)) if *updating == dir);
+        let busy = state.activity().is_some();
+        let update = matches!(
+            row.state,
+            Some(SourceState::UpdateAvailable | SourceState::UpdateFailed(_))
+        )
+        .then(|| {
+            let dialogs = self.package_dialogs.clone();
+            let name = row.name.clone();
+            Button::new("source-update", "Update")
+                .size(Size::Small)
+                .busy(updating)
+                .disabled(busy)
+                .on_click(move |_, _, cx| {
+                    dialogs.update(cx, |dialogs, cx| {
+                        dialogs.update(dir.clone(), name.clone(), false, cx)
+                    })
+                })
+        });
+        let readable = package || !matches!(row.state, Some(SourceState::Problem(_)));
+        let show = readable.then(|| {
+            let root = row.root.clone();
+            Button::new("source-show", "Show in Finder")
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .on_click(cx.listener(move |this, _, _, cx| this.show_folder(&root, cx)))
+        });
+        let this = cx.weak_entity();
+        let menu_root = row.root.clone();
+        let menu = (row.root != self.folder).then(|| {
+            DropdownMenu::new("source-actions")
+                .trigger(
+                    Button::icon(
+                        "source-actions-trigger",
+                        Icon::Ellipsis,
+                        format!("More {} actions", row.name),
+                    )
+                    .variant(Variant::Ghost)
+                    .size(Size::Small)
+                    .hide_tooltip(),
+                )
+                .align(Align::End)
+                .items(move |_, cx| {
+                    this.upgrade()
+                        .map(|scripts| scripts.read(cx).source_actions(&menu_root, &this, cx))
+                        .unwrap_or_default()
+                })
+        });
+        let facts = match &row.release {
+            Some((label, value)) => h_flex().child(format!("{label} {value}")),
+            None => h_flex()
+                .when(row.root == self.folder, |facts| {
+                    facts.child(div().flex_none().child("Default folder · "))
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_ellipsis_start()
+                        .child(row.path.clone()),
+                ),
+        };
+        let failure = match &row.state {
+            Some(SourceState::UpdateFailed(message)) => Some(message.clone()),
+            _ => None,
+        };
+        Some(
+            v_flex()
+                .flex_none()
+                .gap(px(2.0))
+                .pl(layout.space(5.0))
+                .pr(layout.space(3.0))
+                .pt(layout.space(3.0))
+                .pb(layout.space(1.0))
+                .child(
+                    h_flex()
+                        .min_h(layout.control_sm)
+                        .gap(layout.space(2.0))
+                        .child(
+                            div()
+                                .id("source-title")
+                                .role(gpui::Role::Heading)
+                                .aria_level(1)
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_title(typography)
+                                .child(row.name.clone()),
+                        )
+                        .children(update)
+                        .children(show)
+                        .children(menu),
+                )
+                .child(
+                    v_flex()
+                        .text_caption(typography)
+                        .text_color(theme.muted_foreground)
+                        .children(
+                            row.description
+                                .clone()
+                                .map(|description| div().child(description)),
+                        )
+                        .child(facts)
+                        .children(
+                            failure
+                                .map(|message| div().text_color(theme.foreground).child(message)),
+                        ),
+                ),
+        )
+    }
+
+    fn source_list(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        rows: Vec<SourceRow>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Tabs {
+        let rows: Rc<[SourceRow]> = rows.into();
+        let selected = match (!self.searching(cx)).then_some(&self.page) {
+            Some(Page::Library(Some(root))) => rows.iter().position(|row| row.root == *root),
+            _ => None,
+        };
+        let marks = theme.clone();
+        let choices = rows.clone();
+        let this = cx.weak_entity();
+        Tabs::new(id, label, rows.len(), move |index| {
+            let row = &rows[index];
+            let label = match &row.qualifier {
+                Some(qualifier) => SharedString::from(format!("{}, {qualifier}", row.name)),
+                None => row.name.clone(),
+            };
+            let mut tab = Tab::new(label).child(
+                h_flex()
+                    .min_w_0()
+                    .gap(marks.space(1.5))
+                    .child(div().flex_none().child(row.name.clone()))
+                    .children(row.qualifier.clone().map(|qualifier| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_ellipsis_start()
+                            .text_caption(marks.typography)
+                            .text_color(marks.muted_foreground)
+                            .child(qualifier)
+                    }))
+                    .children(
+                        row.state
+                            .as_ref()
+                            .and_then(|state| source_mark(&marks, state)),
+                    ),
+            );
+            if let Some(scripts) = row.scripts {
+                tab = tab.end_slot(SharedString::from(scripts.to_string()));
+            }
+            if let Some(state) = &row.state {
+                tab = tab.description(state.description());
+            }
+            tab
+        })
+        .page_sidebar()
+        .small()
+        .selected(selected.unwrap_or(usize::MAX))
+        .on_select(move |index, _, cx| {
+            let root = choices[index].root.clone();
+            let _ = this.update(cx, |this, cx| this.set_page(Page::Library(Some(root)), cx));
+        })
     }
 
     fn target(&self, cx: &App) -> Option<Entry> {
@@ -1214,6 +1596,7 @@ impl ScriptsWindow {
         {
             if self.displayed.as_ref().map(|shown| &shown.path) != Some(&target.path) {
                 self.detail_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+                self.error_cursor = None;
                 self.displayed = Some(target.clone());
             }
             return Some(target);
@@ -1492,28 +1875,25 @@ impl ScriptsWindow {
                 let scripts = scripts.read(cx);
                 options_panel(this.clone(), scripts.options(cx), scripts.room.clone(), cx)
             })
+            .align(Align::Start)
             .width(px(376.0))
     }
 
-    fn inputs(
-        &self,
-        theme: &Theme,
-        key: &FormKey,
-        width: Pixels,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let layout = theme.layout;
         let Some(form) = self.forms.get(key) else {
-            return muted(theme, "Reading inputs…").into_any_element();
+            return vec![muted(theme, "Reading inputs…").into_any_element()];
         };
         let (definition, drafts, texts) = match &form.state {
             FormState::Broken { title, message } => {
-                return Alert::new("script-broken", Tone::Danger, *title)
-                    .body(message.clone())
-                    .into_any_element();
+                return vec![
+                    Alert::new("script-broken", Tone::Danger, *title)
+                        .body(message.clone())
+                        .into_any_element(),
+                ];
             }
             FormState::Plain => {
-                return muted(theme, "This script has no inputs.").into_any_element();
+                return vec![muted(theme, "This script has no inputs.").into_any_element()];
             }
             FormState::Fields {
                 definition,
@@ -1524,7 +1904,8 @@ impl ScriptsWindow {
         };
         let this = cx.entity().downgrade();
         let saved = matches!(key, FormKey::Script(_));
-        let unreadable = (saved && script_inputs::unreadable(cx)).then(|| {
+        let (unreadable, stale) = leading(saved, drafts, cx);
+        let unreadable = unreadable.then(|| {
             let this = this.clone();
             Alert::new(
                 "inputs-unreadable",
@@ -1541,7 +1922,7 @@ impl ScriptsWindow {
                     }),
             )
         });
-        let stale = drafts.iter().any(|draft| draft.stale.is_some()).then(|| {
+        let stale = stale.then(|| {
             let this = this.clone();
             let key = key.clone();
             h_flex()
@@ -1582,7 +1963,7 @@ impl ScriptsWindow {
                     let control = match (&field.kind, &draft.draft, &texts[index]) {
                         (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
                             Switch::new(("input", index), label.clone(), *on)
-                                .hide_label()
+                                .trailing()
                                 .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx))
                                 .into_any_element()
                         }
@@ -1594,6 +1975,7 @@ impl ScriptsWindow {
                         )
                         .placeholder("Choose…")
                         .full_width()
+                        .invalid(error(field, draft).is_some())
                         .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
                         .into_any_element(),
                         (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
@@ -1624,15 +2006,22 @@ impl ScriptsWindow {
                                 .into_any_element()
                         }
                         (kind, _, Some(input)) => div()
-                            .when(matches!(kind, Kind::Number { .. }), |slot| slot.w(px(80.0)))
+                            .when(matches!(kind, Kind::Number { .. }), |slot| {
+                                slot.flex_none().w(px(80.0))
+                            })
                             .child(input.clone())
                             .into_any_element(),
                         _ => div().into_any_element(),
                     };
-                    let control = if width < theme.layout.inspector {
-                        mira_ui::primitives::Field::new(label, control).into_any_element()
-                    } else {
-                        row(layout, label, true, control).into_any_element()
+                    let control = match field.kind {
+                        Kind::Boolean { .. } => control,
+                        Kind::Number { .. } => h_flex()
+                            .justify_between()
+                            .gap(layout.space(2.0))
+                            .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(label))
+                            .child(control)
+                            .into_any_element(),
+                        _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
                     };
                     v_flex()
                         .gap(layout.space(1.0))
@@ -1646,11 +2035,103 @@ impl ScriptsWindow {
                             (None, None) => column,
                         })
                 });
-        v_flex()
-            .gap(layout.space(2.0))
-            .children(unreadable)
-            .children(stale)
-            .children(fields)
+        unreadable
+            .map(IntoElement::into_any_element)
+            .into_iter()
+            .chain(stale.map(IntoElement::into_any_element))
+            .chain(fields.map(IntoElement::into_any_element))
+            .collect()
+    }
+
+    fn input_errors(&self, path: &Path, cx: &App) -> usize {
+        match self
+            .forms
+            .get(&FormKey::Script(path.to_owned()))
+            .map(|form| &form.state)
+        {
+            Some(FormState::Fields {
+                definition, drafts, ..
+            }) if !script_inputs::unreadable(cx) => errored_fields(definition, drafts).len(),
+            _ => 0,
+        }
+    }
+
+    fn jump_to_error(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.displayed.as_ref().map(|entry| entry.path.clone()) else {
+            return;
+        };
+        let Some(Form {
+            state:
+                FormState::Fields {
+                    definition,
+                    drafts,
+                    texts,
+                    ..
+                },
+            ..
+        }) = self.forms.get(&FormKey::Script(path))
+        else {
+            return;
+        };
+        let errored = errored_fields(definition, drafts);
+        let count = errored.len() as isize;
+        if count == 0 {
+            return;
+        }
+        let next = match self.error_cursor {
+            Some(at) => (at as isize + by).rem_euclid(count),
+            None if by > 0 => 0,
+            None => count - 1,
+        } as usize;
+        let field = errored[next];
+        let (unreadable, stale) = leading(true, drafts, cx);
+        let item = usize::from(unreadable) + usize::from(stale) + field;
+        let input = texts.get(field).cloned().flatten();
+        self.error_cursor = Some(next);
+        let theme = cx.theme();
+        reveal_item(
+            &self.detail_scroll,
+            item,
+            theme.space(6.0),
+            error_bar_clearance(theme),
+        );
+        if let Some(input) = input {
+            window.focus(&input.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn error_bar(&self, theme: &Theme, errors: usize, cx: &mut Context<Self>) -> AnyElement {
+        let label: SharedString = match errors {
+            1 => "1 error".into(),
+            count => format!("{count} errors").into(),
+        };
+        let step = |id: &'static str, glyph: Icon, name: &'static str, by: isize| {
+            Button::icon(id, glyph, name)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .hide_tooltip()
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.jump_to_error(by, window, cx)),
+                )
+        };
+        theme
+            .floating_bar()
+            .id("error-bar")
+            .role(gpui::Role::Toolbar)
+            .aria_label("Input errors")
+            .child(
+                div()
+                    .pr(theme.space(1.0))
+                    .child(status_text("input-errors", label)),
+            )
+            .child(step(
+                "previous-error",
+                Icon::ChevronUp,
+                "Previous error",
+                -1,
+            ))
+            .child(step("next-error", Icon::ChevronDown, "Next error", 1))
             .into_any_element()
     }
 
@@ -1658,82 +2139,59 @@ impl ScriptsWindow {
         &self,
         theme: &Theme,
         entry: Option<&Entry>,
-        width: Pixels,
-        window: &Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(entry) = entry else {
-            return div().into_any_element();
-        };
-        let path = fit_path_to(&home_relative(&entry.path), width, window, theme);
-        v_flex()
-            .gap(theme.space(4.0))
-            .child(heading(theme, entry.name.clone(), path, None))
-            .child(self.inputs(theme, &FormKey::Script(entry.path.clone()), width, cx))
-            .into_any_element()
+    ) -> Option<Detail> {
+        let entry = entry?;
+        let errors = self.input_errors(&entry.path, cx);
+        let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
+        Some(Detail {
+            heading: heading(theme, entry.name.clone(), home_relative(&entry.path), None)
+                .into_any_element(),
+            body: self.inputs(theme, &FormKey::Script(entry.path.clone()), cx),
+            bar,
+        })
     }
 
     fn queued_detail(
         &self,
         theme: &Theme,
         queue: &[queue::Entry],
-        width: Pixels,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<Detail> {
         let layout = theme.layout;
-        let Some(queued) = queue.get(self.queued) else {
-            return div().into_any_element();
-        };
-        let position: SharedString = match &queued.state {
-            queue::State::Waiting => format!(
-                "{} of {} waiting",
-                queue[..self.queued]
-                    .iter()
-                    .filter(|entry| entry.waiting())
-                    .count()
-                    + 1,
-                queue.iter().filter(|entry| entry.waiting()).count()
-            )
-            .into(),
-            queue::State::Running { .. } => "Running now".into(),
-            queue::State::Ended { outcome, took } => {
-                format!("{} after {}", ended(outcome), duration(*took)).into()
-            }
-        };
+        let queued = queue.get(self.queued)?;
         let failed = match &queued.state {
             queue::State::Ended { outcome, .. } => failure(outcome),
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
         let body = match self.forms.get(&key).map(|form| &form.state) {
-            _ if queued.waiting() => self.inputs(theme, &key, width, cx),
-            None => muted(theme, "Reading inputs…").into_any_element(),
-            Some(FormState::Broken { title, message }) => {
+            _ if queued.waiting() => self.inputs(theme, &key, cx),
+            None => vec![muted(theme, "Reading inputs…").into_any_element()],
+            Some(FormState::Broken { title, message }) => vec![
                 Alert::new("queued-broken", Tone::Danger, *title)
                     .body(message.clone())
-                    .into_any_element()
+                    .into_any_element(),
+            ],
+            Some(FormState::Plain) => {
+                vec![muted(theme, "This script has no inputs.").into_any_element()]
             }
-            Some(FormState::Plain) => muted(theme, "This script has no inputs.").into_any_element(),
-            Some(FormState::Fields { definition, .. }) => {
-                let rows = queued
-                    .values
-                    .as_ref()
-                    .map(|values| rows(definition, values))
-                    .unwrap_or_default();
-                v_flex()
-                    .gap(layout.space(2.0))
-                    .children(rows.into_iter().map(|(label, value)| {
-                        row(layout, label, true, div().truncate().child(value))
-                    }))
-                    .into_any_element()
-            }
+            Some(FormState::Fields { definition, .. }) => queued
+                .values
+                .as_ref()
+                .map(|values| rows(definition, values))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(label, value)| {
+                    row(layout, label, true, div().truncate().child(value)).into_any_element()
+                })
+                .collect(),
         };
-        v_flex()
-            .gap(theme.space(4.0))
-            .child(heading(
+        Some(Detail {
+            heading: heading(
                 theme,
                 file_name(&queued.script).into(),
-                position,
+                home_relative(&queued.script),
                 Some(
                     Button::new("queued-remove", "Remove")
                         .size(Size::Small)
@@ -1742,25 +2200,32 @@ impl ScriptsWindow {
                         .on_click(cx.listener(|this, _, _, cx| this.remove_queued(cx)))
                         .into_any_element(),
                 ),
-            ))
-            .when_some(failed, |detail, message| {
-                detail.child(Alert::new("queued-failed", Tone::Danger, "Failed").body(message))
-            })
-            .child(body)
-            .into_any_element()
+            )
+            .into_any_element(),
+            body: failed
+                .map(|message| {
+                    Alert::new("queued-failed", Tone::Danger, "Failed")
+                        .body(message)
+                        .into_any_element()
+                })
+                .into_iter()
+                .chain(body)
+                .collect(),
+            bar: None,
+        })
     }
 
     fn queue_list(
         &self,
         theme: &Theme,
         queue: &[queue::Entry],
+        width: Pixels,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if queue.is_empty() {
-            return empty_frame(theme)
-                .child("Nothing queued. Pick a script in Library and choose Add to queue.")
-                .into_any_element();
-        }
+        let layout = theme.layout;
+        let number_width = layout.space(4.0);
+        let text_width = width - layout.space(3.0) * 2.0 - layout.space(2.0) * 3.0 - number_width;
         let rows: Rc<[QueueRow]> = queue
             .iter()
             .map(|queued| {
@@ -1768,7 +2233,7 @@ impl ScriptsWindow {
                     .forms
                     .get(&FormKey::Entry(queued.id))
                     .map(|form| &form.state);
-                let meta = match &queued.state {
+                let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
                         Some(FormState::Broken { .. }) => Some("Can't start".into()),
                         Some(FormState::Fields {
@@ -1783,18 +2248,40 @@ impl ScriptsWindow {
                         theme.muted_foreground,
                     )),
                 };
+                let folder = queued
+                    .script
+                    .parent()
+                    .map(home_relative)
+                    .unwrap_or_default();
+                let room = match &meta {
+                    Some((meta, _)) => {
+                        text_width - layout.space(2.0) - caption_width(meta, window, theme)
+                    }
+                    None => text_width,
+                };
                 QueueRow {
                     name: file_name(&queued.script).into(),
+                    folder: fit_path_to(&folder, room, window, theme),
                     meta,
                 }
             })
             .collect();
         let pinned = queue.iter().filter(|entry| !entry.waiting()).count();
+        let quiet = theme.muted_foreground;
         let this = cx.entity().downgrade();
         let that = this.clone();
-        let list = List::new("queue", "Queue", rows.len(), move |index| {
-            let QueueRow { name, meta } = &rows[index];
-            let item = ListItem::new(name.clone());
+        List::new("queue", "Queue", rows.len(), move |index| {
+            let QueueRow { name, folder, meta } = &rows[index];
+            let item = ListItem::new(name.clone())
+                .start_slot(
+                    div()
+                        .min_w(number_width)
+                        .text_right()
+                        .font_features(mira_ui::theme::tabular())
+                        .text_color(quiet)
+                        .child((index + 1).to_string()),
+                )
+                .description(folder.clone());
             match meta {
                 Some((meta, color)) => item.end_slot(div().text_color(*color).child(meta.clone())),
                 None => item,
@@ -1802,6 +2289,7 @@ impl ScriptsWindow {
         })
         .selected(Some(self.queued))
         .fill()
+        .flush()
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| {
                 this.queued = index;
@@ -1811,113 +2299,144 @@ impl ScriptsWindow {
         .on_reorder(move |from, to, _, cx| {
             let _ = that.update(cx, |this, cx| this.move_queued(from, to, cx));
         })
-        .pin_first(pinned);
-        v_flex().size_full().child(list).into_any_element()
+        .pin_first(pinned)
+        .into_any_element()
     }
 
-    fn library(&self, theme: &Theme, rows: Rc<[Row]>, cx: &mut Context<Self>) -> AnyElement {
-        let layout = theme.layout;
-        let typography = theme.typography;
-        let note = || empty_frame(theme);
-        let Some(library) = &self.library else {
-            return note().into_any_element();
-        };
-        if library.entries.is_empty() && library.sources.is_empty() {
-            let folder = self.folder.clone();
-            return note()
-                .child(
-                    div()
-                        .text_size(typography.body)
-                        .line_height(typography.body_line)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground)
-                        .child("No scripts yet"),
-                )
-                .child(format!(
-                    "Put .ts or .js files in {}, or add a folder you already have.",
-                    home_relative(&self.folder)
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .gap(layout.space(2.0))
-                        .child(
-                            Button::new("empty-show", "Show in Finder")
-                                .size(Size::Small)
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.show_folder(&folder, cx)
-                                    }),
-                                ),
-                        )
-                        .child(
-                            Button::new("empty-add", "Add folder…")
-                                .size(Size::Small)
-                                .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
-                        ),
-                )
-                .into_any_element();
+    fn no_scripts(&self, cx: &mut Context<Self>) -> Empty {
+        let folder = self.folder.clone();
+        Empty::new(
+            "No scripts yet",
+            format!(
+                "Put .ts or .js files in {}, or add a folder you already have.",
+                home_relative(&self.folder)
+            ),
+        )
+        .action(
+            Button::new("empty-show", "Show in Finder")
+                .size(Size::Small)
+                .on_click(cx.listener(move |this, _, _, cx| this.show_folder(&folder, cx))),
+        )
+        .action(
+            Button::new("empty-add", "Add folder…")
+                .size(Size::Small)
+                .on_click(cx.listener(|this, _, _, cx| this.add_folder(cx))),
+        )
+    }
+
+    fn library_empty(&self, no_scripts: bool, cx: &mut Context<Self>) -> Option<Empty> {
+        if self.searching(cx) {
+            return Some(Empty::new("No scripts match", "Try a different search."));
         }
-        let list = if rows.is_empty() {
-            let query = self.search.read(cx).text().trim().to_owned();
-            let text = if query.is_empty() {
-                "No scripts here yet.".to_owned()
-            } else {
-                format!("No scripts match \u{201c}{query}\u{201d}.")
-            };
-            note().child(text).into_any_element()
-        } else {
-            let sources: Rc<[Source]> = library.sources.clone().into();
-            let built_in: SharedString = library
-                .entries
-                .iter()
-                .filter(|entry| entry.source.is_none())
-                .count()
-                .to_string()
-                .into();
-            let count = rows.len();
-            let this = cx.entity().downgrade();
-            let that = this.clone();
-            VirtualList::new("scripts", "Scripts", count, move |index| {
-                match &rows[index] {
-                    Row::DefaultFolder => {
-                        ListItem::header("Default folder").end_slot(built_in.clone())
-                    }
-                    Row::Source(source) => {
-                        let source = &sources[*source];
-                        ListItem::header(source.name.clone()).end_slot(source_meta(source))
-                    }
-                    Row::Script(entry) => match &entry.folder {
-                        Some(folder) => ListItem::new(entry.name.clone()).end_slot(
-                            div()
-                                .max_w(px(100.0))
-                                .truncate()
-                                .text_ellipsis_start()
-                                .child(folder.clone()),
-                        ),
-                        None => ListItem::new(entry.name.clone()),
-                    },
-                }
-            })
-            .selected(Some(self.selected.min(count - 1)))
-            .fill()
-            .on_select(move |index, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.selected = index;
-                    this.chosen = None;
-                    cx.notify();
-                });
-            })
-            .on_activate(move |index, _, cx| {
-                let _ = that.update(cx, |this, cx| {
-                    this.selected = index;
-                    this.chosen = None;
-                    this.run_selected(cx);
-                });
-            })
-            .into_any_element()
+        if no_scripts {
+            return Some(self.no_scripts(cx));
+        }
+        let Page::Library(Some(root)) = &self.page else {
+            return None;
         };
-        v_flex().size_full().child(list).into_any_element()
+        let folder_empty = |root: PathBuf, cx: &mut Context<Self>| {
+            Empty::new(
+                "No scripts here",
+                format!("Put .ts or .js files in {}.", home_relative(&root)),
+            )
+            .action(
+                Button::new("empty-source-show", "Show in Finder")
+                    .size(Size::Small)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_folder(&root, cx))),
+            )
+        };
+        if *root == self.folder {
+            return Some(folder_empty(root.clone(), cx));
+        }
+        let source = self
+            .library
+            .as_ref()?
+            .sources
+            .iter()
+            .find(|source| source.root == *root)?;
+        Some(match (&source.problem, &source.kind) {
+            (Some(problem), SourceKind::Folder) => {
+                let root = root.clone();
+                Empty::new(format!("Can't load {}", source.name), problem.clone()).action(
+                    Button::new("empty-source-locate", "Locate…")
+                        .size(Size::Small)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.locate_folder(root.clone(), cx)),
+                        ),
+                )
+            }
+            (Some(problem), SourceKind::Package { .. }) => {
+                Empty::new(format!("Can't load {}", source.name), problem.clone())
+            }
+            (None, SourceKind::Package { .. }) => {
+                Empty::new("No scripts here", "This package has no scripts.")
+            }
+            (None, SourceKind::Folder) => folder_empty(root.clone(), cx),
+        })
+    }
+
+    fn library(
+        &self,
+        library: &Library,
+        rows: Rc<[Row]>,
+        folder_width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (folders, installed) = self.source_rows(cx);
+        let qualified: HashMap<PathBuf, SharedString> = folders
+            .into_iter()
+            .chain(installed)
+            .filter_map(|row| Some((row.root, row.qualifier?)))
+            .collect();
+        let headings: Rc<[(SharedString, Option<SharedString>)]> = library
+            .sources
+            .iter()
+            .map(|source| (source.name.clone(), qualified.get(&source.root).cloned()))
+            .collect();
+        let count = rows.len();
+        let this = cx.entity().downgrade();
+        let that = this.clone();
+        VirtualList::new("scripts", "Scripts", count, move |index| {
+            match &rows[index] {
+                Row::Source(source) => {
+                    let (name, qualifier) = &headings[*source];
+                    match qualifier {
+                        Some(qualifier) => {
+                            ListItem::header(name.clone()).end_slot(qualifier.clone())
+                        }
+                        None => ListItem::header(name.clone()),
+                    }
+                }
+                Row::Script(entry) => match &entry.folder {
+                    Some(folder) => ListItem::new(entry.name.clone()).end_slot(
+                        div()
+                            .max_w(folder_width)
+                            .truncate()
+                            .text_ellipsis_start()
+                            .child(folder.clone()),
+                    ),
+                    None => ListItem::new(entry.name.clone()),
+                },
+            }
+        })
+        .selected(Some(self.selected.min(count - 1)))
+        .fill()
+        .flush()
+        .on_select(move |index, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.selected = index;
+                this.chosen = None;
+                cx.notify();
+            });
+        })
+        .on_activate(move |index, _, cx| {
+            let _ = that.update(cx, |this, cx| {
+                this.selected = index;
+                this.chosen = None;
+                this.run_selected(cx);
+            });
+        })
+        .into_any_element()
     }
 }
 
@@ -1925,19 +2444,6 @@ fn first_script(rows: &[Row]) -> usize {
     rows.iter()
         .position(|row| matches!(row, Row::Script(_)))
         .unwrap_or(0)
-}
-
-fn source_meta(source: &Source) -> SharedString {
-    if let Some(problem) = &source.problem {
-        return problem.clone();
-    }
-    match &source.kind {
-        SourceKind::Package {
-            version: Some(version),
-            ..
-        } => version.clone(),
-        _ => source.scripts.to_string().into(),
-    }
 }
 
 fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
@@ -1971,27 +2477,27 @@ pub(super) fn fit_path_to(
     window: &Window,
     theme: &Theme,
 ) -> SharedString {
-    let font = gpui::font(theme.font_family.clone());
-    fit_path(path, |text| {
-        let run = TextRun {
-            len: text.len(),
-            font: font.clone(),
-            color: Hsla::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        window
-            .text_system()
-            .shape_line(
-                text.to_owned().into(),
-                theme.typography.secondary,
-                &[run],
-                None,
-            )
-            .width
-            <= width
-    })
+    fit_path(path, |text| caption_width(text, window, theme) <= width)
+}
+
+fn caption_width(text: &str, window: &Window, theme: &Theme) -> Pixels {
+    let run = TextRun {
+        len: text.len(),
+        font: gpui::font(theme.font_family.clone()),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(
+            text.to_owned().into(),
+            theme.typography.secondary,
+            &[run],
+            None,
+        )
+        .width
 }
 
 impl Render for ScriptsWindow {
@@ -2018,7 +2524,8 @@ impl Render for ScriptsWindow {
             FormKey::Script(_) => true,
             FormKey::Entry(id) => queued.contains(id),
         });
-        if self.pane == Pane::Queue {
+        let page = self.shown_page(cx);
+        if page == Page::Queue {
             for entry in &queue {
                 self.load_form(FormKey::Entry(entry.id), &entry.script, cx);
             }
@@ -2039,7 +2546,13 @@ impl Render for ScriptsWindow {
             .all(|entry| self.entry_ready(entry.id));
         let finished = queue.len() > unfinished;
         let skippable = queue.iter().any(queue::Entry::running);
-        let (status, status_color) = self.status(&theme, cx);
+        let status = self.status(&theme, cx);
+        let private = matches!(
+            self.options(cx).map(|options| options.rooms),
+            Some(Rooms::Private { .. })
+        );
+        self.room
+            .update(cx, |room, cx| room.set_disabled(!private, cx));
         let header = shown_tab::header(
             "Scripts",
             &self.client,
@@ -2049,7 +2562,7 @@ impl Render for ScriptsWindow {
             window,
             cx,
         )
-        .child(
+        .children(status.map(|(status, color)| {
             div()
                 .id("script-status")
                 .role(gpui::Role::Status)
@@ -2059,174 +2572,202 @@ impl Render for ScriptsWindow {
                 .pr(PADDING)
                 .truncate()
                 .text_size(typography.secondary)
-                .text_color(status_color)
-                .child(status),
+                .text_color(color)
+                .child(status)
+        }));
+        let no_scripts = matches!(
+            &self.library,
+            Some(library) if library.entries.is_empty() && library.sources.is_empty()
         );
-        let this = cx.entity().downgrade();
-        let panes = Tabs::new("pane", "Show", 2, move |index| {
-            if index == 0 {
-                Tab::new("Library")
-            } else {
-                let tab = Tab::new("Queue");
-                if unfinished > 0 {
-                    tab.end_slot(Badge::new(unfinished.to_string()))
-                } else {
-                    tab
-                }
-            }
-        })
-        .selected(usize::from(self.pane == Pane::Queue))
-        .on_select(move |index, _, cx| {
-            let pane = if index == 0 {
-                Pane::Library
-            } else {
-                Pane::Queue
+        let inspector_width = layout.inspector;
+        let list_width = window.viewport_size().width - layout.sidebar - inspector_width - px(1.0);
+        let inspected = |detail: Option<Detail>| {
+            let inline = |pane: Div| {
+                pane.pl(theme.space(4.0) + RING_ROOM)
+                    .pr(theme.space(4.0) + Scrollbar::GUTTER)
             };
-            let _ = this.update(cx, |this, cx| this.set_pane(pane, cx));
-        });
-        let library = self.pane == Pane::Library;
-        let search = div()
-            .w(SEARCH_WIDTH)
-            .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                let by = match event.keystroke.key.as_str() {
-                    "up" => -1,
-                    "down" => 1,
-                    _ => return,
-                };
-                this.step(by, cx);
-                cx.stop_propagation();
-            }))
-            .child(self.search.clone());
-        let toolbar = theme
-            .toolbar()
-            .child(div().w(PANES_WIDTH).child(panes))
-            .child(div().flex_1())
-            .when(library, |toolbar| {
-                toolbar.child(
-                    h_flex()
-                        .gap(layout.space(1.5))
-                        .children(self.filter(&theme, cx))
-                        .child(search),
-                )
-            });
-        let list_width = (window.viewport_size().width * 0.4).min(theme.layout.script_list_max);
-        let detail_width =
-            window.viewport_size().width - list_width - px(1.0) - theme.space(4.0) * 2.0;
-        let (list, detail) = match self.pane {
-            Pane::Library => (
-                self.library(&theme, rows, cx),
-                self.script_detail(&theme, chosen.as_ref(), detail_width, window, cx),
-            ),
-            Pane::Queue => (
-                self.queue_list(&theme, &queue, cx),
-                self.queued_detail(&theme, &queue, detail_width, cx),
-            ),
-        };
-        let body = h_flex()
-            .flex_1()
-            .min_h_0()
-            .items_start()
-            .child(
-                v_flex()
-                    .flex_none()
-                    .w(list_width)
-                    .h_full()
-                    .p(theme.space(3.0))
-                    .border_r_1()
-                    .border_color(theme.border)
-                    .child(list),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .p(theme.space(4.0))
+            let scrolled = self.detail_scroll.offset().y < px(0.0);
+            v_flex().flex_none().w(inspector_width).h_full().when_some(
+                detail,
+                |pane, Detail { heading, body, bar }| {
+                    let (reserve, covered) = if bar.is_some() {
+                        (theme.space(15.0), error_bar_clearance(&theme))
+                    } else {
+                        (theme.space(4.0), Pixels::ZERO)
+                    };
+                    pane.child(inline(
+                        div().flex_none().pt(theme.space(3.0)).child(heading),
+                    ))
                     .child(
                         div()
-                            .id("detail")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.detail_scroll)
-                            .pl(RING_ROOM)
-                            .pr(Scrollbar::GUTTER)
-                            .pb(RING_ROOM)
-                            .child(detail),
-                    )
-                    .child(Scrollbar::new(
-                        "detail-scrollbar",
-                        self.detail_scroll.clone(),
-                    )),
-            );
-        let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
-        let footer = match self.pane {
-            Pane::Library => footer
-                .child(self.sources(cx))
-                .child(
-                    Button::new("choose-file", "Choose file…")
-                        .variant(Variant::Ghost)
-                        .disabled(!has_tab || running)
-                        .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
-                )
-                .child(div().flex_1())
-                .child(
-                    Button::new("queue", "Add to queue")
-                        .end_slot(mira_ui::primitives::Kbd::hint("⌘⏎"))
-                        .disabled(!has_tab || !valid)
-                        .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
-                )
-                .child(div().flex_none().w(RUN_WIDTH).child(if running {
-                    Button::new("stop", "Stop")
-                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-                } else {
-                    Button::new("run", "Run")
-                        .end_slot(mira_ui::primitives::Kbd::hint("⏎"))
-                        .variant(Variant::Primary)
-                        .disabled(!has_tab || !valid)
-                        .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
-                })),
-            Pane::Queue => footer
-                .child(
-                    Button::new("queue-clear", "Clear queue")
-                        .variant(Variant::Ghost)
-                        .disabled(queue.len() == usize::from(skippable))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.edit_queue(cx, Queue::clear);
-                        })),
-                )
-                .child(
-                    Button::new("queue-clear-finished", "Clear finished")
-                        .variant(Variant::Ghost)
-                        .disabled(!finished)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.edit_queue(cx, Queue::clear_finished);
-                        })),
-                )
-                .child(div().flex_1())
-                .when(playing && skippable, |footer| {
-                    footer.child(Button::new("queue-skip", "Skip").on_click(
-                        cx.listener(|this, _, _, cx| this.act_on_tab(cx, RuffleView::skip_script)),
-                    ))
-                })
-                .child(
-                    div()
-                        .flex_none()
-                        .w(QUEUE_RUN_WIDTH)
-                        .child(if playing || skippable {
-                            Button::new("queue-stop", "Stop queue").on_click(cx.listener(
-                                |this, _, _, cx| this.act_on_tab(cx, RuffleView::stop_script),
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .child(mira_ui::nav::pane_start_above(
+                                self.detail_scroll.clone(),
+                                covered,
                             ))
-                        } else {
-                            Button::new("queue-start", "Start queue")
-                                .variant(Variant::Primary)
-                                .disabled(!has_tab || !waiting || !startable)
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.edit_queue(cx, Queue::play)),
+                            .child(
+                                inline(div())
+                                    .id("detail")
+                                    .size_full()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.detail_scroll)
+                                    .flex()
+                                    .flex_col()
+                                    .gap(theme.space(2.0))
+                                    .pt(theme.space(4.0))
+                                    .pb(reserve)
+                                    .children(body),
+                            )
+                            .child(mira_ui::nav::pane_end())
+                            .when_some(bar, |inputs, bar| {
+                                inputs.child(
+                                    h_flex()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom_0()
+                                        .justify_center()
+                                        .px(theme.space(3.0))
+                                        .pt(theme.space(6.0))
+                                        .pb(theme.space(3.0))
+                                        .bg(linear_gradient(
+                                            180.0,
+                                            linear_color_stop(theme.background.opacity(0.0), 0.0),
+                                            linear_color_stop(theme.background, 0.45),
+                                        ))
+                                        .child(bar),
                                 )
-                        }),
-                ),
+                            })
+                            .when(scrolled, |inputs| {
+                                inputs.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .h(theme.space(6.0))
+                                        .bg(linear_gradient(
+                                            180.0,
+                                            linear_color_stop(theme.background, 0.0),
+                                            linear_color_stop(theme.background.opacity(0.0), 1.0),
+                                        )),
+                                )
+                            })
+                            .child(
+                                Scrollbar::new("detail-scrollbar", self.detail_scroll.clone())
+                                    .persistent(),
+                            ),
+                    )
+                },
+            )
         };
+        let body = h_flex().flex_1().min_h_0().items_stretch();
+        let source_header = self.source_header(&theme, cx);
+        let body = match &page {
+            Page::Library(_) if self.chosen.is_none() && (no_scripts || rows.is_empty()) => body
+                .justify_center()
+                .items_center()
+                .children(self.library_empty(no_scripts, cx)),
+            Page::Library(_) => {
+                let list = if rows.is_empty() {
+                    self.library_empty(no_scripts, cx)
+                        .map(|empty| empty.compact().into_any_element())
+                } else {
+                    self.library
+                        .as_ref()
+                        .map(|library| self.library(library, rows, list_width * 0.45, cx))
+                };
+                let detail = self.script_detail(&theme, chosen.as_ref(), cx);
+                body.child(v_flex().flex_1().min_w_0().children(list))
+                    .child(theme.column_rule())
+                    .child(inspected(detail))
+            }
+            Page::Queue if !has_tab => body.justify_center().items_center().child(Empty::new(
+                "No tabs open",
+                "Open a tab to queue scripts on it.",
+            )),
+            Page::Queue if queue.is_empty() => body.justify_center().items_center().child(
+                Empty::new("Nothing queued", "Pick a script and choose Add to queue."),
+            ),
+            Page::Queue => {
+                let list = self.queue_list(&theme, &queue, list_width, window, cx);
+                let detail = self.queued_detail(&theme, &queue, cx);
+                body.child(v_flex().flex_1().min_w_0().child(list))
+                    .child(theme.column_rule())
+                    .child(inspected(detail))
+            }
+            Page::Log => body.justify_center().items_center().child(Empty::new(
+                "Script logs",
+                "Coming soon. Until then, script output goes to mira.log.",
+            )),
+        };
+        let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
+        let footer =
+            match page {
+                Page::Library(_) => Some(
+                    footer
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("queue", "Add to queue")
+                                .end_slot(mira_ui::primitives::Kbd::hint("⌘⏎"))
+                                .disabled(!has_tab || !valid)
+                                .on_click(cx.listener(|this, _, _, cx| this.add_to_queue(cx))),
+                        )
+                        .child(div().flex_none().w(RUN_WIDTH).child(if running {
+                            Button::new("stop", "Stop")
+                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                        } else {
+                            Button::new("run", "Run")
+                                .end_slot(mira_ui::primitives::Kbd::hint("⏎"))
+                                .variant(Variant::Primary)
+                                .disabled(!has_tab || !valid)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx)))
+                        })),
+                ),
+                Page::Queue => Some(
+                    footer
+                        .child(
+                            Button::new("queue-clear-finished", "Clear finished")
+                                .variant(Variant::Ghost)
+                                .disabled(!finished)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.edit_queue(cx, Queue::clear_finished);
+                                })),
+                        )
+                        .child(
+                            Button::new("queue-clear", "Clear queue")
+                                .variant(Variant::Ghost)
+                                .disabled(queue.len() == usize::from(skippable))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.edit_queue(cx, Queue::clear);
+                                })),
+                        )
+                        .child(div().flex_1())
+                        .when(playing && skippable, |footer| {
+                            footer.child(Button::new("queue-skip", "Skip").on_click(cx.listener(
+                                |this, _, _, cx| this.act_on_tab(cx, RuffleView::skip_script),
+                            )))
+                        })
+                        .child(div().flex_none().w(QUEUE_RUN_WIDTH).child(
+                            if playing || skippable {
+                                Button::new("queue-stop", "Stop queue").on_click(cx.listener(
+                                    |this, _, _, cx| this.act_on_tab(cx, RuffleView::stop_script),
+                                ))
+                            } else {
+                                Button::new("queue-start", "Start queue")
+                                    .variant(Variant::Primary)
+                                    .disabled(!has_tab || !waiting || !startable)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.edit_queue(cx, Queue::play)
+                                    }))
+                            },
+                        )),
+                ),
+                Page::Log => None,
+            };
+        let sidebar = self.sidebar(&theme, unfinished, cx);
         v_flex()
             .size_full()
             .window_surface(&theme)
@@ -2235,20 +2776,31 @@ impl Render for ScriptsWindow {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
             .on_action(cx.listener(|this, _: &AddToQueue, _, cx| {
-                if this.pane == Pane::Library {
+                if matches!(this.shown_page(cx), Page::Library(_)) {
                     this.add_to_queue(cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                this.set_pane(Pane::Library, cx);
                 window.focus(&this.search.focus_handle(cx), cx);
             }))
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
-            .child(toolbar)
-            .child(body)
-            .child(footer)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_stretch()
+                    .child(sidebar)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .children(source_header)
+                            .child(body)
+                            .children(footer),
+                    ),
+            )
             .child(self.package_dialogs.clone())
             .child(Toaster::layer(
                 &self.package_dialogs.read(cx).toasts.clone(),
@@ -2256,6 +2808,62 @@ impl Render for ScriptsWindow {
                 cx,
             ))
     }
+}
+
+struct Detail {
+    heading: AnyElement,
+    body: Vec<AnyElement>,
+    bar: Option<AnyElement>,
+}
+
+fn errored_fields(definition: &Definition, drafts: &[FieldDraft]) -> Vec<usize> {
+    definition
+        .fields()
+        .iter()
+        .zip(drafts)
+        .enumerate()
+        .filter(|(_, (field, draft))| error(field, draft).is_some())
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn error_bar_clearance(theme: &Theme) -> Pixels {
+    theme.space(17.0)
+}
+
+fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
+    let Some(item) = scroll.bounds_for_item(index) else {
+        return;
+    };
+    let viewport = scroll.bounds();
+    let mut offset = scroll.offset();
+    let top = item.top() + offset.y;
+    let bottom = item.bottom() + offset.y;
+    if top < viewport.top() + above {
+        offset.y += viewport.top() + above - top;
+    } else if bottom > viewport.bottom() - below {
+        offset.y -= bottom - (viewport.bottom() - below);
+    } else {
+        return;
+    }
+    offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
+    scroll.set_offset(offset);
+}
+
+fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
+    let text = text.into();
+    div()
+        .id(id)
+        .role(gpui::Role::Status)
+        .aria_label(text.clone())
+        .child(text)
+}
+
+fn leading(saved: bool, drafts: &[FieldDraft], cx: &App) -> (bool, bool) {
+    (
+        saved && script_inputs::unreadable(cx),
+        drafts.iter().any(|draft| draft.stale.is_some()),
+    )
 }
 
 fn heading(
@@ -2276,7 +2884,6 @@ fn heading(
                 .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
                 .child(
                     div()
-                        .truncate()
                         .text_size(typography.secondary)
                         .line_height(typography.secondary_line)
                         .text_color(theme.muted_foreground)
@@ -2284,22 +2891,6 @@ fn heading(
                 ),
         )
         .children(action)
-}
-
-fn empty_frame(theme: &Theme) -> gpui::Div {
-    let layout = theme.layout;
-    let typography = theme.typography;
-    v_flex()
-        .size_full()
-        .gap(layout.space(2.5))
-        .p(layout.space(3.0))
-        .rounded(theme.radius.panel)
-        .bg(theme.card)
-        .border_1()
-        .border_color(theme.border)
-        .text_size(typography.secondary)
-        .line_height(typography.secondary_line)
-        .text_color(theme.muted_foreground)
 }
 
 fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
@@ -2313,6 +2904,7 @@ fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
 
 struct QueueRow {
     name: SharedString,
+    folder: SharedString,
     meta: Option<(SharedString, Hsla)>,
 }
 
@@ -2365,72 +2957,44 @@ fn options_panel(
             options.child(note("Log in to change script settings.", true, &theme))
         })
         .child(
-            v_flex()
-                .gap(layout.space(1.0))
-                .child(switch_row(
-                    layout,
-                    "Safe start and stop",
-                    editable,
-                    Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
-                        .on_toggle(toggle(|options, on| options.safe_start_stop = on)),
-                ))
-                .child(note(
-                    "Best effort attempt to start or stop the script at your house.",
-                    editable,
-                    &theme,
-                )),
+            Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
+                .trailing()
+                .description("Best effort attempt to start or stop the script at your house.")
+                .disabled(!editable)
+                .on_toggle(toggle(|options, on| options.safe_start_stop = on)),
         )
         .child(
-            v_flex()
-                .gap(layout.space(1.0))
-                .child(switch_row(
-                    layout,
-                    "Restart after reconnecting",
-                    editable,
-                    Switch::new(
-                        "restart",
-                        "Restart after reconnecting",
-                        options.restart_after_reconnect,
-                    )
-                    .on_toggle(toggle(|options, on| options.restart_after_reconnect = on)),
-                ))
-                .child(note(
-                    "Restart the script when the same account reconnects.",
-                    editable,
-                    &theme,
-                )),
+            Switch::new(
+                "restart",
+                "Restart after reconnecting",
+                options.restart_after_reconnect,
+            )
+            .trailing()
+            .description("Restart the script when the same account reconnects.")
+            .disabled(!editable)
+            .on_toggle(toggle(|options, on| options.restart_after_reconnect = on)),
         )
         .child(div().h(px(1.0)).my(layout.space(1.0)).bg(theme.border))
         .child(
+            Switch::new("private-rooms", "Private rooms", private)
+                .trailing()
+                .description("Scripts join private rooms instead of public ones.")
+                .disabled(!editable)
+                .on_toggle(set_private),
+        )
+        .child(
             v_flex()
                 .gap(layout.space(1.0))
-                .child(switch_row(
-                    layout,
-                    "Private rooms",
-                    editable,
-                    Switch::new("private-rooms", "Private rooms", private).on_toggle(set_private),
-                ))
-                .child(note(
-                    "Scripts join private rooms instead of public ones.",
-                    editable,
-                    &theme,
-                )),
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .gap(layout.space(3.0))
+                        .min_h(layout.control)
+                        .child(row_label("Room", editable && private))
+                        .child(div().flex_none().w(px(96.0)).child(room_input)),
+                )
+                .child(note(ROOM_NOTE, editable && private, &theme)),
         )
-        .when(editable && private, |options| {
-            options.child(
-                v_flex()
-                    .gap(layout.space(1.0))
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .gap(layout.space(3.0))
-                            .min_h(layout.control)
-                            .child(row_label("Room", true))
-                            .child(div().flex_none().w(px(96.0)).child(room_input)),
-                    )
-                    .child(note(ROOM_NOTE, true, &theme)),
-            )
-        })
         .into_any_element()
 }
 
@@ -2594,7 +3158,7 @@ mod tests {
     }
 
     #[test]
-    fn search_and_the_folder_filter_narrow_the_list() {
+    fn search_and_the_chosen_source_narrow_the_list() {
         let entry = |name: &str, folder: Option<&str>, source: Option<usize>| Entry {
             path: PathBuf::from(name),
             name: name.to_owned().into(),
@@ -2616,13 +3180,12 @@ mod tests {
                 entry("dage.ts", None, Some(0)),
                 entry("spin.ts", None, Some(1)),
             ],
-            sources: vec![source("community"), source("dailies")],
+            sources: vec![source("community"), source("dailies"), source("unplugged")],
         };
         let names_in = |query: &str, scope: Scope| -> Vec<String> {
             library_rows(&library, query, scope)
                 .iter()
                 .map(|row| match row {
-                    Row::DefaultFolder => "[Default folder]".to_owned(),
                     Row::Source(index) => format!("[{}]", library.sources[*index].name),
                     Row::Script(entry) => entry.name.to_string(),
                 })
@@ -2645,41 +3208,71 @@ mod tests {
         assert_eq!(names("dailies"), ["[dailies]", "spin.ts"]);
         assert_eq!(names("weekly"), ["[community]", "daily.ts"]);
         assert!(names("zzz").is_empty());
-        assert_eq!(
-            names_in("", Scope::BuiltIn),
-            ["[Default folder]", "daily.ts", "hunt.ts"]
-        );
-        assert_eq!(
-            names_in("", Scope::Source(0)),
-            ["[community]", "daily.ts", "dage.ts"]
-        );
-        assert_eq!(
-            names_in("daily", Scope::Source(0)),
-            ["[community]", "daily.ts"]
-        );
-        assert!(names_in("hunt", Scope::Source(1)).is_empty());
+        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "hunt.ts"]);
+        assert_eq!(names_in("", Scope::Source(0)), ["daily.ts", "dage.ts"]);
+        assert_eq!(names_in("", Scope::Source(1)), ["spin.ts"]);
     }
 
-    struct OpenSources(Entity<ScriptsWindow>);
+    type Interaction = Box<dyn Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle)>;
 
-    impl Render for OpenSources {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let layout = cx.theme().layout;
-            let menu = self
-                .0
-                .update(cx, |scripts, cx| scripts.sources(cx))
-                .width(px(320.0))
-                .default_open(true);
-            div()
-                .size_full()
-                .bg(cx.theme().background)
-                .p(layout.space(4.0))
-                .child(div().w(px(140.0)).child(menu))
+    fn update_scripts(
+        cx: &mut gpui::HeadlessAppContext,
+        window: gpui::AnyWindowHandle,
+        f: impl Fn(&mut ScriptsWindow, &mut Context<ScriptsWindow>),
+    ) {
+        cx.update_window(window, |root, _, cx| {
+            let scripts = root
+                .downcast::<ScriptsWindow>()
+                .expect("the window shows Scripts");
+            scripts.update(cx, f);
+        })
+        .expect("update Scripts");
+        cx.run_until_parked();
+    }
+
+    fn pointer(
+        position: gpui::Point<Pixels>,
+        button: Option<gpui::MouseButton>,
+    ) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+        move |cx, window| {
+            let mut events: Vec<gpui::PlatformInput> = [px(0.0), px(1.0)]
+                .map(|nudge| {
+                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        position: position + gpui::point(nudge, px(0.0)),
+                        pressed_button: None,
+                        modifiers: Default::default(),
+                    })
+                })
+                .into();
+            if let Some(button) = button {
+                events.push(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    position,
+                    button,
+                    click_count: 1,
+                    first_mouse: false,
+                    modifiers: Default::default(),
+                }));
+                events.push(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    position,
+                    button,
+                    click_count: 1,
+                    modifiers: Default::default(),
+                }));
+            }
+            for event in events {
+                cx.update_window(window, |_, window, cx| {
+                    window.dispatch_event(event, cx);
+                    window.refresh();
+                })
+                .expect("send the pointer event");
+                cx.run_until_parked();
+            }
+            cx.advance_clock(Duration::from_secs(1));
         }
     }
 
     #[test]
-    fn snapshot_package_sources() {
+    fn snapshot_sources() {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let temp =
@@ -2689,9 +3282,13 @@ mod tests {
             r#"{{"repository":1,"owner":"toommyliu","repo":"mira","path":"script-packages/dailies","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
         );
         for (file, contents) in [
+            ("scripts/hunt.ts", ""),
+            ("scripts/bosses/dage.ts", ""),
+            ("community/daily.ts", ""),
+            ("backup/scripts/old-hunt.ts", ""),
             (
                 "packages/toommyliu-mira-dailies/package.json",
-                r#"{"name":"Dailies","mira":{}}"#,
+                r#"{"name":"Daily quests","mira":{}}"#,
             ),
             ("packages/toommyliu-mira-dailies/scripts/spin.ts", ""),
             (
@@ -2700,9 +3297,10 @@ mod tests {
             ),
             (
                 "packages/farming/package.json",
-                r#"{"name":"Farming","version":"1.2.0","mira":{}}"#,
+                r#"{"name":"Farming","version":"1.2.0","description":"Gold, XP and class point farms.","mira":{}}"#,
             ),
             ("packages/farming/scripts/hunt.ts", ""),
+            ("packages/farming/scripts/merge/yulgar.ts", ""),
             (
                 "packages/future/package.json",
                 r#"{"name":"Future","mira":{"requires":"9.0.0"}}"#,
@@ -2712,43 +3310,124 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, contents).unwrap();
         }
-        let size = gpui::size(px(560.0), px(440.0));
-        for written in mira_ui::snapshot("scripts-sources-packages", size, move |window, cx| {
-            let temp = temp.clone();
+        let size = gpui::size(px(WIDTH), px(HEIGHT));
+        let build = |window: &mut Window, cx: &mut App| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::settings::add_script_folder(temp.join("community"), cx);
+            crate::settings::add_script_folder(temp.join("unplugged"), cx);
+            crate::settings::add_script_folder(temp.join("backup/scripts"), cx);
             crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
             crate::packages::packages(cx).update(cx, |packages, _| {
-                packages.mark("toommyliu-mira-dailies", Status::Available)
+                packages.mark(
+                    "toommyliu-mira-dailies",
+                    Status::Available(
+                        crate::packages::Sha::parse(&("9a8b7c6".to_owned() + &"0".repeat(33)))
+                            .unwrap(),
+                    ),
+                )
             });
-            let scripts = cx.new(|cx| {
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            crate::shortcuts::apply(cx);
+            cx.new(|cx| {
                 let client = Client::empty_for_tests(&temp, cx);
-                ScriptsWindow::new(
+                let mut scripts = ScriptsWindow::new(
                     client,
                     temp.join("scripts"),
                     temp.join("types"),
                     Target::Selected,
                     window,
                     cx,
-                )
-            });
-            let library = scan_all(&temp.join("scripts"), &[], &temp.join("packages"));
-            scripts.update(cx, |scripts, _| scripts.library = Some(library));
-            cx.new(|_| OpenSources(scripts))
-        }) {
-            assert!(written.exists(), "{} was not written", written.display());
+                );
+                scripts.shown = Some(ShownTab::fake(
+                    "Alt 1",
+                    crate::automation::settings::Automation::default(),
+                ));
+                scripts
+            })
+        };
+        let select = |root: PathBuf| -> Interaction {
+            Box::new(move |cx, window| {
+                let page = Page::Library(Some(root.clone()));
+                update_scripts(cx, window, move |scripts, cx| {
+                    scripts.set_page(page.clone(), cx)
+                });
+            })
+        };
+        let shots: [(&str, Interaction); 9] = [
+            (
+                "scripts-sources-collapsed",
+                Box::new(|cx, window| {
+                    update_scripts(cx, window, |scripts, cx| {
+                        scripts.folders_open = false;
+                        cx.notify();
+                    })
+                }),
+            ),
+            ("scripts-sources", Box::new(|_, _| {})),
+            (
+                "scripts-source-actions",
+                Box::new({
+                    let pick = select(temp.join("packages/toommyliu-mira-dailies"));
+                    let open = pointer(
+                        gpui::point(px(WIDTH - 24.0), px(62.0)),
+                        Some(gpui::MouseButton::Left),
+                    );
+                    move |cx, window| {
+                        pick(cx, window);
+                        open(cx, window);
+                    }
+                }),
+            ),
+            (
+                "scripts-source-problem",
+                select(temp.join("packages/future")),
+            ),
+            (
+                "scripts-source-package",
+                select(temp.join("packages/farming")),
+            ),
+            (
+                "scripts-source-update",
+                select(temp.join("packages/toommyliu-mira-dailies")),
+            ),
+            ("scripts-source-folder", select(temp.join("community"))),
+            ("scripts-source-default", select(temp.join("scripts"))),
+            (
+                "scripts-updates-card",
+                Box::new(pointer(gpui::point(px(159.0), px(335.0)), None)),
+            ),
+        ];
+        for (name, interact) in shots {
+            for written in mira_ui::snapshot_with(name, size, build, interact) {
+                assert!(written.exists(), "{} was not written", written.display());
+            }
         }
+        let smallest = gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT));
+        let shots: [(&str, Interaction); 2] = [
+            ("scripts-sources-min", Box::new(|_, _| {})),
+            (
+                "scripts-source-update-min",
+                select(temp.join("packages/toommyliu-mira-dailies")),
+            ),
+        ];
+        for (name, interact) in shots {
+            for written in mira_ui::snapshot_with(name, smallest, build, interact) {
+                assert!(written.exists(), "{} was not written", written.display());
+            }
+        }
+        fs::remove_dir_all(temp).unwrap();
     }
 
     struct OptionsPanels {
         scripts: Entity<ScriptsWindow>,
+        rooms: [Entity<Input>; 3],
     }
 
     impl Render for OptionsPanels {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let layout = cx.theme().layout;
             let this = self.scripts.downgrade();
-            let room = self.scripts.read(cx).room.clone();
-            let panel = |options: Option<ScriptOptions>, cx: &App| {
+            let panel = |options: Option<ScriptOptions>, room: &Entity<Input>, cx: &App| {
                 div()
                     .w(px(376.0))
                     .p(layout.space(3.0))
@@ -2773,10 +3452,10 @@ mod tests {
                 .items_start()
                 .gap(layout.space(4.0))
                 .p(layout.space(4.0))
-                .bg(cx.theme().background)
-                .child(panel(Some(pinned), cx))
-                .child(panel(Some(public), cx))
-                .child(panel(None, cx))
+                .window_surface(cx.theme())
+                .child(panel(Some(pinned), &self.rooms[0], cx))
+                .child(panel(Some(public), &self.rooms[1], cx))
+                .child(panel(None, &self.rooms[2], cx))
         }
     }
 
@@ -2802,42 +3481,295 @@ mod tests {
                     cx,
                 )
             });
-            scripts.update(cx, |scripts, cx| {
-                scripts
-                    .room
-                    .update(cx, |room, cx| room.set_text("4242", cx));
+            let rooms = [("4242", false), ("", true), ("", true)].map(|(text, disabled)| {
+                cx.new(|cx| {
+                    let mut room = Input::new("Room", cx).placeholder("Random");
+                    room.set_text(text, cx);
+                    room.set_disabled(disabled, cx);
+                    room
+                })
             });
-            cx.new(|_| OptionsPanels { scripts })
+            cx.new(|_| OptionsPanels { scripts, rooms })
         }) {
             assert!(written.exists(), "{} was not written", written.display());
         }
     }
 
-    #[test]
-    fn snapshot_nested_library() {
+    fn snapshot_window(
+        name: &str,
+        size: (f32, f32),
+        tab: &'static str,
+        files: &[(&str, &str)],
+        setup: fn(&mut ScriptsWindow),
+    ) {
+        snapshot_window_with(name, size, tab, files, setup, |_, _| {});
+    }
+
+    fn snapshot_window_with(
+        name: &str,
+        size: (f32, f32),
+        tab: &'static str,
+        files: &[(&str, &str)],
+        setup: fn(&mut ScriptsWindow),
+        interact: impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle),
+    ) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let temp =
             std::env::temp_dir().join(format!("mira-scripts-{:x}", u64::from_ne_bytes(random)));
-        for file in [
-            "scripts/hunt.ts",
-            "scripts/bosses/dage.ts",
-            "scripts/legion/daily-quests/ultras/temple.ts",
-            "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
-        ] {
+        for (file, contents) in files {
             let path = temp.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "").unwrap();
+            fs::write(path, contents).unwrap();
         }
-        for (name, w, h) in [
-            ("scripts-nested", WIDTH, HEIGHT),
-            ("scripts-nested-min", MIN_WIDTH, MIN_HEIGHT),
+        let size = gpui::size(px(size.0), px(size.1));
+        let build = |window: &mut Window, cx: &mut App| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            cx.new(|cx| {
+                let client = Client::empty_for_tests(&temp, cx);
+                let mut scripts = ScriptsWindow::new(
+                    client,
+                    temp.join("scripts"),
+                    temp.join("types"),
+                    Target::Selected,
+                    window,
+                    cx,
+                );
+                scripts.shown = Some(ShownTab::fake(
+                    tab,
+                    crate::automation::settings::Automation::default(),
+                ));
+                setup(&mut scripts);
+                scripts
+            })
+        };
+        for written in mira_ui::snapshot_with(name, size, build, interact) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    const NESTED: &[(&str, &str)] = &[
+        ("scripts/hunt.ts", ""),
+        ("scripts/bosses/dage.ts", ""),
+        ("scripts/legion/daily-quests/ultras/temple.ts", ""),
+        (
+            "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
+            "",
+        ),
+        (
+            "packages/community/package.json",
+            r#"{"name":"Community","version":"1.4.0","mira":{}}"#,
+        ),
+        ("packages/community/scripts/daily.ts", ""),
+        ("packages/community/scripts/bosses/nulgath.ts", ""),
+    ];
+
+    const INPUTS: &[(&str, &str)] = &[(
+        "scripts/inputs.ts",
+        include_str!("../../examples/inputs.ts"),
+    )];
+
+    #[test]
+    fn snapshot_library() {
+        for (name, size, tab) in [
+            ("scripts-nested", (WIDTH, HEIGHT), "Alt 1"),
+            ("scripts-nested-min", (MIN_WIDTH, MIN_HEIGHT), "Alt 1"),
+            (
+                "scripts-long-tab-min",
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Sepulchure farm alt with a long name",
+            ),
         ] {
-            for written in mira_ui::snapshot(name, gpui::size(px(w), px(h)), |window, cx| {
-                let temp = temp.clone();
+            snapshot_window(name, size, tab, NESTED, |_| {});
+        }
+        snapshot_window_with(
+            "scripts-search-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            NESTED,
+            |scripts| scripts.page = Page::Queue,
+            |cx, window| {
+                update_scripts(cx, window, |scripts, cx| {
+                    scripts
+                        .search
+                        .update(cx, |search, cx| search.set_text("daily", cx))
+                })
+            },
+        );
+        snapshot_window(
+            "scripts-filtered-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            NESTED,
+            |scripts| scripts.page = Page::Library(Some(scripts.packages.join("community"))),
+        );
+    }
+
+    #[test]
+    fn snapshot_inputs_in_the_inspector() {
+        for (name, size) in [
+            ("scripts-inputs", (WIDTH, 760.0)),
+            ("scripts-inputs-min", (MIN_WIDTH, MIN_HEIGHT)),
+        ] {
+            snapshot_window(name, size, "Alt 1", INPUTS, |_| {});
+        }
+        snapshot_window(
+            "scripts-inputs-ready-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            &[("scripts/hunt.ts", include_str!("../../examples/hunt.ts"))],
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn snapshot_inputs_scroll_under_a_pinned_heading() {
+        snapshot_window_with(
+            "scripts-inputs-scrolled-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            INPUTS,
+            |_| {},
+            |cx, window| {
+                update_scripts(cx, window, |scripts, cx| {
+                    scripts
+                        .detail_scroll
+                        .set_offset(gpui::point(px(0.0), px(-120.0)));
+                    cx.notify();
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_options_open_from_the_footer() {
+        snapshot_window_with(
+            "scripts-options-open-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            NESTED,
+            |_| {},
+            |cx, window| {
+                let position = gpui::point(px(264.0), px(MIN_HEIGHT - 20.0));
+                for event in [
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        first_mouse: false,
+                        modifiers: Default::default(),
+                    }),
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        modifiers: Default::default(),
+                    }),
+                ] {
+                    cx.update_window(window, |_, window, cx| {
+                        window.dispatch_event(event, cx);
+                    })
+                    .expect("click Options");
+                    cx.run_until_parked();
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_empty_pages() {
+        let pages: [(&str, &[(&str, &str)], fn(&mut ScriptsWindow)); 3] = [
+            ("scripts-empty-min", &[], |_| {}),
+            ("scripts-queue-min", NESTED, |scripts| {
+                scripts.page = Page::Queue
+            }),
+            ("scripts-log-min", NESTED, |scripts| {
+                scripts.page = Page::Log
+            }),
+        ];
+        for (name, files, setup) in pages {
+            snapshot_window(name, (MIN_WIDTH, MIN_HEIGHT), "Alt 1", files, setup);
+        }
+    }
+
+    struct QueuePage {
+        scripts: Entity<ScriptsWindow>,
+        entries: Vec<queue::Entry>,
+    }
+
+    impl Render for QueuePage {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let width = window.viewport_size().width - theme.layout.inspector;
+            let entries = self.entries.clone();
+            let (list, detail) = self.scripts.update(cx, |scripts, cx| {
+                for entry in &entries {
+                    scripts.load_form(FormKey::Entry(entry.id), &entry.script, cx);
+                }
+                (
+                    scripts.queue_list(&theme, &entries, width, window, cx),
+                    scripts.queued_detail(&theme, &entries, cx),
+                )
+            });
+            h_flex()
+                .size_full()
+                .items_stretch()
+                .window_surface(&theme)
+                .child(v_flex().flex_1().min_w_0().child(list))
+                .child(
+                    theme
+                        .inspector_pane()
+                        .p(theme.space(4.0))
+                        .children(detail.map(|Detail { heading, body, .. }| {
+                            v_flex()
+                                .gap(theme.space(4.0))
+                                .child(heading)
+                                .child(v_flex().gap(theme.space(2.0)).children(body))
+                        })),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_queue() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-queue-{:x}", u64::from_ne_bytes(random)));
+        let scripts = [
+            ("scripts/hunt.ts", include_str!("../../examples/hunt.ts")),
+            ("scripts/legion/daily-quests/ultras/temple.ts", ""),
+            ("packages/community/scripts/daily.ts", ""),
+            (
+                "scripts/hunt-copy/hunt.ts",
+                include_str!("../../examples/hunt.ts"),
+            ),
+        ];
+        let mut queue = Queue::default();
+        for (file, contents) in scripts {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+            queue.add(path, Values::new());
+        }
+        let now = Instant::now();
+        queue.play();
+        queue.start_next(now);
+        queue.ended(&Outcome::Completed, now + Duration::from_secs(150));
+        queue.start_next(now);
+        let entries = queue.entries().to_vec();
+        for (name, width, height) in [
+            ("scripts-queue", WIDTH - 208.0, HEIGHT - 78.0),
+            ("scripts-queue-narrow", MIN_WIDTH - 208.0, MIN_HEIGHT - 78.0),
+        ] {
+            let size = gpui::size(px(width), px(height));
+            for written in mira_ui::snapshot(name, size, |window, cx| {
                 crate::settings::init(temp.join("settings.json"), |_| {}, cx);
                 crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
-                cx.new(|cx| {
+                crate::script_inputs::init(temp.join("inputs.json"), cx);
+                let scripts = cx.new(|cx| {
                     let client = Client::empty_for_tests(&temp, cx);
                     let mut scripts = ScriptsWindow::new(
                         client,
@@ -2847,16 +3779,297 @@ mod tests {
                         window,
                         cx,
                     );
-                    scripts.shown = Some(ShownTab::fake(
-                        "Alt 1",
-                        crate::automation::settings::Automation::default(),
-                    ));
+                    scripts.queued = 2;
                     scripts
-                })
+                });
+                let entries = entries.clone();
+                cx.new(|_| QueuePage { scripts, entries })
             }) {
                 assert!(written.exists(), "{} was not written", written.display());
             }
         }
+    }
+
+    #[gpui::test]
+    fn installing_a_package_selects_its_first_script(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-install-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, cx| scripts.target(cx).map(|entry| entry.path))
+        };
+        assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+
+        write(
+            "packages/dailies/package.json",
+            r#"{"name":"Dailies","mira":{}}"#,
+        );
+        write("packages/dailies/scripts/spin.ts", "");
+        write("packages/dailies/scripts/wheel.ts", "");
+        let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
+        dialogs.update(cx, |_, cx| {
+            cx.emit(PackageEvent::Installed("dailies".into()))
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            selected(cx),
+            Some(temp.join("packages/dailies/scripts/spin.ts"))
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn search_covers_every_source_until_a_source_is_chosen(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-search-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "");
+        write(
+            "packages/dailies/package.json",
+            r#"{"name":"Dailies","mira":{}}"#,
+        );
+        write("packages/dailies/scripts/spin.ts", "");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, cx| scripts.target(cx).map(|entry| entry.path))
+        };
+        let dailies = temp.join("packages/dailies");
+        let choose_dailies = |cx: &mut gpui::VisualTestContext| {
+            scripts.update(cx, |scripts, cx| {
+                scripts.set_page(Page::Library(Some(dailies.clone())), cx)
+            });
+            cx.run_until_parked();
+        };
+        choose_dailies(cx);
+        assert_eq!(selected(cx), Some(dailies.join("scripts/spin.ts")));
+
+        let search = scripts.read_with(cx, |scripts, _| scripts.search.clone());
+        search.update(cx, |search, cx| search.set_text("hunt", cx));
+        cx.run_until_parked();
+        assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+
+        choose_dailies(cx);
+        assert_eq!(
+            search.read_with(cx, |search, _| search.text().to_owned()),
+            ""
+        );
+        assert_eq!(selected(cx), Some(dailies.join("scripts/spin.ts")));
+
+        fs::remove_dir_all(&dailies).unwrap();
+        let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
+        dialogs.update(cx, |_, cx| cx.emit(PackageEvent::Changed));
+        cx.run_until_parked();
+        assert_eq!(
+            scripts.read_with(cx, |scripts, _| scripts.page.clone()),
+            Page::Library(None)
+        );
+        assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn the_inputs_bar_counts_inputs_to_fix_and_steps_through_them(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp = std::env::temp_dir().join(format!("mira-fix-{:x}", u64::from_ne_bytes(random)));
+        let script = temp.join("scripts/inputs.ts");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(&script, include_str!("../../examples/inputs.ts")).unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        let errors = |cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, cx| scripts.input_errors(&script, cx))
+        };
+        assert_eq!(errors(cx), 2);
+
+        let text = |field: usize, cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, _| {
+                let Some(Form {
+                    state: FormState::Fields { texts, .. },
+                    ..
+                }) = scripts.forms.get(&FormKey::Script(script.clone()))
+                else {
+                    panic!("the inputs are loaded");
+                };
+                texts[field].clone().expect("a text field")
+            })
+        };
+        let offset = text(4, cx);
+        let focused = |input: &Entity<Input>, cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| input.focus_handle(cx).is_focused(window))
+        };
+        let jump = |by: isize, cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                scripts.update(cx, |scripts, cx| scripts.jump_to_error(by, window, cx))
+            });
+            cx.run_until_parked();
+        };
+        jump(1, cx);
+        assert!(focused(&offset, cx), "the first input to fix is Offset");
+        jump(1, cx);
+        let scrolled = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
+        assert!(scrolled < px(0.0), "stepping to Room scrolls it into view");
+        jump(1, cx);
+        assert!(
+            focused(&offset, cx),
+            "stepping past the last input wraps to the first"
+        );
+
+        offset.update(cx, |input, cx| input.set_text("3", cx));
+        cx.run_until_parked();
+        assert_eq!(errors(cx), 1);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn tabbing_through_inputs_keeps_the_focused_field_in_view(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp = std::env::temp_dir().join(format!("mira-tab-{:x}", u64::from_ne_bytes(random)));
+        let script = temp.join("scripts/inputs.ts");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(&script, include_str!("../../examples/inputs.ts")).unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        let input = |field: usize, cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, _| {
+                let Some(Form {
+                    state: FormState::Fields { texts, .. },
+                    ..
+                }) = scripts.forms.get(&FormKey::Script(script.clone()))
+                else {
+                    panic!("the inputs are loaded");
+                };
+                texts[field].clone().expect("a text field")
+            })
+        };
+        let (name, offset) = (input(0, cx), input(4, cx));
+        cx.update(|window, cx| window.focus(&name.focus_handle(cx), cx));
+        cx.run_until_parked();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("tab");
+            cx.run_until_parked();
+        }
+        assert!(cx.update(|window, cx| offset.focus_handle(cx).is_focused(window)));
+        let at_offset = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
+        assert!(
+            at_offset < px(0.0),
+            "Offset is below the fold, so tabbing to it scrolls"
+        );
+        for _ in 0..3 {
+            cx.simulate_keystrokes("tab");
+            cx.run_until_parked();
+        }
+        let at_mode = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
+        assert!(
+            at_mode < at_offset,
+            "tabbing on to Mode scrolls further, even with Offset still marked invalid"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn sources_with_the_same_name_show_the_nearest_folder_that_tells_them_apart() {
+        let rows = |rows: &[(&str, &[&str])]| -> Vec<(SharedString, Vec<String>)> {
+            rows.iter()
+                .map(|(name, segments)| {
+                    (
+                        SharedString::from(*name),
+                        segments.iter().map(|segment| segment.to_string()).collect(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            qualifiers(&rows(&[
+                ("scripts", &["Mira", "Documents", "~"]),
+                ("scripts", &["aqw", "~"]),
+                ("community", &["aqw", "~"]),
+            ])),
+            [Some("Mira".into()), Some("aqw".into()), None]
+        );
+        assert_eq!(
+            qualifiers(&rows(&[
+                ("scripts", &["Mira", "a", "~"]),
+                ("scripts", &["Mira", "b", "~"]),
+            ])),
+            [Some("a/Mira".into()), Some("b/Mira".into())]
+        );
     }
 
     #[test]
