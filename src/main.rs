@@ -10,6 +10,7 @@ mod beep;
 mod bridge;
 mod combat_profiles;
 mod domain;
+mod file_panel;
 mod jitter;
 mod logging;
 mod net;
