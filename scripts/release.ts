@@ -110,6 +110,28 @@ export function releaseBody(notes: string, changes: readonly Change[]): string {
   ].join("\n");
 }
 
+export type Plan = "bump" | "resume";
+
+export function plan(
+  version: Version,
+  current: Version,
+  head: string,
+  latest: string | null,
+): Plan {
+  const name = formatVersion(version);
+  const resumable = name === formatVersion(current) && head === `release: Mira ${name}`;
+  if (latest === `v${name}`) {
+    if (resumable) return "resume";
+    throw new Error(`${name} is already published`);
+  }
+  if (latest !== null && !isNewer(version, parseVersion(latest.slice(1)))) {
+    throw new Error(`${name} isn't newer than the published ${latest}`);
+  }
+  if (isNewer(version, current)) return "bump";
+  if (resumable) return "resume";
+  throw new Error(`${name} isn't newer than ${formatVersion(current)}`);
+}
+
 export function parseChanges(log: string): Change[] {
   return log
     .split("\x1e")
@@ -132,15 +154,38 @@ function run(command: string, args: readonly string[], inherit = false): string 
 
 function latestTag(repository: Repository): string | null {
   try {
-    const tag = run("gh", [
-      "api",
-      `repos/${repository.owner}/${repository.name}/releases/latest`,
-      "--jq",
-      ".tag_name",
-    ]).trim();
+    const tag = execFileSync(
+      "gh",
+      ["api", `repos/${repository.owner}/${repository.name}/releases/latest`, "--jq", ".tag_name"],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
     return tag || null;
-  } catch {
-    return null;
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    if (stderr.includes("HTTP 404")) return null;
+    throw new Error(`Couldn't read the latest release: ${stderr.trim() || String(error)}`);
+  }
+}
+
+type Published = { readonly draft: boolean; readonly assets: readonly string[] };
+
+function published(slug: string, name: string): Published | null {
+  try {
+    const view = execFileSync(
+      "gh",
+      ["release", "view", name, "--repo", slug, "--json", "isDraft,assets"],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const release = JSON.parse(view) as {
+      isDraft: boolean;
+      assets: readonly { name: string; state: string }[];
+    };
+    const uploaded = release.assets.filter((asset) => asset.state === "uploaded");
+    return { draft: release.isDraft, assets: uploaded.map((asset) => asset.name) };
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    if (stderr.includes("release not found")) return null;
+    throw new Error(`Couldn't read release ${name}: ${stderr.trim() || String(error)}`);
   }
 }
 
@@ -173,35 +218,54 @@ async function changes(): Promise<void> {
 async function publish(versionText: string, notesPath: string, dryRun: boolean): Promise<void> {
   const { manifest, repository, remote, tag, changes } = await context();
   const version = parseVersion(versionText);
-  const current = manifestVersion(manifest);
-  if (!isNewer(version, current)) {
-    throw new Error(`${formatVersion(version)} isn't newer than ${formatVersion(current)}`);
+  const name = `v${formatVersion(version)}`;
+  const head = run("git", ["log", "-1", "--format=%s"]).trim();
+  const step = plan(version, manifestVersion(manifest), head, tag);
+  const slug = `${repository.owner}/${repository.name}`;
+  const existing = published(slug, name);
+  if (existing && step === "bump") {
+    throw new Error(
+      `${name} already has a release. Resume from its release commit or delete it first`,
+    );
   }
   const body = releaseBody(await readFile(notesPath, "utf8"), changes);
-  const slug = `${repository.owner}/${repository.name}`;
   const branch = run("gh", ["api", `repos/${slug}`, "--jq", ".default_branch"]).trim();
-  const name = `v${formatVersion(version)}`;
-  console.log(`Release ${name} to ${slug} (${remote}/${branch}), previous ${tag ?? "none"}\n`);
-  console.log(body);
+  const action = step === "resume" ? "Resume" : "Release";
+  console.log(`${action} ${name} to ${slug} (${remote}/${branch}), previous ${tag ?? "none"}\n`);
+  if (!existing) console.log(body);
   if (dryRun) return;
   if (run("git", ["status", "--porcelain", "--untracked-files=no"]).trim()) {
     throw new Error("Commit or stash your changes before releasing");
   }
-  await writeFile(manifestPath, withVersion(manifest, version));
-  run("cargo", ["update", "--workspace", "--offline", "--quiet"]);
-  run("git", [
-    "commit",
-    "--quiet",
-    "-m",
-    `release: Mira ${formatVersion(version)}`,
-    "--",
-    "Cargo.toml",
-    "Cargo.lock",
-  ]);
+  if (step === "bump") {
+    await writeFile(manifestPath, withVersion(manifest, version));
+    run("cargo", ["update", "--workspace", "--offline", "--quiet"]);
+    run("git", [
+      "commit",
+      "--quiet",
+      "-m",
+      `release: Mira ${formatVersion(version)}`,
+      "--",
+      "Cargo.toml",
+      "Cargo.lock",
+    ]);
+  }
   const sha = run("git", ["rev-parse", "HEAD"]).trim();
-  run("git", ["push", "--quiet", remote, `HEAD:refs/heads/${branch}`], true);
   run("scripts/package-app", [], true);
+  run("git", ["push", "--quiet", remote, `HEAD:refs/heads/${branch}`], true);
   const out = join(root, "target", "releases", formatVersion(version));
+  const assets = ["Mira.dmg", "Mira.zip"];
+  if (existing) {
+    const missing = assets.filter((asset) => !existing.assets.includes(asset));
+    if (missing.length > 0) {
+      const files = missing.map((asset) => join(out, asset));
+      run("gh", ["release", "upload", name, "--repo", slug, "--clobber", ...files], true);
+    }
+    if (existing.draft) {
+      run("gh", ["release", "edit", name, "--repo", slug, "--draft=false", "--latest"], true);
+    }
+    return;
+  }
   const scratch = await mkdtemp(join(tmpdir(), "mira-release-"));
   try {
     const notes = join(scratch, "notes.md");
@@ -221,8 +285,7 @@ async function publish(versionText: string, notesPath: string, dryRun: boolean):
         "--notes-file",
         notes,
         "--latest",
-        join(out, "Mira.dmg"),
-        join(out, "Mira.zip"),
+        ...assets.map((asset) => join(out, asset)),
       ],
       true,
     );

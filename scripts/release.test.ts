@@ -8,6 +8,7 @@ import {
   manifestVersion,
   parseChanges,
   parseVersion,
+  plan,
   releaseBody,
   remoteFor,
   withVersion,
@@ -85,4 +86,16 @@ test("notes are bullets and leave the changelog to the script", () => {
   assert.throws(() => checkNotes("Updates in the sidebar."));
   assert.throws(() => checkNotes("- One\n<details>"));
   assert.equal(checkNotes("- One\n\n- Two\n"), "- One\n\n- Two");
+});
+
+test("a publish bumps a newer version, resumes its own release commit, and refuses the rest", () => {
+  const v = parseVersion;
+  assert.equal(plan(v("0.1.8"), v("0.1.7"), "fix: something", "v0.1.7"), "bump");
+  assert.equal(plan(v("0.1.8"), v("0.1.8"), "release: Mira 0.1.8", "v0.1.7"), "resume");
+  assert.equal(plan(v("0.1.8"), v("0.1.8"), "release: Mira 0.1.8", "v0.1.8"), "resume");
+  assert.equal(plan(v("0.1.0"), v("0.0.9"), "fix: something", null), "bump");
+  assert.throws(() => plan(v("0.1.8"), v("0.1.8"), "fix: something", "v0.1.7"));
+  assert.throws(() => plan(v("0.1.7"), v("0.1.7"), "release: Mira 0.1.7", "v0.1.9"));
+  assert.throws(() => plan(v("0.1.8"), v("0.1.7"), "fix: something", "v0.2.0"));
+  assert.throws(() => plan(v("0.1.7"), v("0.1.6"), "fix: something", "v0.1.7"));
 });
