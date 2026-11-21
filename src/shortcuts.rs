@@ -219,23 +219,26 @@ impl Shortcut {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Taken(pub(crate) String);
+pub(crate) enum Taken {
+    Reserved,
+    Shortcut(Shortcut),
+}
 
 pub(crate) fn assign(
     overrides: &mut Overrides,
     shortcut: Shortcut,
     keys: Option<String>,
-    taken_by_app: impl Fn(&str) -> Option<String>,
+    reserved: impl Fn(&str) -> bool,
 ) -> Result<(), Taken> {
     if let Some(keys) = &keys {
-        if let Some(owner) = taken_by_app(keys) {
-            return Err(Taken(owner));
+        if reserved(keys) {
+            return Err(Taken::Reserved);
         }
         if let Some(other) = Shortcut::ALL
             .into_iter()
             .find(|&other| other != shortcut && other.keys(overrides) == Some(keys))
         {
-            return Err(Taken(other.label().to_owned()));
+            return Err(Taken::Shortcut(other));
         }
     }
     set(overrides, shortcut, keys);
@@ -293,37 +296,22 @@ pub(crate) fn apply(cx: &mut App) {
             .cloned()
             .collect();
         keymap.clear();
-        keymap.add_bindings(fixed);
         keymap.add_bindings(bindings);
+        keymap.add_bindings(fixed);
     }
     cx.refresh_windows();
 }
 
-pub(crate) fn taken_by_app(keys: &str, cx: &App) -> Option<String> {
-    let wanted = Keystroke::parse_with_os(keys, cx.platform_info().os).ok()?;
+pub(crate) fn reserved(keys: &str, cx: &App) -> bool {
+    let Ok(wanted) = Keystroke::parse_with_os(keys, cx.platform_info().os) else {
+        return false;
+    };
     let wanted = keyboard::typed(&wanted);
-    cx.key_bindings()
-        .borrow()
-        .bindings()
-        .find(|binding| {
-            !Shortcut::ALL.iter().any(|shortcut| shortcut.owns(binding))
-                && matches!(binding.keystrokes(), [only] if same(only.inner(), &wanted))
-        })
-        .map(|binding| command_name(binding.action().name()))
-}
-
-fn command_name(action: &str) -> String {
-    let name = action.rsplit("::").next().unwrap_or(action);
-    let mut words = String::new();
-    for (index, ch) in name.chars().enumerate() {
-        if ch.is_uppercase() && index > 0 {
-            words.push(' ');
-            words.extend(ch.to_lowercase());
-        } else {
-            words.push(ch);
-        }
-    }
-    words
+    cx.key_bindings().borrow().bindings().any(|binding| {
+        binding.predicate().is_none()
+            && !Shortcut::ALL.iter().any(|shortcut| shortcut.owns(binding))
+            && matches!(binding.keystrokes(), [only] if same(only.inner(), &wanted))
+    })
 }
 
 fn same(a: &Keystroke, b: &Keystroke) -> bool {
@@ -344,10 +332,10 @@ mod tests {
     #[test]
     fn a_shortcut_cant_take_keys_another_uses_and_back_to_default_saves_nothing() {
         let mut overrides = Overrides::new();
-        let free = |_: &str| None;
+        let free = |_: &str| false;
         assert_eq!(
             assign(&mut overrides, Shortcut::Bank, Some("cmd-r".into()), free),
-            Err(Taken("Start/stop script".into()))
+            Err(Taken::Shortcut(Shortcut::StartStopScript))
         );
         assert_eq!(Shortcut::StartStopScript.keys(&overrides), Some("cmd-r"));
 
@@ -397,9 +385,9 @@ mod tests {
             &mut overrides,
             Shortcut::Bank,
             Some("cmd-q".into()),
-            |keys| (keys == "cmd-q").then(|| "Quit".to_owned()),
+            |keys| keys == "cmd-q",
         );
-        assert_eq!(taken, Err(Taken("Quit".into())));
+        assert_eq!(taken, Err(Taken::Reserved));
         assert_eq!(Shortcut::Bank.keys(&overrides), Some("cmd-b"));
     }
 
@@ -412,10 +400,11 @@ mod tests {
         ));
         std::fs::write(
             &path,
-            r#"{"appearance":"light","shortcuts":{"follower":"cmd-shift-f","packets":"cmd-shift-k","bank":null,"interfaceOnlyRendering":"cmd-i"}}"#,
+            r#"{"appearance":"light","shortcuts":{"follower":"cmd-shift-f","packets":"cmd-shift-k","bank":null,"jump":"cmd-c","interfaceOnlyRendering":"cmd-i"}}"#,
         )
         .unwrap();
         cx.update(|cx| {
+            mira_ui::init(cx);
             settings::init(path.clone(), |_| {}, cx);
             apply(cx);
             apply(cx);
@@ -426,8 +415,25 @@ mod tests {
                 Some("⌘I")
             );
             assert_eq!(keys_for(&game::ToggleScript, cx).as_deref(), Some("⌘R"));
-            assert_eq!(taken_by_app("cmd-shift-p", cx), None);
-            assert_eq!(taken_by_app("cmd-,", cx).as_deref(), Some("Open settings"));
+            assert!(!reserved("cmd-shift-p", cx));
+            assert!(reserved("cmd-,", cx));
+            assert!(!reserved("cmd-c", cx));
+            let copy = |contexts: &[&str]| {
+                let contexts: Vec<_> = contexts
+                    .iter()
+                    .map(|context| gpui::KeyContext::parse(context).unwrap())
+                    .collect();
+                let (bindings, _) = cx
+                    .key_bindings()
+                    .borrow()
+                    .bindings_for_input(&[Keystroke::parse("cmd-c").unwrap()], &contexts);
+                bindings[0].action().boxed_clone()
+            };
+            assert!(
+                copy(&["FocusScope", "Input"]).partial_eq(&mira_ui::primitives::text_field::Copy)
+            );
+            assert!(copy(&["FocusScope"]).partial_eq(&game::OpenJump));
+            assert!(copy(&[]).partial_eq(&game::OpenJump));
             let bound = cx.key_bindings().borrow().bindings().count();
             apply(cx);
             assert_eq!(cx.key_bindings().borrow().bindings().count(), bound);

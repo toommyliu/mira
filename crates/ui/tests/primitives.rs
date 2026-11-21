@@ -7,6 +7,7 @@ use gpui::{
 };
 use mira_ui::{
     FOCUS_SCOPE,
+    components::ShortcutRefusal,
     primitives::{Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, MenuItem, Select},
 };
 
@@ -1077,7 +1078,7 @@ fn a_disclosure_toggles_once_per_key_press(cx: &mut TestAppContext) {
     }
 }
 
-gpui::actions!(test, [CloseWindow]);
+gpui::actions!(test, [CloseWindow, Quit]);
 
 struct Shortcut {
     focus: FocusHandle,
@@ -1096,7 +1097,10 @@ impl Render for Shortcut {
                 mira_ui::components::ShortcutField::new("hotkey", "Hotkey", None).on_change(
                     move |keystroke, _, _| {
                         if keystroke == Keystroke::parse("cmd-q").ok() {
-                            return Err("Used by Quit".into());
+                            return Err(ShortcutRefusal::Reserved);
+                        }
+                        if keystroke == Keystroke::parse("cmd-b").ok() {
+                            return Err(ShortcutRefusal::Taken("Used by Bank".into()));
                         }
                         recorded.set(keystroke);
                         Ok(())
@@ -1116,14 +1120,18 @@ impl Render for Shortcut {
 #[gpui::test]
 fn shortcut_field_records_combinations_the_app_binds(cx: &mut TestAppContext) {
     let fired = Rc::new(Cell::new(false));
+    let quit = Rc::new(Cell::new(false));
     cx.update(|cx| {
         mira_ui::init(cx);
         cx.bind_keys([
             gpui::KeyBinding::new("cmd-w", CloseWindow, None),
             gpui::KeyBinding::new("ctrl-shift-tab", CloseWindow, None),
+            gpui::KeyBinding::new("cmd-q", Quit, None),
         ]);
         let fired = fired.clone();
         cx.on_action(move |_: &CloseWindow, _| fired.set(true));
+        let quit = quit.clone();
+        cx.on_action(move |_: &Quit, _| quit.set(true));
     });
     let recorded = Rc::new(Cell::new(None));
     let next = Rc::new(Cell::new(None));
@@ -1151,6 +1159,23 @@ fn shortcut_field_records_combinations_the_app_binds(cx: &mut TestAppContext) {
             Some(Keystroke::parse(combination).unwrap())
         );
     }
+
+    cx.update(|window, cx| {
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    press(cx, "cmd-q");
+    assert!(quit.get(), "a reserved combination didn't reach the app");
+    assert_eq!(recorded.take(), None);
+    assert!(cx.debug_bounds("shortcut-error").is_none());
+    press(cx, "cmd-k");
+    assert_eq!(
+        recorded.take(),
+        Some(Keystroke::parse("cmd-k").unwrap()),
+        "the field stopped recording after a reserved combination"
+    );
 
     cx.update(|window, cx| {
         let focus = view.read(cx).focus.clone();
@@ -3330,7 +3355,7 @@ fn a_rejected_shortcut_keeps_recording_until_a_free_one_is_pressed(cx: &mut Test
     });
     cx.run_until_parked();
     press(cx, "tab");
-    press(cx, "cmd-q");
+    press(cx, "cmd-b");
     assert_eq!(recorded.take(), None);
     for key in ["a", "enter", "left"] {
         press(cx, key);
