@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+case $1 in
+*/mira) ;;
+*) exec "$@" ;;
+esac
+app="$(dirname "$1")/Mira (Dev).app"
+"$(dirname "$0")/bundle-app" --dev "$1" "$app" "$CARGO_PKG_VERSION"
+shift
+exec "$app/Contents/MacOS/mira" "$@"

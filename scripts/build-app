@@ -12,21 +12,10 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 cargo build --profile "$profile" --locked
-bundle=target/Mira.app/Contents
-mkdir -p "$bundle/MacOS"
-cp "target/$directory/mira" "$bundle/MacOS/mira"
-resources="$bundle/Resources"
+version=$(cargo pkgid --locked -p mira | sed 's/.*[#@]//')
+scripts/bundle-app "target/$directory/mira" target/Mira.app "$version"
+resources=target/Mira.app/Contents/Resources
 rm -rf "$resources/script-packages" "$resources/script-packages.json"
-mkdir -p "$resources"
-icon_plist=$(mktemp)
-trap 'rm -f "$icon_plist"' EXIT
-# actool resolves relative paths against its background agent's working directory.
-if ! log=$(xcrun actool "$PWD/assets/Mira.icon" --compile "$PWD/$resources" --platform macosx --target-device mac \
-    --minimum-deployment-target 11.0 --app-icon Mira --output-partial-info-plist "$icon_plist" \
-    --output-format human-readable-text --errors --warnings); then
-    printf '%s\n' "$log" >&2
-    exit 1
-fi
 if git cat-file -e HEAD:script-packages 2>/dev/null; then
     git archive HEAD script-packages | tar -x -C "$resources"
     commit=$(git rev-parse HEAD)
@@ -38,19 +27,3 @@ if git cat-file -e HEAD:script-packages 2>/dev/null; then
     done
     printf '{"commit":"%s","trees":{%s}}\n' "$commit" "$trees" > "$resources/script-packages.json"
 fi
-version=$(cargo pkgid --locked -p mira | sed 's/.*[#@]//')
-cat > "$bundle/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-    <key>CFBundleName</key><string>Mira</string>
-    <key>CFBundleIdentifier</key><string>local.mira.app</string>
-    <key>CFBundleExecutable</key><string>mira</string>
-    <key>CFBundleIconFile</key><string>Mira</string>
-    <key>CFBundleIconName</key><string>Mira</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$version</string>
-    <key>CFBundleVersion</key><string>$version</string>
-    <key>NSHighResolutionCapable</key><true/>
-</dict></plist>
-PLIST
