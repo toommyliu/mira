@@ -24,7 +24,7 @@ use mira_ui::{
     components::{Disclosure, Empty},
     h_flex,
     primitives::{
-        Alert, Align, Badge, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
+        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
         Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
@@ -79,7 +79,6 @@ const PADDING: Pixels = px(16.0);
 const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
-const SHOWN_TAGS: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -2358,11 +2357,8 @@ impl ScriptsWindow {
         let key = FormKey::Script(entry.path.clone());
         let about = self.about(&entry.path, &key);
         Some(Detail {
-            heading: heading(theme, about.name.clone(), home_relative(&entry.path), None)
-                .into_any_element(),
-            body: about_body(theme, &about)
-                .chain(self.inputs(theme, &key, cx))
-                .collect(),
+            heading: heading(theme, &about, home_relative(&entry.path), None).into_any_element(),
+            body: self.inputs(theme, &key, cx),
             bar,
         })
     }
@@ -2406,7 +2402,7 @@ impl ScriptsWindow {
         Some(Detail {
             heading: heading(
                 theme,
-                about.name.clone(),
+                &about,
                 home_relative(&queued.script),
                 Some(
                     Button::new("queued-remove", "Remove")
@@ -2418,12 +2414,13 @@ impl ScriptsWindow {
                 ),
             )
             .into_any_element(),
-            body: about_body(theme, &about)
-                .chain(failed.map(|message| {
+            body: failed
+                .map(|message| {
                     Alert::new("queued-failed", Tone::Danger, "Failed")
                         .body(message)
                         .into_any_element()
-                }))
+                })
+                .into_iter()
                 .chain(body)
                 .collect(),
             bar: None,
@@ -3095,12 +3092,34 @@ fn leading(saved: bool, drafts: &[FieldDraft], cx: &App) -> (bool, bool) {
 
 fn heading(
     theme: &Theme,
-    name: SharedString,
+    about: &About,
     detail: SharedString,
     action: Option<AnyElement>,
 ) -> impl IntoElement {
     let layout = theme.layout;
     let typography = theme.typography;
+    let description = about.description.clone().map(|description| {
+        div()
+            .mt(layout.space(1.0))
+            .line_clamp(3)
+            .text_ellipsis()
+            .child(description)
+    });
+    let tags = (!about.tags.is_empty()).then(|| {
+        let count = match about.tags.len() {
+            1 => "1 tag".to_owned(),
+            count => format!("{count} tags"),
+        };
+        let listed: Vec<&str> = about.tags.iter().map(AsRef::as_ref).collect();
+        h_flex().mt(layout.space(1.0)).child(
+            div().flex_none().child(
+                HoverCard::new("script-tags", "Tags")
+                    .fit()
+                    .body(listed.join(", "))
+                    .child(div().child(count)),
+            ),
+        )
+    });
     h_flex()
         .items_start()
         .gap(layout.space(2.0))
@@ -3108,45 +3127,23 @@ fn heading(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
                 .child(
                     div()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(about.name.clone()),
+                )
+                .child(
+                    v_flex()
                         .text_size(typography.secondary)
                         .line_height(typography.secondary_line)
                         .text_color(theme.muted_foreground)
-                        .child(detail),
+                        .child(detail)
+                        .children(description)
+                        .children(tags),
                 ),
         )
         .children(action)
-}
-
-fn about_body(theme: &Theme, about: &About) -> impl Iterator<Item = AnyElement> {
-    let description = about
-        .description
-        .clone()
-        .map(|description| muted(theme, description).into_any_element());
-    let rest = about.tags.get(SHOWN_TAGS..).unwrap_or_default();
-    let more = (!rest.is_empty()).then(|| {
-        let title = match rest.len() {
-            1 => "1 more tag".to_owned(),
-            count => format!("{count} more tags"),
-        };
-        let listed: Vec<&str> = rest.iter().map(AsRef::as_ref).collect();
-        div().flex_none().child(
-            HoverCard::new("more-tags", title)
-                .body(listed.join(", "))
-                .child(Badge::new(format!("+{}", rest.len()))),
-        )
-    });
-    let tags = (!about.tags.is_empty()).then(|| {
-        h_flex()
-            .flex_wrap()
-            .gap(theme.space(1.0))
-            .children(about.tags.iter().take(SHOWN_TAGS).cloned().map(Badge::new))
-            .children(more)
-            .into_any_element()
-    });
-    description.into_iter().chain(tags)
 }
 
 fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
