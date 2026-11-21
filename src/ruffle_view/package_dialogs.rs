@@ -185,7 +185,7 @@ impl PackageDialogs {
     }
 
     pub(super) fn remove(&mut self, dir: String, name: SharedString, cx: &mut Context<Self>) {
-        let task = packages::packages(cx).update(cx, |packages, cx| packages.remove(dir, cx));
+        let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(dir, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {

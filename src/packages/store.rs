@@ -211,8 +211,21 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn remove(&self, dir: &str) -> io::Result<()> {
-        (self.trash)(&self.package(dir))
+    pub(crate) fn uninstall(&self, dir: &str) -> io::Result<()> {
+        if matches!(dir, "" | "." | "..") || dir.contains(['/', '\0']) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid package folder name",
+            ));
+        }
+        let package = self.package(dir);
+        if !fs::metadata(&package)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotADirectory,
+                "The package path is not a folder",
+            ));
+        }
+        (self.trash)(&package)
     }
 }
 
@@ -465,9 +478,17 @@ pub(crate) mod tests {
             "new"
         );
 
-        store.remove("o-r").unwrap();
+        store.uninstall("o-r").unwrap();
         assert!(!installed.exists());
-        assert_eq!(bin.contents().len(), 3);
+        assert_eq!(
+            bin.contents(),
+            [b"half".to_vec(), b"new".to_vec(), b"old".to_vec()]
+        );
+        assert!(store.receipts().is_empty());
+        assert_eq!(
+            store.uninstall("o-r").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
