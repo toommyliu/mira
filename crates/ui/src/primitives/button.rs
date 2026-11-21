@@ -596,7 +596,11 @@ impl RenderOnce for Button {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(Spinner::new("busy").color(fg).size(icon_size * (4.0 / 3.0))),
+                        .child(Spinner::new("busy").color(fg).size(if self.icon.is_some() {
+                            icon_size
+                        } else {
+                            icon_size * (4.0 / 3.0)
+                        })),
                 )
             })
             .when(ring || self.invalid, |button| {
