@@ -556,7 +556,7 @@ mod tests {
             (
                 Some(r#"{"name":"left-pad"}"#),
                 &[],
-                "This isn't a Mira script package. Its package.json needs a \"mira\" field.",
+                "This isn't a Mira script package.",
             ),
             (
                 None,
