@@ -27,7 +27,7 @@ mod text_input;
 #[path = "macos.rs"]
 mod native;
 
-use std::{ops::Range, rc::Rc};
+use std::{ops::Range, path::PathBuf, rc::Rc};
 
 use crate::{
     account_settings::{self, Options},
@@ -73,8 +73,37 @@ pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
-pub(crate) use scripts::{LoadScript, OpenScripts, load as load_script, open as open_scripts};
+pub(crate) use scripts::{LoadScript, OpenScripts};
 pub(crate) use shown_tab::Target;
+
+pub(crate) fn init_tools(folder: PathBuf, types: PathBuf, cx: &mut App) {
+    let (load_folder, load_types) = (folder.clone(), types.clone());
+    on_tool::<LoadScript>(cx, move |client, cx| {
+        scripts::load(client, load_folder.clone(), load_types.clone(), cx)
+    });
+    on_tool::<OpenScripts>(cx, move |client, cx| {
+        scripts::open(client, folder.clone(), types.clone(), Target::Selected, cx)
+    });
+    on_tool::<OpenEnvironment>(cx, |client, cx| {
+        environment::open(client, Target::Selected, cx)
+    });
+    on_tool::<OpenLoaderGrabber>(cx, |client, cx| {
+        loader_grabber::open(client, Target::Selected, cx)
+    });
+    on_tool::<OpenPackets>(cx, |client, cx| packets::open(client, Target::Selected, cx));
+}
+
+fn on_tool<A: gpui::Action>(cx: &mut App, open: impl Fn(Entity<Client>, &mut App) + 'static) {
+    let open = Rc::new(open);
+    cx.on_action(move |_: &A, cx| {
+        let open = open.clone();
+        cx.defer(move |cx| {
+            if let Some(client) = client::frontmost(cx) {
+                open(client, cx);
+            }
+        });
+    });
+}
 
 fn close_tools(client: gpui::EntityId, cx: &mut gpui::App) {
     scripts::close(client, cx);
