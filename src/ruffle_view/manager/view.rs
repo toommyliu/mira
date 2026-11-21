@@ -303,22 +303,24 @@ fn account_menu(
         ]);
         if !in_setup {
             let removed = account.clone();
-            items.push(
-                targets_item(
-                    &this,
-                    &targets,
-                    "Remove account…",
-                    move |manager, _, _, cx| {
-                        manager.ask(
-                            Ask::Remove {
-                                account: removed.clone(),
-                            },
-                            cx,
-                        )
-                    },
-                )
-                .danger(),
-            );
+            let mut remove = targets_item(
+                &this,
+                &targets,
+                "Remove account…",
+                move |manager, _, _, cx| {
+                    manager.ask(
+                        Ask::Remove {
+                            account: removed.clone(),
+                        },
+                        cx,
+                    )
+                },
+            )
+            .danger();
+            if let Some(blocked) = super::busy(&account.id(), "removing it", cx) {
+                remove = remove.disabled(true).description(blocked);
+            }
+            items.push(remove);
         }
         items
     })
@@ -2000,7 +2002,7 @@ impl Manager {
                 format!("Remove {}?", account.name),
                 format!(
                     "This deletes the saved login and settings for {} and takes it out of any \
-                     setups. If its tab is open, the tab stays open.",
+                     setups.",
                     account.name
                 ),
                 vec![

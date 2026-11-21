@@ -266,6 +266,23 @@ enum Ask {
     },
 }
 
+fn busy(account: &AccountId, action: &str, cx: &App) -> Option<String> {
+    let clients = games(cx);
+    if clients
+        .iter()
+        .any(|client| client.uses_settings_of(account, cx))
+    {
+        Some(format!("Close this account's tab before {action}."))
+    } else if clients
+        .iter()
+        .any(|client| client.waiting(account).is_some())
+    {
+        Some(format!("Stop this account's launch before {action}."))
+    } else {
+        None
+    }
+}
+
 fn games(cx: &App) -> Vec<&Client> {
     client::clients(cx)
         .into_iter()
@@ -1264,23 +1281,10 @@ impl Manager {
             .editing
             .as_ref()
             .filter(|editing| **editing != AccountId::of(draft.username.trim()));
-        if let Some(old) = renamed {
-            let clients = games(cx);
-            let blocked = if clients
-                .iter()
-                .any(|client| client.summary(old, cx).is_some())
-            {
-                Some("Close this account's tab before changing its username.")
-            } else if clients.iter().any(|client| client.waiting(old).is_some()) {
-                Some("Stop this account's launch before changing its username.")
-            } else {
-                None
-            };
-            if let Some(blocked) = blocked {
-                form.error = Some(Problem::Username(blocked.into()));
-                cx.notify();
-                return;
-            }
+        if let Some(blocked) = renamed.and_then(|old| busy(old, "changing its username", cx)) {
+            form.error = Some(Problem::Username(blocked.into()));
+            cx.notify();
+            return;
         }
         match accounts.save(form.editing.as_ref(), draft) {
             Ok(id) => {
@@ -1312,6 +1316,11 @@ impl Manager {
         let Ok(accounts) = &mut self.accounts else {
             return;
         };
+        if let Some(blocked) = busy(id, "removing it", cx) {
+            self.notice = Some(blocked.into());
+            cx.notify();
+            return;
+        }
         match accounts.remove(id) {
             Ok(()) => {
                 account_settings::forget(id, cx);
