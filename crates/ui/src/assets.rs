@@ -50,7 +50,6 @@ impl AssetSource for Assets {
             "icons/circle-dot.svg" => include_str!("../assets/icons/lucide/circle-dot.svg"),
             "icons/file-plus-2.svg" => include_str!("../assets/icons/lucide/file-plus-2.svg"),
             "icons/pencil.svg" => include_str!("../assets/icons/lucide/pencil.svg"),
-            "icons/octagon-x.svg" => include_str!("../assets/icons/lucide/octagon-x.svg"),
             "icons/loader-circle.svg" => include_str!("../assets/icons/lucide/loader-circle.svg"),
             "icons/circle.svg" => include_str!("../assets/icons/lucide/circle.svg"),
             "icons/circle-stop.svg" => include_str!("../assets/icons/lucide/circle-stop.svg"),
