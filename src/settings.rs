@@ -15,11 +15,11 @@ use gpui::{
     prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme, Tone,
+    ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme,
     components::{Disclosure, Empty, Group, ShortcutField, ShortcutRefusal},
     h_flex,
     primitives::{
-        Badge, Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
+        Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
         Scrollbar, Select, Switch, Tab, Tabs,
         button::{Size, Variant as ButtonVariant},
     },
@@ -237,7 +237,6 @@ struct Settings {
     hidden_recent_scripts: Vec<PathBuf>,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
-    dotnet: Option<PathBuf>,
 }
 
 impl Settings {
@@ -511,7 +510,6 @@ fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
 fn apply(cx: &mut App) {
     let settings = &cx.global::<Store>().settings;
     mira_platform::set_font_smoothing(settings.font_smoothing);
-    crate::scripting::set_skua_dotnet(settings.dotnet.clone());
     let theme = settings.theme(settings.variant(cx.window_appearance()));
     cx.set_global(theme);
     cx.refresh_windows();
@@ -839,9 +837,8 @@ struct SettingsWindow {
     mono_size: Entity<Input>,
     fonts: Rc<[SharedString]>,
     github_token: Entity<Input>,
-    dotnet: Entity<Input>,
     resetting: Option<Pane>,
-    _subscriptions: [Subscription; 5],
+    _subscriptions: [Subscription; 4],
 }
 
 impl SettingsWindow {
@@ -876,23 +873,6 @@ impl SettingsWindow {
                 tracing::error!(%error, "couldn't save the GitHub token");
             }
         });
-        let chosen = cx.global::<Store>().settings.dotnet.clone();
-        let dotnet = cx.new(|cx| {
-            let mut input = Input::new("dotnet", cx).placeholder("dotnet from your PATH");
-            if let Some(chosen) = chosen {
-                input.set_text(chosen.display().to_string(), cx);
-            }
-            input
-        });
-        let dotnet_changes = cx.subscribe(&dotnet, |_, input, event, cx| {
-            if !matches!(event, InputEvent::Changed) {
-                return;
-            }
-            let text = input.read(cx).text().trim().to_owned();
-            change(cx, |settings| {
-                settings.dotnet = (!text.is_empty()).then(|| PathBuf::from(text));
-            });
-        });
         let settings = &cx.global::<Store>().settings;
         let (text_size, size_changes) = size_input(
             "Interface font size",
@@ -924,14 +904,7 @@ impl SettingsWindow {
             mono_size,
             fonts: Rc::from([]),
             github_token,
-            dotnet,
-            _subscriptions: [
-                token_changes,
-                dotnet_changes,
-                search_changes,
-                size_changes,
-                mono_changes,
-            ],
+            _subscriptions: [token_changes, search_changes, size_changes, mono_changes],
         }
     }
 
@@ -1027,21 +1000,6 @@ impl SettingsWindow {
                 "Token",
                 Some("For private script packages and higher GitHub rate limits."),
                 div().w(px(200.0)).child(self.github_token.clone()),
-            ))),
-            Block::Section(Section {
-                header_end: Some(
-                    Badge::new("Experimental")
-                        .tone(Tone::Warning)
-                        .into_any_element(),
-                ),
-                ..Section::titled("Skua scripts")
-            }
-            .row(Row::new(
-                "dotnet",
-                Some(
-                    "Skua scripts need .NET 10. Set where dotnet is if Mira can't find it, for example when you open Mira from Finder.",
-                ),
-                div().w(px(200.0)).child(self.dotnet.clone()),
             ))),
         ]
     }
@@ -1538,7 +1496,6 @@ mod tests {
             skip_update_checks: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
-            dotnet: Some(PathBuf::from("/opt/dotnet/dotnet")),
         };
         chosen.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), chosen);

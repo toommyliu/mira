@@ -2,10 +2,13 @@ mod compile;
 mod worker;
 
 use std::{
-    io,
+    env,
+    ffi::{OsStr, OsString},
+    fs, io,
     path::{Path, PathBuf},
     process::{Command as Process, ExitStatus, Stdio},
     sync::{Arc, Mutex, OnceLock, PoisonError, mpsc},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -27,8 +30,8 @@ use super::{
 use crate::bridge::{self, CallError, EXPORTS, Event as LoaderEvent, Loader, Subscription};
 
 const STOP_GRACE: Duration = Duration::from_secs(10);
-const NO_DOTNET: &str =
-    "Skua scripts need .NET 10. Install it from dot.net, or set where dotnet is in Settings.";
+const NO_DOTNET: &str = "Skua scripts need .NET 10. Install it from dot.net.";
+const SHELL_WAIT: Duration = Duration::from_secs(5);
 const NO_RUNTIME: &str = "Skua scripts need the .NET 10 runtime. Install it from dot.net.";
 const NO_RUNNER: &str =
     "This copy of Mira can't run Skua scripts because its Skua runner is missing.";
@@ -41,14 +44,10 @@ pub(crate) struct Setup {
 }
 
 static SETUP: OnceLock<Setup> = OnceLock::new();
-static DOTNET: Mutex<Option<PathBuf>> = Mutex::new(None);
+static SHELL_DOTNET: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 pub(crate) fn init(setup: Setup) {
     let _ = SETUP.set(setup);
-}
-
-pub(crate) fn set_dotnet(path: Option<PathBuf>) {
-    *DOTNET.lock().unwrap_or_else(PoisonError::into_inner) = path;
 }
 
 pub(crate) fn is_entry(path: &Path) -> bool {
@@ -63,17 +62,67 @@ fn runner(setup: &Setup) -> Result<Process, String> {
     if !setup.runner.is_file() {
         return Err(NO_RUNNER.into());
     }
-    let dotnet = DOTNET
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("dotnet"));
+    let dotnet = dotnet().ok_or(NO_DOTNET)?;
     let mut process = Process::new(dotnet);
     process
         .arg(&setup.runner)
         .env("MIRA_SKUA_DIR", &setup.home)
         .stdin(Stdio::null());
     Ok(process)
+}
+
+fn dotnet() -> Option<PathBuf> {
+    on_path(env::var_os("PATH")).or_else(|| {
+        let mut found = SHELL_DOTNET.lock().unwrap_or_else(PoisonError::into_inner);
+        if !found.as_ref().is_some_and(|dotnet| dotnet.is_file()) {
+            let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+            *found = from_login_shell(&shell);
+        }
+        found.clone()
+    })
+}
+
+fn on_path(path: Option<OsString>) -> Option<PathBuf> {
+    path.iter()
+        .flat_map(env::split_paths)
+        .map(|dir| dir.join("dotnet"))
+        .find(|dotnet| dotnet.is_file())
+}
+
+fn from_login_shell(shell: &OsStr) -> Option<PathBuf> {
+    let answer = env::temp_dir().join(format!("mira-dotnet-{}", std::process::id()));
+    let mut child = Process::new(shell)
+        .args([
+            "-l",
+            "-i",
+            "-c",
+            r#"/usr/bin/which dotnet > "$MIRA_DOTNET""#,
+        ])
+        .env("MIRA_DOTNET", &answer)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + SHELL_WAIT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let text = fs::read_to_string(&answer);
+    let _ = fs::remove_file(&answer);
+    if !status?.success() {
+        return None;
+    }
+    let dotnet = PathBuf::from(text.ok()?.trim());
+    (dotnet.is_absolute() && dotnet.is_file()).then_some(dotnet)
 }
 
 fn not_started(error: &io::Error) -> String {
