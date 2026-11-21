@@ -73,8 +73,13 @@ fn spoken(keystroke: &Keystroke) -> String {
 
 const PILL_WIDTH: gpui::Pixels = px(64.0);
 
+pub enum ShortcutRefusal {
+    Taken(SharedString),
+    Reserved,
+}
+
 type ShortcutHandler =
-    Rc<dyn Fn(Option<Keystroke>, &mut Window, &mut App) -> Result<(), SharedString>>;
+    Rc<dyn Fn(Option<Keystroke>, &mut Window, &mut App) -> Result<(), ShortcutRefusal>>;
 
 struct Recorder {
     on_change: Option<ShortcutHandler>,
@@ -182,7 +187,8 @@ fn record(
         _ => return Outcome::Ignored,
     };
     match on_change.map(|on_change| on_change(chosen, window, cx)) {
-        Some(Err(error)) => Outcome::Rejected(error),
+        Some(Err(ShortcutRefusal::Taken(error))) => Outcome::Rejected(error),
+        Some(Err(ShortcutRefusal::Reserved)) => Outcome::Pass,
         _ => Outcome::Done,
     }
 }
@@ -211,7 +217,7 @@ impl ShortcutField {
 
     pub fn on_change(
         mut self,
-        f: impl Fn(Option<Keystroke>, &mut Window, &mut App) -> Result<(), SharedString> + 'static,
+        f: impl Fn(Option<Keystroke>, &mut Window, &mut App) -> Result<(), ShortcutRefusal> + 'static,
     ) -> Self {
         self.on_change = Some(Rc::new(f));
         self

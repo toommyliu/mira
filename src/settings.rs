@@ -16,7 +16,7 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, ColorToken, FOCUS_SCOPE, Theme,
-    components::{Disclosure, Empty, Group, ShortcutField},
+    components::{Disclosure, Empty, Group, ShortcutField, ShortcutRefusal},
     h_flex,
     primitives::{
         Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
@@ -482,7 +482,7 @@ fn set_shortcut(shortcut: Shortcut, keys: Option<Keystroke>, cx: &mut App) -> Re
         &mut overrides,
         shortcut,
         keys.map(|keys| mira_ui::keyboard::pressed(&keys).unparse(os)),
-        |keys| shortcuts::taken_by_app(keys, cx),
+        |keys| shortcuts::reserved(keys, cx),
     )?;
     change(cx, |settings| settings.shortcuts = overrides);
     Ok(())
@@ -1180,8 +1180,12 @@ impl SettingsWindow {
                     .keys(overrides)
                     .and_then(|keys| Keystroke::parse_with_os(keys, os).ok());
                 let record = move |keys: Option<Keystroke>, _: &mut Window, cx: &mut App| {
-                    set_shortcut(shortcut, keys, cx)
-                        .map_err(|Taken(owner)| SharedString::from(format!("Used by {owner}")))
+                    set_shortcut(shortcut, keys, cx).map_err(|taken| match taken {
+                        Taken::Reserved => ShortcutRefusal::Reserved,
+                        Taken::Shortcut(other) => {
+                            ShortcutRefusal::Taken(format!("Used by {}", other.label()).into())
+                        }
+                    })
                 };
                 let changed = !shortcut.is_default(overrides);
                 let reset = changed.then(|| {
