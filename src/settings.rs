@@ -991,7 +991,7 @@ impl SettingsWindow {
                     .on_toggle(|on, _, cx| {
                         change(cx, |settings| settings.skip_update_checks = !on);
                         if on {
-                            crate::updates::Updates::check(false, cx);
+                            crate::updates::Updates::check(false, cx).detach();
                         }
                     }),
                 )),
