@@ -116,6 +116,14 @@ fn main() -> anyhow::Result<()> {
                     }
                 });
             });
+            cx.on_action(|_: &ruffle_view::OpenClient, cx| {
+                cx.defer(|cx| match ruffle_view::current_client(cx) {
+                    Ok(window) => {
+                        let _ = window.update(cx, |_, window, _| window.activate_window());
+                    }
+                    Err(error) => tracing::error!(%error, "couldn't open the client"),
+                });
+            });
             cx.on_action(|_: &ruffle_view::OpenEnvironment, cx| {
                 cx.defer(|cx| {
                     if let Some(client) = client(cx) {
