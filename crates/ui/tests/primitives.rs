@@ -1811,6 +1811,62 @@ fn hover_cards_wait_for_a_rest_hand_off_without_stacking_and_close_at_once(
     );
 }
 
+struct InvalidAboveTheFold {
+    focus: FocusHandle,
+    pane: gpui::ScrollHandle,
+    field: Entity<mira_ui::primitives::Input>,
+}
+
+impl Render for InvalidAboveTheFold {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        mira_ui::nav::set_scroll_root(&self.pane, window, cx);
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                div()
+                    .id("pane")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane)
+                    .child(self.field.clone())
+                    .child(div().h(px(2000.0)))
+                    .child(Button::new("below", "Below the fold")),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_resting_invalid_field_leaves_the_reveal_to_the_focused_control(cx: &mut TestAppContext) {
+    use gpui::{AppContext as _, Focusable as _, px};
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        let field = cx.new(|cx| {
+            let mut field = mira_ui::primitives::Input::new("Offset", cx);
+            field.set_invalid(true, cx);
+            field
+        });
+        InvalidAboveTheFold {
+            focus: cx.focus_handle(),
+            pane: gpui::ScrollHandle::new(),
+            field,
+        }
+    });
+    cx.run_until_parked();
+    let field = view.read_with(cx, |view, _| view.field.clone());
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.run_until_parked();
+    press(cx, "tab");
+    let offset = view.read_with(cx, |view, _| view.pane.offset().y);
+    assert!(
+        offset < px(0.0),
+        "the invalid field kept the pane from revealing the focused button"
+    );
+}
+
 struct CardOverPane {
     pane: gpui::ScrollHandle,
     hovered: Rc<Cell<bool>>,
