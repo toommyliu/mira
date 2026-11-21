@@ -893,6 +893,24 @@ fn arrow_keys_in_a_setup_being_edited_scroll_the_cursor_into_view(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn the_edit_menu_select_all_checks_every_shown_account(cx: &mut gpui::TestAppContext) {
+    let (manager, cx, dir) = open_manager("select-all", View::All, cx);
+    cx.update(|window, cx| {
+        let focus = manager.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    let select_all = mira_ui::primitives::text_field::SelectAll;
+    assert!(cx.update(|window, cx| window.is_action_available(&select_all, cx)));
+    cx.dispatch_action(select_all);
+    manager.read_with(cx, |manager, cx| {
+        assert!(!manager.checked.is_empty());
+        assert_eq!(manager.checked.len(), manager.shown(cx).len());
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn a_setup_set_to_open_in_a_new_window_launches_there_and_leaves_open_accounts_where_they_are(
     cx: &mut gpui::TestAppContext,
 ) {

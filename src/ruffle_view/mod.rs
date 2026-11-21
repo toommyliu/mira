@@ -37,7 +37,7 @@ use crate::{
         Msg, Output, Runtime,
         context_menu::MenuSelection,
         extras,
-        view::{StageFit, ViewEvent},
+        view::{Edit, StageFit, ViewEvent},
     },
 };
 use gpui::{
@@ -49,7 +49,7 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, Theme,
-    primitives::{Button, Spinner, button::Variant},
+    primitives::{Button, Spinner, button::Variant, text_field},
 };
 use native::NativeView;
 use ruffle_core::backend::ui::MouseCursor;
@@ -586,10 +586,17 @@ impl RuffleView {
         cx.notify();
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(key) = input::key(&event.keystroke) {
+            if Edit::of(key).is_some() {
+                cx.stop_propagation();
+            }
             self.session.send(ViewEvent::KeyDown(key));
         }
+    }
+
+    fn edit(&mut self, edit: Edit) {
+        self.session.send(ViewEvent::Edit(edit));
     }
 
     fn key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -793,6 +800,12 @@ impl Render for RuffleView {
             })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &text_field::Copy, _, _| this.edit(Edit::Copy)))
+            .on_action(cx.listener(|this, _: &text_field::Cut, _, _| this.edit(Edit::Cut)))
+            .on_action(cx.listener(|this, _: &text_field::Paste, _, _| this.edit(Edit::Paste)))
+            .on_action(
+                cx.listener(|this, _: &text_field::SelectAll, _, _| this.edit(Edit::SelectAll)),
+            )
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .child(

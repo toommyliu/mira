@@ -22,6 +22,7 @@ pub enum ViewEvent {
     Wheel(WheelDelta),
     KeyDown(Key),
     KeyUp(Key),
+    Edit(Edit),
     Text(String),
     Ime(Ime),
     Focus(bool),
@@ -187,6 +188,43 @@ pub(crate) enum Effect {
     Throttle(Option<Duration>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edit {
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+}
+
+impl Edit {
+    pub(crate) fn of(key: Key) -> Option<Edit> {
+        let shortcut = if cfg!(target_os = "macos") {
+            key.modifiers.command
+        } else {
+            key.modifiers.control
+        };
+        match key.code {
+            KeyCode::Char(c) if shortcut => Some(match c.to_ascii_lowercase() {
+                'a' => Edit::SelectAll,
+                'c' => Edit::Copy,
+                'v' => Edit::Paste,
+                'x' => Edit::Cut,
+                _ => return None,
+            }),
+            _ => None,
+        }
+    }
+
+    fn code(self) -> TextControlCode {
+        match self {
+            Edit::Copy => TextControlCode::Copy,
+            Edit::Cut => TextControlCode::Cut,
+            Edit::Paste => TextControlCode::Paste,
+            Edit::SelectAll => TextControlCode::SelectAll,
+        }
+    }
+}
+
 pub(crate) fn translate(event: ViewEvent, viewport: Viewport, out: &mut Vec<Effect>) {
     use PlayerEvent as Event;
     let scale = viewport.scale();
@@ -256,6 +294,7 @@ pub(crate) fn translate(event: ViewEvent, viewport: Viewport, out: &mut Vec<Effe
         ViewEvent::KeyUp(key) => Event::KeyUp {
             key: descriptor(key),
         },
+        ViewEvent::Edit(edit) => Event::TextControl { code: edit.code() },
         ViewEvent::Text(text) => {
             out.extend(
                 text.chars()
@@ -406,14 +445,10 @@ fn text_control(key: Key) -> Option<TextControlCode> {
     } else {
         m.control
     };
+    if let Some(edit) = Edit::of(key) {
+        return Some(edit.code());
+    }
     Some(match key.code {
-        KeyCode::Char(c) if shortcut => match c.to_ascii_lowercase() {
-            'a' => T::SelectAll,
-            'c' => T::Copy,
-            'v' => T::Paste,
-            'x' => T::Cut,
-            _ => return None,
-        },
         KeyCode::Named(N::Enter) => T::Enter,
         KeyCode::Named(N::Backspace) if word => T::BackspaceWord,
         KeyCode::Named(N::Backspace) => T::Backspace,
@@ -561,6 +596,10 @@ mod tests {
             (
                 ViewEvent::Text("é\n".into()),
                 "[Event(TextInput { codepoint: 'é' })]",
+            ),
+            (
+                ViewEvent::Edit(Edit::Paste),
+                "[Event(TextControl { code: Paste })]",
             ),
             (ViewEvent::Focus(false), "[Event(FocusLost)]"),
             (ViewEvent::Visible(false), "[Visible(false)]"),

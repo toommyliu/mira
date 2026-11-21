@@ -20,7 +20,7 @@ use mira_ui::{
         Field, Flow, HoverCard, Icon, MenuItem, Placement, Pose, Scrollbar, SegmentedProgress,
         Side, Signal, Sortable, Tab, Tabs, Tooltip,
         button::{Joined, Size, Variant},
-        icon, small_icon,
+        icon, small_icon, text_field,
     },
     theme::tabular,
     v_flex,
@@ -28,7 +28,7 @@ use mira_ui::{
 
 use super::{
     AddAccount, Ask, Check, ClearSelection, Confirming, Form, Manager, NewSetup, Pick, PickServer,
-    Problem, SelectShown, StartSetup, View, join_names, plural,
+    Problem, StartSetup, View, join_names, plural,
     run::{
         Filter, ROSTER_FILTERS, RUN_FILTERS, Runs, Start, any_failed, count, setup_work, stoppable,
     },
@@ -2210,7 +2210,9 @@ impl Render for Manager {
                         cx.listener(|this, _: &NewSetup, window, cx| this.new_setup(window, cx)),
                     )
                     .on_action(cx.listener(|this, _: &StartSetup, _, cx| this.start_current(cx)))
-                    .on_action(cx.listener(|this, _: &SelectShown, _, cx| this.select_shown(cx)))
+                    .on_action(
+                        cx.listener(|this, _: &text_field::SelectAll, _, cx| this.select_shown(cx)),
+                    )
                     .on_action(cx.listener(|this, _: &ClearSelection, window, cx| {
                         if this.editing.is_some() {
                             this.finish_edit(window, cx);

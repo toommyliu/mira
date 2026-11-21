@@ -1555,7 +1555,7 @@ fn snapshot_long_select_scrolls() {
 fn snapshot_shortcut_field_hints() {
     for (name, keys) in [
         ("shortcut-plain-key", &["tab", "a"][..]),
-        ("shortcut-rejected", &["tab", "cmd-q"][..]),
+        ("shortcut-rejected", &["tab", "cmd-j"][..]),
         ("shortcut-return", &["tab", "enter"][..]),
     ] {
         scene_after_keys(name, 320.0, 80.0, keys, |_, _| {
@@ -1564,7 +1564,11 @@ fn snapshot_shortcut_field_hints() {
                 "Bank",
                 Some(gpui::Keystroke::parse("cmd-b").unwrap()),
             )
-            .on_change(|_, _, _| Err("Used by Quit".into()))
+            .on_change(|_, _, _| {
+                Err(mira_ui::components::ShortcutRefusal::Taken(
+                    "Used by Jump".into(),
+                ))
+            })
             .into_any_element()
         });
     }
