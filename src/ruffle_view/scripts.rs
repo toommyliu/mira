@@ -38,9 +38,10 @@ use mira_ui::{
 use crate::file_panel::{self, Pick};
 
 use super::{
-    Changed, Client, RuffleView,
+    Changed, Client, RuffleView, Updated,
     account::file_name,
     client::{CloseSession, drag_area},
+    core_bots::CoreBotsPage,
     form::{note, row, row_label},
     package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
@@ -445,11 +446,14 @@ pub(super) fn home_relative(path: &Path) -> SharedString {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Page {
     Library(Option<PathBuf>),
+    CoreBots,
     Queue,
     Log,
 }
 
 const PAGES: [Page; 3] = [Page::Library(None), Page::Queue, Page::Log];
+const SKUA_PAGES: [&str; 2] = ["Scripts", "CoreBots"];
+const SKUA_ROOMS: &str = "Skua scripts take their rooms from CoreBots options.";
 
 #[derive(Clone)]
 enum SourceState {
@@ -661,8 +665,9 @@ pub(super) struct ScriptsWindow {
     error_cursor: Option<usize>,
     source_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
+    core_bots: Entity<CoreBotsPage>,
     toasts: Entity<Toaster>,
-    _view_changes: Option<Subscription>,
+    _view_changes: Option<Vec<Subscription>>,
     _subscriptions: [Subscription; 6],
 }
 
@@ -740,6 +745,8 @@ impl ScriptsWindow {
         let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
         let toasts = Toaster::new(window, cx);
         let package_dialogs = cx.new(|cx| PackageDialogs::new(toasts.clone(), cx));
+        let skua = packages::packages(cx).read(cx).skua_scripts();
+        let core_bots = cx.new(|cx| CoreBotsPage::new(skua.clone(), window, cx));
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
@@ -790,7 +797,7 @@ impl ScriptsWindow {
             tab,
             shown: None,
             packages: folder.with_file_name("packages"),
-            skua: packages::packages(cx).read(cx).skua_scripts(),
+            skua,
             folder,
             types,
             library: None,
@@ -819,6 +826,7 @@ impl ScriptsWindow {
             error_cursor: None,
             source_scroll: ScrollHandle::new(),
             package_dialogs,
+            core_bots,
             toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
@@ -848,13 +856,38 @@ impl ScriptsWindow {
     }
 
     fn switched(&mut self, cx: &mut Context<Self>) {
-        self._view_changes = self
-            .view()
-            .map(|view| cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()));
+        self._view_changes = self.view().map(|view| {
+            vec![
+                cx.subscribe(&view, |this, _, _: &Changed, cx| {
+                    this.refresh_core_bots(cx);
+                    cx.notify();
+                }),
+                cx.subscribe(&view, |this, _, _: &Updated, cx| this.refresh_core_bots(cx)),
+            ]
+        });
         self.queued = 0;
         self.chosen = None;
         self.show_saved_room(cx);
         self.select_last_run(cx);
+        if self.page == Page::CoreBots {
+            self.show_core_bots(cx);
+        }
+    }
+
+    fn refresh_core_bots(&mut self, cx: &mut Context<Self>) {
+        if self.page == Page::CoreBots {
+            let account = self.account(cx);
+            let view = self.view();
+            self.core_bots
+                .update(cx, |page, cx| page.refresh(account, view, cx));
+        }
+    }
+
+    fn show_core_bots(&mut self, cx: &mut Context<Self>) {
+        let account = self.account(cx);
+        let view = self.view();
+        self.core_bots
+            .update(cx, |page, cx| page.show(account, view, cx));
     }
 
     fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1003,8 +1036,16 @@ impl ScriptsWindow {
         }
     }
 
+    fn source_root(&self, cx: &App) -> Option<PathBuf> {
+        match self.shown_page(cx) {
+            Page::Library(root) => root,
+            Page::CoreBots => Some(self.skua.clone()),
+            Page::Queue | Page::Log => None,
+        }
+    }
+
     fn scope(&self, cx: &App) -> Option<Scope> {
-        let Page::Library(Some(root)) = self.shown_page(cx) else {
+        let Some(root) = self.source_root(cx) else {
             return Some(Scope::All);
         };
         if root == self.folder {
@@ -1029,7 +1070,23 @@ impl ScriptsWindow {
         self.page = page;
         self.chosen = None;
         self.selected = first_script(&self.rows(cx));
+        if self.page == Page::CoreBots {
+            self.show_core_bots(cx);
+        }
         cx.notify();
+    }
+
+    fn skua_selected(&self, cx: &App) -> bool {
+        let script = match self.shown_page(cx) {
+            Page::Library(_) => self.target(cx).map(|entry| entry.path),
+            Page::Queue => self
+                .queue(cx)
+                .0
+                .get(self.queued)
+                .map(|entry| entry.script.clone()),
+            Page::CoreBots | Page::Log => None,
+        };
+        script.is_some_and(|script| scripting::is_skua(&script))
     }
 
     fn run_selected(&mut self, cx: &mut Context<Self>) {
@@ -1339,7 +1396,7 @@ impl ScriptsWindow {
         let this = cx.weak_entity();
         let pages = Tabs::new("pages", "Views", PAGES.len(), move |index| {
             let (label, count) = match PAGES[index] {
-                Page::Library(_) => ("Library", total),
+                Page::Library(_) | Page::CoreBots => ("Library", total),
                 Page::Queue => ("Queue", (unfinished > 0).then_some(unfinished)),
                 Page::Log => ("Log", None),
             };
@@ -1481,9 +1538,7 @@ impl ScriptsWindow {
     fn source_header(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
         let layout = theme.layout;
         let typography = theme.typography;
-        let Page::Library(Some(root)) = self.shown_page(cx) else {
-            return None;
-        };
+        let root = self.source_root(cx)?;
         let (folders, installed) = self.source_rows(cx);
         let package = installed.iter().any(|row| row.root == root);
         let row = folders
@@ -1558,6 +1613,28 @@ impl ScriptsWindow {
             Some(SourceState::UpdateFailed(message)) => Some(message.clone()),
             _ => None,
         };
+        let skua = self.library.as_ref().is_some_and(|library| {
+            library.sources.iter().any(|source| {
+                source.root == row.root && matches!(source.kind, SourceKind::Skua { .. })
+            })
+        });
+        let pages = skua.then(|| {
+            let this = cx.weak_entity();
+            let root = row.root.clone();
+            Tabs::new("skua-pages", "Skua pages", SKUA_PAGES.len(), |index| {
+                Tab::new(SKUA_PAGES[index])
+            })
+            .line()
+            .small()
+            .selected(usize::from(self.page == Page::CoreBots))
+            .on_select(move |index, _, cx| {
+                let page = match index {
+                    0 => Page::Library(Some(root.clone())),
+                    _ => Page::CoreBots,
+                };
+                let _ = this.update(cx, |this, cx| this.set_page(page, cx));
+            })
+        });
         Some(
             v_flex()
                 .flex_none()
@@ -1599,7 +1676,8 @@ impl ScriptsWindow {
                             failure
                                 .map(|message| div().text_color(theme.foreground).child(message)),
                         ),
-                ),
+                )
+                .children(pages.map(|pages| div().pt(layout.space(2.0)).child(pages))),
         )
     }
 
@@ -1612,10 +1690,9 @@ impl ScriptsWindow {
         cx: &mut Context<Self>,
     ) -> Tabs {
         let rows: Rc<[SourceRow]> = rows.into();
-        let selected = match (!self.searching(cx)).then_some(&self.page) {
-            Some(Page::Library(Some(root))) => rows.iter().position(|row| row.root == *root),
-            _ => None,
-        };
+        let selected = self
+            .source_root(cx)
+            .and_then(|root| rows.iter().position(|row| row.root == root));
         let marks = theme.clone();
         let choices = rows.clone();
         let this = cx.weak_entity();
@@ -2173,7 +2250,13 @@ impl ScriptsWindow {
                     return div().into_any_element();
                 };
                 let scripts = scripts.read(cx);
-                options_panel(this.clone(), scripts.options(cx), scripts.room.clone(), cx)
+                options_panel(
+                    this.clone(),
+                    scripts.options(cx),
+                    scripts.room.clone(),
+                    scripts.skua_selected(cx),
+                    cx,
+                )
             })
             .align(Align::Start)
             .width(px(376.0))
@@ -2925,8 +3008,9 @@ impl Render for ScriptsWindow {
             self.options(cx).map(|options| options.rooms),
             Some(Rooms::Private { .. })
         );
+        let skua = self.skua_selected(cx);
         self.room
-            .update(cx, |room, cx| room.set_disabled(!private, cx));
+            .update(cx, |room, cx| room.set_disabled(!private || skua, cx));
         let header = shown_tab::header(
             "Scripts",
             &self.client,
@@ -3072,6 +3156,11 @@ impl Render for ScriptsWindow {
                     .child(theme.column_rule())
                     .child(inspected(detail))
             }
+            Page::CoreBots if !has_tab => body.justify_center().items_center().child(Empty::new(
+                "No tabs open",
+                "Open a tab to change its CoreBots options.",
+            )),
+            Page::CoreBots => body.child(div().flex_1().min_w_0().child(self.core_bots.clone())),
             Page::Log => body.justify_center().items_center().child(Empty::new(
                 "Script logs",
                 "Coming soon. Until then, script output goes to mira.log.",
@@ -3141,7 +3230,7 @@ impl Render for ScriptsWindow {
                             },
                         )),
                 ),
-                Page::Log => None,
+                Page::CoreBots | Page::Log => None,
             };
         let sidebar = self.sidebar(&theme, unfinished, cx);
         v_flex()
@@ -3330,10 +3419,12 @@ fn options_panel(
     this: WeakEntity<ScriptsWindow>,
     options: Option<ScriptOptions>,
     room_input: Entity<Input>,
+    skua: bool,
     cx: &App,
 ) -> AnyElement {
     let layout = cx.theme().layout;
     let editable = options.is_some();
+    let rooms_editable = editable && !skua;
     let options = options.unwrap_or_default();
     let private = matches!(options.rooms, Rooms::Private { .. });
     let set_private = {
@@ -3379,7 +3470,7 @@ fn options_panel(
             Switch::new("private-rooms", "Private rooms", private)
                 .trailing()
                 .description("Scripts join private rooms instead of public ones.")
-                .disabled(!editable)
+                .disabled(!rooms_editable)
                 .on_toggle(set_private),
         )
         .child(
@@ -3390,11 +3481,12 @@ fn options_panel(
                         .justify_between()
                         .gap(layout.space(3.0))
                         .min_h(layout.control)
-                        .child(row_label("Room", editable && private))
+                        .child(row_label("Room", rooms_editable && private))
                         .child(div().flex_none().w(px(96.0)).child(room_input)),
                 )
-                .child(note(ROOM_NOTE, editable && private, &theme)),
+                .child(note(ROOM_NOTE, rooms_editable && private, &theme)),
         )
+        .when(skua, |panel| panel.child(note(SKUA_ROOMS, true, &theme)))
         .into_any_element()
 }
 
@@ -4070,23 +4162,24 @@ mod tests {
 
     struct OptionsPanels {
         scripts: Entity<ScriptsWindow>,
-        rooms: [Entity<Input>; 3],
+        rooms: [Entity<Input>; 4],
     }
 
     impl Render for OptionsPanels {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let layout = cx.theme().layout;
             let this = self.scripts.downgrade();
-            let panel = |options: Option<ScriptOptions>, room: &Entity<Input>, cx: &App| {
-                div()
-                    .w(px(376.0))
-                    .p(layout.space(3.0))
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().popover)
-                    .child(options_panel(this.clone(), options, room.clone(), cx))
-            };
+            let panel =
+                |options: Option<ScriptOptions>, room: &Entity<Input>, skua: bool, cx: &App| {
+                    div()
+                        .w(px(376.0))
+                        .p(layout.space(3.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().popover)
+                        .child(options_panel(this.clone(), options, room.clone(), skua, cx))
+                };
             let pinned = ScriptOptions {
                 rooms: Rooms::Private {
                     room: PrivateRoom::parse("4242"),
@@ -4103,9 +4196,10 @@ mod tests {
                 .gap(layout.space(4.0))
                 .p(layout.space(4.0))
                 .window_surface(cx.theme())
-                .child(panel(Some(pinned), &self.rooms[0], cx))
-                .child(panel(Some(public), &self.rooms[1], cx))
-                .child(panel(None, &self.rooms[2], cx))
+                .child(panel(Some(pinned), &self.rooms[0], false, cx))
+                .child(panel(Some(public), &self.rooms[1], false, cx))
+                .child(panel(None, &self.rooms[2], false, cx))
+                .child(panel(Some(pinned), &self.rooms[3], true, cx))
         }
     }
 
@@ -4115,7 +4209,7 @@ mod tests {
         getrandom::getrandom(&mut random).unwrap();
         let temp =
             std::env::temp_dir().join(format!("mira-options-{:x}", u64::from_ne_bytes(random)));
-        let size = gpui::size(px(1224.0), px(360.0));
+        let size = gpui::size(px(1616.0), px(420.0));
         for written in mira_ui::snapshot("scripts-options", size, move |window, cx| {
             let temp = temp.clone();
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
@@ -4136,14 +4230,16 @@ mod tests {
                     cx,
                 )
             });
-            let rooms = [("4242", false), ("", true), ("", true)].map(|(text, disabled)| {
-                cx.new(|cx| {
-                    let mut room = Input::new("Room", cx).placeholder("Random");
-                    room.set_text(text, cx);
-                    room.set_disabled(disabled, cx);
-                    room
-                })
-            });
+            let rooms = [("4242", false), ("", true), ("", true), ("4242", true)].map(
+                |(text, disabled)| {
+                    cx.new(|cx| {
+                        let mut room = Input::new("Room", cx).placeholder("Random");
+                        room.set_text(text, cx);
+                        room.set_disabled(disabled, cx);
+                        room
+                    })
+                },
+            );
             cx.new(|_| OptionsPanels { scripts, rooms })
         }) {
             assert!(written.exists(), "{} was not written", written.display());
@@ -4338,6 +4434,63 @@ mod tests {
                 });
             },
         );
+    }
+
+    const SKUA: &[(&str, &str)] = &[
+        ("skua/Scripts/.mira-install.json", RECEIPT),
+        (
+            "skua/Scripts/scripts.json",
+            r#"[{"name":"Free Daily Boost","description":"Claims the daily boost reward you pick.","tags":["daily"],"path":"Dailies/FreeDailyBoost.cs"}]"#,
+        ),
+        ("skua/Scripts/CoreBots.cs", ""),
+        ("skua/Scripts/Dailies/FreeDailyBoost.cs", ""),
+    ];
+
+    #[test]
+    fn snapshot_core_bots() {
+        use super::super::core_bots::Wardrobe;
+        use crate::core_bots::Gear;
+        for (name, size) in [
+            ("scripts-core-bots", (WIDTH, HEIGHT)),
+            ("scripts-core-bots-min", (MIN_WIDTH, MIN_HEIGHT)),
+            ("scripts-core-bots-tall", (WIDTH, 2400.0)),
+        ] {
+            snapshot_window_with(
+                name,
+                size,
+                "Alt 1",
+                SKUA,
+                |scripts| scripts.page = Page::CoreBots,
+                |cx, window| {
+                    cx.update_window(window, |root, _, cx| {
+                        let scripts = root.downcast::<ScriptsWindow>().unwrap();
+                        let page = scripts.read(cx).core_bots.clone();
+                        page.update(cx, |page, cx| {
+                            page.fake(
+                                "hero",
+                                "PrivateRooms: True\nPrivateRoomNr: 4242\nSoloClassSelect: Legion Revenant\nSoloModeSelect: Solo\nFarmClassSelect: Lich\nFarmEquipCheck: False\nHelm1Select: Hollowborn Reaper's Hood\nWeapon1Select: Necrotic Sword of Doom\nAntiLag: False\n",
+                                Some(Wardrobe::fake(
+                                    &["ArchPaladin", "Legion Revenant", "Lich"],
+                                    &[
+                                        (Gear::Helm, &["Hollowborn Reaper's Hood"]),
+                                        (Gear::Weapon, &["Necrotic Sword of Doom"]),
+                                    ],
+                                )),
+                                [
+                                    ("Legion Revenant".to_owned(), vec!["Base", "Solo", "Farm"]),
+                                    ("Lich".to_owned(), vec!["Base"]),
+                                ]
+                                .into_iter()
+                                .collect(),
+                                cx,
+                            )
+                        });
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                },
+            );
+        }
     }
 
     #[test]

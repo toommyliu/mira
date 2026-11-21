@@ -41,6 +41,9 @@ pub(crate) enum Job {
         source: Source,
         reply: Reply<Option<String>>,
     },
+    Items {
+        reply: Reply<Option<Vec<Item>>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +341,9 @@ pub(crate) async fn run(
         Job::Raw { source, reply } => {
             let _ = reply.try_send(raw(loader, source));
         }
+        Job::Items { reply } => {
+            let _ = reply.try_send(items(loader));
+        }
     }
 }
 
@@ -626,6 +632,13 @@ fn drop_line(drop: &Drop, held: Holding) -> Line {
 
 pub(crate) fn percent(value: f64) -> String {
     format!("{}%", (value * 100.0).round() / 100.0)
+}
+
+fn items(loader: &impl Loader) -> Result<Option<Vec<Item>>, CallError> {
+    if !ready(loader)? {
+        return Ok(None);
+    }
+    inventory::items(loader).map(Some)
 }
 
 fn raw(loader: &impl Loader, source: Source) -> Result<Option<String>, CallError> {

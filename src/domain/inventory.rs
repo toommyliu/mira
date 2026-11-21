@@ -201,6 +201,10 @@ impl Item {
         &self.name
     }
 
+    pub(crate) fn slot(&self) -> &str {
+        &self.slot
+    }
+
     pub(crate) fn coins(&self) -> bool {
         self.coins
     }

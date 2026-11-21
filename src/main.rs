@@ -9,6 +9,7 @@ mod automation;
 mod beep;
 mod bridge;
 mod combat_profiles;
+mod core_bots;
 mod domain;
 mod file_panel;
 mod jitter;
