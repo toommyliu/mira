@@ -220,12 +220,22 @@ impl Packages {
                 service::update(&github, &store, &target, overwrite_edits).await
             },
         );
-        self.settle(
-            dir,
+        let settled = self.settle(
+            dir.clone(),
             work,
             |updated| !matches!(updated, Updated::Edited(_)),
             cx,
-        )
+        );
+        cx.spawn(async move |this, cx| {
+            let result = settled.await;
+            if let Err(message) = &result {
+                let _ = this.update(cx, |this, cx| {
+                    this.status.insert(dir, Status::Failed(message.clone()));
+                    cx.notify();
+                });
+            }
+            result
+        })
     }
 
     pub(crate) fn remove(
@@ -407,6 +417,16 @@ mod tests {
                     "Couldn't find o/gone. If it's private, add a GitHub token in Settings.".into()
                 ))
             );
+        });
+
+        let updated = packages
+            .update(cx, |packages, cx| packages.update("o-r".into(), false, cx))
+            .await;
+        let Err(message) = updated else {
+            panic!("the update can't download o/r, so it fails");
+        };
+        packages.read_with(cx, |packages, _| {
+            assert_eq!(packages.status("o-r"), Some(&Status::Failed(message)));
         });
         fs::remove_dir_all(root).unwrap();
     }
