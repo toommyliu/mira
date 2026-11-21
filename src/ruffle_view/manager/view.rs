@@ -745,12 +745,16 @@ impl Manager {
             )
             .child(
                 h_flex()
-                    .min_h(theme.typography.secondary_line)
                     .gap(layout.space(3.0))
                     .px(layout.space(3.0))
                     .pt(layout.space(1.5))
                     .pb(layout.space(2.0))
-                    .child(div().flex_1().child(bar))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_h(theme.typography.secondary_line)
+                            .child(div().flex_1().child(bar)),
+                    )
                     .children(when.map(|when| {
                         div()
                             .flex_none()
