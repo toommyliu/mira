@@ -19,13 +19,10 @@ use super::{
     Changed, Details, Glance, Identified, RuffleView, ScriptPhase, ScriptState, Summary, Target,
     Updated,
     launches::{self, Launch, Launches, Pace},
-    manager::OpenManager,
     script::{CloseTab, Finished},
 };
 use mira_ui::{
-    ActiveTheme as _, Theme, Tone,
-    components::format_keystroke,
-    h_flex,
+    ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
         Align, Button, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem, Tabs,
         button::{Size, Variant},
@@ -1112,7 +1109,7 @@ impl Client {
         }
     }
 
-    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let layout = theme.layout;
         let shortcuts = self.shortcut_tabs();
@@ -1195,37 +1192,15 @@ impl Client {
             )
             .child(div().flex_none().child(tabs))
             .child(drag_area().flex_1())
-            .child(
-                div()
-                    .flex_none()
-                    .p(layout.space(2.0))
-                    .children(crate::updates::sidebar_row(cx))
-                    .child(
-                        Button::new("manager", "Manager")
-                            .variant(Variant::Ghost)
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .justify_between()
-                                    .child("Manager")
-                                    .children(
-                                        window
-                                            .highest_precedence_binding_for_action(&OpenManager)
-                                            .and_then(|binding| {
-                                                Some(format_keystroke(
-                                                    binding.keystrokes().first()?.inner(),
-                                                ))
-                                            })
-                                            .map(|keys| {
-                                                div().text_color(theme.muted_foreground).child(keys)
-                                            }),
-                                    ),
-                            )
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(OpenManager), cx)
-                            }),
-                    ),
+            .children(
+                crate::updates::button(Placement::new(Side::Right, Align::End), theme.sidebar, cx)
+                    .map(|update| {
+                        h_flex()
+                            .flex_none()
+                            .justify_end()
+                            .p(layout.space(2.0))
+                            .child(update)
+                    }),
             )
     }
 
@@ -1239,15 +1214,21 @@ impl Client {
             Sidebar::Hidden => Icon::Sidebar,
             Sidebar::Full => Icon::SidebarOpen,
         };
+        let dot = (self.sidebar == Sidebar::Hidden)
+            .then(|| crate::updates::dot(cx.theme().background, cx))
+            .flatten();
+        let mut toggle = bar_icon_button("sidebar-toggle", glyph, label)
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
+        if dot.is_some() {
+            toggle = toggle.tooltip("Show sidebar · an update is available");
+        }
         div()
             .absolute()
             .left(traffic_lights_inset(window))
             .top((cx.theme().layout.chrome - layout.control_sm) / 2.0)
             .occlude()
-            .child(
-                bar_icon_button("sidebar-toggle", glyph, label)
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
-            )
+            .child(toggle)
+            .children(dot)
     }
 
     fn toggle_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1582,7 +1563,7 @@ impl Client {
                 }
             }))
             .when(self.sidebar == Sidebar::Full, |root| {
-                root.child(self.sidebar(window, cx))
+                root.child(self.sidebar(cx))
             })
             .child(
                 div()
@@ -1761,7 +1742,7 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        assert!(cx.debug_bounds("sidebar-update").is_none());
+        assert!(cx.debug_bounds("bar-update").is_none());
         cx.update(|_, cx| {
             cx.set_global(crate::updates::Updates::available_preview(
                 semver::Version::new(0, 2, 0),
@@ -1769,26 +1750,29 @@ mod tests {
             ))
         });
         cx.run_until_parked();
-        assert!(cx.debug_bounds("sidebar-update").is_some());
+        assert!(cx.debug_bounds("bar-update").is_some());
     }
 
     #[test]
-    fn snapshot_sidebar_updates() {
+    fn snapshot_bar_updates() {
         use crate::updates::Updates;
         use semver::Version;
         let update = |state: &str| {
             let next = Version::new(0, 2, 0);
             match state {
-                "available" => Updates::available_preview(next, None),
-                "downloading" => Updates::Downloading {
-                    version: next,
-                    progress: 0.4,
-                },
+                "available" | "collapsed" => Updates::available_preview(next, None),
+                "downloading" => Updates::downloading_preview(next, 0.4),
                 "ready" => Updates::ready_preview(next),
                 _ => Updates::available_preview(next, Some("Couldn’t download Mira 0.2.0".into())),
             }
         };
-        for state in ["available", "downloading", "ready", "download-failed"] {
+        for state in [
+            "available",
+            "downloading",
+            "ready",
+            "download-failed",
+            "collapsed",
+        ] {
             let folder = crate::storyboard::scratch(&format!("client-update-{state}"));
             for path in mira_ui::snapshot(
                 &format!("client-update-{state}"),
@@ -1797,12 +1781,53 @@ mod tests {
                     crate::settings::init(folder.join("settings.json"), |_| {}, cx);
                     cx.set_global(update(state));
                     let client = Client::empty_for_tests(&folder, cx);
-                    client.update(cx, |client, _| client.sidebar = Sidebar::Full);
+                    if state != "collapsed" {
+                        client.update(cx, |client, _| client.sidebar = Sidebar::Full);
+                    }
                     cx.new(|_| Shown(client))
                 },
             ) {
                 assert!(path.exists(), "{} was not written", path.display());
             }
+        }
+    }
+
+    #[test]
+    fn snapshot_sidebar_update_card() {
+        use crate::updates::Updates;
+        let folder = crate::storyboard::scratch("client-update-card");
+        for path in mira_ui::snapshot_with(
+            "client-update-card",
+            gpui::size(px(720.0), px(360.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                cx.set_global(Updates::available_preview(
+                    semver::Version::new(0, 2, 0),
+                    None,
+                ));
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, _| client.sidebar = Sidebar::Full);
+                cx.new(|_| Shown(client))
+            },
+            |cx, owner| {
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: gpui::point(px(188.0 + nudge), px(340.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                cx.advance_clock(std::time::Duration::from_secs(1));
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
         }
     }
 
