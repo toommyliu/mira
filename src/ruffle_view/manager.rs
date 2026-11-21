@@ -21,7 +21,7 @@ use super::{
     account_card::{Presence, script_name},
     client::{self, Home, Layout},
 };
-use mira_ui::primitives::{Input, InputEvent};
+use mira_ui::primitives::{Input, InputEvent, text_field};
 
 use crate::{
     accounts::{Account, AccountId, Accounts, Change, Draft, Invalid, SaveError, SetupError},
@@ -36,7 +36,6 @@ actions!(
         AddAccount,
         NewSetup,
         StartSetup,
-        SelectShown,
         ClearSelection
     ]
 );
@@ -62,7 +61,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-n", AddAccount, Some(CONTEXT)),
         KeyBinding::new("cmd-n", NewSetup, Some(CONTEXT)),
         KeyBinding::new("cmd-enter", StartSetup, Some(CONTEXT)),
-        KeyBinding::new("cmd-a", SelectShown, Some(CONTEXT)),
+        KeyBinding::new("cmd-a", text_field::SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
     ]);
 }
