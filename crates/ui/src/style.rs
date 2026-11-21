@@ -134,8 +134,16 @@ impl Theme {
             .min_h_0()
             .items_stretch()
             .child(v_flex().flex_1().min_w_0().child(first))
-            .child(div().w(px(1.0)).my(self.space(4.0)).bg(self.border))
+            .child(self.column_rule())
             .child(v_flex().flex_1().min_w_0().child(second))
+    }
+
+    pub fn column_rule(&self) -> Div {
+        div()
+            .flex_none()
+            .w(px(1.0))
+            .my(self.space(4.0))
+            .bg(self.border)
     }
 
     pub fn account_columns(&self, pane: Pixels) -> usize {
