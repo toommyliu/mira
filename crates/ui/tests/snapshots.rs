@@ -1061,6 +1061,23 @@ fn snapshot_progress_arcs() {
             .child(Button::new("save", "Save").busy(true))
             .into_any_element()
     });
+    scene("progress-arcs-filled", 260.0, 90.0, |_, _| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(16.0))
+            .children([0.0, 0.25, 0.6, 1.0].map(|value| {
+                mira_ui::primitives::Spinner::new(("fill", (value * 100.0) as usize))
+                    .size(px(24.0))
+                    .value(Some(value))
+            }))
+            .child(
+                Button::icon("downloading", Icon::Download, "Download")
+                    .size(Size::Small)
+                    .progress(0.6),
+            )
+            .into_any_element()
+    });
 }
 
 #[test]

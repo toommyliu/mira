@@ -3,6 +3,7 @@ name = "mira"
 version = "0.1.0"
 edition = "2024"
 publish = false
+repository = "https://github.com/toommyliu/mira"
 
 [workspace]
 members = ["crates/platform", "crates/ui"]
@@ -42,7 +43,7 @@ percent-encoding = "2"
 oxc = { version = "0.157", features = ["codegen", "semantic", "transformer"] }
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSView", "NSResponder", "NSGraphics", "NSWindow"] }
 objc2-core-graphics = "0.3"
-objc2-foundation = { version = "0.3", features = ["NSError", "NSFileManager", "NSGeometry", "NSNotification", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSError", "NSFileManager", "NSGeometry", "NSNotification", "NSPathUtilities", "NSURL"] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "CAMetalLayer", "CATransaction"] }
 raw-window-handle = "0.6"
 regex = "1"

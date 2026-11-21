@@ -233,6 +233,7 @@ struct Settings {
     colors: Colors,
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
+    skip_update_checks: bool,
     hidden_recent_scripts: Vec<PathBuf>,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
@@ -399,6 +400,10 @@ pub(crate) fn start(cx: &App) -> Start {
 
 pub(crate) fn quit_shortcut(cx: &App) -> QuitShortcut {
     cx.global::<Store>().settings.quit_shortcut
+}
+
+pub(crate) fn check_updates(cx: &App) -> bool {
+    !cx.global::<Store>().settings.skip_update_checks
 }
 
 pub(crate) fn sidebar(cx: &App) -> bool {
@@ -838,6 +843,8 @@ struct SettingsWindow {
 
 impl SettingsWindow {
     fn new(cx: &mut Context<Self>) -> Self {
+        cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+            .detach();
         let saved = packages::packages(cx)
             .read(cx)
             .token()
@@ -971,10 +978,26 @@ impl SettingsWindow {
                     }),
                 )),
             ),
+            Block::Section(Section::titled("Updates").row(Row::new(
+                "Check automatically",
+                Some("Look for new versions at launch and every 4 hours."),
+                Switch::new(
+                    "check-updates-automatically",
+                    "Check automatically",
+                    !settings.skip_update_checks,
+                )
+                .hide_label()
+                .on_toggle(|on, _, cx| {
+                    change(cx, |settings| settings.skip_update_checks = !on);
+                    if on {
+                        crate::updates::Updates::check(false, cx);
+                    }
+                }),
+            ))),
             Block::Section(Section::titled("GitHub").row(Row::new(
                 "Token",
                 Some(
-                    "Used for all GitHub requests. Unlocks private repos and a higher rate limit.",
+                    "Access private script packages and raise GitHub's rate limit for packages and updates.",
                 ),
                 div().w(px(200.0)).child(self.github_token.clone()),
             ))),
@@ -1380,27 +1403,7 @@ impl Render for SettingsWindow {
                             )
                             .child(tabs)
                             .child(div().flex_1())
-                            .child(
-                                h_flex()
-                                    .flex_none()
-                                    .flex_wrap()
-                                    .justify_between()
-                                    .gap(layout.space(2.0))
-                                    .p(layout.space(2.0))
-                                    .pl(layout.space(4.0))
-                                    .child(
-                                        div()
-                                            .text_caption(theme.typography)
-                                            .text_color(theme.muted_foreground)
-                                            .child(concat!("Mira ", env!("CARGO_PKG_VERSION"))),
-                                    )
-                                    .child(
-                                        Button::new("check-updates", "Check for updates")
-                                            .variant(ButtonVariant::Ghost)
-                                            .size(Size::XSmall)
-                                            .disabled(true),
-                                    ),
-                            ),
+                            .child(crate::updates::footer(cx)),
                     )
                     .child(
                         v_flex().flex_1().min_w_0().child(header).child(
@@ -1468,6 +1471,7 @@ mod tests {
         assert_eq!(Settings::default().start, Start::Client);
         assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
         assert!(!Settings::default().sidebar);
+        assert!(!Settings::default().skip_update_checks);
         let chosen = Settings {
             start: Start::Manager,
             quit_shortcut: QuitShortcut::DoublePress,
@@ -1485,6 +1489,7 @@ mod tests {
             },
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
+            skip_update_checks: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
@@ -1762,6 +1767,85 @@ mod tests {
         assert_eq!(Settings::open(&path), None);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
         fs::remove_file(path).unwrap();
+    }
+
+    fn update_states() -> Vec<(&'static str, crate::updates::Updates)> {
+        use crate::updates::Updates;
+        use semver::Version;
+        let next = Version::new(0, 2, 0);
+        let error = || Some("Couldn’t download Mira 0.2.0: GitHub took too long to answer".into());
+        vec![
+            ("idle", Updates::Idle),
+            ("checking", Updates::Checking),
+            ("current", Updates::Current),
+            ("available", Updates::available_preview(next.clone(), None)),
+            (
+                "download-failed",
+                Updates::available_preview(next.clone(), error()),
+            ),
+            (
+                "downloading",
+                Updates::Downloading {
+                    version: next.clone(),
+                    progress: 0.4,
+                },
+            ),
+            ("ready", Updates::ready_preview(next.clone())),
+            ("restarting", Updates::Restarting(next)),
+            (
+                "failed",
+                Updates::Failed(
+                    "Couldn’t check GitHub for updates: GitHub took too long to answer".into(),
+                ),
+            ),
+            ("unavailable", Updates::Unavailable(None)),
+        ]
+    }
+
+    #[gpui::test]
+    fn the_update_footer_keeps_its_place_in_every_state(cx: &mut gpui::TestAppContext) {
+        let dir = crate::storyboard::scratch("update-footer-layout");
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            init(dir.join("settings.json"), |_| {}, cx);
+            packages::init(dir.join("packages"), dir.join("token"), cx);
+            cx.set_global(crate::updates::Updates::Idle);
+        });
+        let (_, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(cx));
+        cx.run_until_parked();
+        let idle = cx.debug_bounds("settings-update-footer").unwrap();
+        for (name, state) in update_states() {
+            cx.update(|_, cx| cx.set_global(state));
+            cx.run_until_parked();
+            assert_eq!(
+                cx.debug_bounds("settings-update-footer").unwrap(),
+                idle,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_settings_updates() {
+        for (state, _) in update_states() {
+            let name = format!("settings-update-{state}");
+            mira_ui::snapshot(
+                &name,
+                size(px(SETTINGS_WIDTH), px(SETTINGS_MIN_HEIGHT)),
+                move |_, cx| {
+                    cx.set_global(Store {
+                        path: PathBuf::new(),
+                        settings: Settings::default(),
+                        on_change: |_| {},
+                    });
+                    let found = update_states().into_iter().find(|(s, _)| *s == state);
+                    cx.set_global(found.unwrap().1);
+                    let dir = crate::storyboard::scratch(&format!("settings-update-{state}"));
+                    packages::init(dir.join("packages"), dir.join("token"), cx);
+                    cx.new(SettingsWindow::new)
+                },
+            );
+        }
     }
 
     #[test]

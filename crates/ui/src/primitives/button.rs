@@ -84,6 +84,7 @@ pub struct Button {
     size: Size,
     disabled: bool,
     busy: bool,
+    progress: Option<f32>,
     selected: Option<bool>,
     expanded: Option<bool>,
     tooltip: Option<SharedString>,
@@ -115,6 +116,7 @@ impl Button {
             size: Size::default(),
             disabled: false,
             busy: false,
+            progress: None,
             selected: None,
             expanded: None,
             tooltip: None,
@@ -183,6 +185,12 @@ impl Button {
 
     pub fn busy(mut self, busy: bool) -> Self {
         self.busy = busy;
+        self
+    }
+
+    pub fn progress(mut self, value: f32) -> Self {
+        self.busy = true;
+        self.progress = Some(value);
         self
     }
 
@@ -529,7 +537,12 @@ impl RenderOnce for Button {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(Spinner::new("busy").color(fg).size(icon_size)),
+                        .child(
+                            Spinner::new("busy")
+                                .color(fg)
+                                .size(icon_size * (4.0 / 3.0))
+                                .value(self.progress),
+                        ),
                 )
             })
             .when(ring || self.invalid, |button| {
