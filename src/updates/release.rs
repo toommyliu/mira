@@ -18,6 +18,8 @@ static REPOSITORY: LazyLock<(&str, &str)> = LazyLock::new(|| {
 #[derive(Deserialize)]
 struct Release {
     tag_name: String,
+    #[serde(default)]
+    body: Option<String>,
     assets: Vec<Asset>,
 }
 
@@ -32,18 +34,27 @@ struct Asset {
 #[derive(Clone)]
 pub(crate) struct Update {
     pub(crate) version: Version,
+    pub(crate) notes: Option<String>,
     id: u64,
     size: u64,
     sha256: String,
 }
 
 impl Update {
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
     #[cfg(test)]
     pub(crate) fn preview(version: Version) -> Self {
         Self {
             version,
+            notes: Some(
+                "- **Sheets for file panels.** Open and save panels attach to the window that asked for them.\n- **Update from the sidebar.** Download and restart Mira without opening Settings.\n- Fixes a crash when closing a tab mid-login."
+                    .into(),
+            ),
             id: 0,
-            size: 1,
+            size: 18_000_000,
             sha256: String::new(),
         }
     }
@@ -74,6 +85,10 @@ impl Release {
         ensure!(asset.size > 0, "The download for Mira {version} is empty");
         Ok(Some(Update {
             version,
+            notes: self
+                .body
+                .map(|b| b.trim().to_owned())
+                .filter(|b| !b.is_empty()),
             id: asset.id,
             size: asset.size,
             sha256,
@@ -122,6 +137,7 @@ mod tests {
     fn release(tag: &str) -> Release {
         Release {
             tag_name: tag.into(),
+            body: None,
             assets: vec![Asset {
                 id: 17,
                 name: ZIP.into(),

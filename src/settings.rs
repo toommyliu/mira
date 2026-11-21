@@ -1785,10 +1785,7 @@ mod tests {
             ),
             (
                 "downloading",
-                Updates::Downloading {
-                    version: next.clone(),
-                    progress: 0.4,
-                },
+                Updates::downloading_preview(next.clone(), 0.4),
             ),
             ("ready", Updates::ready_preview(next.clone())),
             ("restarting", Updates::Restarting(next)),

@@ -1067,15 +1067,15 @@ fn snapshot_progress_arcs() {
             .items_center()
             .gap(px(16.0))
             .children([0.0, 0.25, 0.6, 1.0].map(|value| {
-                mira_ui::primitives::Spinner::new(("fill", (value * 100.0) as usize))
-                    .size(px(24.0))
-                    .value(Some(value))
+                Button::icon(
+                    ("downloading", (value * 100.0) as usize),
+                    Icon::Download,
+                    "Download",
+                )
+                .size(Size::Small)
+                .icon_size(px(14.0))
+                .progress(value)
             }))
-            .child(
-                Button::icon("downloading", Icon::Download, "Download")
-                    .size(Size::Small)
-                    .progress(0.6),
-            )
             .into_any_element()
     });
 }

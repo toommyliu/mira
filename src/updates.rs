@@ -10,7 +10,7 @@ use semver::Version;
 
 use bundle::Staged;
 use release::Update;
-pub(crate) use view::{footer, sidebar_row};
+pub(crate) use view::{button, dot, footer};
 
 use crate::packages::github::{API, GitHub};
 
@@ -29,10 +29,11 @@ pub(crate) enum Updates {
         error: Option<SharedString>,
     },
     Downloading {
-        version: Version,
+        update: Update,
         progress: f32,
     },
     Ready {
+        update: Update,
         staged: Staged,
         error: Option<SharedString>,
     },
@@ -102,16 +103,35 @@ impl Updates {
     #[cfg(test)]
     pub(crate) fn ready_preview(version: Version) -> Self {
         Self::Ready {
+            update: Update::preview(version.clone()),
             staged: Staged::preview(version),
             error: None,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn downloading_preview(version: Version, progress: f32) -> Self {
+        Self::Downloading {
+            update: Update::preview(version),
+            progress,
+        }
+    }
+
+    pub(crate) fn update(&self) -> Option<&Update> {
+        match self {
+            Self::Available { update, .. }
+            | Self::Downloading { update, .. }
+            | Self::Ready { update, .. } => Some(update),
+            _ => None,
+        }
+    }
+
     pub(crate) fn version(&self) -> Option<&Version> {
         match self {
-            Self::Available { update, .. } => Some(&update.version),
-            Self::Ready { staged, .. } => Some(&staged.version),
-            Self::Downloading { version, .. } | Self::Restarting(version) => Some(version),
+            Self::Available { update, .. }
+            | Self::Downloading { update, .. }
+            | Self::Ready { update, .. } => Some(&update.version),
+            Self::Restarting(version) => Some(version),
             _ => None,
         }
     }
@@ -168,9 +188,8 @@ impl Updates {
         };
         let update = update.clone();
         let github = github(cx);
-        let version = update.version.clone();
         cx.set_global(Self::Downloading {
-            version: version.clone(),
+            update: update.clone(),
             progress: 0.0,
         });
         let (report, progress) = async_channel::unbounded();
@@ -188,7 +207,7 @@ impl Updates {
             while let Ok(progress) = progress.recv().await {
                 cx.update(|cx| {
                     cx.set_global(Self::Downloading {
-                        version: version.clone(),
+                        update: update.clone(),
                         progress,
                     })
                 });
@@ -197,6 +216,7 @@ impl Updates {
             cx.update(|cx| {
                 cx.set_global(match result {
                     Ok(staged) => Self::Ready {
+                        update,
                         staged,
                         error: None,
                     },
@@ -211,10 +231,10 @@ impl Updates {
     }
 
     pub(crate) fn restart(cx: &mut App) {
-        let Some(Self::Ready { staged, .. }) = cx.try_global::<Self>() else {
+        let Some(Self::Ready { update, staged, .. }) = cx.try_global::<Self>() else {
             return;
         };
-        let staged = staged.clone();
+        let (update, staged) = (update.clone(), staged.clone());
         cx.set_global(Self::Restarting(staged.version.clone()));
         let installing = staged.clone();
         let task = cx.background_spawn(async move {
@@ -229,6 +249,7 @@ impl Updates {
             cx.update(|cx| match result {
                 Ok(()) => cx.quit(),
                 Err(error) => cx.set_global(Self::Ready {
+                    update,
                     staged,
                     error: Some(message(&error)),
                 }),
