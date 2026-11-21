@@ -11,7 +11,7 @@ use gpui::{
     Styled as _, Task, TextRun, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
 };
 
-use super::{Button, Icon, button::Size};
+use super::{Button, Icon, Spinner, button::Size, icon};
 use crate::{ActiveTheme as _, Tone, motion, nav};
 
 const LINGER: Duration = Duration::from_secs(5);
@@ -20,16 +20,27 @@ const GAP: Pixels = px(14.0);
 const PEEK: Pixels = px(14.0);
 const SHRINK: f32 = 0.05;
 const UNMOUNT: Duration = motion::GLIDE;
-const FALLBACK_HEIGHT: Pixels = px(50.0);
+const FALLBACK_HEIGHT: Pixels = px(42.0);
+const ICON: Pixels = px(14.0);
 
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToastId(u64);
 
 #[derive(Clone)]
 pub struct Toast {
     title: SharedString,
     body: Option<SharedString>,
     tone: Tone,
+    loading: bool,
     action: Option<(SharedString, ActionHandler)>,
+}
+
+#[derive(Clone, Copy)]
+enum Lead {
+    Spinner,
+    Icon(Icon),
 }
 
 impl Toast {
@@ -38,8 +49,14 @@ impl Toast {
             title: title.into(),
             body: None,
             tone: Tone::Neutral,
+            loading: false,
             action: None,
         }
+    }
+
+    pub fn loading(mut self) -> Self {
+        self.loading = true;
+        self
     }
 
     pub fn body(mut self, body: impl Into<SharedString>) -> Self {
@@ -62,7 +79,15 @@ impl Toast {
     }
 
     fn stays(&self) -> bool {
-        self.action.is_some() || self.tone == Tone::Danger
+        self.loading || self.action.is_some() || self.tone == Tone::Danger
+    }
+
+    fn lead(&self) -> Option<Lead> {
+        if self.loading {
+            Some(Lead::Spinner)
+        } else {
+            (self.tone != Tone::Neutral).then(|| Lead::Icon(Icon::of(self.tone)))
+        }
     }
 }
 
@@ -244,13 +269,13 @@ impl Toaster {
         }
     }
 
-    pub fn push(stack: &Entity<Self>, toast: Toast, cx: &mut App) {
-        let stays = toast.stays();
+    pub fn push(stack: &Entity<Self>, toast: Toast, cx: &mut App) -> ToastId {
         let reduce = cx.reduce_motion();
         stack.update(cx, |toasts, cx| {
             toasts.prune(reduce);
             let id = toasts.next;
             toasts.next += 1;
+            let stays = toast.stays();
             toasts.shown.insert(
                 0,
                 Shown {
@@ -263,14 +288,36 @@ impl Toaster {
                 },
             );
             if !stays {
-                if toasts.paused {
-                    toasts.timers.insert(id, Timer::Paused(LINGER));
-                } else {
-                    toasts.start(id, LINGER, cx);
-                }
+                toasts.linger(id, cx);
+            }
+            cx.notify();
+            ToastId(id)
+        })
+    }
+
+    pub fn replace(stack: &Entity<Self>, id: ToastId, toast: Toast, cx: &mut App) -> ToastId {
+        if !stack.read(cx).present().any(|shown| shown.id == id.0) {
+            return Self::push(stack, toast, cx);
+        }
+        stack.update(cx, |toasts, cx| {
+            toasts.timers.remove(&id.0);
+            if !toast.stays() {
+                toasts.linger(id.0, cx);
+            }
+            if let Some(shown) = toasts.shown.iter_mut().find(|shown| shown.id == id.0) {
+                shown.toast = toast;
             }
             cx.notify();
         });
+        id
+    }
+
+    fn linger(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.paused {
+            self.timers.insert(id, Timer::Paused(LINGER));
+        } else {
+            self.start(id, LINGER, cx);
+        }
     }
 
     fn start(&mut self, id: u64, after: Duration, cx: &mut Context<Self>) {
@@ -383,21 +430,10 @@ impl Toaster {
             .iter()
             .map(|shown| natural_width(&shown.toast, window, &theme))
             .fold(Pixels::ZERO, Pixels::max);
-        let widest = px(motion::glide(
-            "toasts-width",
-            None,
-            f32::from(widest),
-            window,
-            cx,
-        ));
         let width = widest
             .min(theme.layout.overlay_max_width)
             .min((viewport_width - edge * 2.0).max(px(1.0)));
-        let end = if viewport_width < theme.layout.compact_overlay {
-            (viewport_width - width) / 2.0
-        } else {
-            edge
-        };
+        let compact = viewport_width < theme.layout.compact_overlay;
         let height_of = |id: u64| {
             heights
                 .borrow()
@@ -550,28 +586,39 @@ impl Toaster {
             );
         }
         let hover_stack = stack.clone();
-        let viewport = window.viewport_size();
         deferred(
-            gpui::anchored()
-                .anchor(gpui::Anchor::BottomRight)
-                .position(gpui::point(viewport.width - end, viewport.height - edge))
-                .child(
-                    div()
-                        .id("toasts")
-                        .track_focus(&focus)
-                        .relative()
-                        .w(width)
-                        .h(stack_height)
-                        .children(cards)
-                        .child(div().id("toasts-hover").absolute().inset_0().on_hover(
-                            move |hovered, _, cx| {
-                                hover_stack.update(cx, |toasts, cx| {
-                                    toasts.hovered = *hovered;
-                                    cx.notify();
-                                })
-                            },
-                        )),
-                ),
+            div().absolute().inset_0().overflow_hidden().child(
+                div()
+                    .absolute()
+                    .left(edge)
+                    .right(edge)
+                    .bottom(edge)
+                    .flex()
+                    .map(|row| {
+                        if compact {
+                            row.justify_center()
+                        } else {
+                            row.justify_end()
+                        }
+                    })
+                    .child(
+                        div()
+                            .id("toasts")
+                            .track_focus(&focus)
+                            .relative()
+                            .w(width)
+                            .h(stack_height)
+                            .children(cards)
+                            .child(div().id("toasts-hover").absolute().inset_0().on_hover(
+                                move |hovered, _, cx| {
+                                    hover_stack.update(cx, |toasts, cx| {
+                                        toasts.hovered = *hovered;
+                                        cx.notify();
+                                    })
+                                },
+                            )),
+                    ),
+            ),
         )
         .with_priority(super::layer::TOASTS)
         .into_any_element()
@@ -580,21 +627,25 @@ impl Toaster {
 
 fn natural_width(toast: &Toast, window: &Window, theme: &crate::Theme) -> Pixels {
     let line = |text: &SharedString, weight: FontWeight| {
-        let run = TextRun {
-            len: text.len(),
-            font: gpui::Font {
-                weight,
-                ..gpui::font(theme.font_family.clone())
-            },
-            color: Hsla::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        window
-            .text_system()
-            .shape_line(text.clone(), theme.typography.body, &[run], None)
-            .width
+        text.split('\n')
+            .map(|part| {
+                let run = TextRun {
+                    len: part.len(),
+                    font: gpui::Font {
+                        weight,
+                        ..gpui::font(theme.font_family.clone())
+                    },
+                    color: Hsla::default(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .layout_line(part, theme.typography.body, &[run], None)
+                    .width
+            })
+            .fold(Pixels::ZERO, Pixels::max)
     };
     let gap = theme.space(3.0);
     let text = toast
@@ -605,7 +656,10 @@ fn natural_width(toast: &Toast, window: &Window, theme: &crate::Theme) -> Pixels
     let action = toast.action.as_ref().map_or(Pixels::ZERO, |(label, _)| {
         line(label, FontWeight::MEDIUM) + theme.space(2.0) * 2.0 + px(2.0) + gap
     });
-    let chrome = theme.space(3.0) * 2.0 + px(2.0);
+    let icon = toast
+        .lead()
+        .map_or(Pixels::ZERO, |_| ICON + theme.space(2.0));
+    let chrome = theme.space(3.0) * 2.0 + px(2.0) + icon;
     (chrome + text + action + gap + theme.layout.control_sm).ceil()
 }
 
@@ -633,7 +687,7 @@ fn card(
     let typography = theme.typography;
     let id = shown.id;
     let toast = &shown.toast;
-    let (_, _, tone_text) = theme.tone(toast.tone);
+    let (solid, _, tone_text) = theme.tone(toast.tone);
     let dismiss = {
         let stack = stack.clone();
         move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
@@ -642,6 +696,7 @@ fn card(
     };
     div()
         .id(("toast", id))
+        .debug_selector(|| format!("toast: {}", toast.title))
         .track_focus(&shown.focus)
         .role(if toast.tone == Tone::Danger {
             Role::Alert
@@ -653,7 +708,8 @@ fn card(
         .occlude()
         .flex()
         .size_full()
-        .p(theme.space(3.0))
+        .py(theme.space(2.0))
+        .px(theme.space(3.0))
         .rounded(theme.radius.control)
         .bg(bg)
         .border_1()
@@ -679,32 +735,59 @@ fn card(
                     .child(
                         div()
                             .flex()
-                            .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .py(px(2.0))
-                            .gap(theme.space(1.0))
+                            .items_start()
+                            .gap(layout.space(2.0))
+                            .when_some(toast.lead(), |row, lead| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .h(typography.body_line)
+                                        .mt(px(2.0))
+                                        .child(match lead {
+                                            Lead::Spinner => Spinner::new(("toast-spinner", id))
+                                                .color(solid)
+                                                .size(ICON)
+                                                .into_any_element(),
+                                            Lead::Icon(glyph) => {
+                                                icon(glyph, solid).size(ICON).into_any_element()
+                                            }
+                                        }),
+                                )
+                            })
                             .child(
                                 div()
-                                    .text_size(typography.body)
-                                    .line_height(typography.body_line)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if toast.tone == Tone::Neutral {
-                                        theme.foreground
-                                    } else {
-                                        tone_text
-                                    })
-                                    .child(toast.title.clone()),
-                            )
-                            .when_some(toast.body.clone(), |column, body| {
-                                column.child(
-                                    div()
-                                        .text_size(typography.body)
-                                        .line_height(typography.body_line)
-                                        .text_color(theme.muted_foreground)
-                                        .child(body),
-                                )
-                            }),
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .py(px(2.0))
+                                    .gap(theme.space(1.0))
+                                    .child(
+                                        div()
+                                            .text_size(typography.body)
+                                            .line_height(typography.body_line)
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if toast.tone == Tone::Neutral {
+                                                theme.foreground
+                                            } else {
+                                                tone_text
+                                            })
+                                            .child(toast.title.clone()),
+                                    )
+                                    .when_some(toast.body.clone(), |column, body| {
+                                        column.child(
+                                            div()
+                                                .text_size(typography.body)
+                                                .line_height(typography.body_line)
+                                                .text_color(theme.muted_foreground)
+                                                .child(body),
+                                        )
+                                    }),
+                            ),
                     )
                     .when_some(toast.action.clone(), |row, (label, action)| {
                         let stack = stack.clone();
