@@ -49,7 +49,9 @@ use crate::{
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
-    scripting::{self, Definition, ExtractError, Kind, Launch, Outcome, Supplied, Values},
+    scripting::{
+        self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
+    },
     settings, shortcuts,
 };
 
@@ -85,6 +87,7 @@ struct Entry {
 impl Entry {
     fn matches(&self, query: &str) -> bool {
         self.name.to_lowercase().contains(query)
+            || file_name(&self.path).to_lowercase().contains(query)
             || self
                 .folder
                 .as_ref()
@@ -320,8 +323,12 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
                 .ok()
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .map(|folder| folder.display().to_string().into());
+            let name = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| scripting::display_name(&path, &text))
+                .unwrap_or_else(|| name.to_owned());
             entries.push(Entry {
-                name: name.to_owned().into(),
+                name: name.into(),
                 folder,
                 path,
                 source: None,
@@ -566,6 +573,7 @@ enum FormKey {
 
 struct Form {
     generation: u64,
+    meta: Meta,
     state: FormState,
 }
 
@@ -1543,7 +1551,7 @@ impl ScriptsWindow {
             })?;
             scripting::extract(&display, &script, &text).map_err(|error| match error {
                 ExtractError::Syntax(message) => ("This script has a syntax error", message),
-                ExtractError::Inputs(message) => ("This script's inputs are invalid", message),
+                ExtractError::Meta(message) => ("This script's meta is invalid", message),
             })
         });
         let generation = self.generation;
@@ -1604,14 +1612,22 @@ impl ScriptsWindow {
         &mut self,
         key: FormKey,
         generation: u64,
-        read: Result<Option<Definition>, (&'static str, String)>,
+        read: Result<Declared, (&'static str, String)>,
         cx: &mut Context<Self>,
     ) {
+        let (meta, read) = match read {
+            Ok(Declared { meta, inputs }) => (
+                meta,
+                inputs.map_err(|message| ("This script's inputs are invalid", message)),
+            ),
+            Err(broken) => (Meta::default(), Err(broken)),
+        };
         if let Some(form) = self.forms.get_mut(&key)
             && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
             && definition == read
         {
             form.generation = generation;
+            form.meta = meta;
             return;
         }
         let state = match read {
@@ -1674,7 +1690,14 @@ impl ScriptsWindow {
             ) => Some(values(definition, drafts)),
             _ => None,
         };
-        self.forms.insert(key.clone(), Form { generation, state });
+        self.forms.insert(
+            key.clone(),
+            Form {
+                generation,
+                meta,
+                state,
+            },
+        );
         if let Some(edited) = checked {
             self.store_entry(&key, edited, cx);
         }
@@ -2126,10 +2149,20 @@ impl ScriptsWindow {
         let entry = entry?;
         let errors = self.input_errors(&entry.path, cx);
         let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
+        let key = FormKey::Script(entry.path.clone());
+        let meta = self.forms.get(&key).map(|form| &form.meta);
+        let name = meta
+            .and_then(|meta| meta.name.clone())
+            .map_or_else(|| entry.name.clone(), SharedString::from);
+        let description = meta
+            .and_then(|meta| meta.description.clone())
+            .map(|description| muted(theme, description).into_any_element());
         Some(Detail {
-            heading: heading(theme, entry.name.clone(), home_relative(&entry.path), None)
-                .into_any_element(),
-            body: self.inputs(theme, &FormKey::Script(entry.path.clone()), cx),
+            heading: heading(theme, name, home_relative(&entry.path), None).into_any_element(),
+            body: description
+                .into_iter()
+                .chain(self.inputs(theme, &key, cx))
+                .collect(),
             bar,
         })
     }
@@ -2147,6 +2180,13 @@ impl ScriptsWindow {
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
+        let meta = self.forms.get(&key).map(|form| &form.meta);
+        let name = meta
+            .and_then(|meta| meta.name.clone())
+            .unwrap_or_else(|| file_name(&queued.script));
+        let description = meta
+            .and_then(|meta| meta.description.clone())
+            .map(|description| muted(theme, description).into_any_element());
         let body = match self.forms.get(&key).map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
@@ -2172,7 +2212,7 @@ impl ScriptsWindow {
         Some(Detail {
             heading: heading(
                 theme,
-                file_name(&queued.script).into(),
+                name.into(),
                 home_relative(&queued.script),
                 Some(
                     Button::new("queued-remove", "Remove")
@@ -2184,13 +2224,13 @@ impl ScriptsWindow {
                 ),
             )
             .into_any_element(),
-            body: failed
-                .map(|message| {
+            body: description
+                .into_iter()
+                .chain(failed.map(|message| {
                     Alert::new("queued-failed", Tone::Danger, "Failed")
                         .body(message)
                         .into_any_element()
-                })
-                .into_iter()
+                }))
                 .chain(body)
                 .collect(),
             bar: None,
@@ -2211,10 +2251,11 @@ impl ScriptsWindow {
         let rows: Rc<[QueueRow]> = queue
             .iter()
             .map(|queued| {
-                let form = self
-                    .forms
-                    .get(&FormKey::Entry(queued.id))
-                    .map(|form| &form.state);
+                let form = self.forms.get(&FormKey::Entry(queued.id));
+                let name = form
+                    .and_then(|form| form.meta.name.clone())
+                    .unwrap_or_else(|| file_name(&queued.script));
+                let form = form.map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
                         Some(FormState::Broken { .. }) => Some("Can't start".into()),
@@ -2242,7 +2283,7 @@ impl ScriptsWindow {
                     None => text_width,
                 };
                 QueueRow {
-                    name: file_name(&queued.script).into(),
+                    name: name.into(),
                     folder: fit_path_to(&folder, room, window, theme),
                     meta,
                 }
@@ -2870,13 +2911,13 @@ fn heading(
         .children(action)
 }
 
-fn muted(theme: &Theme, text: &'static str) -> impl IntoElement {
+fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
     let typography = theme.typography;
     div()
         .text_size(typography.body)
         .line_height(typography.body_line)
         .text_color(theme.muted_foreground)
-        .child(text)
+        .child(text.into())
 }
 
 struct QueueRow {
@@ -2994,7 +3035,10 @@ mod tests {
         let packages = temp.join("packages");
         assert_eq!(scan_all(&built_in, &[], &packages), Library::default());
         for (file, contents) in [
-            ("scripts/zeta.ts", ""),
+            (
+                "scripts/zeta.ts",
+                "export const meta = { name: \"Alchemy\" } satisfies Meta;",
+            ),
             ("scripts/Alpha.js", ""),
             ("scripts/notes.txt", ""),
             ("scripts/types.d.ts", ""),
@@ -3002,7 +3046,7 @@ mod tests {
             ("scripts/farming/hunt.ts", ""),
             ("scripts/node_modules/lib/index.js", ""),
             ("scripts/.git/hook.js", ""),
-            ("community/daily.ts", ""),
+            ("community/daily.ts", "export const meta = { name: 5 };"),
             ("community/bosses/dage.ts", ""),
             (
                 "authoring/package.json",
@@ -3048,8 +3092,8 @@ mod tests {
         assert_eq!(
             listed,
             [
+                (None, None, "Alchemy"),
                 (None, None, "Alpha.js"),
-                (None, None, "zeta.ts"),
                 (None, Some("farming"), "daily.mts"),
                 (None, Some("farming"), "hunt.ts"),
                 (Some(0), None, "daily.ts"),
@@ -3152,7 +3196,10 @@ mod tests {
         let library = Library {
             entries: vec![
                 entry("daily.ts", None, None),
-                entry("hunt.ts", None, None),
+                Entry {
+                    name: "Frogzard hunt".into(),
+                    ..entry("hunt.ts", None, None)
+                },
                 entry("daily.ts", Some("weekly"), Some(0)),
                 entry("dage.ts", None, Some(0)),
                 entry("spin.ts", None, Some(1)),
@@ -3173,7 +3220,7 @@ mod tests {
             names(""),
             [
                 "daily.ts",
-                "hunt.ts",
+                "Frogzard hunt",
                 "[community]",
                 "daily.ts",
                 "dage.ts",
@@ -3184,8 +3231,10 @@ mod tests {
         assert_eq!(names("daily"), ["daily.ts", "[community]", "daily.ts"]);
         assert_eq!(names("dailies"), ["[dailies]", "spin.ts"]);
         assert_eq!(names("weekly"), ["[community]", "daily.ts"]);
+        assert_eq!(names("frogzard"), ["Frogzard hunt"]);
+        assert_eq!(names("hunt.ts"), ["Frogzard hunt"]);
         assert!(names("zzz").is_empty());
-        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "hunt.ts"]);
+        assert_eq!(names_in("", Scope::BuiltIn), ["daily.ts", "Frogzard hunt"]);
         assert_eq!(names_in("", Scope::Source(0)), ["daily.ts", "dage.ts"]);
         assert_eq!(names_in("", Scope::Source(1)), ["spin.ts"]);
     }
@@ -3594,7 +3643,7 @@ mod tests {
         ("scripts/legion/daily-quests/ultras/temple.ts", ""),
         (
             "scripts/legion/daily-quests/ultras/void-highlord-farm.ts",
-            "",
+            r#"export const meta = { name: "Void Highlord farm" };"#,
         ),
         (
             "packages/community/package.json",
