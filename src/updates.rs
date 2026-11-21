@@ -23,6 +23,7 @@ const COOLDOWN: Duration = Duration::from_secs(30);
 static CURRENT: LazyLock<Version> =
     LazyLock::new(|| Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo package version"));
 
+#[derive(Clone)]
 pub(crate) enum Updates {
     Unavailable(Option<SharedString>),
     Idle,
@@ -165,6 +166,7 @@ impl Updates {
             Ok(github) => github,
             Err(error) => return cx.set_global(Self::Failed(message(&error))),
         };
+        let previous = cx.try_global::<Self>().cloned();
         if !offered {
             cx.set_global(Self::Checking);
         }
@@ -197,7 +199,7 @@ impl Updates {
                         if offered {
                             return;
                         }
-                        Self::Idle
+                        previous.unwrap_or(Self::Idle)
                     }
                 })
             });

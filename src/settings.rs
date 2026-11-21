@@ -1810,15 +1810,16 @@ mod tests {
         });
         let (_, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(cx));
         cx.run_until_parked();
-        let idle = cx.debug_bounds("settings-update-footer").unwrap();
+        let bounds = |cx: &mut gpui::VisualTestContext| {
+            let footer = cx.debug_bounds("settings-update-footer").unwrap();
+            let version = cx.debug_bounds("settings-update-version").unwrap();
+            (footer, version.origin, version.size.height)
+        };
+        let idle = bounds(cx);
         for (name, state) in update_states() {
             cx.update(|_, cx| cx.set_global(state));
             cx.run_until_parked();
-            assert_eq!(
-                cx.debug_bounds("settings-update-footer").unwrap(),
-                idle,
-                "{name}"
-            );
+            assert_eq!(bounds(cx), idle, "{name}");
         }
     }
 

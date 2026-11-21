@@ -35,17 +35,18 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
     let fallback = Updates::Unavailable(None);
     let state = cx.try_global::<Updates>().unwrap_or(&fallback);
     let status = match state {
-        Updates::Current(_) => Some("Up to date".to_owned()),
-        Updates::Failed(_) => Some("Couldn’t check".to_owned()),
-        Updates::Available { error: Some(_), .. } => Some("Download failed".to_owned()),
-        Updates::Available { .. } => Some("Update available".to_owned()),
-        Updates::Downloading { progress, .. } => {
-            Some(format!("Downloading… {:.0}%", progress * 100.0))
-        }
-        Updates::Ready { error: Some(_), .. } => Some("Install failed".to_owned()),
-        Updates::Ready { .. } => Some("Ready to restart".to_owned()),
-        Updates::Restarting(_) => Some("Restarting…".to_owned()),
-        _ => None,
+        Updates::Unavailable(None) => "Development build".to_owned(),
+        Updates::Unavailable(Some(_)) => "Updates unavailable".to_owned(),
+        Updates::Idle => "Not checked yet".to_owned(),
+        Updates::Checking => "Checking…".to_owned(),
+        Updates::Current(_) => "Up to date".to_owned(),
+        Updates::Failed(_) => "Couldn’t check".to_owned(),
+        Updates::Available { error: Some(_), .. } => "Download failed".to_owned(),
+        Updates::Available { .. } => "Update available".to_owned(),
+        Updates::Downloading { progress, .. } => format!("Downloading… {:.0}%", progress * 100.0),
+        Updates::Ready { error: Some(_), .. } => "Install failed".to_owned(),
+        Updates::Ready { .. } => "Ready to restart".to_owned(),
+        Updates::Restarting(_) => "Restarting…".to_owned(),
     };
     let failed = matches!(
         state,
@@ -87,14 +88,20 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
             v_flex()
                 .min_w_0()
                 .justify_center()
-                .child(div().truncate().text_color(theme.foreground).child(VERSION))
-                .children(status.map(|status| {
+                .child(
+                    div()
+                        .debug_selector(|| "settings-update-version".into())
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(VERSION),
+                )
+                .child(
                     h_flex()
                         .min_w_0()
                         .gap(theme.space(1.5))
                         .child(div().min_w_0().truncate().child(status))
-                        .when(failed, |row| row.child(failed_mark(cx)))
-                })),
+                        .when(failed, |row| row.child(failed_mark(cx))),
+                ),
         )
         .child(action)
 }
