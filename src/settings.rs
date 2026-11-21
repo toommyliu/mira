@@ -1777,7 +1777,7 @@ mod tests {
         vec![
             ("idle", Updates::Idle),
             ("checking", Updates::Checking),
-            ("current", Updates::Current),
+            ("current", Updates::Current(std::time::Instant::now())),
             ("available", Updates::available_preview(next.clone(), None)),
             (
                 "download-failed",

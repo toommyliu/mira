@@ -35,7 +35,7 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
     let fallback = Updates::Unavailable(None);
     let state = cx.try_global::<Updates>().unwrap_or(&fallback);
     let status = match state {
-        Updates::Current => Some("Up to date".to_owned()),
+        Updates::Current(_) => Some("Up to date".to_owned()),
         Updates::Failed(_) => Some("Couldn’t check".to_owned()),
         Updates::Available { error: Some(_), .. } => Some("Download failed".to_owned()),
         Updates::Available { .. } => Some("Update available".to_owned()),

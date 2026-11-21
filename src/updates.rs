@@ -2,7 +2,10 @@ mod bundle;
 mod release;
 mod view;
 
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use gpui::{App, AppContext as _, Global, SharedString};
@@ -15,6 +18,8 @@ pub(crate) use view::{button, dot, footer};
 use crate::packages::github::{API, GitHub};
 
 const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+const SPIN: Duration = Duration::from_secs(1);
+const COOLDOWN: Duration = Duration::from_secs(30);
 static CURRENT: LazyLock<Version> =
     LazyLock::new(|| Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo package version"));
 
@@ -22,7 +27,7 @@ pub(crate) enum Updates {
     Unavailable(Option<SharedString>),
     Idle,
     Checking,
-    Current,
+    Current(Instant),
     Failed(SharedString),
     Available {
         update: Update,
@@ -137,8 +142,22 @@ impl Updates {
     }
 
     pub(crate) fn check(manual: bool, cx: &mut App) {
+        let started = cx.background_executor().now();
         let offered = match cx.try_global::<Self>() {
-            Some(Self::Idle | Self::Current | Self::Failed(_)) => false,
+            Some(&Self::Current(at)) if started.duration_since(at) < COOLDOWN => {
+                cx.set_global(Self::Checking);
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(SPIN).await;
+                    cx.update(|cx| {
+                        if matches!(cx.try_global::<Self>(), Some(Self::Checking)) {
+                            cx.set_global(Self::Current(at));
+                        }
+                    });
+                })
+                .detach();
+                return;
+            }
+            Some(Self::Idle | Self::Current(_) | Self::Failed(_)) => false,
             Some(Self::Available { .. }) => true,
             _ => return,
         };
@@ -152,6 +171,10 @@ impl Updates {
         let task = cx.background_spawn(async move { block_on(release::latest(&github, &CURRENT)) });
         cx.spawn(async move |cx| {
             let result = task.await;
+            let executor = cx.background_executor().clone();
+            if let Some(left) = (started + SPIN).checked_duration_since(executor.now()) {
+                executor.timer(left).await;
+            }
             cx.update(|cx| {
                 if !matches!(
                     cx.try_global::<Self>(),
@@ -164,7 +187,7 @@ impl Updates {
                         update,
                         error: None,
                     },
-                    Ok(None) => Self::Current,
+                    Ok(None) => Self::Current(cx.background_executor().now()),
                     Err(error) if manual => Self::Failed(message(&error)),
                     Err(error) => {
                         tracing::info!(
@@ -274,4 +297,28 @@ async fn fetch(github: GitHub, update: Update, progress: impl FnMut(f32)) -> Res
         let _ = std::fs::remove_dir_all(&dir);
     }
     staged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn a_check_soon_after_one_spins_without_asking_github(cx: &mut gpui::TestAppContext) {
+        let checked = cx.update(|cx| {
+            let now = cx.background_executor().now();
+            cx.set_global(Updates::Current(now));
+            now
+        });
+        cx.executor().advance_clock(COOLDOWN / 2);
+        cx.update(|cx| Updates::check(true, cx));
+        assert!(cx.update(|cx| matches!(cx.global::<Updates>(), Updates::Checking)));
+        cx.executor().advance_clock(SPIN);
+        cx.run_until_parked();
+        assert!(
+            cx.update(
+                |cx| matches!(cx.global::<Updates>(), &Updates::Current(at) if at == checked)
+            )
+        );
+    }
 }
