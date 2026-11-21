@@ -1,10 +1,11 @@
 use std::{rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role, ScrollEvent, ScrollHandle,
-    ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role,
+    ScrollEvent, ScrollHandle, ScrollStrategy, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use super::{Flow, Pose, Scrollbar, Sortable};
@@ -19,6 +20,8 @@ type ReorderHandler = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
 type RowBuilder = Rc<dyn Fn(usize) -> ListItem>;
 
 const LIST_INSET: Pixels = px(4.0);
+const PANE_INSET: Pixels = px(12.0);
+const PANE_BLOCK_INSET: Pixels = px(8.0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -98,6 +101,7 @@ struct Options {
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
     uniform: bool,
+    surface: Hsla,
     theme: Theme,
 }
 
@@ -234,7 +238,7 @@ impl Options {
             })
             .when(!disabled, |row| {
                 row.active(|style| {
-                    style.bg(theme.pressed(theme.card, theme.muted, theme.foreground))
+                    style.bg(theme.pressed(self.surface, theme.muted, theme.foreground))
                 })
                 .pointer_cursor(theme)
                 .on_click(move |event, window, cx| {
@@ -286,20 +290,41 @@ impl Options {
     }
 }
 
+fn surface(flush: bool, theme: &Theme) -> Hsla {
+    if flush { theme.background } else { theme.card }
+}
+
+fn scroll_into_view(scroll: &ScrollHandle, index: usize, inset: Pixels) {
+    let Some(item) = scroll.bounds_for_item(index) else {
+        return;
+    };
+    let view = scroll.bounds();
+    let mut offset = scroll.offset();
+    if item.top() + offset.y < view.top() + inset {
+        offset.y = view.top() + inset - item.top();
+    } else if item.bottom() + offset.y > view.bottom() - inset {
+        offset.y = view.bottom() - inset - item.bottom();
+    }
+    scroll.set_offset(offset);
+}
+
 fn contain_scroll(_: &ScrollEvent, _: &mut Window, cx: &mut App) {
     cx.stop_propagation();
 }
 
-fn list_frame(id: ElementId, label: SharedString, options: &Options) -> Stateful<Div> {
+fn list_frame(id: ElementId, label: SharedString, flush: bool, options: &Options) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::ListBox)
         .aria_label(label)
         .track_focus(&options.focus.clone().tab_stop(true))
-        .rounded(options.theme.radius.panel)
-        .bg(options.theme.card)
-        .border_1()
-        .border_color(options.theme.border)
+        .when(!flush, |frame| {
+            frame
+                .rounded(options.theme.radius.panel)
+                .bg(options.theme.card)
+                .border_1()
+                .border_color(options.theme.border)
+        })
 }
 
 #[derive(Clone, Copy)]
@@ -321,6 +346,7 @@ pub struct List {
     on_activate: Option<IndexHandler>,
     on_reorder: Option<ReorderHandler>,
     pinned: usize,
+    flush: bool,
 }
 
 impl List {
@@ -341,6 +367,7 @@ impl List {
             on_activate: None,
             on_reorder: None,
             pinned: 0,
+            flush: false,
         }
     }
 
@@ -356,6 +383,11 @@ impl List {
 
     pub fn fill(mut self) -> Self {
         self.height = Height::Fill;
+        self
+    }
+
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
         self
     }
 
@@ -399,20 +431,34 @@ impl RenderOnce for List {
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: false,
+            surface: surface(self.flush, cx.theme()),
             theme: cx.theme().clone(),
         };
         let reveal = scroll.clone();
+        let block_inset = if self.flush {
+            PANE_BLOCK_INSET
+        } else {
+            LIST_INSET
+        };
         let bar = Scrollbar::new((self.id.clone(), "scrollbar"), scroll.clone());
-        let list = list_frame(self.id, self.label, &options)
-            .on_key_down(options.keys(move |index| reveal.scroll_to_item(index)))
+        let list = list_frame(self.id, self.label, self.flush, &options)
+            .on_key_down(options.keys(move |index| scroll_into_view(&reveal, index, block_inset)))
             .flex()
             .flex_col()
             .gap(px(1.0))
-            .p(LIST_INSET)
             .map(|list| match self.height {
                 Height::Content => list,
-                Height::Fixed(height) => list.h(height).pr(Scrollbar::GUTTER),
-                Height::Fill => list.size_full().pr(Scrollbar::GUTTER),
+                Height::Fixed(height) => list.h(height),
+                Height::Fill => list.size_full(),
+            })
+            .map(|list| {
+                if self.flush {
+                    list.px(PANE_INSET).py(PANE_BLOCK_INSET)
+                } else if matches!(self.height, Height::Content) {
+                    list.p(LIST_INSET)
+                } else {
+                    list.p(LIST_INSET).pr(Scrollbar::GUTTER)
+                }
             });
         let count = self.count;
         let list = match self.on_reorder {
@@ -455,6 +501,7 @@ pub struct VirtualList {
     height: Height,
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
+    flush: bool,
 }
 
 impl VirtualList {
@@ -473,6 +520,7 @@ impl VirtualList {
             height: Height::Fixed(px(320.0)),
             on_select: None,
             on_activate: None,
+            flush: false,
         }
     }
 
@@ -488,6 +536,11 @@ impl VirtualList {
 
     pub fn fill(mut self) -> Self {
         self.height = Height::Fill;
+        self
+    }
+
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
         self
     }
 
@@ -523,6 +576,7 @@ impl RenderOnce for VirtualList {
             on_select: self.on_select,
             on_activate: self.on_activate,
             uniform: true,
+            surface: surface(self.flush, cx.theme()),
             theme: cx.theme().clone(),
         };
         let shown = window.use_keyed_state((self.id.clone(), "shown"), cx, |_, _| None);
@@ -538,7 +592,8 @@ impl RenderOnce for VirtualList {
             (self.id.clone(), "scrollbar"),
             scroll.0.borrow().base_handle.clone(),
         );
-        list_frame(self.id.clone(), self.label, &options)
+        let flush = self.flush;
+        list_frame(self.id.clone(), self.label, flush, &options)
             .relative()
             .on_scroll(contain_scroll)
             .on_key_down(
@@ -560,8 +615,13 @@ impl RenderOnce for VirtualList {
                 })
                 .track_scroll(&scroll)
                 .size_full()
-                .p(LIST_INSET)
-                .pr(Scrollbar::GUTTER),
+                .map(|rows| {
+                    if flush {
+                        rows.px(PANE_INSET).py(PANE_BLOCK_INSET)
+                    } else {
+                        rows.p(LIST_INSET).pr(Scrollbar::GUTTER)
+                    }
+                }),
             )
             .child(bar)
     }
