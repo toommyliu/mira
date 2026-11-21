@@ -94,61 +94,55 @@ fn announce(cx: &mut App) {
         return;
     };
     let installed = env!("CARGO_PKG_VERSION");
-    let notes = |update: &Update| {
-        let mut detail = format!("You have Mira {installed}.");
-        if let Some(notes) = update.notes.as_deref().map(view::plain_notes) {
-            detail.push_str("\n\n");
-            detail.push_str(&notes);
-        }
-        detail
-    };
-    let (level, message, detail, answers): (_, String, String, &[&str]) = match &state {
+    let (level, message, detail, answers): (_, String, Option<String>, &[&str]) = match &state {
         Updates::Current(_) => (
             PromptLevel::Info,
-            "You're up to date".into(),
-            format!("Mira {installed} is the newest version."),
+            "You’re up to date!".into(),
+            Some(format!(
+                "Mira {installed} is currently the newest version available."
+            )),
             &["OK"],
         ),
-        Updates::Available { update, error } => (
+        Updates::Available { update, .. } => (
             PromptLevel::Info,
-            format!("Mira {} is available", update.version),
-            match error {
-                Some(error) => format!("The last download failed: {error}"),
-                None => notes(update),
-            },
+            format!("Mira {} is available.", update.version),
+            Some(format!("You’re running Mira {installed}.")),
             &["Download", "Later"],
         ),
         Updates::Downloading { update, .. } => (
             PromptLevel::Info,
-            format!("Mira {} is downloading", update.version),
-            "It will be ready to install in a moment.".into(),
+            format!("Mira {} is already downloading.", update.version),
+            None,
             &["OK"],
         ),
         Updates::Ready { update, .. } => (
             PromptLevel::Info,
-            format!("Mira {} is ready to install", update.version),
-            "Any running scripts will be interrupted. Make sure you're ready before continuing."
-                .into(),
+            format!("Mira {} is ready to install.", update.version),
+            Some(
+                "Mira will restart to install it. Any running scripts will be interrupted.".into(),
+            ),
             &["Restart", "Later"],
         ),
         Updates::Failed(error) => (
             PromptLevel::Warning,
-            "Couldn’t check for updates".into(),
-            error.to_string(),
+            "Could not check for updates.".into(),
+            Some(error.to_string()),
             &["OK"],
         ),
         Updates::Unavailable(reason) => (
             PromptLevel::Info,
-            "Updates aren’t available".into(),
-            reason
-                .as_ref()
-                .map_or("This is a development build.".into(), ToString::to_string),
+            "Automatic updates are not available right now.".into(),
+            Some(
+                reason
+                    .as_ref()
+                    .map_or("This is a development build.".into(), ToString::to_string),
+            ),
             &["OK"],
         ),
         Updates::Idle | Updates::Checking | Updates::Restarting(_) => return,
     };
     let answer = window.update(cx, |_, window, cx| {
-        window.prompt(level, &message, Some(&detail), answers, cx)
+        window.prompt(level, &message, detail.as_deref(), answers, cx)
     });
     let Ok(answer) = answer else {
         return;
