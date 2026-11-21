@@ -802,6 +802,10 @@ impl ScriptsWindow {
             let scanned = scanned.await;
             let _ = this.update(cx, |this, cx| {
                 let first = this.library.is_none();
+                let kept = match this.rows(cx).get(this.selected) {
+                    Some(Row::Script(entry)) => Some(entry.path.clone()),
+                    _ => None,
+                };
                 this.library = Some(scanned);
                 if this.scope(cx).is_none() {
                     this.page = Page::Library(None);
@@ -810,7 +814,12 @@ impl ScriptsWindow {
                     this.select_last_run(cx);
                 }
                 let rows = this.rows(cx);
-                if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
+                if let Some(index) = kept.and_then(|path| {
+                    rows.iter()
+                        .position(|row| matches!(row, Row::Script(entry) if entry.path == path))
+                }) {
+                    this.selected = index;
+                } else if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
                     this.selected = first_script(&rows);
                 }
                 cx.notify();
@@ -3875,6 +3884,66 @@ mod tests {
                 assert!(written.exists(), "{} was not written", written.display());
             }
         }
+    }
+
+    #[gpui::test]
+    fn a_package_appearing_above_the_selection_keeps_it(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-rescan-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "");
+        write("packages/zeta/package.json", r#"{"name":"Zeta","mira":{}}"#);
+        write("packages/zeta/scripts/spin.ts", "");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let spin = temp.join("packages/zeta/scripts/spin.ts");
+        scripts.update(cx, |scripts, cx| {
+            let rows = scripts.rows(cx);
+            scripts.selected = rows
+                .iter()
+                .position(|row| matches!(row, Row::Script(entry) if entry.path == spin))
+                .unwrap();
+        });
+
+        write(
+            "packages/alpha/package.json",
+            r#"{"name":"Alpha","mira":{}}"#,
+        );
+        write("packages/alpha/scripts/daily.ts", "");
+        let dialogs = scripts.read_with(cx, |scripts, _| scripts.package_dialogs.clone());
+        dialogs.update(cx, |_, cx| cx.emit(PackageEvent::Changed));
+        cx.run_until_parked();
+        let daily = temp.join("packages/alpha/scripts/daily.ts");
+        scripts.read_with(cx, |scripts, cx| {
+            assert!(
+                scripts
+                    .rows(cx)
+                    .iter()
+                    .any(|row| matches!(row, Row::Script(entry) if entry.path == daily))
+            );
+            assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
+        });
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[gpui::test]
