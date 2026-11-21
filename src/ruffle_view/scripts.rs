@@ -2,11 +2,12 @@ use mira_ui::StyledExt as _;
 use std::{
     collections::{HashMap, HashSet},
     fs, io, iter,
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -79,6 +80,7 @@ const PADDING: Pixels = px(16.0);
 const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
+const SETTLE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -647,6 +649,11 @@ pub(super) struct ScriptsWindow {
     generation: u64,
     loading: HashMap<FormKey, Task<()>>,
     describing: Arc<AtomicU64>,
+    urgent: Arc<AtomicUsize>,
+    preloading: Option<(PathBuf, Arc<AtomicBool>)>,
+    visible: Range<usize>,
+    settled: bool,
+    settle: Option<Task<()>>,
     probes: HashMap<EntryId, Arc<AtomicBool>>,
     waiting: Option<(PathBuf, Instant, Task<()>)>,
     displayed: Option<Entry>,
@@ -668,7 +675,38 @@ enum FormKey {
 struct Form {
     generation: u64,
     meta: Meta,
+    edited: bool,
     state: FormState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Load {
+    Shown,
+    Ahead,
+}
+
+enum Stop {
+    Superseded {
+        turn: u64,
+        latest: Arc<AtomicU64>,
+    },
+    Ahead {
+        cancelled: Arc<AtomicBool>,
+        urgent: Arc<AtomicUsize>,
+    },
+    Removed(Arc<AtomicBool>),
+}
+
+impl Stop {
+    fn stopped(&self) -> bool {
+        match self {
+            Stop::Superseded { turn, latest } => latest.load(Ordering::SeqCst) != *turn,
+            Stop::Ahead { cancelled, urgent } => {
+                cancelled.load(Ordering::SeqCst) || urgent.load(Ordering::SeqCst) > 0
+            }
+            Stop::Removed(removed) => removed.load(Ordering::SeqCst),
+        }
+    }
 }
 
 enum FormState {
@@ -769,6 +807,11 @@ impl ScriptsWindow {
             generation: 0,
             loading: HashMap::new(),
             describing: Arc::default(),
+            urgent: Arc::default(),
+            preloading: None,
+            visible: 0..0,
+            settled: false,
+            settle: None,
             probes: HashMap::new(),
             waiting: None,
             displayed: None,
@@ -1636,18 +1679,89 @@ impl ScriptsWindow {
         }
     }
 
-    fn load_form(&mut self, key: FormKey, path: &Path, cx: &mut Context<Self>) {
+    fn saw(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        if range == self.visible {
+            return;
+        }
+        self.visible = range;
+        self.settled = false;
+        self.settle = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SETTLE).await;
+            let _ = this.update(cx, |this, cx| {
+                this.settled = true;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn preload(&mut self, rows: &[Row], cx: &mut Context<Self>) {
+        let end = self.visible.end.min(rows.len());
+        let start = self.visible.start.min(end);
+        let mut skua = Vec::new();
+        for (index, row) in rows[start..end].iter().enumerate() {
+            let Row::Script(entry) = row else {
+                continue;
+            };
+            if scripting::is_skua(&entry.path) {
+                skua.push((start + index, entry.path.clone()));
+            } else {
+                let key = FormKey::Script(entry.path.clone());
+                self.load_form(key, &entry.path, Load::Ahead, cx);
+            }
+        }
+        if !self.settled || self.preloading.is_some() || self.urgent.load(Ordering::SeqCst) > 0 {
+            return;
+        }
+        let selected = self.selected;
+        let next = skua
+            .into_iter()
+            .filter(|(_, path)| self.needs_load(&FormKey::Script(path.clone())))
+            .min_by_key(|(index, _)| index.abs_diff(selected));
+        if let Some((_, path)) = next {
+            self.load_form(FormKey::Script(path.clone()), &path, Load::Ahead, cx);
+        }
+    }
+
+    fn evict(&mut self, rows: &[Row], target: Option<&Path>) {
+        let span = self.visible.len();
+        let end = (self.visible.end + span).min(rows.len());
+        let start = self.visible.start.saturating_sub(span).min(end);
+        let kept: HashSet<&Path> = rows[start..end]
+            .iter()
+            .filter_map(|row| match row {
+                Row::Script(entry) => Some(entry.path.as_path()),
+                Row::Source(_) => None,
+            })
+            .chain(target)
+            .chain(self.displayed.as_ref().map(|entry| entry.path.as_path()))
+            .collect();
+        self.forms.retain(|key, form| match key {
+            FormKey::Script(path) => form.edited || kept.contains(path.as_path()),
+            FormKey::Entry(_) => true,
+        });
+        if let Some((path, cancelled)) = &self.preloading
+            && !kept.contains(path.as_path())
+        {
+            cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn needs_load(&self, key: &FormKey) -> bool {
         let current = self
             .forms
-            .get(&key)
+            .get(key)
             .is_some_and(|form| form.generation == self.generation);
-        let pending = self.loading.contains_key(&key);
-        if current || pending {
+        !current && !self.loading.contains_key(key)
+    }
+
+    fn load_form(&mut self, key: FormKey, path: &Path, load: Load, cx: &mut Context<Self>) {
+        if !self.needs_load(&key) {
             return;
         }
         let script = path.to_owned();
         if scripting::is_skua(&script) {
-            return self.describe_skua(key, script, cx);
+            return self.describe_skua(key, script, load, cx);
         }
         let read = cx.background_spawn(async move {
             let display = file_name(&script);
@@ -1675,6 +1789,7 @@ impl ScriptsWindow {
             }
         });
         if let FormKey::Script(path) = &key
+            && load == Load::Shown
             && !self.forms.contains_key(&key)
         {
             let wake = cx.spawn(async move |this, cx| {
@@ -1686,28 +1801,32 @@ impl ScriptsWindow {
         self.loading.insert(key, task);
     }
 
-    fn describe_skua(&mut self, key: FormKey, script: PathBuf, cx: &mut Context<Self>) {
-        let (preview, removed) = match &key {
-            FormKey::Script(_) => {
-                let turn = self.describing.fetch_add(1, Ordering::SeqCst) + 1;
-                (Some((turn, self.describing.clone())), None)
+    fn describe_skua(&mut self, key: FormKey, script: PathBuf, load: Load, cx: &mut Context<Self>) {
+        let stop = match (&key, load) {
+            (FormKey::Script(_), Load::Shown) => Stop::Superseded {
+                turn: self.describing.fetch_add(1, Ordering::SeqCst) + 1,
+                latest: self.describing.clone(),
+            },
+            (FormKey::Script(_), Load::Ahead) => {
+                let cancelled = Arc::new(AtomicBool::new(false));
+                self.preloading = Some((script.clone(), cancelled.clone()));
+                Stop::Ahead {
+                    cancelled,
+                    urgent: self.urgent.clone(),
+                }
             }
-            FormKey::Entry(id) => {
+            (FormKey::Entry(id), _) => {
                 let removed = Arc::new(AtomicBool::new(false));
                 self.probes.insert(*id, removed.clone());
-                (None, Some(removed))
+                Stop::Removed(removed)
             }
         };
-        let read = cx.background_spawn(async move {
-            scripting::describe_skua(&script, &|| {
-                preview
-                    .as_ref()
-                    .is_some_and(|(turn, latest)| latest.load(Ordering::SeqCst) != *turn)
-                    || removed
-                        .as_ref()
-                        .is_some_and(|removed| removed.load(Ordering::SeqCst))
-            })
-        });
+        let urgent = !matches!(stop, Stop::Ahead { .. });
+        if urgent {
+            self.urgent.fetch_add(1, Ordering::SeqCst);
+        }
+        let read = cx
+            .background_spawn(async move { scripting::describe_skua(&script, &|| stop.stopped()) });
         let generation = self.generation;
         let task = cx.spawn({
             let key = key.clone();
@@ -1715,6 +1834,11 @@ impl ScriptsWindow {
                 let read = read.await;
                 let _ = this.update(cx, |this, cx| {
                     this.loading.remove(&key);
+                    if urgent {
+                        this.urgent.fetch_sub(1, Ordering::SeqCst);
+                    } else {
+                        this.preloading = None;
+                    }
                     if let FormKey::Entry(id) = &key {
                         this.probes.remove(id);
                     }
@@ -1860,6 +1984,7 @@ impl ScriptsWindow {
             Form {
                 generation,
                 meta,
+                edited: false,
                 state,
             },
         );
@@ -1870,6 +1995,7 @@ impl ScriptsWindow {
 
     fn set_draft(&mut self, key: &FormKey, index: usize, draft: Draft, cx: &mut Context<Self>) {
         let Some(Form {
+            edited,
             state:
                 FormState::Fields {
                     definition,
@@ -1887,6 +2013,7 @@ impl ScriptsWindow {
             return;
         };
         *slot = FieldDraft { draft, stale: None };
+        *edited = true;
         if let Some(Some(input)) = texts.get(index) {
             let invalid = error(field, slot).is_some();
             input.update(cx, |input, cx| input.set_invalid(invalid, cx));
@@ -1964,6 +2091,9 @@ impl ScriptsWindow {
         let (definition, values) = self.launch_values(&entry.path, cx)?;
         if definition.is_some() {
             script_inputs::save(&entry.path, values.clone(), cx);
+            if let Some(form) = self.forms.get_mut(&FormKey::Script(entry.path.clone())) {
+                form.edited = false;
+            }
         }
         Some((entry.path, values))
     }
@@ -2607,6 +2737,7 @@ impl ScriptsWindow {
         let count = rows.len();
         let this = cx.entity().downgrade();
         let that = this.clone();
+        let watcher = this.clone();
         VirtualList::new("scripts", "Scripts", count, move |index| {
             match &rows[index] {
                 Row::Source(source) => {
@@ -2631,6 +2762,9 @@ impl ScriptsWindow {
             }
         })
         .selected(Some(self.selected.min(count - 1)))
+        .on_visible(move |range, _, cx| {
+            let _ = watcher.update(cx, |this, cx| this.saw(range, cx));
+        })
         .fill()
         .flush()
         .on_select(move |index, _, cx| {
@@ -2714,6 +2848,9 @@ fn caption_width(text: &str, window: &Window, theme: &Theme) -> Pixels {
 impl Drop for ScriptsWindow {
     fn drop(&mut self) {
         self.describing.fetch_add(1, Ordering::SeqCst);
+        if let Some((_, cancelled)) = &self.preloading {
+            cancelled.store(true, Ordering::SeqCst);
+        }
         for removed in self.probes.values() {
             removed.store(true, Ordering::SeqCst);
         }
@@ -2729,8 +2866,14 @@ impl Render for ScriptsWindow {
         let rows = self.rows(cx);
         let chosen = self.target(cx);
         if let Some(entry) = &chosen {
-            self.load_form(FormKey::Script(entry.path.clone()), &entry.path, cx);
+            self.load_form(
+                FormKey::Script(entry.path.clone()),
+                &entry.path,
+                Load::Shown,
+                cx,
+            );
         }
+        let target = chosen.as_ref().map(|entry| entry.path.clone());
         let chosen = self.detail_entry(chosen);
         let (queue, playing) = self.queue(cx);
         let queued: HashSet<EntryId> = self
@@ -2754,9 +2897,13 @@ impl Render for ScriptsWindow {
         let page = self.shown_page(cx);
         if page == Page::Queue {
             for entry in &queue {
-                self.load_form(FormKey::Entry(entry.id), &entry.script, cx);
+                self.load_form(FormKey::Entry(entry.id), &entry.script, Load::Shown, cx);
             }
         }
+        if matches!(page, Page::Library(_)) {
+            self.preload(&rows, cx);
+        }
+        self.evict(&rows, target.as_deref());
         self.queued = self.queued.min(queue.len().saturating_sub(1));
         let valid = chosen
             .as_ref()
@@ -4256,7 +4403,7 @@ mod tests {
             let entries = self.entries.clone();
             let (list, detail) = self.scripts.update(cx, |scripts, cx| {
                 for entry in &entries {
-                    scripts.load_form(FormKey::Entry(entry.id), &entry.script, cx);
+                    scripts.load_form(FormKey::Entry(entry.id), &entry.script, Load::Shown, cx);
                 }
                 (
                     scripts.queue_list(&theme, &entries, width, window, cx),
@@ -4463,6 +4610,149 @@ mod tests {
             selected(cx),
             Some(temp.join("packages/dailies/scripts/spin.ts"))
         );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn the_library_loads_the_scripts_in_view_and_lets_go_of_far_ones(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-preload-{:x}", u64::from_ne_bytes(random)));
+        let folder = temp.join("scripts");
+        fs::create_dir_all(&folder).unwrap();
+        for index in 0..150 {
+            fs::write(
+                folder.join(format!("s{index:03}.ts")),
+                "export const inputs = { kills: { type: \"number\", label: \"Kills\" } };\nexport default function* () {}",
+            )
+            .unwrap();
+        }
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                folder.clone(),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        let settle = |cx: &mut gpui::VisualTestContext| {
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update(|window, cx| window.simulate_next_frame(cx));
+            }
+            cx.run_until_parked();
+        };
+        settle(cx);
+        let loaded = |name: &str, cx: &mut gpui::VisualTestContext| {
+            let key = FormKey::Script(folder.join(name));
+            scripts.read_with(cx, |scripts, _| scripts.forms.contains_key(&key))
+        };
+        assert!(
+            loaded("s005.ts", cx),
+            "a row in view loads before it's chosen"
+        );
+        assert!(!loaded("s100.ts", cx), "a row far out of view waits");
+
+        let edited = FormKey::Script(folder.join("s003.ts"));
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_draft(&edited, 0, Draft::Text("7".into()), cx)
+        });
+        scripts.update(cx, |scripts, cx| {
+            scripts.selected = 120;
+            cx.notify();
+        });
+        settle(cx);
+        assert!(loaded("s118.ts", cx), "rows around the new position load");
+        assert!(!loaded("s000.ts", cx), "rows left far behind let go");
+        assert!(loaded("s003.ts", cx), "a form with unsaved edits stays");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn skua_scripts_in_view_load_one_at_a_time_once_the_list_settles(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp = std::env::temp_dir().join(format!(
+            "mira-skua-preload-{:x}",
+            u64::from_ne_bytes(random)
+        ));
+        let skua = temp.join("skua/Scripts");
+        let listed: Vec<String> = (0..40)
+            .map(|index| format!(r#"{{"name":"Script {index:02}","path":"s{index:02}.cs"}}"#))
+            .collect();
+        fs::create_dir_all(&skua).unwrap();
+        fs::write(skua.join(".mira-install.json"), RECEIPT).unwrap();
+        fs::write(skua.join("scripts.json"), format!("[{}]", listed.join(","))).unwrap();
+        for index in 0..40 {
+            fs::write(skua.join(format!("s{index:02}.cs")), "").unwrap();
+        }
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        let frames = |count: usize, cx: &mut gpui::VisualTestContext| {
+            for _ in 0..count {
+                cx.run_until_parked();
+                cx.update(|window, cx| window.simulate_next_frame(cx));
+            }
+            cx.run_until_parked();
+        };
+        frames(2, cx);
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_page(Page::Library(Some(skua.clone())), cx)
+        });
+        frames(3, cx);
+        let loaded = |name: &str, cx: &mut gpui::VisualTestContext| {
+            let key = FormKey::Script(skua.join(name));
+            scripts.read_with(cx, |scripts, _| scripts.forms.contains_key(&key))
+        };
+        assert!(loaded("s00.cs", cx), "the chosen script loads at once");
+        assert!(
+            !loaded("s03.cs", cx),
+            "the rest wait for the list to settle"
+        );
+
+        cx.executor().advance_clock(SETTLE);
+        frames(40, cx);
+        for name in ["s01.cs", "s02.cs", "s03.cs", "s05.cs"] {
+            assert!(loaded(name, cx), "{name} loads once the list settles");
+        }
+        assert!(!loaded("s39.cs", cx), "rows out of view don't load");
         fs::remove_dir_all(temp).unwrap();
     }
 
