@@ -531,3 +531,42 @@ fn free_daily_boost_runs_through_the_real_worker() {
         "{logs:#?}"
     );
 }
+
+#[test]
+fn dotnet_is_found_on_path_first_then_through_the_login_shell() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut random = [0; 8];
+    getrandom::getrandom(&mut random).unwrap();
+    let temp = std::env::temp_dir().join(format!("mira-dotnet-{:x}", u64::from_ne_bytes(random)));
+    let (bin, mise) = (temp.join("bin"), temp.join("mise/dotnet-root"));
+    for dir in [&bin, &mise] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("dotnet"), "").unwrap();
+    }
+    let path = std::env::join_paths([temp.join("empty"), bin.clone()]).unwrap();
+    assert_eq!(on_path(Some(path)), Some(bin.join("dotnet")));
+    assert_eq!(on_path(Some(temp.join("empty").into())), None);
+
+    std::fs::write(
+        temp.join(".zshrc"),
+        "path=(\"$ZDOTDIR/mise/dotnet-root\" $path)\nalias dotnet='dotnet --nologo'\necho 'from the rc files'\n",
+    )
+    .unwrap();
+    let shell = temp.join("zsh");
+    std::fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\nZDOTDIR='{}' exec /bin/zsh \"$@\"\n",
+            temp.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(mise.join("dotnet"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        from_login_shell(shell.as_os_str()),
+        Some(mise.join("dotnet"))
+    );
+    std::fs::remove_dir_all(temp).unwrap();
+}
