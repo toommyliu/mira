@@ -22,7 +22,7 @@ use mira_ui::{
     primitives::{
         Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
-        Tab, Tabs, VirtualList,
+        Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
         icon,
     },
@@ -561,6 +561,7 @@ pub(super) struct ScriptsWindow {
     error_cursor: Option<usize>,
     source_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
+    toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 6],
 }
@@ -606,7 +607,8 @@ impl ScriptsWindow {
                 .search()
         });
         let room = cx.new(|cx| Input::new("Room", cx).placeholder("Random"));
-        let package_dialogs = cx.new(|cx| PackageDialogs::new(cx));
+        let toasts = Toaster::new(window, cx);
+        let package_dialogs = cx.new(|cx| PackageDialogs::new(toasts.clone(), cx));
         let subscriptions = [
             cx.observe(&packages::packages(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&package_dialogs, |this, _, event: &PackageEvent, cx| {
@@ -678,6 +680,7 @@ impl ScriptsWindow {
             error_cursor: None,
             source_scroll: ScrollHandle::new(),
             package_dialogs,
+            toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
         };
@@ -1252,6 +1255,10 @@ impl ScriptsWindow {
             .packages_open
             .then(|| self.source_list("packages", "Packages", installed, theme, cx));
         let busy = packages::packages(cx).read(cx).activity().is_some();
+        let installing = matches!(
+            packages::packages(cx).read(cx).activity(),
+            Some(packages::Activity::Installing)
+        );
         let dialogs = self.package_dialogs.clone();
         let sources = v_flex()
             .child(
@@ -1282,6 +1289,7 @@ impl ScriptsWindow {
                         .child(
                             Button::icon("install-package", Icon::Plus, "Install package")
                                 .size(Size::Small)
+                                .busy(installing)
                                 .disabled(busy)
                                 .on_click(move |_, window, cx| {
                                     dialogs
@@ -2734,7 +2742,9 @@ impl Render for ScriptsWindow {
                 "Script logs",
                 "Coming soon. Until then, script output goes to mira.log.",
             )),
-        };
+        }
+        .relative()
+        .child(Toaster::layer(&self.toasts, window, cx));
         let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
         let footer =
             match page {
@@ -3701,6 +3711,43 @@ mod tests {
             NESTED,
             |scripts| scripts.page = Page::Library(Some(scripts.packages.join("community"))),
         );
+    }
+
+    #[test]
+    fn snapshot_toasts_in_the_pane() {
+        use mira_ui::primitives::Toast;
+
+        for (name, toast) in [
+            (
+                "scripts-toast-installing-min",
+                Toast::new("Installing package…").loading(),
+            ),
+            (
+                "scripts-toast-installed-min",
+                Toast::new("Installed Dailies").tone(Tone::Success),
+            ),
+            (
+                "scripts-toast-failed-min",
+                Toast::new("Couldn't install package")
+                    .body(
+                        "Couldn't find o/missing. If it's private, add a GitHub token in Settings.",
+                    )
+                    .tone(Tone::Danger),
+            ),
+        ] {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                |_| {},
+                move |cx, window| {
+                    update_scripts(cx, window, |scripts, cx| {
+                        Toaster::push(&scripts.toasts, toast.clone(), cx);
+                    })
+                },
+            );
+        }
     }
 
     #[test]
