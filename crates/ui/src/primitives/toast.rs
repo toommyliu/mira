@@ -6,9 +6,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _,
+    AnyElement, App, AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Pixels, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
+    Styled as _, Task, TextRun, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{Button, Icon, button::Size};
@@ -20,7 +20,7 @@ const GAP: Pixels = px(14.0);
 const PEEK: Pixels = px(14.0);
 const SHRINK: f32 = 0.05;
 const UNMOUNT: Duration = motion::GLIDE;
-const FALLBACK_HEIGHT: Pixels = px(58.0);
+const FALLBACK_HEIGHT: Pixels = px(50.0);
 
 type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -379,9 +379,19 @@ impl Toaster {
         let theme = cx.theme().clone();
         let viewport_width = window.viewport_size().width;
         let edge = theme.space(4.0);
-        let width = theme
-            .layout
-            .overlay_max_width
+        let widest = shown
+            .iter()
+            .map(|shown| natural_width(&shown.toast, window, &theme))
+            .fold(Pixels::ZERO, Pixels::max);
+        let widest = px(motion::glide(
+            "toasts-width",
+            None,
+            f32::from(widest),
+            window,
+            cx,
+        ));
+        let width = widest
+            .min(theme.layout.overlay_max_width)
             .min((viewport_width - edge * 2.0).max(px(1.0)));
         let end = if viewport_width < theme.layout.compact_overlay {
             (viewport_width - width) / 2.0
@@ -568,6 +578,37 @@ impl Toaster {
     }
 }
 
+fn natural_width(toast: &Toast, window: &Window, theme: &crate::Theme) -> Pixels {
+    let line = |text: &SharedString, weight: FontWeight| {
+        let run = TextRun {
+            len: text.len(),
+            font: gpui::Font {
+                weight,
+                ..gpui::font(theme.font_family.clone())
+            },
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window
+            .text_system()
+            .shape_line(text.clone(), theme.typography.body, &[run], None)
+            .width
+    };
+    let gap = theme.space(3.0);
+    let text = toast
+        .body
+        .as_ref()
+        .map_or(Pixels::ZERO, |body| line(body, FontWeight::NORMAL))
+        .max(line(&toast.title, FontWeight::MEDIUM));
+    let action = toast.action.as_ref().map_or(Pixels::ZERO, |(label, _)| {
+        line(label, FontWeight::MEDIUM) + theme.space(2.0) * 2.0 + px(2.0) + gap
+    });
+    let chrome = theme.space(3.0) * 2.0 + px(2.0);
+    (chrome + text + action + gap + theme.layout.control_sm).ceil()
+}
+
 fn rest(depth: usize, expanded: bool, before: Pixels, front: Pixels) -> Pixels {
     if expanded {
         before + GAP * depth as f32
@@ -612,7 +653,7 @@ fn card(
         .occlude()
         .flex()
         .size_full()
-        .p(theme.space(4.0))
+        .p(theme.space(3.0))
         .rounded(theme.radius.control)
         .bg(bg)
         .border_1()
@@ -641,6 +682,7 @@ fn card(
                             .flex_col()
                             .flex_1()
                             .min_w_0()
+                            .py(px(2.0))
                             .gap(theme.space(1.0))
                             .child(
                                 div()
