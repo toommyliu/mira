@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseDownEvent, ParentElement, Pixels, Point, Refineable as _, RenderOnce, Role,
-    SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    KeyDownEvent, MouseDownEvent, ParentElement, Refineable as _, RenderOnce, Role, SharedString,
+    Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
 };
 
 use super::{
@@ -154,10 +154,10 @@ impl Bar {
         .filter(|&index| index != from)
     }
 
-    fn over_trigger(&self, at: Point<Pixels>, cx: &App) -> bool {
+    fn over_trigger(&self, event: &MouseDownEvent, cx: &App) -> bool {
         self.states
             .iter()
-            .any(|state| menu::over_trigger(state, at, cx))
+            .any(|state| menu::over_trigger(state, event, cx))
     }
 
     fn show(
@@ -367,7 +367,7 @@ fn render_entry(
     let on_outside: PressHandler = {
         let bar = bar.clone();
         Rc::new(move |event, window, cx| {
-            if bar.over_trigger(event.position, cx) {
+            if bar.over_trigger(event, cx) {
                 return;
             }
             menu::close(&bar.states[index], false, window, cx);

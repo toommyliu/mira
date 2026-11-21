@@ -411,14 +411,19 @@ pub(crate) fn trigger_probe(state: &Entity<MenuState>) -> impl IntoElement {
     .inset_0()
 }
 
-pub(crate) fn over_trigger(state: &Entity<MenuState>, at: Point<Pixels>, cx: &App) -> bool {
-    state.read(cx).trigger_bounds.get().contains(&at)
+pub(crate) fn over_trigger(state: &Entity<MenuState>, event: &MouseDownEvent, cx: &App) -> bool {
+    event.button == MouseButton::Left
+        && state
+            .read(cx)
+            .trigger_bounds
+            .get()
+            .contains(&event.position)
 }
 
 pub(crate) fn dismiss(state: &Entity<MenuState>) -> PressHandler {
     let state = state.clone();
     Rc::new(move |event, window, cx| {
-        if !over_trigger(&state, event.position, cx) {
+        if !over_trigger(&state, event, cx) {
             close(&state, false, window, cx)
         }
     })
