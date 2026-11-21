@@ -2130,6 +2130,52 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
     assert!(!hovered.get(), "the pane under the card saw the pointer");
 }
 
+struct FittedCard(&'static str);
+
+impl Render for FittedCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        use mira_ui::primitives::HoverCard;
+        div().size_full().child(
+            div().w(px(40.0)).h(px(20.0)).flex().child(
+                HoverCard::new("fit", "9 more tags")
+                    .fit()
+                    .body(self.0)
+                    .child(div().size_full()),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn a_fitted_hover_card_is_as_wide_as_its_text_up_to_the_popover_width(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+    cx.update(mira_ui::init);
+    let mut width = |body: &'static str| {
+        let (_, cx) = cx.add_window_view(move |window, _| {
+            window.activate_window();
+            FittedCard(body)
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(20.0), px(10.0)), None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(1000));
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(20.0), px(11.0)), None, Modifiers::none());
+        cx.run_until_parked();
+        cx.debug_bounds("fit-card")
+            .expect("resting opens the card")
+            .size
+            .width
+    };
+    let short = width("boom, went");
+    let long = width(
+        "boom, went, dynamite, thewicked, oblivion, nulgath, maces, overlords, doomblade, blessed",
+    );
+    assert!(short < px(200.0), "{short:?}");
+    assert_eq!(long, px(288.0));
+}
+
 struct FocusRing {
     root: FocusHandle,
     target: FocusHandle,
