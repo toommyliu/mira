@@ -332,7 +332,9 @@ impl RenderOnce for Restart {
                     },
                 )
                 .alert()
-                .description("Any running scripts will be interrupted.")
+                .description(
+                    "Any running scripts will be interrupted. Make sure you're ready before continuing.",
+                )
                 .action(
                     Button::new("restart-cancel", "Cancel").on_click(move |_, _, cx| cancel(cx)),
                 )
