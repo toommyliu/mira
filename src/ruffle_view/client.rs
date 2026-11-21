@@ -1193,14 +1193,13 @@ impl Client {
             .child(div().flex_none().child(tabs))
             .child(drag_area().flex_1())
             .children(
-                crate::updates::button(Placement::new(Side::Right, Align::End), theme.sidebar, cx)
-                    .map(|update| {
-                        h_flex()
-                            .flex_none()
-                            .justify_end()
-                            .p(layout.space(2.0))
-                            .child(update)
-                    }),
+                crate::updates::button(Placement::new(Side::Right, Align::End), cx).map(|update| {
+                    h_flex()
+                        .flex_none()
+                        .justify_end()
+                        .p(layout.space(2.0))
+                        .child(update)
+                }),
             )
     }
 
@@ -1215,7 +1214,7 @@ impl Client {
             Sidebar::Full => Icon::SidebarOpen,
         };
         let dot = (self.sidebar == Sidebar::Hidden)
-            .then(|| crate::updates::dot(cx.theme().background, cx))
+            .then(|| crate::updates::dot(cx).map(|dot| dot.top(px(0.0)).right(px(-1.0))))
             .flatten();
         let mut toggle = bar_icon_button("sidebar-toggle", glyph, label)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
