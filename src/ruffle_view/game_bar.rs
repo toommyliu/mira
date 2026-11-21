@@ -944,26 +944,24 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
 }
 
 fn windows_menu(cx: &App) -> Vec<MenuItem> {
-    let windows: [(&str, Box<dyn gpui::Action>); 5] = [
-        ("Manager", Box::new(super::OpenManager)),
-        ("Combat profiles", Box::new(super::OpenCombatProfiles)),
-        ("Environment", Box::new(super::OpenEnvironment)),
-        ("Loader/grabber", Box::new(super::OpenLoaderGrabber)),
-        ("Packets", Box::new(super::OpenPackets)),
-    ];
-    windows
-        .into_iter()
-        .map(|(label, action)| {
-            let keys = shortcuts::keys_for(action.as_ref(), cx);
-            let item = MenuItem::action(label, move |window, cx| {
-                window.dispatch_action(action.boxed_clone(), cx)
-            });
-            match keys {
-                Some(keys) => item.shortcut(keys),
-                None => item,
-            }
-        })
-        .collect()
+    let open = |label: &'static str, action: Box<dyn gpui::Action>| {
+        let keys = shortcuts::keys_for(action.as_ref(), cx);
+        let item = MenuItem::action(label, move |window, cx| {
+            window.dispatch_action(action.boxed_clone(), cx)
+        });
+        match keys {
+            Some(keys) => item.shortcut(keys),
+            None => item,
+        }
+    };
+    vec![
+        open("Manager", Box::new(super::OpenManager)),
+        open("Combat profiles", Box::new(super::OpenCombatProfiles)),
+        MenuItem::separator(),
+        open("Environment", Box::new(super::OpenEnvironment)),
+        open("Loader/grabber", Box::new(super::OpenLoaderGrabber)),
+        open("Packets", Box::new(super::OpenPackets)),
+    ]
 }
 
 fn attack_panel(
