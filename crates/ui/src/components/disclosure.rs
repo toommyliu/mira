@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use crate::{
-    ActiveTheme as _, PointerCursor as _, h_flex, nav,
+    ActiveTheme as _, PointerCursor as _, StyledExt as _, h_flex, nav,
     primitives::{Icon, icon},
 };
 
@@ -18,6 +18,7 @@ pub struct Disclosure {
     id: ElementId,
     label: SharedString,
     open: bool,
+    caption: bool,
     on_toggle: Option<ToggleHandler>,
 }
 
@@ -27,8 +28,14 @@ impl Disclosure {
             id: id.into(),
             label: label.into(),
             open,
+            caption: false,
             on_toggle: None,
         }
+    }
+
+    pub fn caption(mut self) -> Self {
+        self.caption = true;
+        self
     }
 
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
@@ -55,6 +62,7 @@ impl RenderOnce for Disclosure {
             Icon::ChevronRight
         };
         let toggle = self.on_toggle;
+        let chevron = if self.caption { px(12.0) } else { px(14.0) };
         h_flex()
             .id(self.id)
             .role(Role::Button)
@@ -74,8 +82,9 @@ impl RenderOnce for Disclosure {
                 })
             })
             .pointer_cursor(&theme)
+            .when(self.caption, |row| row.text_caption(theme.typography))
             .child(self.label)
-            .child(icon(glyph, ink))
+            .child(icon(glyph, ink).size(chevron))
             .when(ring, |row| {
                 row.child(theme.halo(
                     theme.ring.opacity(0.5),
