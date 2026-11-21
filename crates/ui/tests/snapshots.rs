@@ -550,6 +550,10 @@ fn snapshot_menu() {
                                 vec![MenuItem::action("Install package…", |_, _| {})],
                             ),
                             MenuItem::action("Move to Trash", |_, _| {}).danger(),
+                            MenuItem::action("Remove account…", |_, _| {})
+                                .danger()
+                                .disabled(true)
+                                .description("Close this account's tab before removing it."),
                         ]
                     }),
             )

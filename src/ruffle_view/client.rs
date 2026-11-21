@@ -626,6 +626,12 @@ impl Client {
         self.session_of(account, cx).is_some() || self.launches.position(account).is_some()
     }
 
+    pub(crate) fn uses_settings_of(&self, account: &AccountId, cx: &App) -> bool {
+        self.sessions
+            .iter()
+            .any(|session| session.view.read(cx).settings_account.as_ref() == Some(account))
+    }
+
     pub(crate) fn summary(&self, account: &AccountId, cx: &App) -> Option<Summary> {
         let index = self.session_of(account, cx)?;
         Some(self.sessions[index].view.read(cx).summary())
