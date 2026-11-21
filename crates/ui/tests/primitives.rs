@@ -1600,6 +1600,160 @@ fn toast_action_returns_keyboard_focus_to_the_originating_control(cx: &mut TestA
     assert!(cx.update(|window, cx| host.read(cx).editor.is_focused(window)));
 }
 
+#[gpui::test]
+fn a_loading_toast_stays_until_its_result_replaces_it(cx: &mut TestAppContext) {
+    use mira_ui::primitives::{Toast, Toaster};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        Host {
+            editor: cx.focus_handle(),
+            stack: Toaster::new(window, cx),
+            renders: Rc::default(),
+        }
+    });
+    let stack = host.read_with(cx, |host, _| host.stack.clone());
+    let settle = |cx: &mut gpui::VisualTestContext, wait: std::time::Duration| {
+        cx.executor().advance_clock(wait);
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    let long = std::time::Duration::from_secs(10);
+
+    let loading = cx.update(|_, cx| Toaster::push(&stack, Toast::new("Installing").loading(), cx));
+    settle(cx, long);
+    assert!(cx.debug_bounds("toast: Installing").is_some());
+
+    let replaced =
+        cx.update(|_, cx| Toaster::replace(&stack, loading, Toast::new("Installed"), cx));
+    assert_eq!(replaced, loading);
+    settle(cx, std::time::Duration::ZERO);
+    assert!(cx.debug_bounds("toast: Installing").is_none());
+    assert!(cx.debug_bounds("toast: Installed").is_some());
+    settle(cx, long);
+    assert!(cx.debug_bounds("toast: Installed").is_none());
+
+    let renewed = cx.update(|_, cx| Toaster::replace(&stack, loading, Toast::new("Again"), cx));
+    assert_ne!(renewed, loading);
+    settle(cx, std::time::Duration::ZERO);
+    assert!(cx.debug_bounds("toast: Again").is_some());
+}
+
+#[gpui::test]
+fn a_replaced_toast_shows_its_final_size_on_the_first_frame(cx: &mut TestAppContext) {
+    use mira_ui::primitives::{Toast, Toaster};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(false);
+    });
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        Host {
+            editor: cx.focus_handle(),
+            stack: Toaster::new(window, cx),
+            renders: Rc::default(),
+        }
+    });
+    let stack = host.read_with(cx, |host, _| host.stack.clone());
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+    let settle = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            std::thread::sleep(mira_ui::motion::GLIDE / 2);
+            draw(cx);
+        }
+    };
+    let id = cx.update(|_, cx| Toaster::push(&stack, Toast::new("Installing").loading(), cx));
+    settle(cx);
+
+    let title = "toast: Couldn't install package";
+    cx.update(|_, cx| {
+        let failed = Toast::new("Couldn't install package")
+            .body("Couldn't find o/missing. If it's private, add a GitHub token in Settings.")
+            .tone(mira_ui::Tone::Danger);
+        Toaster::replace(&stack, id, failed, cx)
+    });
+    draw(cx);
+    let first = cx.debug_bounds(title).unwrap();
+    settle(cx);
+    assert_eq!(first, cx.debug_bounds(title).unwrap());
+}
+
+struct Pane {
+    stack: Entity<mira_ui::primitives::Toaster>,
+    clicks: Rc<Cell<usize>>,
+}
+
+impl Render for Pane {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.clicks.clone();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_1()
+                    .relative()
+                    .child(mira_ui::primitives::Toaster::layer(&self.stack, window, cx)),
+            )
+            .child(div().flex().justify_end().p(gpui::px(8.0)).child(
+                div().debug_selector(|| "footer-action".into()).child(
+                    Button::new("run", "Run").on_click(move |_, _, _| {
+                        clicks.set(clicks.get() + 1);
+                    }),
+                ),
+            ))
+    }
+}
+
+#[gpui::test]
+fn an_entering_toast_leaves_controls_outside_its_pane_clickable(cx: &mut TestAppContext) {
+    use mira_ui::primitives::{Toast, Toaster};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(false);
+    });
+    let clicks = Rc::new(Cell::new(0));
+    let (pane, cx) = cx.add_window_view(|window, cx| Pane {
+        stack: Toaster::new(window, cx),
+        clicks: clicks.clone(),
+    });
+    cx.run_until_parked();
+    let run = cx.debug_bounds("footer-action").unwrap();
+    let stack = pane.read_with(cx, |pane, _| pane.stack.clone());
+    cx.update(|window, cx| {
+        Toaster::push(&stack, Toast::new("Installed Dailies"), cx);
+        window.draw(cx).clear(cx);
+    });
+    cx.simulate_click(run.center(), gpui::Modifiers::default());
+    assert_eq!(clicks.get(), 1);
+}
+
+#[gpui::test]
+fn a_toast_with_line_breaks_renders(cx: &mut TestAppContext) {
+    use mira_ui::primitives::{Toast, Toaster};
+    cx.update(mira_ui::init);
+    let (host, cx) = cx.add_window_view(|window, cx| Host {
+        editor: cx.focus_handle(),
+        stack: Toaster::new(window, cx),
+        renders: Rc::default(),
+    });
+    let stack = host.read_with(cx, |host, _| host.stack.clone());
+    cx.update(|_, cx| {
+        let toast = Toast::new("Installed Daily\nquests").body("First line\nsecond line");
+        Toaster::push(&stack, toast, cx)
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("toast: Installed Daily\nquests").is_some());
+}
+
 struct ThemedToolbar;
 
 impl Render for ThemedToolbar {

@@ -22,12 +22,7 @@ impl Alert {
         Self {
             id: id.into(),
             tone,
-            icon: match tone {
-                Tone::Neutral | Tone::Accent => Icon::Info,
-                Tone::Success => Icon::CircleCheck,
-                Tone::Warning | Tone::Attention => Icon::TriangleAlert,
-                Tone::Danger => Icon::CircleAlert,
-            },
+            icon: Icon::of(tone),
             title: title.into(),
             body: None,
             action: None,

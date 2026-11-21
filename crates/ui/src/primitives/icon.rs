@@ -1,5 +1,7 @@
 use gpui::{App, Hsla, IntoElement, RenderOnce, Styled as _, Svg, Window, px, svg};
 
+use crate::Tone;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, IntoElement)]
 pub enum Icon {
     ArrowDown,
@@ -49,6 +51,15 @@ pub enum Icon {
 }
 
 impl Icon {
+    pub(super) fn of(tone: Tone) -> Self {
+        match tone {
+            Tone::Neutral | Tone::Accent => Icon::Info,
+            Tone::Success => Icon::CircleCheck,
+            Tone::Warning | Tone::Attention => Icon::TriangleAlert,
+            Tone::Danger => Icon::CircleAlert,
+        }
+    }
+
     pub(super) fn path(self) -> &'static str {
         match self {
             Icon::ArrowDown => "icons/arrow-down.svg",
