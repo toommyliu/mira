@@ -412,7 +412,7 @@ pub(crate) fn hover(
                 .max_w(viewport.width - COLLISION_MARGIN * 2.0)
                 .opacity(fade)
                 .when(matches!(kind, Kind::Card), |panel| {
-                    panel.on_hover(move |over, _, cx| {
+                    panel.occlude().on_hover(move |over, _, cx| {
                         tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))
                     })
                 })
