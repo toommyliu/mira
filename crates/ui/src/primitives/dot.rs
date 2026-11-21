@@ -1,14 +1,15 @@
 use gpui::{
     App, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce,
-    StatefulInteractiveElement as _, Styled as _, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
-use crate::{ActiveTheme as _, Tone, motion};
+use crate::{ActiveTheme as _, Tone};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Activity {
     Idle,
     Running,
+    NeedsYou,
     Waiting,
     Stopped,
     Failed,
@@ -83,18 +84,21 @@ impl StatusDot {
 
 impl RenderOnce for StatusDot {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
         let (mark, ink) = match self.activity {
-            Activity::Idle => (super::Icon::Circle, cx.theme().muted_foreground),
-            Activity::Running => (super::Icon::CircleDot, cx.theme().foreground),
-            Activity::Waiting => (super::Icon::LoaderCircle, cx.theme().muted_foreground),
-            Activity::Stopped => (super::Icon::CircleStop, cx.theme().muted_foreground),
-            Activity::Failed => (super::Icon::CircleAlert, cx.theme().destructive),
+            Activity::Idle => (super::Icon::Circle, theme.muted_foreground),
+            Activity::Running => (super::Icon::CircleDot, theme.foreground),
+            Activity::NeedsYou => (super::Icon::TriangleAlert, theme.warning),
+            Activity::Waiting => {
+                return super::Spinner::new(self.id)
+                    .label("Waiting")
+                    .color(theme.muted_foreground)
+                    .size(px(14.0))
+                    .into_any_element();
+            }
+            Activity::Stopped => (super::Icon::CircleStop, theme.muted_foreground),
+            Activity::Failed => (super::Icon::CircleAlert, theme.destructive),
         };
-        let glyph = super::icon(mark, ink);
-        if self.activity == Activity::Waiting {
-            motion::spin(self.id, glyph, cx)
-        } else {
-            glyph.into_any_element()
-        }
+        super::icon(mark, ink).into_any_element()
     }
 }
