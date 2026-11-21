@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Global, SharedString, actions};
+use gpui::{App, AppContext as _, Global, PromptLevel, SharedString, Task, actions};
 use semver::Version;
 
 use bundle::Staged;
@@ -52,8 +52,12 @@ impl Global for Updates {}
 
 pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
-        cx.dispatch_action(&crate::settings::OpenSettings);
-        Updates::check(true, cx);
+        let checking = Updates::check(true, cx);
+        cx.spawn(async move |cx| {
+            checking.await;
+            cx.update(announce);
+        })
+        .detach();
     });
     cx.set_global(match bundle::locate() {
         Ok(_) => Updates::Idle,
@@ -73,11 +77,91 @@ pub(crate) fn start(cx: &mut App) {
         loop {
             cx.update(|cx| {
                 if crate::settings::check_updates(cx) {
-                    Updates::check(false, cx);
+                    Updates::check(false, cx).detach();
                 }
             });
             cx.background_executor().timer(EVERY).await;
         }
+    })
+    .detach();
+}
+
+fn announce(cx: &mut App) {
+    let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
+        return cx.dispatch_action(&crate::settings::OpenSettings);
+    };
+    let Some(state) = cx.try_global::<Updates>().cloned() else {
+        return;
+    };
+    let installed = env!("CARGO_PKG_VERSION");
+    let notes = |update: &Update| {
+        let mut detail = format!("You have Mira {installed}.");
+        if let Some(notes) = update.notes.as_deref().map(view::plain_notes) {
+            detail.push_str("\n\n");
+            detail.push_str(&notes);
+        }
+        detail
+    };
+    let (level, message, detail, answers): (_, String, String, &[&str]) = match &state {
+        Updates::Current(_) => (
+            PromptLevel::Info,
+            "You're up to date".into(),
+            format!("Mira {installed} is the newest version."),
+            &["OK"],
+        ),
+        Updates::Available { update, error } => (
+            PromptLevel::Info,
+            format!("Mira {} is available", update.version),
+            match error {
+                Some(error) => format!("The last download failed: {error}"),
+                None => notes(update),
+            },
+            &["Download", "Later"],
+        ),
+        Updates::Downloading { update, .. } => (
+            PromptLevel::Info,
+            format!("Mira {} is downloading", update.version),
+            "It will be ready to install in a moment.".into(),
+            &["OK"],
+        ),
+        Updates::Ready { update, .. } => (
+            PromptLevel::Info,
+            format!("Mira {} is ready to install", update.version),
+            "Any running scripts will be interrupted. Make sure you're ready before continuing."
+                .into(),
+            &["Restart", "Later"],
+        ),
+        Updates::Failed(error) => (
+            PromptLevel::Warning,
+            "Couldn’t check for updates".into(),
+            error.to_string(),
+            &["OK"],
+        ),
+        Updates::Unavailable(reason) => (
+            PromptLevel::Info,
+            "Updates aren’t available".into(),
+            reason
+                .as_ref()
+                .map_or("This is a development build.".into(), ToString::to_string),
+            &["OK"],
+        ),
+        Updates::Idle | Updates::Checking | Updates::Restarting(_) => return,
+    };
+    let answer = window.update(cx, |_, window, cx| {
+        window.prompt(level, &message, Some(&detail), answers, cx)
+    });
+    let Ok(answer) = answer else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        if answer.await != Ok(0) {
+            return;
+        }
+        cx.update(|cx| match state {
+            Updates::Available { .. } => Updates::download(cx),
+            Updates::Ready { .. } => Updates::restart(cx),
+            _ => {}
+        });
     })
     .detach();
 }
@@ -148,29 +232,30 @@ impl Updates {
         }
     }
 
-    pub(crate) fn check(manual: bool, cx: &mut App) {
+    pub(crate) fn check(manual: bool, cx: &mut App) -> Task<()> {
         let started = cx.background_executor().now();
         let offered = match cx.try_global::<Self>() {
             Some(&Self::Current(at)) if started.duration_since(at) < COOLDOWN => {
                 cx.set_global(Self::Checking);
-                cx.spawn(async move |cx| {
+                return cx.spawn(async move |cx| {
                     cx.background_executor().timer(SPIN).await;
                     cx.update(|cx| {
                         if matches!(cx.try_global::<Self>(), Some(Self::Checking)) {
                             cx.set_global(Self::Current(at));
                         }
                     });
-                })
-                .detach();
-                return;
+                });
             }
             Some(Self::Idle | Self::Current(_) | Self::Failed(_)) => false,
             Some(Self::Available { .. }) => true,
-            _ => return,
+            _ => return Task::ready(()),
         };
         let github = match github(cx) {
             Ok(github) => github,
-            Err(error) => return cx.set_global(Self::Failed(message(&error))),
+            Err(error) => {
+                cx.set_global(Self::Failed(message(&error)));
+                return Task::ready(());
+            }
         };
         let previous = cx.try_global::<Self>().cloned();
         if !offered {
@@ -210,7 +295,6 @@ impl Updates {
                 })
             });
         })
-        .detach();
     }
 
     pub(crate) fn download(cx: &mut App) {
@@ -319,7 +403,7 @@ mod tests {
             now
         });
         cx.executor().advance_clock(COOLDOWN / 2);
-        cx.update(|cx| Updates::check(true, cx));
+        cx.update(|cx| Updates::check(true, cx).detach());
         assert!(cx.update(|cx| matches!(cx.global::<Updates>(), Updates::Checking)));
         cx.executor().advance_clock(SPIN);
         cx.run_until_parked();
