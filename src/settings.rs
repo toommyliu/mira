@@ -537,7 +537,7 @@ fn reset_button(
 
 fn with_reset(reset: Option<Button>, control: impl IntoElement, theme: &Theme) -> gpui::Div {
     h_flex()
-        .gap(theme.space(2.0))
+        .gap(theme.space(1.0))
         .children(reset)
         .child(control)
 }
@@ -752,7 +752,7 @@ impl Pane {
         match self {
             Pane::General => "",
             Pane::Appearance => {
-                "Mode, colors, fonts, font sizes, font smoothing and cursor pointers go back to their defaults."
+                "Mode, colors, fonts, font sizes, font smoothing and pointer cursors go back to their defaults."
             }
             Pane::Shortcuts => "Every shortcut goes back to its default.",
         }
@@ -1158,11 +1158,11 @@ impl SettingsWindow {
                         .on_toggle(|on, _, cx| change(cx, |settings| settings.font_smoothing = on)),
                 ))
                 .row(Row::new(
-                    "Use cursor pointers",
+                    "Use pointer cursors",
                     Some("Show a hand cursor over clickable controls."),
                     Switch::new(
                         "pointer-cursors",
-                        "Use cursor pointers",
+                        "Use pointer cursors",
                         settings.pointer_cursors,
                     )
                     .hide_label()

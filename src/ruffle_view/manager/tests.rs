@@ -1083,7 +1083,13 @@ fn snapshot_stress() {
     )
     .unwrap();
     type Act = fn(&mut Manager, &mut Window, &mut Context<Manager>);
-    let cases: [(&str, (f32, f32), Option<&str>, Act); 7] = [
+    let cases: [(&str, (f32, f32), Option<&str>, Act); 8] = [
+        (
+            "stress-manager-not-started",
+            (1000.0, 600.0),
+            Some("Setup 0"),
+            |_, _, _| {},
+        ),
         (
             "stress-manager-setup",
             (1000.0, 600.0),
