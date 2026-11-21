@@ -559,14 +559,13 @@ impl Manager {
             })
             .child(drag_area().flex_1())
             .children(
-                crate::updates::button(Placement::new(Side::Right, Align::End), theme.sidebar, cx)
-                    .map(|update| {
-                        h_flex()
-                            .flex_none()
-                            .justify_end()
-                            .p(layout.space(2.0))
-                            .child(update)
-                    }),
+                crate::updates::button(Placement::new(Side::Right, Align::End), cx).map(|update| {
+                    h_flex()
+                        .flex_none()
+                        .justify_end()
+                        .p(layout.space(2.0))
+                        .child(update)
+                }),
             )
     }
 
