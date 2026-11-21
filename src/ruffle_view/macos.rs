@@ -1,4 +1,7 @@
-use std::ptr::NonNull;
+use std::{
+    ptr::NonNull,
+    time::{Duration, Instant},
+};
 
 use crate::ruffle::Surface;
 use gpui::{Bounds, Pixels, Window};
@@ -17,7 +20,8 @@ use objc2_foundation::{
     NSNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
 };
 use objc2_quartz_core::{
-    CADisplayLink, CAFrameRateRange, CAMetalLayer, CATransaction, kCAGravityResizeAspect,
+    CACurrentMediaTime, CADisplayLink, CAFrameRateRange, CAMetalLayer, CATransaction,
+    kCAGravityResizeAspect,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -40,19 +44,19 @@ pub(super) struct NativeView {
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "MiraCallback"]
-    #[ivars = Box<dyn Fn()>]
+    #[ivars = Box<dyn Fn(&AnyObject)>]
     struct Callback;
 
     impl Callback {
         #[unsafe(method(call:))]
-        fn call(&self, _sender: &AnyObject) {
-            (self.ivars())();
+        fn call(&self, sender: &AnyObject) {
+            (self.ivars())(sender);
         }
     }
 );
 
 impl Callback {
-    fn new(callback: impl Fn() + 'static) -> Retained<Callback> {
+    fn new(callback: impl Fn(&AnyObject) + 'static) -> Retained<Callback> {
         unsafe { msg_send![super(Callback::alloc().set_ivars(Box::new(callback))), init] }
     }
 }
@@ -116,11 +120,16 @@ impl NativeView {
             .respondsToSelector(sel!(displayLinkWithTarget:selector:))
     }
 
-    pub(super) fn connect_frames(&mut self, on_frame: impl Fn() + 'static) {
+    pub(super) fn connect_frames(&mut self, on_frame: impl Fn(Instant) + 'static) {
         if !self.supports_display_frames() {
             return;
         }
-        let target = Callback::new(on_frame);
+        let target = Callback::new(move |sender| {
+            if let Some(clock) = sender.downcast_ref::<CADisplayLink>() {
+                let ahead = clock.targetTimestamp() - CACurrentMediaTime();
+                on_frame(Instant::now() + Duration::from_secs_f64(ahead.max(0.0)));
+            }
+        });
         let clock = unsafe {
             self.view
                 .displayLinkWithTarget_selector(&target, sel!(call:))
@@ -144,7 +153,7 @@ impl NativeView {
         on_change(is_visible(&window));
         let observer = Callback::new({
             let window = window.clone();
-            move || on_change(is_visible(&window))
+            move |_| on_change(is_visible(&window))
         });
         unsafe {
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
