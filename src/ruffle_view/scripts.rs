@@ -1215,6 +1215,7 @@ impl ScriptsWindow {
                 let this = toggles.clone();
                 h_flex()
                     .flex_none()
+                    .h(layout.control)
                     .justify_between()
                     .pl(layout.space(4.0))
                     .pr(layout.space(2.0))
@@ -1298,10 +1299,12 @@ impl ScriptsWindow {
                     .flex()
                     .flex_col()
                     .min_h_0()
+                    .my(-RING_ROOM)
                     .child(
                         div()
                             .id("sources")
                             .min_h_0()
+                            .py(RING_ROOM)
                             .overflow_y_scroll()
                             .track_scroll(&self.source_scroll)
                             .child(sources),
@@ -3327,7 +3330,7 @@ mod tests {
                 });
             })
         };
-        let shots: [(&str, Interaction); 9] = [
+        let shots: [(&str, Interaction); 10] = [
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
@@ -3335,6 +3338,67 @@ mod tests {
                         scripts.folders_open = false;
                         cx.notify();
                     })
+                }),
+            ),
+            (
+                "scripts-sources-packages-focused",
+                Box::new({
+                    let middle = 218;
+                    let collapse = pointer(
+                        gpui::point(px(40.0), px(middle as f32)),
+                        Some(gpui::MouseButton::Left),
+                    );
+                    move |cx, window| {
+                        update_scripts(cx, window, |scripts, cx| {
+                            scripts.folders_open = false;
+                            cx.notify();
+                        });
+                        collapse(cx, window);
+                        update_scripts(cx, window, |scripts, _| {
+                            assert!(!scripts.packages_open, "the click collapses Packages")
+                        });
+                        for key in ["shift-tab", "tab"] {
+                            cx.update_window(window, |_, window, cx| {
+                                window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
+                            })
+                            .unwrap();
+                            cx.run_until_parked();
+                        }
+                        let image = cx.capture_screenshot(window).unwrap();
+                        let scale = image.width() / WIDTH as u32;
+                        let middle = middle * scale;
+                        let row: Vec<_> = (0..image.width())
+                            .map(|x| *image.get_pixel(x, middle))
+                            .collect();
+                        let background = row[0];
+                        let edge = row
+                            .iter()
+                            .position(|pixel| *pixel != background)
+                            .expect("the focus ring around Packages");
+                        let ring = row[edge + scale as usize];
+                        let inside = edge
+                            + row[edge..]
+                                .iter()
+                                .position(|pixel| *pixel == background)
+                                .unwrap();
+                        let gap = row[inside..]
+                            .iter()
+                            .position(|pixel| *pixel != background)
+                            .unwrap();
+                        assert!(
+                            gap >= 3 * scale as usize,
+                            "the focus ring touches the Packages label"
+                        );
+                        let column = edge as u32 + 30 * scale;
+                        let stroke = |rows: std::ops::Range<u32>| {
+                            rows.filter(|&y| *image.get_pixel(column, y) == ring)
+                                .count()
+                        };
+                        let above = stroke(middle - 16 * scale..middle);
+                        let below = stroke(middle..middle + 16 * scale);
+                        assert!(above > 0, "the focus ring has no top edge");
+                        assert_eq!(above, below, "the sidebar clips the focus ring");
+                    }
                 }),
             ),
             ("scripts-sources", Box::new(|_, _| {})),
@@ -3368,7 +3432,7 @@ mod tests {
             ("scripts-source-default", select(temp.join("scripts"))),
             (
                 "scripts-updates-card",
-                Box::new(pointer(gpui::point(px(159.0), px(335.0)), None)),
+                Box::new(pointer(gpui::point(px(159.0), px(341.0)), None)),
             ),
         ];
         for (name, interact) in shots {
