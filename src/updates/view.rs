@@ -10,6 +10,7 @@ use mira_ui::{
         button::{Size, Variant},
         icon,
     },
+    v_flex,
 };
 
 use super::Updates;
@@ -33,8 +34,25 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let fallback = Updates::Unavailable(None);
     let state = cx.try_global::<Updates>().unwrap_or(&fallback);
-    let status = matches!(state, Updates::Current).then_some("Up to date");
-    let failed = matches!(state, Updates::Failed(_));
+    let status = match state {
+        Updates::Current => Some("Up to date".to_owned()),
+        Updates::Failed(_) => Some("Couldn’t check".to_owned()),
+        Updates::Available { error: Some(_), .. } => Some("Download failed".to_owned()),
+        Updates::Available { .. } => Some("Update available".to_owned()),
+        Updates::Downloading { progress, .. } => {
+            Some(format!("Downloading… {:.0}%", progress * 100.0))
+        }
+        Updates::Ready { error: Some(_), .. } => Some("Install failed".to_owned()),
+        Updates::Ready { .. } => Some("Ready to restart".to_owned()),
+        Updates::Restarting(_) => Some("Restarting…".to_owned()),
+        _ => None,
+    };
+    let failed = matches!(
+        state,
+        Updates::Failed(_)
+            | Updates::Available { error: Some(_), .. }
+            | Updates::Ready { error: Some(_), .. }
+    );
     let action = match button(Placement::new(Side::Top, Align::Start), theme.sidebar, cx) {
         Some(update) => update.into_any_element(),
         None => {
@@ -58,7 +76,7 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
     h_flex()
         .debug_selector(|| "settings-update-footer".into())
         .flex_none()
-        .h(theme.layout.control)
+        .h(theme.typography.secondary_line * 2.0)
         .m(theme.space(2.0))
         .pl(theme.space(2.0))
         .gap(theme.space(2.0))
@@ -66,12 +84,17 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
         .text_caption(theme.typography)
         .text_color(theme.muted_foreground)
         .child(
-            h_flex()
+            v_flex()
                 .min_w_0()
-                .gap(theme.space(1.5))
-                .child(div().flex_none().child(VERSION))
-                .children(status.map(|status| div().min_w_0().truncate().child(status)))
-                .when(failed, |row| row.child(failed_mark(cx))),
+                .justify_center()
+                .child(div().truncate().text_color(theme.foreground).child(VERSION))
+                .children(status.map(|status| {
+                    h_flex()
+                        .min_w_0()
+                        .gap(theme.space(1.5))
+                        .child(div().min_w_0().truncate().child(status))
+                        .when(failed, |row| row.child(failed_mark(cx)))
+                })),
         )
         .child(action)
 }
