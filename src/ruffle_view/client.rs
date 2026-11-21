@@ -358,6 +358,10 @@ pub(crate) fn open_launch_window(cx: &mut App) {
     }
 }
 
+pub(super) fn frontmost(cx: &App) -> Option<Entity<Client>> {
+    live(cx).next().map(|(_, client)| client)
+}
+
 pub(crate) fn current(cx: &mut App) -> anyhow::Result<WindowHandle<Client>> {
     let frontmost = live(cx).next().map(|(game, _)| game.handle);
     match frontmost {
@@ -1683,6 +1687,47 @@ mod tests {
         assert!(!cx.windows().contains(&window.into()));
         assert!(cx.update(|cx| clients(cx).is_empty()));
         assert!(cx.update(|cx| finished_at(&account, &entry, cx)).is_some());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
+    fn tools_open_for_an_open_client_and_never_open_one(cx: &mut gpui::TestAppContext) {
+        use crate::ruffle_view::{
+            LoadScript, OpenEnvironment, OpenLoaderGrabber, OpenPackets, OpenScripts, init_tools,
+        };
+        let folder = std::env::temp_dir().join(format!("mira-tools-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+            init(
+                folder.clone(),
+                folder.join("accounts.json"),
+                reqwest::header::HeaderValue::from_static("test"),
+                Armies::new(folder.join("armies")),
+                cx,
+            );
+            init_tools(folder.join("scripts"), folder.join("types"), cx);
+        });
+        let tools: [&dyn gpui::Action; 5] = [
+            &OpenPackets,
+            &OpenEnvironment,
+            &OpenLoaderGrabber,
+            &OpenScripts,
+            &LoadScript,
+        ];
+        for tool in tools {
+            cx.update(|cx| cx.dispatch_action(tool));
+            cx.run_until_parked();
+            assert!(cx.windows().is_empty(), "{} opened a window", tool.name());
+        }
+        let client = cx
+            .update(|cx| open(Home::Setup("Daily".into()), false, cx))
+            .unwrap();
+        cx.update(|cx| cx.dispatch_action(&OpenPackets));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 2);
+        assert!(cx.windows().contains(&client.into()));
         std::fs::remove_dir_all(folder).unwrap();
     }
 
