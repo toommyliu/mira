@@ -163,8 +163,9 @@ struct SessionTab {
 
 impl SessionTab {
     fn tab(&self, theme: &Theme, active: bool) -> TabItem {
-        let face = tab_face(theme, &self.title, self.glance.clone(), active, self.hint);
-        let mut tab = TabItem::new(self.title.clone()).child(face);
+        let mut tab = TabItem::new(self.title.clone())
+            .child(tab_title(theme, &self.title, active, self.hint))
+            .detail(tab_glance(theme, self.glance.clone()));
         if let Some(glance) = &self.glance {
             tab = tab.description(glance.label.clone());
         }
@@ -1351,53 +1352,46 @@ impl Client {
     }
 }
 
-pub(super) fn tab_face(
+fn tab_title(
     theme: &Theme,
     label: &SharedString,
-    glance: Option<Glance>,
     active: bool,
     hint: Option<usize>,
 ) -> impl IntoElement {
-    let layout = theme.layout;
     let typography = theme.typography;
     div()
         .flex()
-        .flex_col()
-        .gap(layout.space(1.0))
-        .flex_1()
-        .min_w_0()
+        .items_center()
+        .gap(theme.space(2.0))
+        .h(typography.body_line)
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap(layout.space(2.0))
-                .h(typography.body_line)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .line_height(typography.body_line)
-                        .truncate()
-                        .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
-                        .child(label.clone()),
-                )
-                .children(hint.map(|number| Kbd::new(format!("⌘{number}")))),
-        )
-        .child(
-            div()
-                .h(typography.secondary_line)
+                .flex_1()
+                .min_w_0()
+                .line_height(typography.body_line)
                 .truncate()
-                .text_size(typography.secondary)
-                .line_height(typography.secondary_line)
-                .children(glance.map(|glance| {
-                    div()
-                        .text_color(match glance.tone {
-                            Tone::Neutral => theme.muted_foreground,
-                            tone => theme.tone(tone).2,
-                        })
-                        .child(glance.label)
-                })),
+                .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
+                .child(label.clone()),
         )
+        .children(hint.map(|number| Kbd::new(format!("⌘{number}"))))
+}
+
+fn tab_glance(theme: &Theme, glance: Option<Glance>) -> impl IntoElement {
+    let typography = theme.typography;
+    div()
+        .mt(theme.space(1.0))
+        .h(typography.secondary_line)
+        .truncate()
+        .text_caption(typography)
+        .children(glance.map(|glance| {
+            div()
+                .truncate()
+                .text_color(match glance.tone {
+                    Tone::Neutral => theme.muted_foreground,
+                    tone => theme.tone(tone).2,
+                })
+                .child(glance.label)
+        }))
 }
 
 pub(super) fn reveal_tab(scroll: &ScrollHandle, index: usize, count: usize) {
@@ -1925,6 +1919,85 @@ mod tests {
                         ),
                 )
         }
+    }
+
+    struct StressRows;
+
+    impl Render for StressRows {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let view = cx.entity_id();
+            let rows: Vec<SessionTab> = [
+                ("The Legendary Hero Of Battleon And Beyond", "Swordhaven (EU) · tercessuinotlim-99999", Tone::Neutral, Some(1)),
+                ("xXx_SuperLongUsernameWithoutAnySpaces_xXx", "legion-revenant-fealty-and-exalted-crown-farm.ts is waiting for you", Tone::Attention, Some(2)),
+                ("a", "Couldn't join house-73675086, the room is full", Tone::Danger, None),
+                ("Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww", "Logging in, attempt 2 of 3", Tone::Neutral, Some(10)),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (title, label, tone, hint))| SessionTab {
+                view,
+                number: index + 1,
+                title: title.into(),
+                glance: Some(Glance { label: label.into(), tone }),
+                details: Details {
+                    server: Some("Swordhaven (EU)".into()),
+                    script: Some("/Users/player/Documents/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
+                    error: Some("Couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into()),
+                },
+                hint,
+            })
+            .collect();
+            div()
+                .size_full()
+                .window_text(&theme)
+                .bg(gpui::black())
+                .child(
+                    div()
+                        .w(theme.layout.sidebar)
+                        .h_full()
+                        .bg(theme.sidebar)
+                        .child(
+                            Tabs::new("sessions", "Tabs", rows.len(), move |index| {
+                                let row = &rows[index];
+                                let (view, title) = (row.view, row.title.clone());
+                                row.tab(&theme, index == 0)
+                                    .menu(move |_, _| {
+                                        tool_menu(&WeakEntity::new_invalid(), view, &title)
+                                    })
+                                    .on_close(|_, _| {})
+                            })
+                            .vertical()
+                            .on_reorder(|_, _, _, _| {}),
+                        ),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_stress_sessions() {
+        mira_ui::snapshot_with(
+            "stress-sessions",
+            gpui::size(px(600.0), px(320.0)),
+            |_, cx| cx.new(|_| StressRows),
+            |cx, owner| {
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(42.0 + nudge), px(80.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                cx.advance_clock(std::time::Duration::from_secs(1));
+            },
+        );
     }
 
     #[test]
