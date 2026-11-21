@@ -274,7 +274,10 @@ impl RenderOnce for Restart {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let asking = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
         let open = *asking.read(cx);
-        let tabs = crate::ruffle_view::open_tabs(cx);
+        let version = cx
+            .try_global::<Updates>()
+            .and_then(Updates::version)
+            .map(ToString::to_string);
         let set = move |to: bool| {
             let asking = asking.clone();
             move |cx: &mut App| {
@@ -294,25 +297,28 @@ impl RenderOnce for Restart {
                 }
             }))
             .child(
-                Dialog::new((self.id, "dialog"), open, "Restart to update?")
-                    .alert()
-                    .description(match tabs {
-                        1 => "Restarting closes your tab and stops its script.".to_owned(),
-                        n => format!("Restarting closes your {n} tabs and stops their scripts."),
-                    })
-                    .action(
-                        Button::new("restart-cancel", "Cancel")
-                            .on_click(move |_, _, cx| cancel(cx)),
-                    )
-                    .action(
-                        Button::new("restart-accept", "Restart")
-                            .variant(Variant::Primary)
-                            .on_click(move |_, _, cx| {
-                                accept(cx);
-                                Updates::restart(cx);
-                            }),
-                    )
-                    .on_close(move |_, cx| close(cx)),
+                Dialog::new(
+                    (self.id, "dialog"),
+                    open,
+                    match version {
+                        Some(version) => format!("Install Mira {version} and restart?"),
+                        None => "Install the update and restart?".to_owned(),
+                    },
+                )
+                .alert()
+                .description("Any running scripts will be interrupted.")
+                .action(
+                    Button::new("restart-cancel", "Cancel").on_click(move |_, _, cx| cancel(cx)),
+                )
+                .action(
+                    Button::new("restart-accept", "Restart")
+                        .variant(Variant::Primary)
+                        .on_click(move |_, _, cx| {
+                            accept(cx);
+                            Updates::restart(cx);
+                        }),
+                )
+                .on_close(move |_, cx| close(cx)),
             )
     }
 }
