@@ -932,12 +932,12 @@ fn snapshot_menubar() {
 
 #[test]
 fn snapshot_popover() {
-    scene("popover", 420.0, 260.0, |_, _| {
+    fn options(open: bool) -> gpui::AnyElement {
         div()
             .flex()
             .child(
                 Popover::new("options")
-                    .default_open(true)
+                    .default_open(open)
                     .trigger(Button::new("options", "Options").end_slot(Icon::ChevronDown))
                     .content(|_, _, _| {
                         div()
@@ -950,7 +950,66 @@ fn snapshot_popover() {
                     }),
             )
             .into_any_element()
+    }
+
+    snapshot("popover", size(px(420.0), px(260.0)), |window, cx| {
+        Scene::open(|_, _| options(true), window, cx)
     });
+    mira_ui::snapshot_with(
+        "popover-toggled",
+        size(px(420.0), px(260.0)),
+        |window, cx| Scene::open(|_, _| options(false), window, cx),
+        |cx, owner| {
+            use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
+
+            cx.update(|cx| cx.set_reduce_motion(false));
+            let at = point(px(45.0), px(30.0));
+            let click = |cx: &mut gpui::HeadlessAppContext| {
+                cx.update_window(owner, |_, window, cx| {
+                    for input in [
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: at,
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: at,
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                    ] {
+                        window.dispatch_event(input, cx);
+                    }
+                })
+                .unwrap();
+            };
+            let panel = |cx: &mut gpui::HeadlessAppContext| {
+                cx.update_window(owner, |_, window, cx| {
+                    window.simulate_next_frame(cx);
+                    window.draw(cx).clear(cx);
+                    let scale = window.scale_factor();
+                    window
+                        .painted_quads()
+                        .into_iter()
+                        .map(|quad| quad.bounds.size.width.as_f32() / scale)
+                        .find(|width| (270.0..=290.0).contains(width))
+                })
+                .unwrap()
+            };
+            move_pointer(cx, owner, 45.0, 30.0);
+            assert_eq!(panel(cx), None);
+            click(cx);
+            assert_eq!(
+                panel(cx),
+                Some(288.0),
+                "the first frame after a click paints the whole popover"
+            );
+            click(cx);
+            assert_eq!(panel(cx), None, "the popover closes without a fade");
+        },
+    );
 }
 
 #[test]

@@ -15,7 +15,7 @@ use super::{
     placement::COLLISION_MARGIN,
 };
 use crate::{
-    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious, motion,
+    ActiveTheme as _, FOCUS_SCOPE, FocusNext, FocusPrevious,
     nav::{self, Axis, Step},
 };
 
@@ -283,9 +283,9 @@ impl RenderOnce for Popover {
                 }),
             )
             .attach(menu::trigger_probe(&state).into_any_element());
-        let Some(shown) = menu::presence(&state, window, cx) else {
+        if !is_open {
             return trigger;
-        };
+        }
         let content = (self.content)(&closer, window, cx);
         let panel = panel(&self.id, label, closer, Some(self.width), window, cx)
             .when_some(self.inset, |panel, inset| panel.p(inset))
@@ -297,12 +297,7 @@ impl RenderOnce for Popover {
                 menu::dismiss(&state),
                 window,
                 cx,
-                |from, _| {
-                    menu::fading(
-                        motion::arrive((self.id.clone(), "popover"), panel, from),
-                        shown,
-                    )
-                },
+                |_| panel.into_any_element(),
             )
             .into_any_element(),
         );

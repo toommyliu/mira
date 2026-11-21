@@ -20,7 +20,6 @@ use super::{
 };
 use crate::{
     ActiveTheme as _, FocusNext, FocusPrevious, StyledExt as _, Theme, h_flex,
-    motion::{self, From},
     nav::{self, Axis, Step, Typeahead},
     theme::{Layout, PointerCursor as _},
     v_flex,
@@ -245,12 +244,12 @@ pub(crate) fn attach(
     on_outside: PressHandler,
     window: &mut Window,
     cx: &App,
-    panel: impl FnOnce(From, &mut Window) -> AnyElement,
+    panel: impl FnOnce(&mut Window) -> AnyElement,
 ) -> Div {
     let menu = state.read(cx);
     let trigger = menu.trigger_bounds.get();
     let measured = menu.panel_size.clone();
-    let (positioner, from) = placement.resolve(trigger, measured.get(), window.viewport_size());
+    let (positioner, _) = placement.resolve(trigger, measured.get(), window.viewport_size());
     let measure = canvas(
         move |area, window, _| {
             if measured.replace(area.size) != area.size {
@@ -265,7 +264,7 @@ pub(crate) fn attach(
         positioner,
         state,
         on_outside,
-        [panel(from, window), measure.into_any_element()],
+        [panel(window), measure.into_any_element()],
     )
 }
 
@@ -311,7 +310,6 @@ pub(crate) struct MenuState {
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
     panel_size: Rc<Cell<gpui::Size<Pixels>>>,
     reveal: Cell<bool>,
-    closed_at: Option<Instant>,
     pointer: Option<Point<Pixels>>,
     started: bool,
     pub(crate) opened_from_keyboard: bool,
@@ -325,7 +323,6 @@ impl MenuState {
                 return;
             }
             menu.open = false;
-            menu.closed_at = None;
             menu.submenu = None;
             if let Some(focus) = menu.return_focus.take()
                 && menu.focus.contains_focused(window, cx)
@@ -351,7 +348,6 @@ impl MenuState {
             trigger_bounds: Rc::default(),
             panel_size: Rc::default(),
             reveal: Cell::new(false),
-            closed_at: None,
             pointer: None,
             started: false,
             opened_from_keyboard: false,
@@ -380,26 +376,6 @@ impl MenuState {
     pub(super) fn trigger_bounds(&self) -> Bounds<Pixels> {
         self.trigger_bounds.get()
     }
-}
-
-pub(crate) fn presence(state: &Entity<MenuState>, window: &mut Window, cx: &App) -> Option<f32> {
-    let menu = state.read(cx);
-    if menu.open {
-        return Some(1.0);
-    }
-    motion::leaving(menu.closed_at?, window, cx)
-}
-
-pub(crate) fn fading(panel: impl IntoElement, presence: f32) -> AnyElement {
-    if presence >= 1.0 {
-        return panel.into_any_element();
-    }
-    div()
-        .relative()
-        .opacity(presence)
-        .child(panel)
-        .child(div().absolute().inset_0().occlude())
-        .into_any_element()
 }
 
 fn heading_toward(
@@ -501,7 +477,6 @@ pub(crate) fn open(
     let focus = state.update(cx, |menu, cx| {
         menu.open = true;
         menu.started = true;
-        menu.closed_at = None;
         menu.pointer = None;
         menu.highlighted = highlighted;
         menu.reveal.set(true);
@@ -525,7 +500,6 @@ pub(crate) fn hand_off(
     let return_focus = from.update(cx, |menu, cx| {
         menu.open = false;
         menu.submenu = None;
-        menu.closed_at = None;
         cx.notify();
         menu.return_focus.take()
     });
@@ -535,9 +509,6 @@ pub(crate) fn hand_off(
 
 pub(crate) fn close(state: &Entity<MenuState>, restore: bool, window: &mut Window, cx: &mut App) {
     let return_focus = state.update(cx, |menu, cx| {
-        if menu.open {
-            menu.closed_at = Some(cx.background_executor().now());
-        }
         menu.open = false;
         menu.submenu = None;
         menu.typeahead = Typeahead::default();
@@ -1261,20 +1232,13 @@ pub(crate) fn popup(
     label: SharedString,
     items: Vec<MenuItem>,
     max_height: Pixels,
-    from: From,
     state: &Entity<MenuState>,
     window: &mut Window,
     cx: &App,
 ) -> AnyElement {
-    let shell =
-        popup_panel(id, items, PopupKind::Menu, max_height, state, window, cx).aria_label(label);
-    let menu = state.read(cx);
-    let panel = if menu.hovered || menu.row.is_some() {
-        shell.into_any_element()
-    } else {
-        motion::arrive((id.clone(), "popup"), shell, from).into_any_element()
-    };
-    fading(panel, presence(state, window, cx).unwrap_or(0.0))
+    popup_panel(id, items, PopupKind::Menu, max_height, state, window, cx)
+        .aria_label(label)
+        .into_any_element()
 }
 
 fn scrolling(
@@ -1575,7 +1539,6 @@ impl RenderOnce for DropdownMenu {
             .clone()
             .unwrap_or_else(|| state(&self.id, self.default_open, window, cx));
         let is_open = state.read(cx).open;
-        let shown = presence(&state, window, cx).is_some();
         let trigger = self
             .trigger
             .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Menu"));
@@ -1598,35 +1561,29 @@ impl RenderOnce for DropdownMenu {
         let mut trigger = trigger
             .trigger(is_open, press, keys)
             .attach(trigger_probe(&state).into_any_element());
-        if shown {
+        if is_open {
             let items = (self.items)(window, cx);
             let id = self.id.clone();
             let (width, max_height) = (self.width, self.max_height);
             let beside = self.beside;
             let on_outside = dismiss(&state);
             trigger = trigger.attach(
-                attach(
-                    self.placement,
-                    &state,
-                    on_outside,
-                    window,
-                    cx,
-                    |from, window| {
-                        let panel = popup(&id, label, items, max_height, from, &state, window, cx);
-                        match width {
-                            Some(width) => div().w(width).child(panel).into_any_element(),
-                            None if beside => {
-                                let leave = state.clone();
-                                div()
-                                    .relative()
-                                    .min_w(px(128.0))
-                                    .child(panel)
-                                    .child(
-                                        canvas(
-                                            |bounds, _, _| bounds,
-                                            move |_, bounds, window, _| {
-                                                let leave = leave.clone();
-                                                window.on_mouse_event(
+                attach(self.placement, &state, on_outside, window, cx, |window| {
+                    let panel = popup(&id, label, items, max_height, &state, window, cx);
+                    match width {
+                        Some(width) => div().w(width).child(panel).into_any_element(),
+                        None if beside => {
+                            let leave = state.clone();
+                            div()
+                                .relative()
+                                .min_w(px(128.0))
+                                .child(panel)
+                                .child(
+                                    canvas(
+                                        |bounds, _, _| bounds,
+                                        move |_, bounds, window, _| {
+                                            let leave = leave.clone();
+                                            window.on_mouse_event(
                                                     move |event: &gpui::MouseMoveEvent,
                                                           phase,
                                                           window,
@@ -1651,26 +1608,22 @@ impl RenderOnce for DropdownMenu {
                                                             && !bridge.contains(&at)
                                                         {
                                                             close(&leave, true, window, cx);
-                                                            leave.update(cx, |menu, _| {
-                                                                menu.closed_at = None
-                                                            });
                                                         }
                                                     },
                                                 );
-                                            },
-                                        )
-                                        .absolute()
-                                        .inset_0(),
+                                        },
                                     )
-                                    .into_any_element()
-                            }
-                            None => div()
-                                .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
-                                .child(panel)
-                                .into_any_element(),
+                                    .absolute()
+                                    .inset_0(),
+                                )
+                                .into_any_element()
                         }
-                    },
-                )
+                        None => div()
+                            .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
+                            .child(panel)
+                            .into_any_element(),
+                    }
+                })
                 .into_any_element(),
             );
         }

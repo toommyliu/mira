@@ -13,7 +13,7 @@ use super::{
     popover::{self, Content},
 };
 use crate::{
-    ActiveTheme as _, FOCUS_SCOPE, h_flex, motion,
+    ActiveTheme as _, FOCUS_SCOPE, h_flex,
     nav::{self, Step},
 };
 
@@ -361,9 +361,9 @@ fn render_entry(
     if let Panel::Popover { rows, .. } = &panel {
         popover::focus_first_on_open(&id, &state, *rows, window, cx);
     }
-    let Some(shown) = menu::presence(&state, window, cx) else {
+    if !is_open {
         return trigger.into_any_element();
-    };
+    }
     let on_outside: PressHandler = {
         let bar = bar.clone();
         Rc::new(move |event, window, cx| {
@@ -385,9 +385,7 @@ fn render_entry(
                 on_outside,
                 window,
                 cx,
-                |from, window| {
-                    menu::popup(&id, label, items, MENU_MAX_HEIGHT, from, &state, window, cx)
-                },
+                |window| menu::popup(&id, label, items, MENU_MAX_HEIGHT, &state, window, cx),
             )
         }
         Panel::Popover { content, rows } => {
@@ -406,7 +404,7 @@ fn render_entry(
                 on_outside,
                 window,
                 cx,
-                |from, _| menu::fading(motion::arrive((id.clone(), "popover"), panel, from), shown),
+                |_| panel.into_any_element(),
             )
         }
     };
