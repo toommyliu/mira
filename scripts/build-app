@@ -18,6 +18,15 @@ cp "target/$directory/mira" "$bundle/MacOS/mira"
 resources="$bundle/Resources"
 rm -rf "$resources/script-packages" "$resources/script-packages.json"
 mkdir -p "$resources"
+icon_plist=$(mktemp)
+trap 'rm -f "$icon_plist"' EXIT
+# actool resolves relative paths against its background agent's working directory.
+if ! log=$(xcrun actool "$PWD/assets/Mira.icon" --compile "$PWD/$resources" --platform macosx --target-device mac \
+    --minimum-deployment-target 11.0 --app-icon Mira --output-partial-info-plist "$icon_plist" \
+    --output-format human-readable-text --errors --warnings); then
+    printf '%s\n' "$log" >&2
+    exit 1
+fi
 if git cat-file -e HEAD:script-packages 2>/dev/null; then
     git archive HEAD script-packages | tar -x -C "$resources"
     commit=$(git rev-parse HEAD)
@@ -37,6 +46,8 @@ cat > "$bundle/Info.plist" <<PLIST
     <key>CFBundleName</key><string>Mira</string>
     <key>CFBundleIdentifier</key><string>local.mira.app</string>
     <key>CFBundleExecutable</key><string>mira</string>
+    <key>CFBundleIconFile</key><string>Mira</string>
+    <key>CFBundleIconName</key><string>Mira</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
