@@ -24,7 +24,7 @@ use mira_ui::{
     components::{Disclosure, Empty},
     h_flex,
     primitives::{
-        Alert, Align, Badge, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
+        Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon, Input,
         InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side, Switch,
         Tab, Tabs, VirtualList,
         button::{Size, Variant},
@@ -2495,35 +2495,23 @@ impl ScriptsWindow {
             .chain(installed)
             .filter_map(|row| Some((row.root, row.qualifier?)))
             .collect();
-        let headings: Rc<[(SharedString, Option<SharedString>, bool)]> = library
+        let headings: Rc<[(SharedString, Option<SharedString>)]> = library
             .sources
             .iter()
-            .map(|source| {
-                (
-                    source.name.clone(),
-                    qualified.get(&source.root).cloned(),
-                    matches!(source.kind, SourceKind::Skua { .. }),
-                )
-            })
+            .map(|source| (source.name.clone(), qualified.get(&source.root).cloned()))
             .collect();
-        let gap = cx.theme().layout.space(1.0);
         let count = rows.len();
         let this = cx.entity().downgrade();
         let that = this.clone();
         VirtualList::new("scripts", "Scripts", count, move |index| {
             match &rows[index] {
                 Row::Source(source) => {
-                    let (name, qualifier, experimental) = &headings[*source];
-                    let header = ListItem::header(name.clone());
-                    match (qualifier, experimental) {
-                        (_, true) => header.end_slot(
-                            h_flex()
-                                .gap(gap)
-                                .children(qualifier.clone())
-                                .child(experimental_badge()),
-                        ),
-                        (Some(qualifier), false) => header.end_slot(qualifier.clone()),
-                        (None, false) => header,
+                    let (name, qualifier) = &headings[*source];
+                    match qualifier {
+                        Some(qualifier) => {
+                            ListItem::header(name.clone()).end_slot(qualifier.clone())
+                        }
+                        None => ListItem::header(name.clone()),
                     }
                 }
                 Row::Script(entry) => match &entry.folder {
@@ -2563,10 +2551,6 @@ fn first_script(rows: &[Row]) -> usize {
     rows.iter()
         .position(|row| matches!(row, Row::Script(_)))
         .unwrap_or(0)
-}
-
-fn experimental_badge() -> Badge {
-    Badge::new("Experimental").tone(Tone::Warning)
 }
 
 fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
