@@ -5,4 +5,6 @@ disallowed-methods = [
   { path = "gpui::InteractiveElement::on_drag_move", reason = "reorder with mira_ui::primitives::Sortable" },
   { path = "gpui::Entity::update_in", reason = "runs in whichever window last rendered the entity; use cx.update(|window, cx| entity.update(cx, ...))" },
   { path = "gpui::WeakEntity::update_in", reason = "runs in whichever window last rendered the entity; use cx.update(|window, cx| entity.update(cx, ...))" },
+  { path = "gpui::App::prompt_for_paths", reason = "the panel floats free of its window; use crate::file_panel::open" },
+  { path = "gpui::App::prompt_for_new_path", reason = "the panel floats free of its window; use crate::file_panel::save" },
 ]

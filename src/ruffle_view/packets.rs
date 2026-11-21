@@ -36,6 +36,7 @@ use crate::{
     },
     bridge::packets::Sender,
     domain::packets::{self as packet, Delivery, Problem, Target},
+    file_panel,
     ruffle::Command,
 };
 
@@ -536,28 +537,24 @@ impl Packets {
             .join("\n")
     }
 
-    fn export(&mut self, cx: &mut Context<Self>) {
+    fn export(&mut self, window: &Window, cx: &mut Context<Self>) {
         let text = self.lines_text(true, cx);
         let directory = dirs::document_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_default();
-        let chosen = cx.prompt_for_new_path(&directory, Some("packets.txt"));
+        let chosen = file_panel::save(&directory, "packets.txt", window, cx);
         cx.spawn(async move |this, cx| {
-            let problem = match chosen.await {
-                Ok(Ok(Some(path))) => {
-                    let written = cx
-                        .background_spawn(async move { std::fs::write(&path, text) })
-                        .await;
-                    match written {
-                        Ok(()) => return,
-                        Err(error) => format!("Couldn't save: {error}"),
-                    }
-                }
-                Ok(Ok(None)) | Err(_) => return,
-                Ok(Err(error)) => format!("Couldn't save: {error}"),
+            let Some(path) = chosen.await else {
+                return;
+            };
+            let Err(error) = cx
+                .background_spawn(async move { std::fs::write(&path, text) })
+                .await
+            else {
+                return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.notice = Some(Notice::new(problem, Tone::Danger));
+                this.notice = Some(Notice::new(format!("Couldn't save: {error}"), Tone::Danger));
                 cx.notify();
             });
         })
@@ -682,8 +679,8 @@ impl Packets {
                 items.push(
                     MenuItem::action("Export shown packets…", {
                         let this = this.clone();
-                        move |_, cx| {
-                            let _ = this.update(cx, |this, cx| this.export(cx));
+                        move |window, cx| {
+                            let _ = this.update(cx, |this, cx| this.export(window, cx));
                         }
                     })
                     .disabled(!shown),

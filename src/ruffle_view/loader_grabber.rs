@@ -36,6 +36,7 @@ use crate::{
         inventory::ItemQuery,
         world::Location,
     },
+    file_panel,
     ruffle::Command,
     settings,
 };
@@ -601,13 +602,13 @@ impl LoaderGrabber {
         cx.notify();
     }
 
-    fn take_all(&mut self, save: bool, cx: &mut Context<Self>) {
+    fn take_all(&mut self, save: bool, window: &Window, cx: &mut Context<Self>) {
         let source = self.source;
         let Some(answer) = self.send(|reply| Job::Raw { source, reply }, cx) else {
             return;
         };
         self.taken = None;
-        self.taking = Some(cx.spawn(async move |this, cx| {
+        self.taking = Some(cx.spawn_in(window, async move |this, cx| {
             let text = match answer.recv().await {
                 Ok(Ok(Some(text))) => Ok(text),
                 Ok(Ok(None)) if save => Err("Nothing to export".to_owned()),
@@ -629,12 +630,12 @@ impl LoaderGrabber {
                         .unwrap_or_default();
                     let name = format!("{}.json", source.name().to_lowercase().replace(' ', "-"));
                     let Ok(chosen) =
-                        this.update(cx, |_, cx| cx.prompt_for_new_path(&directory, Some(&name)))
+                        cx.update(|window, cx| file_panel::save(&directory, &name, window, cx))
                     else {
                         return;
                     };
                     match chosen.await {
-                        Ok(Ok(Some(path))) => Some(
+                        Some(path) => Some(
                             match cx
                                 .background_spawn(async move { std::fs::write(&path, text) })
                                 .await
@@ -643,8 +644,7 @@ impl LoaderGrabber {
                                 Err(error) => Outcome::failed(format!("Couldn't save: {error}")),
                             },
                         ),
-                        Ok(Err(error)) => Some(Outcome::failed(format!("Couldn't save: {error}"))),
-                        Ok(Ok(None)) | Err(_) => None,
+                        None => None,
                     }
                 }
             };
@@ -747,8 +747,8 @@ impl LoaderGrabber {
                     .into_iter()
                     .map(|(label, save)| {
                         let this = menu_this.clone();
-                        MenuItem::action(label, move |_, cx| {
-                            let _ = this.update(cx, |this, cx| this.take_all(save, cx));
+                        MenuItem::action(label, move |window, cx| {
+                            let _ = this.update(cx, |this, cx| this.take_all(save, window, cx));
                         })
                         .disabled(taking)
                     })
