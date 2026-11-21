@@ -227,6 +227,8 @@ mod tests {
             };"#,
         )
         .unwrap()
+        .inputs
+        .unwrap()
         .unwrap()
     }
 
