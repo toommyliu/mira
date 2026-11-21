@@ -50,6 +50,34 @@ pub(crate) enum Updates {
 
 impl Global for Updates {}
 
+#[derive(Default)]
+struct InFlight(Option<(Vec<async_channel::Sender<()>>, bool)>);
+
+impl Global for InFlight {}
+
+impl InFlight {
+    fn join(manual: bool, cx: &mut App) -> Option<Task<()>> {
+        let (done, waiting) = async_channel::bounded::<()>(1);
+        let (waiters, asked) = cx.default_global::<Self>().0.as_mut()?;
+        waiters.push(done);
+        *asked |= manual;
+        Some(cx.background_spawn(async move {
+            let _ = waiting.recv().await;
+        }))
+    }
+
+    fn begin(manual: bool, cx: &mut App) {
+        cx.default_global::<Self>().0 = Some((Vec::new(), manual));
+    }
+
+    fn finish(cx: &mut App) -> bool {
+        cx.default_global::<Self>()
+            .0
+            .take()
+            .is_some_and(|(_, manual)| manual)
+    }
+}
+
 pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
         let checking = Updates::check(true, cx);
@@ -139,7 +167,13 @@ fn announce(cx: &mut App) {
             ),
             &["OK"],
         ),
-        Updates::Idle | Updates::Checking | Updates::Restarting(_) => return,
+        Updates::Idle => (
+            PromptLevel::Warning,
+            "Could not check for updates.".into(),
+            Some("Try again in a moment.".into()),
+            &["OK"],
+        ),
+        Updates::Checking | Updates::Restarting(_) => return,
     };
     let answer = window.update(cx, |_, window, cx| {
         window.prompt(level, &message, detail.as_deref(), answers, cx)
@@ -227,13 +261,18 @@ impl Updates {
     }
 
     pub(crate) fn check(manual: bool, cx: &mut App) -> Task<()> {
+        if let Some(running) = InFlight::join(manual, cx) {
+            return running;
+        }
         let started = cx.background_executor().now();
         let offered = match cx.try_global::<Self>() {
             Some(&Self::Current(at)) if started.duration_since(at) < COOLDOWN => {
                 cx.set_global(Self::Checking);
+                InFlight::begin(manual, cx);
                 return cx.spawn(async move |cx| {
                     cx.background_executor().timer(SPIN).await;
                     cx.update(|cx| {
+                        InFlight::finish(cx);
                         if matches!(cx.try_global::<Self>(), Some(Self::Checking)) {
                             cx.set_global(Self::Current(at));
                         }
@@ -255,6 +294,7 @@ impl Updates {
         if !offered {
             cx.set_global(Self::Checking);
         }
+        InFlight::begin(manual, cx);
         let task = cx.background_spawn(async move { block_on(release::latest(&github, &CURRENT)) });
         cx.spawn(async move |cx| {
             let result = task.await;
@@ -263,6 +303,7 @@ impl Updates {
                 executor.timer(left).await;
             }
             cx.update(|cx| {
+                let manual = InFlight::finish(cx);
                 if !matches!(
                     cx.try_global::<Self>(),
                     Some(Self::Checking | Self::Available { .. })
@@ -406,5 +447,27 @@ mod tests {
                 |cx| matches!(cx.global::<Updates>(), &Updates::Current(at) if at == checked)
             )
         );
+    }
+
+    #[gpui::test]
+    fn a_second_check_waits_for_the_one_already_running(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Updates::Current(cx.background_executor().now())));
+        cx.update(|cx| Updates::check(true, cx).detach());
+        let second = cx.update(|cx| Updates::check(true, cx));
+        let answered = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = answered.clone();
+        cx.update(|cx| {
+            cx.spawn(async move |_| {
+                second.await;
+                flag.set(true);
+            })
+            .detach()
+        });
+        cx.run_until_parked();
+        assert!(!answered.get());
+        cx.executor().advance_clock(SPIN);
+        cx.run_until_parked();
+        assert!(answered.get());
+        assert!(cx.update(|cx| matches!(cx.global::<Updates>(), Updates::Current(_))));
     }
 }
