@@ -346,12 +346,7 @@ impl Render for PackageDialogs {
                     v_flex()
                         .gap(layout.space(1.0))
                         .child(label("GitHub link"))
-                        .child(install.link.clone())
-                        .child(note(
-                            "Its package.json needs a \u{201c}mira\u{201d} field.",
-                            true,
-                            &theme,
-                        )),
+                        .child(install.link.clone()),
                 )
                 .child(
                     v_flex()
@@ -661,10 +656,7 @@ mod tests {
         dialogs("install-package-error", |dialogs, window, cx| {
             dialogs.open_install(window, cx);
             let install = dialogs.install.as_mut().unwrap();
-            install.error = Some(
-                "This isn't a Mira script package. Its package.json needs a \u{201c}mira\u{201d} field."
-                    .into(),
-            );
+            install.error = Some("This isn't a Mira script package.".into());
         });
     }
 

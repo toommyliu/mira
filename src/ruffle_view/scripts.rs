@@ -3664,9 +3664,7 @@ mod tests {
                 (
                     packages.join("stripped").as_path(),
                     "stripped",
-                    Some(
-                        "This isn't a Mira script package. Its package.json needs a \"mira\" field."
-                    ),
+                    Some("This isn't a Mira script package."),
                     0
                 ),
                 (skua.as_path(), "Skua", None, 2),
