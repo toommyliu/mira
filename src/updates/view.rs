@@ -144,19 +144,6 @@ fn parse_notes(text: &str) -> Notes {
     notes
 }
 
-pub(super) fn plain_notes(text: &str) -> String {
-    let notes = parse_notes(text);
-    let mut lines = notes.summary;
-    lines.extend(notes.items.into_iter().map(|(lead, text)| match lead {
-        Some(lead) => format!("• {lead} {text}"),
-        None => format!("• {text}"),
-    }));
-    if notes.more > 0 {
-        lines.push(format!("• and {} more", notes.more));
-    }
-    lines.join("\n")
-}
-
 fn with_notes(card: HoverCard, text: &str) -> HoverCard {
     let notes = parse_notes(text);
     let card = match notes.summary.is_empty() {
@@ -241,7 +228,7 @@ pub(crate) fn button(placement: Placement, cx: &App) -> Option<impl IntoElement>
                 card(if error.is_some() {
                     "Download failed. Click to try again.".into()
                 } else {
-                    format!("Mira {version} is available. Click to download.")
+                    "Update available. Click to download.".into()
                 }),
                 error,
             )
@@ -253,10 +240,7 @@ pub(crate) fn button(placement: Placement, cx: &App) -> Option<impl IntoElement>
         ),
         Updates::Downloading { progress, .. } => (
             Button::icon("bar-update", Icon::Download, "Downloading update").progress(*progress),
-            card(format!(
-                "Downloading Mira {version}… {:.0}%",
-                progress * 100.0
-            )),
+            card(format!("Downloading… {:.0}%", progress * 100.0)),
         ),
         Updates::Ready { error, .. } => (
             Button::icon("bar-update", Icon::RotateCw, "Restart to update"),
@@ -264,14 +248,14 @@ pub(crate) fn button(placement: Placement, cx: &App) -> Option<impl IntoElement>
                 card(if error.is_some() {
                     "Install failed. Click to try again.".into()
                 } else {
-                    format!("Mira {version} is ready. Click to restart.")
+                    "Ready to install. Click to restart.".into()
                 }),
                 error,
             ),
         ),
         _ => (
             Button::icon("bar-update", Icon::RotateCw, "Restarting").busy(true),
-            card(format!("Installing Mira {version}…")),
+            card("Installing…".into()),
         ),
     };
     let button = button
@@ -389,11 +373,5 @@ mod tests {
         assert_eq!(notes.items.len(), NOTES);
         assert_eq!(notes.more, 2);
         assert!(notes.items.iter().all(|(_, text)| !text.contains("feat:")));
-        assert_eq!(
-            plain_notes(
-                "- **Sidebar.** Click to download.\n- Fixes a crash.\n<details>\n- feat: x\n"
-            ),
-            "• Sidebar. Click to download.\n• Fixes a crash."
-        );
     }
 }
