@@ -13,22 +13,26 @@ use objc2_foundation::{
 };
 use semver::Version;
 
-const APP: &str = "Mira.app";
+pub(super) const APP: &str = "Mira.app";
+pub(super) const ID: &str = "local.mira.app";
+
+pub(super) fn packaged() -> Option<PathBuf> {
+    let bundle = NSBundle::mainBundle();
+    (!cfg!(debug_assertions)
+        && bundle
+            .bundleIdentifier()
+            .is_some_and(|id| id.to_string() == ID))
+    .then(|| PathBuf::from(bundle.bundlePath().to_string()))
+}
+
+pub(super) fn translocated(app: &Path) -> bool {
+    app.components()
+        .any(|c| c.as_os_str() == "AppTranslocation")
+}
 
 pub(super) fn locate() -> Result<PathBuf, Option<String>> {
-    let bundle = NSBundle::mainBundle();
-    if cfg!(debug_assertions)
-        || bundle
-            .bundleIdentifier()
-            .is_none_or(|id| id.to_string() != "local.mira.app")
-    {
-        return Err(None);
-    }
-    let app = PathBuf::from(bundle.bundlePath().to_string());
-    if app
-        .components()
-        .any(|c| c.as_os_str() == "AppTranslocation")
-    {
+    let app = packaged().ok_or(None)?;
+    if translocated(&app) {
         return Err(Some("Move Mira to Applications to get updates.".into()));
     }
     let folder = app.parent().ok_or(None)?;
@@ -41,23 +45,23 @@ pub(super) fn locate() -> Result<PathBuf, Option<String>> {
     Ok(app)
 }
 
-fn writable(path: &Path) -> bool {
+pub(super) fn writable(path: &Path) -> bool {
     CString::new(path.as_os_str().as_bytes())
         .is_ok_and(|path| unsafe { libc::access(path.as_ptr(), libc::W_OK) } == 0)
 }
 
-fn url(path: &Path) -> objc2::rc::Retained<NSURL> {
+pub(super) fn url(path: &Path) -> objc2::rc::Retained<NSURL> {
     NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
 }
 
-fn file_error(error: objc2::rc::Retained<objc2_foundation::NSError>) -> anyhow::Error {
+pub(super) fn file_error(error: objc2::rc::Retained<objc2_foundation::NSError>) -> anyhow::Error {
     anyhow::anyhow!(error.localizedDescription().to_string())
 }
 
 #[derive(Clone)]
 pub(crate) struct Staged {
     pub(crate) version: Version,
-    target: PathBuf,
+    pub(super) target: PathBuf,
     dir: PathBuf,
 }
 
@@ -106,15 +110,7 @@ impl Staged {
     }
 
     pub(super) fn install(&self) -> Result<()> {
-        NSFileManager::defaultManager()
-            .replaceItemAtURL_withItemAtURL_backupItemName_options_resultingItemURL_error(
-                &url(&self.target),
-                &url(&self.dir.join(APP)),
-                None,
-                NSFileManagerItemReplacementOptions::empty(),
-                None,
-            )
-            .map_err(file_error)
+        replace(&self.target, &self.dir.join(APP))
             .with_context(|| format!("Couldn’t install Mira {}", self.version))?;
         self.discard();
         Ok(())
@@ -124,21 +120,6 @@ impl Staged {
         if let Err(error) = fs::remove_dir_all(&self.dir) {
             tracing::warn!(%error, dir = %self.dir.display(), "couldn't remove the update folder");
         }
-    }
-
-    pub(super) fn relaunch(&self) -> Result<()> {
-        Command::new("/bin/sh")
-            .arg("-c")
-            .arg(r#"while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; exec /usr/bin/open "$2""#)
-            .arg("sh")
-            .arg(std::process::id().to_string())
-            .arg(&self.target)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Couldn’t schedule Mira to reopen")?;
-        Ok(())
     }
 
     #[cfg(test)]
@@ -151,14 +132,42 @@ impl Staged {
     }
 }
 
-fn info(app: &Path, key: &str) -> Result<String> {
+pub(super) fn replace(target: &Path, with: &Path) -> Result<()> {
+    NSFileManager::defaultManager()
+        .replaceItemAtURL_withItemAtURL_backupItemName_options_resultingItemURL_error(
+            &url(target),
+            &url(with),
+            None,
+            NSFileManagerItemReplacementOptions::empty(),
+            None,
+        )
+        .map_err(file_error)?;
+    Ok(())
+}
+
+pub(super) fn reopen(app: &Path) -> Result<()> {
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; exec /usr/bin/open "$2""#)
+        .arg("sh")
+        .arg(std::process::id().to_string())
+        .arg(app)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("Couldn’t schedule Mira to reopen")?;
+    Ok(())
+}
+
+pub(super) fn info(app: &Path, key: &str) -> Result<String> {
     let output = run(Command::new("/usr/bin/plutil")
         .args(["-extract", key, "raw", "-o", "-"])
         .arg(app.join("Contents/Info.plist")))?;
     Ok(String::from_utf8(output)?.trim().to_owned())
 }
 
-fn run(command: &mut Command) -> Result<Vec<u8>> {
+pub(super) fn run(command: &mut Command) -> Result<Vec<u8>> {
     let output = command.stdin(Stdio::null()).output()?;
     if !output.status.success() {
         bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
@@ -180,7 +189,7 @@ mod tests {
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>local.mira.app</string>
+<key>CFBundleIdentifier</key><string>{ID}</string>
 <key>CFBundleShortVersionString</key><string>{version}</string>
 </dict></plist>"#
             ),
@@ -199,6 +208,16 @@ mod tests {
             .arg(&zip))
         .unwrap();
         zip
+    }
+
+    #[test]
+    fn the_packaging_script_stamps_the_id_mira_checks_for() {
+        let script = include_str!("../../scripts/bundle-app");
+        assert!(
+            script
+                .lines()
+                .any(|line| line == format!("identifier={ID}"))
+        );
     }
 
     #[test]
