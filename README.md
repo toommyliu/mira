@@ -6,11 +6,7 @@ Mira is a macOS desktop automation client for AdventureQuest Worlds, built with 
 
 On an Apple silicon Mac, run `pnpm install --frozen-lockfile`, then `scripts/package-app`. It builds the version in the root `Cargo.toml`, signs it ad hoc, and writes `Mira.dmg` and `Mira.zip` to `target/releases/<version>/`. You don't need an Apple Developer account.
 
-To ship a version, create a GitHub release in the repository named in `Cargo.toml`, tagged `v<version>`, attach both files, and mark it latest:
-
-```sh
-gh release create v<version> target/releases/<version>/Mira.dmg target/releases/<version>/Mira.zip --latest
-```
+To ship a version, follow Releasing in `AGENTS.md`: `pnpm release changes` lists the commits since the last release, and `pnpm release publish <version> --notes <file>` bumps the version, packages the app, and publishes both files with the condensed notes and the full changelog.
 
 People install from the DMG by dragging Mira to Applications. macOS asks them to approve it in Privacy & Security on the first launch.
 

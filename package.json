@@ -7,6 +7,7 @@
     "check:bridge": "node scripts/gen-bridge.ts --check",
     "update:gpui": "node scripts/update-gpui.ts",
     "check:gpui": "node scripts/update-gpui.ts --check",
+    "release": "node scripts/release.ts",
     "icons": "node scripts/sync-icons.ts",
     "build:runtime": "node scripts/build-runtime.ts --outdir target/mira-runtime",
     "docs": "pnpm --filter @mira/docs dev",
