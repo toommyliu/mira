@@ -234,6 +234,7 @@ struct Settings {
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
     skip_update_checks: bool,
+    separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
@@ -404,6 +405,10 @@ pub(crate) fn quit_shortcut(cx: &App) -> QuitShortcut {
 
 pub(crate) fn check_updates(cx: &App) -> bool {
     !cx.global::<Store>().settings.skip_update_checks
+}
+
+pub(crate) fn separate_aqw_settings(cx: &App) -> bool {
+    cx.global::<Store>().settings.separate_aqw_settings
 }
 
 pub(crate) fn sidebar(cx: &App) -> bool {
@@ -979,6 +984,21 @@ impl SettingsWindow {
                 )),
             ),
             Block::Section(
+                Section::titled("Client").row(Row::new(
+                    "Separate AQW settings",
+                    Some("Each account keeps its own in-game options and keybinds."),
+                    Switch::new(
+                        "separate-aqw-settings",
+                        "Separate AQW settings",
+                        settings.separate_aqw_settings,
+                    )
+                    .hide_label()
+                    .on_toggle(|on, _, cx| {
+                        change(cx, |settings| settings.separate_aqw_settings = on);
+                    }),
+                )),
+            ),
+            Block::Section(
                 Section::titled("Updates").row(Row::new(
                     "Check automatically",
                     Some("Look for new versions at launch and every 4 hours."),
@@ -1476,6 +1496,7 @@ mod tests {
         assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
         assert!(!Settings::default().sidebar);
         assert!(!Settings::default().skip_update_checks);
+        assert!(!Settings::default().separate_aqw_settings);
         let chosen = Settings {
             start: Start::Manager,
             quit_shortcut: QuitShortcut::DoublePress,
@@ -1494,6 +1515,7 @@ mod tests {
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
             skip_update_checks: true,
+            separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
@@ -1503,6 +1525,7 @@ mod tests {
         assert_eq!(saved["quitShortcut"], "doublePress");
         assert_eq!(saved["colors"]["dark"]["accent"], "#3B82F6");
         assert_eq!(saved["textSize"], 15);
+        assert_eq!(saved["separateAqwSettings"], true);
         assert_eq!(
             serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
                 .unwrap()
