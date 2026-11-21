@@ -21,7 +21,6 @@ use ruffle_core::{
     FloatDuration, Player, PlayerBuilder, StageScaleMode, backend::ui::MouseCursor,
     config::Letterbox, tag_utils::SwfMovie,
 };
-use ruffle_frontend_utils::backends::storage::DiskStorageBackend;
 
 use crate::{
     army::Armies,
@@ -45,7 +44,7 @@ use crate::{
     },
     scripting::{self, Calls, ToPlayer},
 };
-use backends::{Navigator, Tasks, Ui, spawn, spawn_local};
+use backends::{Navigator, Storage, Tasks, Ui, spawn, spawn_local};
 use context_menu::{ContextMenu, MenuSelection, OpenMenu, PlayerInput};
 pub(crate) use surface::Surface;
 use view::{Effect, ViewEvent};
@@ -274,9 +273,7 @@ fn run(
         .with_boxed_audio(backends::audio::audio())
         .with_external_interface(Box::new(bridge.clone()))
         .with_ui(Ui::new(arboard::Clipboard::new()?, outputs.clone()))
-        .with_storage(Box::new(DiskStorageBackend::new(
-            data.join("shared-objects"),
-        )))
+        .with_storage(Box::new(Storage::new(data.join("shared-objects"))))
         .with_viewport_dimensions(viewport.width(), viewport.height(), viewport.scale())
         .with_autoplay(true)
         .with_letterbox(Letterbox::On)
