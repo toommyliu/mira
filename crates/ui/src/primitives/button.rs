@@ -88,6 +88,7 @@ pub struct Button {
     expanded: Option<bool>,
     tooltip: Option<SharedString>,
     focus: Option<gpui::FocusHandle>,
+    invalid: bool,
     on_click: Option<ClickHandler>,
     on_press: Option<PressHandler>,
     on_key_down: Option<KeyHandler>,
@@ -118,6 +119,7 @@ impl Button {
             expanded: None,
             tooltip: None,
             focus: None,
+            invalid: false,
             on_click: None,
             on_press: None,
             on_key_down: None,
@@ -224,6 +226,11 @@ impl Button {
     pub(crate) fn combobox(mut self, value: Option<SharedString>) -> Self {
         self.role = Role::ComboBox;
         self.value = value;
+        self
+    }
+
+    pub(crate) fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
         self
     }
 
@@ -419,6 +426,9 @@ impl RenderOnce for Button {
                 button.aria_expanded(expanded)
             })
             .when(self.busy, |button| button.aria_description("Working"))
+            .when(self.invalid, |button| {
+                button.aria_description("Invalid value")
+            })
             .when(!self.disabled || focus.is_focused(window), |button| {
                 button.track_focus(&focus.clone().tab_stop(!self.disabled))
             })
@@ -468,7 +478,13 @@ impl RenderOnce for Button {
                     .inset_0()
                     .bg(bg)
                     .border_1()
-                    .border_color(if ring { focus_border } else { border })
+                    .border_color(if self.invalid {
+                        theme.invalid_border()
+                    } else if ring {
+                        focus_border
+                    } else {
+                        border
+                    })
                     .when(!inert, |face| {
                         face.group_hover(FACE_GROUP, |style| style.bg(hover))
                             .group_active(FACE_GROUP, |style| {
@@ -516,12 +532,18 @@ impl RenderOnce for Button {
                         .child(Spinner::new("busy").color(fg).size(icon_size)),
                 )
             })
-            .when(ring, |button| {
-                button.child(corners(
-                    theme.halo(halo, radius, Pixels::ZERO, px(2.0)),
-                    radius + px(2.0),
-                    self.joined,
-                ))
+            .when(ring || self.invalid, |button| {
+                let halo = if self.invalid {
+                    theme.invalid_halo()
+                } else {
+                    halo
+                };
+                let paint = if ring {
+                    theme.halo(halo, radius, Pixels::ZERO, px(2.0))
+                } else {
+                    theme.outline(halo, radius, Pixels::ZERO, px(2.0))
+                };
+                button.child(corners(paint, radius + px(2.0), self.joined))
             });
         button.style().refine(&self.style);
         match tip {
