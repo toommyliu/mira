@@ -1,6 +1,6 @@
 use gpui::{
-    App, Div, ElementId, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    App, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
@@ -53,7 +53,7 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
             | Updates::Available { error: Some(_), .. }
             | Updates::Ready { error: Some(_), .. }
     );
-    let action = match button(Placement::new(Side::Top, Align::Start), theme.sidebar, cx) {
+    let action = match button(Placement::new(Side::Top, Align::Start), cx) {
         Some(update) => update.into_any_element(),
         None => {
             let button = Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
@@ -152,7 +152,7 @@ fn with_notes(card: HoverCard, text: &str) -> HoverCard {
     }
 }
 
-pub(crate) fn dot(behind: Hsla, cx: &App) -> Option<Div> {
+pub(crate) fn dot(cx: &App) -> Option<Div> {
     let theme = cx.theme();
     let color = match cx.try_global::<Updates>()? {
         Updates::Available { error: None, .. } => theme.foreground,
@@ -164,17 +164,15 @@ pub(crate) fn dot(behind: Hsla, cx: &App) -> Option<Div> {
     Some(
         div()
             .absolute()
-            .top(px(1.0))
-            .right(px(1.0))
-            .size(px(10.0))
+            .top(px(3.0))
+            .right(px(3.0))
+            .size(px(6.0))
             .rounded_full()
-            .border_2()
-            .border_color(behind)
             .bg(color),
     )
 }
 
-fn ready_badge(behind: Hsla, cx: &App) -> Option<Div> {
+fn ready_badge(cx: &App) -> Option<Div> {
     let theme = cx.theme();
     matches!(
         cx.try_global::<Updates>(),
@@ -183,21 +181,19 @@ fn ready_badge(behind: Hsla, cx: &App) -> Option<Div> {
     .then(|| {
         div()
             .absolute()
-            .right(px(-1.0))
-            .bottom(px(-1.0))
-            .size(px(14.0))
+            .right(px(1.0))
+            .bottom(px(1.0))
+            .size(px(10.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded_full()
-            .border_2()
-            .border_color(behind)
             .bg(theme.foreground)
             .child(icon(Icon::Check, theme.background).size(px(8.0)))
     })
 }
 
-pub(crate) fn button(placement: Placement, behind: Hsla, cx: &App) -> Option<impl IntoElement> {
+pub(crate) fn button(placement: Placement, cx: &App) -> Option<impl IntoElement> {
     let state = cx.try_global::<Updates>()?;
     let version = state.version()?;
     let card = |title: String| {
@@ -263,7 +259,7 @@ pub(crate) fn button(placement: Placement, behind: Hsla, cx: &App) -> Option<imp
         .size(Size::Small)
         .icon_size(px(14.0))
         .hide_tooltip();
-    let dot = dot(behind, cx).or_else(|| ready_badge(behind, cx));
+    let dot = dot(cx).or_else(|| ready_badge(cx));
     let button = match state {
         Updates::Ready { .. } => Restart::new("bar-restart", button).into_any_element(),
         _ => button.into_any_element(),
