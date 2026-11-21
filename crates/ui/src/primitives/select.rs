@@ -76,6 +76,7 @@ pub struct Select {
     placement: Placement,
     default_open: bool,
     disabled: bool,
+    invalid: bool,
     small: bool,
     on_select: Option<IndexHandler>,
 }
@@ -97,6 +98,7 @@ impl Select {
             placement: Placement::new(Side::Bottom, Align::Center),
             default_open: false,
             disabled: false,
+            invalid: false,
             small: false,
             on_select: None,
         }
@@ -142,6 +144,11 @@ impl Select {
         self
     }
 
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
@@ -162,6 +169,7 @@ impl RenderOnce for Select {
             .combobox(value.clone())
             .when(self.small, |button| button.size(super::button::Size::Small))
             .disabled(self.disabled)
+            .invalid(self.invalid)
             .end_slot(div().text_color(muted).child(Icon::ChevronDown))
             .child(
                 div()
