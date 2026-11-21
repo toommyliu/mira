@@ -967,3 +967,200 @@ fn snapshot_an_update_in_the_sidebar() {
         },
     );
 }
+
+#[test]
+fn snapshot_stress() {
+    let now = Instant::now();
+    let minutes = |count: u64| now - Duration::from_secs(count * 60);
+    let long_script = "legion-revenant-fealty-and-exalted-crown-farm.ts";
+    let playing = |class: &str, area: &str, script: Option<ScriptState>| {
+        Presence::Open(Summary {
+            login: Login::Online,
+            place: Some(Place {
+                server: Some("Swordhaven (EU)".into()),
+                area: Some(area.to_owned().into()),
+                cell: Some("Enter".into()),
+            }),
+            character: Some(Character {
+                level: Some(100),
+                class: Some(class.to_owned().into()),
+            }),
+            script,
+        })
+    };
+    let state = |phase, at| Some(ended(long_script, phase, at));
+    let states: Vec<(&str, &str, Presence)> = vec![
+        (
+            "The Legendary Hero Of Battleon And Beyond",
+            "legendaryhero",
+            playing(
+                "Chrono ShadowSlayer of the Eternal Void",
+                "tercessuinotlim-99999",
+                state(ScriptPhase::Running, minutes(60 * 27)),
+            ),
+        ),
+        (
+            "xXx_SuperLongUsernameWithoutAnySpaces_xXx",
+            "xxxsuper",
+            playing(
+                "Legion Revenant",
+                "battleon",
+                state(
+                    ScriptPhase::Failed(
+                        "couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into(),
+                    ),
+                    minutes(1),
+                ),
+            ),
+        ),
+        (
+            "a",
+            "a",
+            playing("Rogue", "battleon", state(ScriptPhase::NeedsInput, minutes(8))),
+        ),
+        (
+            "Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+            "wide",
+            Presence::Waiting {
+                place: 128,
+                script: Some(script(long_script)),
+                open: None,
+            },
+        ),
+        (
+            "needs a server",
+            "needsserver",
+            signing_in(Login::ChooseServer),
+        ),
+        (
+            "Another Extremely Long Display Name Here",
+            "anotherlong",
+            signing_in(Login::Failed(
+                "login didn't reach server selection after three attempts and the session expired".into(),
+            )),
+        ),
+        (
+            "finished long ago",
+            "finishedlong",
+            Presence::Closed(state(ScriptPhase::Finished, minutes(60 * 24 * 12))),
+        ),
+        (
+            "stopping one",
+            "stoppingone",
+            playing("ArchPaladin", "battleon", state(ScriptPhase::Stopping, minutes(14))),
+        ),
+        ("disconnected one", "disconnectedone", signing_in(Login::Disconnected)),
+        ("loading", "loadingone", signing_in(Login::Loading(Some(100)))),
+    ];
+    let dir = std::env::temp_dir().join(format!("mira-manager-stress-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("accounts.json");
+    let accounts: Vec<_> = states
+        .iter()
+        .map(|(name, username, _)| {
+            serde_json::json!({ "name": name, "username": username, "password": "x", "server": "Swordhaven (EU)" })
+        })
+        .collect();
+    let members: Vec<_> = states
+        .iter()
+        .map(|(_, username, _)| serde_json::json!({ "username": username }))
+        .collect();
+    let long_setup = "Daily quests, weekly bosses and the seasonal event farm";
+    let mut setups = vec![
+        serde_json::json!({ "name": long_setup, "script": script(long_script), "members": members }),
+        serde_json::json!({ "name": "No script", "members": [] }),
+    ];
+    for index in 0..14 {
+        setups.push(serde_json::json!({
+            "name": format!("Setup {index}"),
+            "script": script("daily.ts"),
+            "members": [{ "username": "a" }],
+        }));
+    }
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({ "accounts": accounts, "setups": setups })).unwrap(),
+    )
+    .unwrap();
+    type Act = fn(&mut Manager, &mut Window, &mut Context<Manager>);
+    let cases: [(&str, (f32, f32), Option<&str>, Act); 7] = [
+        (
+            "stress-manager-setup",
+            (1000.0, 600.0),
+            Some(long_setup),
+            |_, _, _| {},
+        ),
+        (
+            "stress-manager-setup-min",
+            (720.0, 420.0),
+            Some(long_setup),
+            |_, _, _| {},
+        ),
+        ("stress-manager-all-min", (720.0, 420.0), None, |_, _, _| {}),
+        (
+            "stress-manager-selected-min",
+            (720.0, 420.0),
+            Some(long_setup),
+            |manager, _, _| {
+                manager
+                    .checked
+                    .extend(["legendaryhero", "xxxsuper", "a", "wide"].map(id));
+            },
+        ),
+        (
+            "stress-manager-edit-min",
+            (720.0, 420.0),
+            Some(long_setup),
+            |manager, window, cx| {
+                manager.edit_setup(
+                    "Daily quests, weekly bosses and the seasonal event farm",
+                    window,
+                    cx,
+                )
+            },
+        ),
+        (
+            "stress-manager-empty-setup",
+            (720.0, 420.0),
+            Some("No script"),
+            |_, _, _| {},
+        ),
+        (
+            "stress-manager-search-none",
+            (720.0, 420.0),
+            None,
+            |manager, _, cx| {
+                manager
+                    .search
+                    .update(cx, |search, cx| search.set_text("zzzz", cx));
+            },
+        ),
+    ];
+    for (name, (w, h), view, act) in cases {
+        let view = view.map(str::to_owned);
+        for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
+            crate::settings::init(dir.join("settings.json"), |_| {}, cx);
+            let presences = states
+                .iter()
+                .map(|(_, username, presence)| (id(username), presence.clone()))
+                .collect();
+            cx.new(|cx| {
+                let mut manager =
+                    Manager::new(path.clone(), HeaderValue::from_static("test"), window, cx);
+                manager.fake = Some(Fake {
+                    presences,
+                    finished: HashMap::new(),
+                });
+                cx.global_mut::<Runs>().start(long_setup, minutes(60 * 30));
+                if let Some(view) = &view {
+                    manager.view = View::Setup(view.clone());
+                }
+                act(&mut manager, window, cx);
+                manager
+            })
+        }) {
+            assert!(written.exists());
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

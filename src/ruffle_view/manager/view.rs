@@ -56,6 +56,7 @@ const SERVER_MENU_WIDTH: gpui::Pixels = px(360.0);
 const BAR_ROOM: gpui::Pixels = px(64.0);
 const NARROW_BAR: gpui::Pixels = px(640.0);
 const COMPACT_HEADER: gpui::Pixels = px(760.0);
+const START_MIN_WIDTH: gpui::Pixels = px(112.0);
 const QUICK_ACTION_ROOM: gpui::Pixels = px(44.0);
 
 fn mood_color(theme: &Theme, mood: Mood) -> Hsla {
@@ -493,7 +494,7 @@ impl Manager {
             let tab = Tab::new(row.name.clone())
                 .description(description)
                 .child(label(row.name.clone(), &row.statuses))
-                .child(caption)
+                .detail(caption)
                 .end_slot(count(row.statuses.len()))
                 .menu(move |_, _| setup_menu(&this, &menu_name));
             match &row.script {
@@ -710,9 +711,18 @@ impl Manager {
             .child(
                 self.header_row(theme)
                     .child(
-                        h_flex().flex_1().min_w_0().overflow_hidden().children(
-                            self.filter_buttons(theme, &RUN_FILTERS, statuses, compact, cx),
-                        ),
+                        h_flex()
+                            .flex_grow(1.0)
+                            .flex_shrink(1.0)
+                            .min_w_0()
+                            .overflow_hidden()
+                            .children(self.filter_buttons(
+                                theme,
+                                &RUN_FILTERS,
+                                statuses,
+                                compact,
+                                cx,
+                            )),
                     )
                     .child(
                         Button::new("edit-setup", "Edit")
@@ -859,11 +869,15 @@ impl Manager {
         };
         let setup_name = setup.name.clone();
         h_flex()
+            .min_w_0()
+            .flex_shrink(1000.0)
             .child(
                 Button::new("start-setup", label)
                     .variant(Variant::Primary)
                     .size(Size::Small)
                     .joined(Joined::Next)
+                    .flex_shrink(1.0)
+                    .min_w(START_MIN_WIDTH)
                     .tooltip(tooltip)
                     .disabled(empty)
                     .end_slot(
@@ -912,6 +926,8 @@ impl Manager {
                 )
                 .variant(Variant::Outline)
                 .size(Size::Small)
+                .flex_shrink(1.0)
+                .min_w_0()
                 .when_some(setup.script.as_deref(), |button, script| {
                     button.tooltip(home_relative(script))
                 })
@@ -1001,6 +1017,8 @@ impl Manager {
                             }))
                             .child(
                                 v_flex()
+                                    .min_w_0()
+                                    .max_w_full()
                                     .gap(layout.space(1.0))
                                     .child(label("Script"))
                                     .child(script_menu),
@@ -1090,12 +1108,14 @@ impl Manager {
         let badge = if card.state.as_ref() == card.status.label() {
             badge.into_any_element()
         } else {
-            Tooltip::new(
-                SharedString::from(format!("card-state-{}", account.username)),
-                card.state.clone(),
-                badge,
-            )
-            .into_any_element()
+            div()
+                .flex_none()
+                .child(Tooltip::new(
+                    SharedString::from(format!("card-state-{}", account.username)),
+                    card.state.clone(),
+                    badge,
+                ))
+                .into_any_element()
         };
         let row = |glyph: Icon, label: &'static str, body: AnyElement| {
             h_flex()

@@ -67,7 +67,7 @@ impl RenderOnce for Field {
             .line_height(typography.body_line)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.foreground)
-            .child(self.label)
+            .child(div().flex_1().min_w_0().child(self.label))
             .children(self.end);
         div()
             .flex()
