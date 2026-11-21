@@ -37,6 +37,7 @@ use crate::{
     script_inputs,
     scripting::Values,
     settings,
+    shared_objects::SharedObjects,
 };
 
 actions!(
@@ -541,8 +542,14 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Entity<RuffleView>> {
+        let shared_objects = cx.global::<SharedObjects>();
+        let storage = match account.filter(|_| settings::separate_aqw_settings(cx)) {
+            Some(account) => shared_objects.account(&account.id())?,
+            None => shared_objects.shared(),
+        };
         let view = RuffleView::new(
             self.data.clone(),
+            storage,
             self.device.clone(),
             self.armies.clone(),
             Rc::clone(&self.extras),

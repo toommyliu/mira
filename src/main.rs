@@ -22,6 +22,7 @@ mod script_inputs;
 mod scripting;
 mod settings;
 mod setups;
+mod shared_objects;
 mod shortcuts;
 #[cfg(any(test, feature = "storyboard"))]
 mod storyboard;
@@ -87,6 +88,7 @@ fn main() -> anyhow::Result<()> {
             .detach();
             app_menu::set_menus(cx);
             let accounts = data.join("accounts.json");
+            shared_objects::init(data.join("shared-objects"), &accounts, cx);
             ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
             ruffle_view::open_launch_window(cx);
             if cx.windows().is_empty() {

@@ -136,6 +136,7 @@ impl Runtime {
     pub(crate) fn spawn(
         surface: Surface,
         data: PathBuf,
+        storage: PathBuf,
         device: reqwest::header::HeaderValue,
         failures: async_channel::Sender<String>,
         outputs: async_channel::Sender<Output>,
@@ -158,6 +159,7 @@ impl Runtime {
                 if let Err(error) = run(
                     surface,
                     data,
+                    storage,
                     device,
                     rx,
                     outbox,
@@ -223,6 +225,7 @@ impl Drop for Runtime {
 fn run(
     surface: Surface,
     data: PathBuf,
+    storage: PathBuf,
     device: reqwest::header::HeaderValue,
     rx: mpsc::Receiver<Msg>,
     inbox: Inbox,
@@ -273,7 +276,7 @@ fn run(
         .with_boxed_audio(backends::audio::audio())
         .with_external_interface(Box::new(bridge.clone()))
         .with_ui(Ui::new(arboard::Clipboard::new()?, outputs.clone()))
-        .with_storage(Box::new(Storage::new(data.join("shared-objects"))))
+        .with_storage(Box::new(Storage::new(storage)))
         .with_viewport_dimensions(viewport.width(), viewport.height(), viewport.scale())
         .with_autoplay(true)
         .with_letterbox(Letterbox::On)
