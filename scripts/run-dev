@@ -4,7 +4,22 @@ case $1 in
 */mira) ;;
 *) exec "$@" ;;
 esac
-app="$(dirname "$1")/Mira (Dev).app"
-"$(dirname "$0")/bundle-app" --dev "$1" "$app" "$CARGO_PKG_VERSION"
+scripts=$(cd "$(dirname "$0")" && pwd)
+app="$(cd "$(dirname "$1")" && pwd)/Mira (Dev).app"
+"$scripts/bundle-app" --dev "$1" "$app" "$CARGO_PKG_VERSION"
+runner="$app/Contents/Resources/skua"
+built="$app/Contents/skua-built"
+if [ ! -e "$built" ] || [ -n "$(find "$scripts/../skua" \( -name bin -o -name obj -o -name .git \) -prune -o -type f -newer "$built" -print | head -n 1)" ]; then
+    dotnet=$(command -v dotnet || "${SHELL:-/bin/zsh}" -lic 'command -v dotnet' 2>/dev/null | tail -n 1)
+    if [ -x "$dotnet" ]; then
+        if PATH="$(dirname "$dotnet"):$PATH" "$scripts/build-skua" "$runner"; then
+            touch "$built"
+        else
+            printf "Couldn't build the Skua runner. Skua scripts use the last one built.\n" >&2
+        fi
+    else
+        printf "dotnet isn't installed, so this build can't run Skua scripts.\n" >&2
+    fi
+fi
 shift
 exec "$app/Contents/MacOS/mira" "$@"
