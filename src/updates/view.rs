@@ -1,12 +1,12 @@
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
+    App, Div, ElementId, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
     RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
-    ActiveTheme as _, StyledExt as _, h_flex,
+    ActiveTheme as _, StyledExt as _, Tone, h_flex,
     primitives::{
-        Button, Dialog, Icon, Spinner,
+        Align, Button, Dialog, HoverCard, Icon, Placement, Side,
         button::{Size, Variant},
         icon,
     },
@@ -33,61 +33,27 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let fallback = Updates::Unavailable(None);
     let state = cx.try_global::<Updates>().unwrap_or(&fallback);
-    let status = match state {
-        Updates::Current => Some("Up to date".into()),
-        Updates::Available { update, .. } => Some(format!("{} available", update.version)),
-        Updates::Downloading { progress, .. } => Some(format!("{:.0}%", progress * 100.0)),
-        _ => None,
-    };
-    let failed = matches!(
-        state,
-        Updates::Failed(_)
-            | Updates::Available { error: Some(_), .. }
-            | Updates::Ready { error: Some(_), .. }
-    );
-    let check = |tooltip: Option<SharedString>| {
-        let button = Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
-            .variant(Variant::Ghost)
-            .size(Size::Small)
-            .on_click(|_, _, cx| Updates::check(true, cx));
-        match tooltip {
-            Some(tooltip) => button.tooltip(tooltip),
-            None => button.hide_tooltip(),
+    let status = matches!(state, Updates::Current).then_some("Up to date");
+    let failed = matches!(state, Updates::Failed(_));
+    let action = match button(Placement::new(Side::Top, Align::Start), theme.sidebar, cx) {
+        Some(update) => update.into_any_element(),
+        None => {
+            let button = Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .icon_size(px(14.0))
+                .busy(matches!(state, Updates::Checking))
+                .disabled(matches!(state, Updates::Unavailable(_)))
+                .on_click(|_, _, cx| Updates::check(true, cx));
+            match state {
+                Updates::Unavailable(None) => button.hide_tooltip(),
+                Updates::Unavailable(Some(reason)) => button.tooltip(reason.clone()),
+                Updates::Failed(error) => button.tooltip(retry(error)),
+                Updates::Checking => button.tooltip("Checking for updates…"),
+                _ => button.tooltip("Check for updates"),
+            }
+            .into_any_element()
         }
-    };
-    let download = Button::icon("download-update", Icon::Download, "Download update")
-        .variant(Variant::Ghost)
-        .size(Size::Small);
-    let restart = Button::new("restart-to-update", "Restart to update").size(Size::XSmall);
-    let action: AnyElement = match state {
-        Updates::Unavailable(reason) => check(reason.clone()).disabled(true).into_any_element(),
-        Updates::Idle | Updates::Current => {
-            check(Some("Check for updates".into())).into_any_element()
-        }
-        Updates::Checking => check(Some("Checking for updates…".into()))
-            .busy(true)
-            .into_any_element(),
-        Updates::Failed(error) => check(Some(retry(error))).into_any_element(),
-        Updates::Available { update, error } => download
-            .tooltip(match error {
-                Some(error) => retry(error),
-                None => format!("Download Mira {}", update.version).into(),
-            })
-            .on_click(|_, _, cx| Updates::download(cx))
-            .into_any_element(),
-        Updates::Downloading { version, progress } => download
-            .tooltip(format!("Downloading Mira {version}…"))
-            .progress(*progress)
-            .into_any_element(),
-        Updates::Ready { staged, error } => Restart::new(
-            "settings-restart",
-            restart.tooltip(match error {
-                Some(error) => retry(error),
-                None => format!("Restart to install Mira {}", staged.version).into(),
-            }),
-        )
-        .into_any_element(),
-        Updates::Restarting(_) => restart.busy(true).into_any_element(),
     };
     h_flex()
         .debug_selector(|| "settings-update-footer".into())
@@ -110,60 +76,161 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
         .child(action)
 }
 
-pub(crate) fn sidebar_row(cx: &App) -> Option<impl IntoElement> {
+const NOTES: usize = 8;
+
+fn with_notes(mut card: HoverCard, notes: &str) -> HoverCard {
+    let mut paragraph = Vec::new();
+    let mut items = 0;
+    for line in notes.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) else {
+            paragraph.push(line);
+            continue;
+        };
+        items += 1;
+        if items > NOTES {
+            continue;
+        }
+        card = match item
+            .strip_prefix("**")
+            .and_then(|rest| rest.split_once("**"))
+        {
+            Some((lead, text)) => card.note(Some(lead.to_owned().into()), text.trim().to_owned()),
+            None => card.note(None, item.to_owned()),
+        };
+    }
+    if items > NOTES {
+        card = card.note(None, format!("and {} more", items - NOTES));
+    }
+    match paragraph.is_empty() {
+        true => card,
+        false => card.body(paragraph.join(" ")),
+    }
+}
+
+pub(crate) fn dot(behind: Hsla, cx: &App) -> Option<Div> {
     let theme = cx.theme();
+    let color = match cx.try_global::<Updates>()? {
+        Updates::Available { error: None, .. } => theme.foreground,
+        Updates::Available { error: Some(_), .. } | Updates::Ready { error: Some(_), .. } => {
+            theme.warning
+        }
+        _ => return None,
+    };
+    Some(
+        div()
+            .absolute()
+            .top(px(1.0))
+            .right(px(1.0))
+            .size(px(10.0))
+            .rounded_full()
+            .border_2()
+            .border_color(behind)
+            .bg(color),
+    )
+}
+
+fn ready_badge(behind: Hsla, cx: &App) -> Option<Div> {
+    let theme = cx.theme();
+    matches!(
+        cx.try_global::<Updates>(),
+        Some(Updates::Ready { error: None, .. })
+    )
+    .then(|| {
+        div()
+            .absolute()
+            .right(px(-1.0))
+            .bottom(px(-1.0))
+            .size(px(14.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_2()
+            .border_color(behind)
+            .bg(theme.foreground)
+            .child(icon(Icon::Check, theme.background).size(px(8.0)))
+    })
+}
+
+pub(crate) fn button(placement: Placement, behind: Hsla, cx: &App) -> Option<impl IntoElement> {
     let state = cx.try_global::<Updates>()?;
-    let version = state.version()?.to_string();
-    let muted = theme.muted_foreground;
-    let (label, error) = match state {
-        Updates::Available { error, .. } => ("Update available", error.clone()),
-        Updates::Downloading { .. } => ("Downloading…", None),
-        Updates::Ready { error, .. } => ("Restart to update", error.clone()),
-        _ => ("Restarting…", None),
+    let version = state.version()?;
+    let card = |title: String| {
+        let card = HoverCard::new("update-card", title)
+            .placement(placement)
+            .row(
+                "Version",
+                format!("{} → {version}", env!("CARGO_PKG_VERSION")),
+                Tone::Neutral,
+            );
+        match state.update().and_then(|update| update.notes.as_deref()) {
+            Some(notes) => with_notes(card, notes),
+            None => card,
+        }
     };
-    let mark = match state {
-        Updates::Downloading { progress, .. } => Spinner::new("update-progress")
-            .label("Downloading update")
-            .color(muted)
-            .size(px(16.0))
-            .value(Some(*progress))
-            .into_any_element(),
-        Updates::Restarting(_) => Spinner::new("update-restarting")
-            .label("Restarting")
-            .color(muted)
-            .size(px(16.0))
-            .into_any_element(),
-        _ if error.is_some() => icon(Icon::TriangleAlert, theme.warning)
-            .size(px(14.0))
-            .into_any_element(),
-        _ => icon(Icon::Download, muted)
-            .size(px(14.0))
-            .into_any_element(),
+    let with_error = |card: HoverCard, error: &Option<SharedString>| match error {
+        Some(error) => card.row("Error", error.clone(), Tone::Attention),
+        None => card,
     };
-    let button = Button::new("sidebar-update", label)
+    let (button, card) = match state {
+        Updates::Available { update, error } => (
+            Button::icon("bar-update", Icon::Download, "Download update")
+                .on_click(|_, _, cx| Updates::download(cx)),
+            with_error(
+                card(if error.is_some() {
+                    "Download failed. Click to try again.".into()
+                } else {
+                    format!("Mira {version} is available. Click to download.")
+                }),
+                error,
+            )
+            .row(
+                "Size",
+                format!("{:.1} MB", update.size() as f64 / 1e6),
+                Tone::Neutral,
+            ),
+        ),
+        Updates::Downloading { progress, .. } => (
+            Button::icon("bar-update", Icon::Download, "Downloading update").progress(*progress),
+            card(format!(
+                "Downloading Mira {version}… {:.0}%",
+                progress * 100.0
+            )),
+        ),
+        Updates::Ready { error, .. } => (
+            Button::icon("bar-update", Icon::RotateCw, "Restart to update"),
+            with_error(
+                card(if error.is_some() {
+                    "Install failed. Click to try again.".into()
+                } else {
+                    format!("Mira {version} is ready. Click to restart.")
+                }),
+                error,
+            ),
+        ),
+        _ => (
+            Button::icon("bar-update", Icon::RotateCw, "Restarting").busy(true),
+            card(format!("Installing Mira {version}…")),
+        ),
+    };
+    let button = button
         .variant(Variant::Ghost)
-        .w_full()
-        .child(
-            h_flex()
-                .flex_1()
-                .justify_between()
-                .child(h_flex().gap(theme.space(2.0)).child(mark).child(label))
-                .child(div().text_color(muted).child(version.clone())),
-        );
-    let tooltip = |fallback: String| error.as_ref().map_or(fallback.into(), retry);
-    let row = match state {
-        Updates::Available { .. } => button
-            .tooltip(tooltip(format!("Download Mira {version}")))
-            .on_click(|_, _, cx| Updates::download(cx))
-            .into_any_element(),
-        Updates::Ready { .. } => Restart::new(
-            "sidebar-restart",
-            button.tooltip(tooltip(format!("Restart to install Mira {version}"))),
-        )
-        .into_any_element(),
-        _ => button.disabled(true).into_any_element(),
+        .size(Size::Small)
+        .icon_size(px(14.0))
+        .hide_tooltip();
+    let dot = dot(behind, cx).or_else(|| ready_badge(behind, cx));
+    let button = match state {
+        Updates::Ready { .. } => Restart::new("bar-restart", button).into_any_element(),
+        _ => button.into_any_element(),
     };
-    Some(div().debug_selector(|| "sidebar-update".into()).child(row))
+    Some(
+        div()
+            .debug_selector(|| "bar-update".into())
+            .relative()
+            .flex_none()
+            .child(card.child(button))
+            .children(dot),
+    )
 }
 
 #[derive(IntoElement)]

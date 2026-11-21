@@ -68,6 +68,47 @@ impl Size {
         })
     }
 }
+fn progress_ring(
+    bounds: gpui::Bounds<Pixels>,
+    fraction: f32,
+    color: gpui::Hsla,
+    window: &mut Window,
+) {
+    let side = bounds.size.width.min(bounds.size.height);
+    let stroke = px(1.5);
+    let radius = side * (14.0 / 32.0);
+    let center = bounds.center();
+    let at = |turn: f32| {
+        let angle = (turn * 360.0 - 90.0).to_radians();
+        gpui::point(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        )
+    };
+    let radii = gpui::point(radius, radius);
+    let circle = |path: &mut gpui::PathBuilder, until: f32| {
+        path.move_to(at(0.0));
+        if until >= 1.0 {
+            path.arc_to(radii, px(0.0), false, true, at(0.5));
+            path.arc_to(radii, px(0.0), false, true, at(1.0));
+        } else {
+            path.arc_to(radii, px(0.0), until > 0.5, true, at(until));
+        }
+    };
+    let mut track = gpui::PathBuilder::stroke(stroke);
+    circle(&mut track, 1.0);
+    if let Ok(track) = track.build() {
+        window.paint_path(track, color.opacity(0.22));
+    }
+    if fraction > 0.0 {
+        let mut fill = gpui::PathBuilder::stroke(stroke);
+        circle(&mut fill, fraction);
+        if let Ok(fill) = fill.build() {
+            window.paint_path(fill, color);
+        }
+    }
+}
+
 pub(crate) type PressHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 pub(crate) type KeyHandler = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
 
@@ -392,7 +433,9 @@ impl RenderOnce for Button {
             .when(nudge, |content| {
                 content.group_active(FACE_GROUP, |style| style.top(px(1.0)))
             })
-            .when(self.busy, |content| content.opacity(0.0))
+            .when(self.busy && self.progress.is_none(), |content| {
+                content.opacity(0.0)
+            })
             .when_some(self.start, |content, start| {
                 content.child(h_flex().flex_none().child(start))
             })
@@ -529,7 +572,23 @@ impl RenderOnce for Button {
             )
             .child(content)
             .children(self.attachments)
-            .when(self.busy, |button| {
+            .when_some(self.progress, |button, value| {
+                let shown = crate::motion::travel(
+                    (self.id.clone(), "progress"),
+                    value.clamp(0.0, 1.0),
+                    window,
+                    cx,
+                );
+                button.child(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| progress_ring(bounds, shown, fg, window),
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            })
+            .when(self.busy && self.progress.is_none(), |button| {
                 button.child(
                     div()
                         .absolute()
@@ -537,12 +596,7 @@ impl RenderOnce for Button {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
-                            Spinner::new("busy")
-                                .color(fg)
-                                .size(icon_size * (4.0 / 3.0))
-                                .value(self.progress),
-                        ),
+                        .child(Spinner::new("busy").color(fg).size(icon_size * (4.0 / 3.0))),
                 )
             })
             .when(ring || self.invalid, |button| {

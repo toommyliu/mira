@@ -1,7 +1,7 @@
 use gpui::{
-    AnyElement, App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, Stateful, Styled as _, TextRun, Window, div,
-    px,
+    AnyElement, App, Div, ElementId, FontWeight, HighlightStyle, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement, Pixels, RenderOnce, SharedString, Stateful, Styled as _,
+    StyledText, TextRun, Window, div, px,
 };
 
 const LABEL_MIN: Pixels = px(44.0);
@@ -17,6 +17,8 @@ enum Value {
 pub(super) struct Card {
     title: SharedString,
     rows: Vec<(SharedString, Value)>,
+    body: Option<SharedString>,
+    notes: Vec<(Option<SharedString>, SharedString)>,
 }
 
 #[derive(IntoElement)]
@@ -34,6 +36,8 @@ impl HoverCard {
             card: Card {
                 title: title.into(),
                 rows: Vec::new(),
+                body: None,
+                notes: Vec::new(),
             },
             children: Vec::new(),
             placement: super::Placement::new(super::Side::Bottom, super::Align::Center),
@@ -65,6 +69,16 @@ impl HoverCard {
         self.card
             .rows
             .push((label.into(), Value::Path(path.into())));
+        self
+    }
+
+    pub fn body(mut self, body: impl Into<SharedString>) -> Self {
+        self.card.body = Some(body.into());
+        self
+    }
+
+    pub fn note(mut self, lead: Option<SharedString>, text: impl Into<SharedString>) -> Self {
+        self.card.notes.push((lead, text.into()));
         self
     }
 
@@ -171,5 +185,39 @@ pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::
                         .child(label),
                 )
                 .child(cell)
+        }))
+        .children(card.body.map(|body| {
+            div()
+                .mt(layout.space(0.5))
+                .line_clamp(12)
+                .text_ellipsis()
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
+                .text_color(theme.muted_foreground)
+                .child(body)
+        }))
+        .children(card.notes.into_iter().map(|(lead, text)| {
+            let (line, bold) = match lead {
+                Some(lead) => (format!("{lead} {text}"), lead.len()),
+                None => (text.to_string(), 0),
+            };
+            let lead = HighlightStyle {
+                font_weight: Some(FontWeight::MEDIUM),
+                color: Some(theme.foreground),
+                ..Default::default()
+            };
+            div()
+                .flex()
+                .gap(layout.space(2.0))
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
+                .text_color(theme.muted_foreground)
+                .child(div().flex_none().child("•"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(StyledText::new(line).with_highlights([(0..bold, lead)])),
+                )
         }))
 }
