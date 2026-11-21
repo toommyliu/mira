@@ -63,6 +63,7 @@ impl RenderOnce for Disclosure {
         };
         let toggle = self.on_toggle;
         let chevron = if self.caption { px(12.0) } else { px(14.0) };
+        let inset = theme.space(1.0);
         h_flex()
             .id(self.id)
             .role(Role::Button)
@@ -73,6 +74,8 @@ impl RenderOnce for Disclosure {
             .flex_none()
             .gap(theme.space(1.0))
             .h(theme.layout.control_sm)
+            .px(inset)
+            .mx(-inset)
             .rounded(theme.radius.tag)
             .text_color(ink)
             .on_hover(move |inside, _, cx| {
