@@ -147,7 +147,7 @@ impl RuffleView {
             native.supports_display_frames(),
         )?;
         let inbox = session.inbox();
-        native.connect_frames(move || inbox.request_frame());
+        native.connect_frames(move |shown_at| inbox.request_frame(shown_at));
         let inbox = session.inbox();
         native
             .connect_visibility(move |visible| inbox.post(Msg::View(ViewEvent::Visible(visible))));

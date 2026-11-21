@@ -12,11 +12,7 @@ use std::{
     num::NonZeroU32,
     path::PathBuf,
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -117,7 +113,7 @@ pub(crate) enum Command {
 #[derive(Clone)]
 pub(crate) struct Inbox {
     messages: mpsc::Sender<Msg>,
-    frame_pending: Arc<AtomicBool>,
+    shown_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Inbox {
@@ -125,8 +121,8 @@ impl Inbox {
         let _ = self.messages.send(msg);
     }
 
-    pub(crate) fn request_frame(&self) {
-        if !self.frame_pending.swap(true, Ordering::Relaxed) {
+    pub(crate) fn request_frame(&self, shown_at: Instant) {
+        if self.shown_at.lock().unwrap().replace(shown_at).is_none() {
             self.post(Msg::Frame);
         }
     }
@@ -154,7 +150,7 @@ impl Runtime {
         let (tx, rx) = mpsc::channel();
         let inbox = Inbox {
             messages: tx,
-            frame_pending: Arc::new(AtomicBool::new(false)),
+            shown_at: Arc::default(),
         };
         let outbox = inbox.clone();
         let thread = thread::Builder::new()
@@ -511,7 +507,7 @@ fn run(
     }
     let mut signing_in = None;
     'running: loop {
-        let mut frame_due = false;
+        let mut frame_shown_at = None;
         let deadline = Instant::now() + wait;
         let message = match rx.recv_timeout(wait) {
             Ok(msg) => Some(msg),
@@ -600,10 +596,7 @@ fn run(
                         command,
                     ),
                 ),
-                Some(Msg::Frame) => {
-                    inbox.frame_pending.store(false, Ordering::Relaxed);
-                    frame_due = true;
-                }
+                Some(Msg::Frame) => frame_shown_at = inbox.shown_at.lock().unwrap().take(),
                 Some(Msg::View(event))
                     if open_menu.is_some()
                         && !matches!(
@@ -678,8 +671,9 @@ fn run(
         }
         let now = Instant::now();
         let mut player = player.lock().unwrap();
-        player.tick(FloatDuration::from_std(now - last_tick));
-        last_tick = now;
+        let clock = frame_shown_at.unwrap_or(now).max(last_tick);
+        player.tick(FloatDuration::from_std(clock - last_tick));
+        last_tick = clock;
         if player.frame_rate() != frame_rate {
             frame_rate = player.frame_rate();
             automation.observe_frame_rate(frame_rate);
@@ -693,7 +687,12 @@ fn run(
             let _ = outputs.try_send(Output::FrameClock(frame_clock));
             frame_clock_enabled = frame_clock;
         }
-        if pacing.draw(now, player.needs_render(), interpolating, frame_due) {
+        if pacing.draw(
+            now,
+            player.needs_render(),
+            interpolating,
+            frame_shown_at.is_some(),
+        ) {
             let fit = stage_fit(&mut player);
             if fit != stage && outputs.try_send(Output::Stage(fit)).is_ok() {
                 stage = fit;
@@ -796,20 +795,23 @@ mod tests {
         let (messages, received) = mpsc::channel();
         let inbox = Inbox {
             messages,
-            frame_pending: Arc::new(AtomicBool::new(false)),
+            shown_at: Arc::default(),
         };
         thread::scope(|scope| {
             for _ in 0..8 {
                 let inbox = &inbox;
                 scope.spawn(move || {
                     for _ in 0..1000 {
-                        inbox.request_frame();
+                        inbox.request_frame(Instant::now());
                     }
                 });
             }
         });
+        let latest = Instant::now();
+        inbox.request_frame(latest);
         inbox.post(Msg::View(ViewEvent::Focus(false)));
         assert!(matches!(received.try_recv(), Ok(Msg::Frame)));
+        assert_eq!(inbox.shown_at.lock().unwrap().take(), Some(latest));
         assert!(matches!(
             received.try_recv(),
             Ok(Msg::View(ViewEvent::Focus(false)))
