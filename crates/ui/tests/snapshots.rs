@@ -1525,3 +1525,103 @@ fn snapshot_shortcut_field_hints() {
         });
     }
 }
+
+#[test]
+fn list_keeps_its_inset_when_the_keyboard_reaches_the_last_row() {
+    use gpui::Keystroke;
+    use mira_ui::primitives::VirtualList;
+
+    fn rows(index: usize) -> ListItem {
+        ListItem::new("army.ts")
+            .description("~/Documents/Mira/scripts")
+            .start_slot((index + 1).to_string())
+    }
+
+    for (name, kind) in [
+        ("list-end", 0),
+        ("list-sortable-end", 1),
+        ("list-virtual-end", 2),
+    ] {
+        mira_ui::snapshot_with(
+            name,
+            size(px(320.0), px(360.0)),
+            move |window, cx| {
+                Scene::open(
+                    move |window, cx| {
+                        let theme = cx.theme().clone();
+                        let selected = window.use_keyed_state("selected", cx, |_, _| 0usize);
+                        let index = *selected.read(cx);
+                        let select = move |index: usize, _: &mut Window, cx: &mut gpui::App| {
+                            selected.update(cx, |selected, cx| {
+                                *selected = index;
+                                cx.notify();
+                            });
+                        };
+                        let list = match kind {
+                            2 => VirtualList::new("queue", "Queue", 20, rows)
+                                .selected(Some(index))
+                                .fill()
+                                .flush()
+                                .on_select(select)
+                                .into_any_element(),
+                            _ => {
+                                let list = List::new("queue", "Queue", 20, rows)
+                                    .selected(Some(index))
+                                    .fill()
+                                    .flush()
+                                    .on_select(select);
+                                match kind {
+                                    1 => list.on_reorder(|_, _, _, _| {}),
+                                    _ => list,
+                                }
+                                .into_any_element()
+                            }
+                        };
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .child(list)
+                            .child(theme.footer().child("Footer"))
+                            .into_any_element()
+                    },
+                    window,
+                    cx,
+                )
+            },
+            move |cx, owner| {
+                for key in ["tab", "end"] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                let image = cx.capture_screenshot(owner).unwrap();
+                let scale = image.width() / 320;
+                let x = 250 * scale;
+                let background = *image.get_pixel(x, image.height() - 1);
+                let column: Vec<_> = (0..image.height())
+                    .rev()
+                    .map(|y| *image.get_pixel(x, y))
+                    .collect();
+                let border = column
+                    .iter()
+                    .position(|pixel| *pixel != background)
+                    .expect("the footer border");
+                let line = column[border];
+                let above = border
+                    + column[border..]
+                        .iter()
+                        .position(|pixel| *pixel != line)
+                        .expect("the space above the footer border");
+                assert!(
+                    column[above..above + 4 * scale as usize]
+                        .iter()
+                        .all(|pixel| *pixel == background),
+                    "{name}: the last row touches the footer"
+                );
+            },
+        );
+    }
+}
