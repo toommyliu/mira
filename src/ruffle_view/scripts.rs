@@ -79,7 +79,7 @@ const PADDING: Pixels = px(16.0);
 const RUN_WIDTH: Pixels = px(80.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
-const SHOWN_TAGS: usize = 10;
+const SHOWN_TAGS: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -3125,13 +3125,25 @@ fn about_body(theme: &Theme, about: &About) -> impl Iterator<Item = AnyElement> 
         .description
         .clone()
         .map(|description| muted(theme, description).into_any_element());
-    let hidden = about.tags.len().saturating_sub(SHOWN_TAGS);
+    let rest = about.tags.get(SHOWN_TAGS..).unwrap_or_default();
+    let more = (!rest.is_empty()).then(|| {
+        let title = match rest.len() {
+            1 => "1 more tag".to_owned(),
+            count => format!("{count} more tags"),
+        };
+        let listed: Vec<&str> = rest.iter().map(AsRef::as_ref).collect();
+        div().flex_none().child(
+            HoverCard::new("more-tags", title)
+                .body(listed.join(", "))
+                .child(Badge::new(format!("+{}", rest.len()))),
+        )
+    });
     let tags = (!about.tags.is_empty()).then(|| {
         h_flex()
             .flex_wrap()
             .gap(theme.space(1.0))
             .children(about.tags.iter().take(SHOWN_TAGS).cloned().map(Badge::new))
-            .children((hidden > 0).then(|| Badge::new(format!("+{hidden}"))))
+            .children(more)
             .into_any_element()
     });
     description.into_iter().chain(tags)
