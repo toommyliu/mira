@@ -1571,6 +1571,7 @@ mod tests {
             init(path.clone(), |_| {}, cx);
             packages::init(
                 std::env::temp_dir().join("mira-settings-size-packages"),
+                std::env::temp_dir().join("mira-settings-size-skua"),
                 std::env::temp_dir().join("mira-settings-size-token"),
                 cx,
             );
@@ -1623,6 +1624,7 @@ mod tests {
             init(path.clone(), |_| {}, cx);
             packages::init(
                 std::env::temp_dir().join("mira-settings-reset-packages"),
+                std::env::temp_dir().join("mira-settings-reset-skua"),
                 std::env::temp_dir().join("mira-settings-reset-token"),
                 cx,
             );
@@ -1697,7 +1699,12 @@ mod tests {
         cx.update(|cx| {
             mira_ui::init(cx);
             init(path.clone(), |_| {}, cx);
-            packages::init(dir.join("packages"), dir.join("token"), cx);
+            packages::init(
+                dir.join("packages"),
+                dir.join("skua"),
+                dir.join("token"),
+                cx,
+            );
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
             let settings = SettingsWindow::new(cx);
@@ -1809,7 +1816,12 @@ mod tests {
         cx.update(|cx| {
             mira_ui::init(cx);
             init(dir.join("settings.json"), |_| {}, cx);
-            packages::init(dir.join("packages"), dir.join("token"), cx);
+            packages::init(
+                dir.join("packages"),
+                dir.join("skua"),
+                dir.join("token"),
+                cx,
+            );
             cx.set_global(crate::updates::Updates::Idle);
         });
         let (_, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(cx));
@@ -1843,7 +1855,12 @@ mod tests {
                     let found = update_states().into_iter().find(|(s, _)| *s == state);
                     cx.set_global(found.unwrap().1);
                     let dir = crate::storyboard::scratch(&format!("settings-update-{state}"));
-                    packages::init(dir.join("packages"), dir.join("token"), cx);
+                    packages::init(
+                        dir.join("packages"),
+                        dir.join("skua"),
+                        dir.join("token"),
+                        cx,
+                    );
                     cx.new(SettingsWindow::new)
                 },
             );
@@ -1858,7 +1875,12 @@ mod tests {
             size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
             |_, cx| {
                 init(dir.join("settings.json"), |_| {}, cx);
-                packages::init(dir.join("packages"), dir.join("token"), cx);
+                packages::init(
+                    dir.join("packages"),
+                    dir.join("skua"),
+                    dir.join("token"),
+                    cx,
+                );
                 cx.new(SettingsWindow::new)
             },
             |cx, owner| {
@@ -1891,7 +1913,12 @@ mod tests {
             size(px(SETTINGS_WIDTH), px(SETTINGS_HEIGHT)),
             |window, cx| {
                 init(dir.join("settings.json"), |_| {}, cx);
-                packages::init(dir.join("packages"), dir.join("token"), cx);
+                packages::init(
+                    dir.join("packages"),
+                    dir.join("skua"),
+                    dir.join("token"),
+                    cx,
+                );
                 let settings = cx.new(SettingsWindow::new);
                 window.focus(&settings.read(cx).search.focus_handle(cx), cx);
                 settings
@@ -2048,6 +2075,7 @@ mod tests {
                     });
                     packages::init(
                         std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                        std::env::temp_dir().join("mira-settings-snapshot-skua"),
                         std::env::temp_dir().join("mira-settings-snapshot-token"),
                         cx,
                     );
@@ -2093,7 +2121,12 @@ mod tests {
                         },
                         on_change: |_| {},
                     });
-                    packages::init(dir.join("packages"), dir.join("token"), cx);
+                    packages::init(
+                        dir.join("packages"),
+                        dir.join("skua"),
+                        dir.join("token"),
+                        cx,
+                    );
                     cx.new(|cx| {
                         let settings = SettingsWindow::new(cx);
                         window.focus(&settings.focus, cx);
@@ -2126,6 +2159,7 @@ mod tests {
                 });
                 packages::init(
                     std::env::temp_dir().join("mira-settings-snapshot-packages"),
+                    std::env::temp_dir().join("mira-settings-snapshot-skua"),
                     std::env::temp_dir().join("mira-settings-snapshot-token"),
                     cx,
                 );

@@ -45,6 +45,8 @@ pub(crate) enum Request {
         map: String,
         cell: Option<String>,
         pad: Option<String>,
+        #[serde(default)]
+        rooms: Option<Rooms>,
     },
     JumpToCell {
         cell: String,
@@ -124,11 +126,16 @@ pub(super) async fn serve(
     use bridge::player;
     Ok(match request {
         Request::Ready => json!(domain::ready(loader)?),
-        Request::JoinMap { map, cell, pad } => {
+        Request::JoinMap {
+            map,
+            cell,
+            pad,
+            rooms: chosen,
+        } => {
             if !domain::wait_until_ready(loader).await? {
                 return Ok(json!(false));
             }
-            let map = rooms::destination(loader, &map, rooms)?;
+            let map = rooms::destination(loader, &map, chosen.unwrap_or(rooms))?;
             json!(
                 domain::player::join(loader, &subscribe, &map, cell.as_deref(), pad.as_deref())
                     .await?
@@ -248,6 +255,7 @@ mod tests {
                     map: "battleon".into(),
                     cell: None,
                     pad: None,
+                    rooms: None,
                 },
                 json!(false),
             ),
@@ -613,5 +621,24 @@ mod tests {
                 }
             })
             .await;
+    }
+
+    #[test]
+    fn a_skua_join_names_the_rooms_it_wants() {
+        let request: Request = serde_json::from_value(json!({
+            "op": "joinMap",
+            "map": "yulgar",
+            "cell": "Enter",
+            "pad": "Spawn",
+            "rooms": { "kind": "public" },
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            Request::JoinMap {
+                rooms: Some(Rooms::Public),
+                ..
+            }
+        ));
     }
 }

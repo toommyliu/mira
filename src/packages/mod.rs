@@ -5,6 +5,7 @@ pub(crate) mod fake;
 pub(crate) mod github;
 mod manifest;
 mod service;
+mod skua;
 mod state;
 mod store;
 mod token;
@@ -13,17 +14,48 @@ use std::{fmt, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use bundled::Recommended;
+pub(crate) use bundled::{Recommended, resources};
 #[cfg(test)]
 pub(crate) use github::Locator;
 pub(crate) use manifest::{Manifest, ManifestError};
 pub(crate) use service::{Failure, Installed, Updated};
+pub(crate) use skua::{FOLDER as SKUA_FOLDER, NAME as SKUA_NAME, listed as skua_listed};
 #[cfg(test)]
 pub(crate) use state::init_against;
 pub(crate) use state::{Activity, Status, init, packages, start};
 pub(crate) use store::Edits;
 
 pub(crate) const RECEIPT: &str = ".mira-install.json";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Mira,
+    Skua,
+}
+
+impl Kind {
+    fn of(locator: &github::Locator) -> Self {
+        if skua::is(locator) {
+            Self::Skua
+        } else {
+            Self::Mira
+        }
+    }
+
+    fn generated(self) -> &'static [&'static str] {
+        match self {
+            Self::Mira => &["tsconfig.json"],
+            Self::Skua => &[],
+        }
+    }
+
+    fn rewritten(self) -> &'static [&'static str] {
+        match self {
+            Self::Mira => &[],
+            Self::Skua => &["QuestData.json"],
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Origin {

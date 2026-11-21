@@ -27,3 +27,5 @@ if git cat-file -e HEAD:script-packages 2>/dev/null; then
     done
     printf '{"commit":"%s","trees":{%s}}\n' "$commit" "$trees" > "$resources/script-packages.json"
 fi
+rm -rf "$resources/skua"
+scripts/build-skua "$resources/skua"

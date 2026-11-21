@@ -3,6 +3,216 @@
 
 use super::{DecodeError, Value, arg, decode};
 
+pub(crate) const EXPORTS: &[&str] = &[
+    "auth.connectTo",
+    "auth.getServers",
+    "auth.isLoggedIn",
+    "auth.isTemporarilyKicked",
+    "auth.login",
+    "auth.logout",
+    "bank.deposit",
+    "bank.getItem",
+    "bank.getItems",
+    "bank.getSlots",
+    "bank.getUsedSlots",
+    "bank.isLoaded",
+    "bank.isOpen",
+    "bank.loadItems",
+    "bank.open",
+    "bank.swap",
+    "bank.withdraw",
+    "combat.attackMonster",
+    "combat.cancelAutoAttack",
+    "combat.cancelTarget",
+    "combat.canUseSkill",
+    "combat.castConsumableOnMonster",
+    "combat.getConsumableSkillItem",
+    "combat.getSkillCooldownRemaining",
+    "combat.getSnapshot",
+    "combat.getTarget",
+    "combat.hasTarget",
+    "combat.useSkill",
+    "drops.accept",
+    "drops.getItem",
+    "drops.getItems",
+    "drops.isUsingCustomDrops",
+    "drops.reject",
+    "drops.toggleUi",
+    "extras.setBankSearchEnabled",
+    "extras.setChatRecallEnabled",
+    "extras.setCopyMenusEnabled",
+    "extras.setHideMusicButtonEnabled",
+    "extras.setPercentagesEnabled",
+    "flash.callGameFunction",
+    "flash.callGameFunction0",
+    "flash.getArrayObject",
+    "flash.getConnMcText",
+    "flash.getGameObject",
+    "flash.getGameObjectKey",
+    "flash.getGameObjectS",
+    "flash.hideConnMc",
+    "flash.isConnMcBackButtonVisible",
+    "flash.isNull",
+    "flash.isTextFieldFocused",
+    "flash.selectArrayObjects",
+    "flash.sendClientPacket",
+    "flash.setArrayObject",
+    "flash.setGameObject",
+    "flash.setGameObjectKey",
+    "house.getItem",
+    "house.getItems",
+    "house.getSlots",
+    "house.getUsedSlots",
+    "inventory.equip",
+    "inventory.getItem",
+    "inventory.getItems",
+    "inventory.getSlots",
+    "inventory.getUsedSlots",
+    "inventory.unequip",
+    "inventory.use",
+    "inventory.wear",
+    "outfits.equip",
+    "outfits.get",
+    "outfits.getAll",
+    "outfits.wear",
+    "player.getAuras",
+    "player.getCell",
+    "player.getCharId",
+    "player.getClassName",
+    "player.getData",
+    "player.getFactions",
+    "player.getGender",
+    "player.getGold",
+    "player.getHp",
+    "player.getLevel",
+    "player.getMap",
+    "player.getMaxHp",
+    "player.getMaxMp",
+    "player.getMp",
+    "player.getPad",
+    "player.getPosition",
+    "player.getState",
+    "player.getUserId",
+    "player.goToPlayer",
+    "player.hasActiveBoost",
+    "player.isAfk",
+    "player.isLoaded",
+    "player.isMember",
+    "player.joinMap",
+    "player.jump",
+    "player.rest",
+    "player.walkTo",
+    "players.get",
+    "players.getAll",
+    "quests.abandon",
+    "quests.accept",
+    "quests.canComplete",
+    "quests.complete",
+    "quests.fakeComplete",
+    "quests.get",
+    "quests.getAccepted",
+    "quests.getLoaded",
+    "quests.getMaxTurnIns",
+    "quests.isAvailable",
+    "quests.isInProgress",
+    "quests.load",
+    "settings.enemyMagnet",
+    "settings.infiniteRange",
+    "settings.provokeCell",
+    "settings.resetCustomGuild",
+    "settings.resetCustomName",
+    "settings.setAdsVisible",
+    "settings.setAnimationsEnabled",
+    "settings.setCollisionsEnabled",
+    "settings.setCustomGuild",
+    "settings.setCustomName",
+    "settings.setFrameRate",
+    "settings.setOtherPlayersVisible",
+    "settings.setWalkSpeed",
+    "settings.setWorldVisible",
+    "settings.skipCutscenes",
+    "shops.buy",
+    "shops.canBuyItem",
+    "shops.canEnhance",
+    "shops.close",
+    "shops.enhance",
+    "shops.getItem",
+    "shops.getMaxBuyQuantity",
+    "shops.getShop",
+    "shops.isOpen",
+    "shops.load",
+    "shops.loadHairShop",
+    "shops.openArmorCustomizer",
+    "shops.sell",
+    "skua.attackMonsterID",
+    "skua.attackMonsterName",
+    "skua.attackPlayer",
+    "skua.availableMonsters",
+    "skua.buyItemByID",
+    "skua.buyItemByName",
+    "skua.canUseSkill",
+    "skua.clickServer",
+    "skua.connectToServer",
+    "skua.disableDeathAd",
+    "skua.disableFX",
+    "skua.gender",
+    "skua.GetAuraRuleStacks",
+    "skua.GetAuraSnapshots",
+    "skua.GetAurasValue",
+    "skua.getAvatar",
+    "skua.getLoadouts",
+    "skua.GetMonsterAuraByID",
+    "skua.GetMonsterAuraByName",
+    "skua.getMonsters",
+    "skua.GetPlayerAura",
+    "skua.getShopItem",
+    "skua.getShopItemByID",
+    "skua.getSubjectAuras",
+    "skua.getTargetMonster",
+    "skua.getUnmetPurchaseRequirements",
+    "skua.globalCooldownRemaining",
+    "skua.HasAnyActiveAura",
+    "skua.hasInventoryCategories",
+    "skua.hidePlayers",
+    "skua.infiniteRange",
+    "skua.inventoryBagUsedSlots",
+    "skua.inventoryHasSpaceFor",
+    "skua.inventoryMiscSlots",
+    "skua.inventoryMiscUsedSlots",
+    "skua.inventoryPool",
+    "skua.isFavoriteItem",
+    "skua.isKicked",
+    "skua.isLoggedIn",
+    "skua.jumpCorrectRoom",
+    "skua.killLag",
+    "skua.magnetize",
+    "skua.rebuildAuraArray",
+    "skua.rebuildmonTree",
+    "skua.rebuilduoTree",
+    "skua.rejectExcept",
+    "skua.skillCooldownRemaining",
+    "skua.skipCutscenes",
+    "skua.untargetSelf",
+    "skua.useSkill",
+    "skua.walkTo",
+    "tempInventory.getItem",
+    "tempInventory.getItems",
+    "world.getAvailableMonsterMapIds",
+    "world.getCellPads",
+    "world.getCells",
+    "world.getMapItem",
+    "world.getMonster",
+    "world.getMonsters",
+    "world.isActionAvailable",
+    "world.isCellReady",
+    "world.isLoaded",
+    "world.isMonsterAvailable",
+    "world.loadSwf",
+    "world.reload",
+    "world.requestMonsterDrops",
+    "world.setSpawnPoint",
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Event {
     Connection { status: String },
@@ -1119,6 +1329,459 @@ pub(crate) mod shops {
         let call_args = vec![selector, Value::Number(f64::from(quantity.unwrap_or(-1)))];
         let reply = loader.call("shops.sell", call_args)?;
         Ok(decode("shops.sell", reply)?)
+    }
+}
+
+pub(crate) mod skua {
+    use crate::bridge::{CallError, Loader, Value, decode};
+
+    pub(crate) fn attack_monster_id(
+        loader: &impl Loader,
+        id: i32,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(id))];
+        let reply = loader.call("skua.attackMonsterID", call_args)?;
+        Ok(decode("skua.attackMonsterID", reply)?)
+    }
+
+    pub(crate) fn attack_monster_name(
+        loader: &impl Loader,
+        name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(name.to_owned())];
+        let reply = loader.call("skua.attackMonsterName", call_args)?;
+        Ok(decode("skua.attackMonsterName", reply)?)
+    }
+
+    pub(crate) fn attack_player(
+        loader: &impl Loader,
+        name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(name.to_owned())];
+        let reply = loader.call("skua.attackPlayer", call_args)?;
+        Ok(decode("skua.attackPlayer", reply)?)
+    }
+
+    pub(crate) fn available_monsters(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.availableMonsters", call_args)?;
+        Ok(decode("skua.availableMonsters", reply)?)
+    }
+
+    pub(crate) fn buy_item_by_id(
+        loader: &impl Loader,
+        id: i32,
+        shop_item_id: i32,
+        quantity: Option<i32>,
+    ) -> Result<(), CallError> {
+        let call_args = vec![
+            Value::Number(f64::from(id)),
+            Value::Number(f64::from(shop_item_id)),
+            Value::Number(f64::from(quantity.unwrap_or(-1))),
+        ];
+        let reply = loader.call("skua.buyItemByID", call_args)?;
+        Ok(decode("skua.buyItemByID", reply)?)
+    }
+
+    pub(crate) fn buy_item_by_name(
+        loader: &impl Loader,
+        name: &str,
+        quantity: Option<i32>,
+    ) -> Result<(), CallError> {
+        let call_args = vec![
+            Value::String(name.to_owned()),
+            Value::Number(f64::from(quantity.unwrap_or(-1))),
+        ];
+        let reply = loader.call("skua.buyItemByName", call_args)?;
+        Ok(decode("skua.buyItemByName", reply)?)
+    }
+
+    pub(crate) fn can_use_skill(
+        loader: &impl Loader,
+        index: i32,
+        ignore_target: Option<bool>,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::Number(f64::from(index)),
+            Value::Bool(ignore_target.unwrap_or(false)),
+        ];
+        let reply = loader.call("skua.canUseSkill", call_args)?;
+        Ok(decode("skua.canUseSkill", reply)?)
+    }
+
+    pub(crate) fn click_server(
+        loader: &impl Loader,
+        server_name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(server_name.to_owned())];
+        let reply = loader.call("skua.clickServer", call_args)?;
+        Ok(decode("skua.clickServer", reply)?)
+    }
+
+    pub(crate) fn connect_to_server(
+        loader: &impl Loader,
+        server: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(server.to_owned())];
+        let reply = loader.call("skua.connectToServer", call_args)?;
+        Ok(decode("skua.connectToServer", reply)?)
+    }
+
+    pub(crate) fn disable_death_ad(loader: &impl Loader, enable: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enable)];
+        let reply = loader.call("skua.disableDeathAd", call_args)?;
+        Ok(decode("skua.disableDeathAd", reply)?)
+    }
+
+    pub(crate) fn disable_fx(loader: &impl Loader, enabled: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("skua.disableFX", call_args)?;
+        Ok(decode("skua.disableFX", reply)?)
+    }
+
+    pub(crate) fn gender(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.gender", call_args)?;
+        Ok(decode("skua.gender", reply)?)
+    }
+
+    pub(crate) fn get_aura_rule_stacks(
+        loader: &impl Loader,
+        subject: &str,
+        aura_name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::String(subject.to_owned()),
+            Value::String(aura_name.to_owned()),
+        ];
+        let reply = loader.call("skua.GetAuraRuleStacks", call_args)?;
+        Ok(decode("skua.GetAuraRuleStacks", reply)?)
+    }
+
+    pub(crate) fn get_aura_snapshots(
+        loader: &impl Loader,
+        subject: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(subject.to_owned())];
+        let reply = loader.call("skua.GetAuraSnapshots", call_args)?;
+        Ok(decode("skua.GetAuraSnapshots", reply)?)
+    }
+
+    pub(crate) fn get_auras_value(
+        loader: &impl Loader,
+        subject: &str,
+        aura_name: &str,
+    ) -> Result<f64, CallError> {
+        let call_args = vec![
+            Value::String(subject.to_owned()),
+            Value::String(aura_name.to_owned()),
+        ];
+        let reply = loader.call("skua.GetAurasValue", call_args)?;
+        Ok(decode("skua.GetAurasValue", reply)?)
+    }
+
+    pub(crate) fn get_avatar(loader: &impl Loader, id: i32) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(id))];
+        let reply = loader.call("skua.getAvatar", call_args)?;
+        Ok(decode("skua.getAvatar", reply)?)
+    }
+
+    pub(crate) fn get_loadouts(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.getLoadouts", call_args)?;
+        Ok(decode("skua.getLoadouts", reply)?)
+    }
+
+    pub(crate) fn get_monster_aura_by_id(
+        loader: &impl Loader,
+        mon_id: i32,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(mon_id))];
+        let reply = loader.call("skua.GetMonsterAuraByID", call_args)?;
+        Ok(decode("skua.GetMonsterAuraByID", reply)?)
+    }
+
+    pub(crate) fn get_monster_aura_by_name(
+        loader: &impl Loader,
+        monster_name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(monster_name.to_owned())];
+        let reply = loader.call("skua.GetMonsterAuraByName", call_args)?;
+        Ok(decode("skua.GetMonsterAuraByName", reply)?)
+    }
+
+    pub(crate) fn get_monsters(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.getMonsters", call_args)?;
+        Ok(decode("skua.getMonsters", reply)?)
+    }
+
+    pub(crate) fn get_player_aura(
+        loader: &impl Loader,
+        player_name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(player_name.to_owned())];
+        let reply = loader.call("skua.GetPlayerAura", call_args)?;
+        Ok(decode("skua.GetPlayerAura", reply)?)
+    }
+
+    pub(crate) fn get_shop_item(loader: &impl Loader, name: &str) -> Result<Value, CallError> {
+        let call_args = vec![Value::String(name.to_owned())];
+        let reply = loader.call("skua.getShopItem", call_args)?;
+        Ok(decode("skua.getShopItem", reply)?)
+    }
+
+    pub(crate) fn get_shop_item_by_id(
+        loader: &impl Loader,
+        item_id: i32,
+        shop_item_id: i32,
+    ) -> Result<Value, CallError> {
+        let call_args = vec![
+            Value::Number(f64::from(item_id)),
+            Value::Number(f64::from(shop_item_id)),
+        ];
+        let reply = loader.call("skua.getShopItemByID", call_args)?;
+        Ok(decode("skua.getShopItemByID", reply)?)
+    }
+
+    pub(crate) fn get_subject_auras(
+        loader: &impl Loader,
+        subject: &str,
+    ) -> Result<Value, CallError> {
+        let call_args = vec![Value::String(subject.to_owned())];
+        let reply = loader.call("skua.getSubjectAuras", call_args)?;
+        Ok(decode("skua.getSubjectAuras", reply)?)
+    }
+
+    pub(crate) fn get_target_monster(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.getTargetMonster", call_args)?;
+        Ok(decode("skua.getTargetMonster", reply)?)
+    }
+
+    pub(crate) fn get_unmet_purchase_requirements(
+        loader: &impl Loader,
+        item_id: i32,
+        shop_item_id: i32,
+        quantity: Option<i32>,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::Number(f64::from(item_id)),
+            Value::Number(f64::from(shop_item_id)),
+            Value::Number(f64::from(quantity.unwrap_or(-1))),
+        ];
+        let reply = loader.call("skua.getUnmetPurchaseRequirements", call_args)?;
+        Ok(decode("skua.getUnmetPurchaseRequirements", reply)?)
+    }
+
+    pub(crate) fn global_cooldown_remaining(
+        loader: &impl Loader,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.globalCooldownRemaining", call_args)?;
+        Ok(decode("skua.globalCooldownRemaining", reply)?)
+    }
+
+    pub(crate) fn has_any_active_aura(
+        loader: &impl Loader,
+        subject: &str,
+        aura_names: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::String(subject.to_owned()),
+            Value::String(aura_names.to_owned()),
+        ];
+        let reply = loader.call("skua.HasAnyActiveAura", call_args)?;
+        Ok(decode("skua.HasAnyActiveAura", reply)?)
+    }
+
+    pub(crate) fn has_inventory_categories(
+        loader: &impl Loader,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.hasInventoryCategories", call_args)?;
+        Ok(decode("skua.hasInventoryCategories", reply)?)
+    }
+
+    pub(crate) fn hide_players(loader: &impl Loader, enabled: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("skua.hidePlayers", call_args)?;
+        Ok(decode("skua.hidePlayers", reply)?)
+    }
+
+    pub(crate) fn infinite_range(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.infiniteRange", call_args)?;
+        Ok(decode("skua.infiniteRange", reply)?)
+    }
+
+    pub(crate) fn inventory_bag_used_slots(loader: &impl Loader) -> Result<i32, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.inventoryBagUsedSlots", call_args)?;
+        Ok(decode("skua.inventoryBagUsedSlots", reply)?)
+    }
+
+    pub(crate) fn inventory_has_space_for(
+        loader: &impl Loader,
+        item_json: &str,
+        quantity: Option<i32>,
+        purchase: Option<bool>,
+        outgoing_json: Option<&str>,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::String(item_json.to_owned()),
+            Value::Number(f64::from(quantity.unwrap_or(1))),
+            Value::Bool(purchase.unwrap_or(false)),
+            outgoing_json.map_or(Value::Null, |value| Value::String(value.to_owned())),
+        ];
+        let reply = loader.call("skua.inventoryHasSpaceFor", call_args)?;
+        Ok(decode("skua.inventoryHasSpaceFor", reply)?)
+    }
+
+    pub(crate) fn inventory_misc_slots(loader: &impl Loader) -> Result<i32, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.inventoryMiscSlots", call_args)?;
+        Ok(decode("skua.inventoryMiscSlots", reply)?)
+    }
+
+    pub(crate) fn inventory_misc_used_slots(loader: &impl Loader) -> Result<i32, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.inventoryMiscUsedSlots", call_args)?;
+        Ok(decode("skua.inventoryMiscUsedSlots", reply)?)
+    }
+
+    pub(crate) fn inventory_pool(
+        loader: &impl Loader,
+        item_json: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(item_json.to_owned())];
+        let reply = loader.call("skua.inventoryPool", call_args)?;
+        Ok(decode("skua.inventoryPool", reply)?)
+    }
+
+    pub(crate) fn is_favorite_item(
+        loader: &impl Loader,
+        item_id: i32,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(item_id))];
+        let reply = loader.call("skua.isFavoriteItem", call_args)?;
+        Ok(decode("skua.isFavoriteItem", reply)?)
+    }
+
+    pub(crate) fn is_kicked(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.isKicked", call_args)?;
+        Ok(decode("skua.isKicked", reply)?)
+    }
+
+    pub(crate) fn is_logged_in(loader: &impl Loader) -> Result<Option<String>, CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.isLoggedIn", call_args)?;
+        Ok(decode("skua.isLoggedIn", reply)?)
+    }
+
+    pub(crate) fn jump_correct_room(
+        loader: &impl Loader,
+        cell: &str,
+        pad: &str,
+        auto_correct: Option<bool>,
+        client_only: Option<bool>,
+    ) -> Result<(), CallError> {
+        let call_args = vec![
+            Value::String(cell.to_owned()),
+            Value::String(pad.to_owned()),
+            Value::Bool(auto_correct.unwrap_or(true)),
+            Value::Bool(client_only.unwrap_or(false)),
+        ];
+        let reply = loader.call("skua.jumpCorrectRoom", call_args)?;
+        Ok(decode("skua.jumpCorrectRoom", reply)?)
+    }
+
+    pub(crate) fn kill_lag(loader: &impl Loader, enable: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enable)];
+        let reply = loader.call("skua.killLag", call_args)?;
+        Ok(decode("skua.killLag", reply)?)
+    }
+
+    pub(crate) fn magnetize(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.magnetize", call_args)?;
+        Ok(decode("skua.magnetize", reply)?)
+    }
+
+    pub(crate) fn rebuild_aura_array(
+        loader: &impl Loader,
+        auras: Value,
+    ) -> Result<Value, CallError> {
+        let call_args = vec![auras];
+        let reply = loader.call("skua.rebuildAuraArray", call_args)?;
+        Ok(decode("skua.rebuildAuraArray", reply)?)
+    }
+
+    pub(crate) fn rebuildmon_tree(loader: &impl Loader, mon_id: i32) -> Result<Value, CallError> {
+        let call_args = vec![Value::Number(f64::from(mon_id))];
+        let reply = loader.call("skua.rebuildmonTree", call_args)?;
+        Ok(decode("skua.rebuildmonTree", reply)?)
+    }
+
+    pub(crate) fn rebuilduo_tree(
+        loader: &impl Loader,
+        player_name: &str,
+    ) -> Result<Value, CallError> {
+        let call_args = vec![Value::String(player_name.to_owned())];
+        let reply = loader.call("skua.rebuilduoTree", call_args)?;
+        Ok(decode("skua.rebuilduoTree", reply)?)
+    }
+
+    pub(crate) fn reject_except(
+        loader: &impl Loader,
+        whitelist: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::String(whitelist.to_owned())];
+        let reply = loader.call("skua.rejectExcept", call_args)?;
+        Ok(decode("skua.rejectExcept", reply)?)
+    }
+
+    pub(crate) fn skill_cooldown_remaining(
+        loader: &impl Loader,
+        index: i32,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(index))];
+        let reply = loader.call("skua.skillCooldownRemaining", call_args)?;
+        Ok(decode("skua.skillCooldownRemaining", reply)?)
+    }
+
+    pub(crate) fn skip_cutscenes(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.skipCutscenes", call_args)?;
+        Ok(decode("skua.skipCutscenes", reply)?)
+    }
+
+    pub(crate) fn untarget_self(loader: &impl Loader) -> Result<(), CallError> {
+        let call_args = vec![];
+        let reply = loader.call("skua.untargetSelf", call_args)?;
+        Ok(decode("skua.untargetSelf", reply)?)
+    }
+
+    pub(crate) fn use_skill(loader: &impl Loader, index: i32) -> Result<Option<String>, CallError> {
+        let call_args = vec![Value::Number(f64::from(index))];
+        let reply = loader.call("skua.useSkill", call_args)?;
+        Ok(decode("skua.useSkill", reply)?)
+    }
+
+    pub(crate) fn walk_to(
+        loader: &impl Loader,
+        x_pos: i32,
+        y_pos: i32,
+        walk_speed: i32,
+    ) -> Result<(), CallError> {
+        let call_args = vec![
+            Value::Number(f64::from(x_pos)),
+            Value::Number(f64::from(y_pos)),
+            Value::Number(f64::from(walk_speed)),
+        ];
+        let reply = loader.call("skua.walkTo", call_args)?;
+        Ok(decode("skua.walkTo", reply)?)
     }
 }
 

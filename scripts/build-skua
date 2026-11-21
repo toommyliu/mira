@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+out="${1:-target/Resources/skua}"
+git submodule update --init skua/vendor/Skua
+dotnet publish skua/Host/Mira.Skua.csproj -c Release --self-contained false -o "$out" -nologo -v q

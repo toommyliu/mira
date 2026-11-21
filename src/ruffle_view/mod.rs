@@ -1,6 +1,7 @@
 mod account;
 mod account_card;
 mod client;
+mod core_bots;
 mod environment;
 mod form;
 mod game_bar;
