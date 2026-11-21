@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Global, SharedString};
+use gpui::{App, AppContext as _, Global, SharedString, actions};
 use semver::Version;
 
 use bundle::Staged;
@@ -16,6 +16,8 @@ use release::Update;
 pub(crate) use view::{button, dot, footer};
 
 use crate::packages::github::{API, GitHub};
+
+actions!(mira, [CheckForUpdates]);
 
 const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 const SPIN: Duration = Duration::from_secs(1);
@@ -49,6 +51,10 @@ pub(crate) enum Updates {
 impl Global for Updates {}
 
 pub(crate) fn init(cx: &mut App) {
+    cx.on_action(|_: &CheckForUpdates, cx| {
+        cx.dispatch_action(&crate::settings::OpenSettings);
+        Updates::check(true, cx);
+    });
     cx.set_global(match bundle::locate() {
         Ok(_) => Updates::Idle,
         Err(reason) => Updates::Unavailable(reason.map(Into::into)),
