@@ -78,32 +78,54 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
 
 const NOTES: usize = 8;
 
-fn with_notes(mut card: HoverCard, notes: &str) -> HoverCard {
-    let mut paragraph = Vec::new();
-    let mut items = 0;
-    for line in notes.lines().map(str::trim).filter(|line| !line.is_empty()) {
+#[derive(Debug, Default, PartialEq)]
+struct Notes {
+    summary: Vec<String>,
+    items: Vec<(Option<String>, String)>,
+    more: usize,
+}
+
+fn parse_notes(text: &str) -> Notes {
+    let mut notes = Notes::default();
+    for line in text
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with("<details"))
+        .filter(|line| !line.is_empty())
+    {
         let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) else {
-            paragraph.push(line);
+            notes.summary.push(line.to_owned());
             continue;
         };
-        items += 1;
-        if items > NOTES {
+        if notes.items.len() == NOTES {
+            notes.more += 1;
             continue;
         }
-        card = match item
-            .strip_prefix("**")
-            .and_then(|rest| rest.split_once("**"))
-        {
-            Some((lead, text)) => card.note(Some(lead.to_owned().into()), text.trim().to_owned()),
-            None => card.note(None, item.to_owned()),
-        };
+        notes.items.push(
+            match item
+                .strip_prefix("**")
+                .and_then(|rest| rest.split_once("**"))
+            {
+                Some((lead, text)) => (Some(lead.to_owned()), text.trim().to_owned()),
+                None => (None, item.to_owned()),
+            },
+        );
     }
-    if items > NOTES {
-        card = card.note(None, format!("and {} more", items - NOTES));
-    }
-    match paragraph.is_empty() {
+    notes
+}
+
+fn with_notes(card: HoverCard, text: &str) -> HoverCard {
+    let notes = parse_notes(text);
+    let card = match notes.summary.is_empty() {
         true => card,
-        false => card.body(paragraph.join(" ")),
+        false => card.body(notes.summary.join(" ")),
+    };
+    let card = notes.items.into_iter().fold(card, |card, (lead, text)| {
+        card.note(lead.map(Into::into), text)
+    });
+    match notes.more {
+        0 => card,
+        more => card.note(None, format!("and {more} more")),
     }
 }
 
@@ -292,5 +314,33 @@ impl RenderOnce for Restart {
                     )
                     .on_close(move |_, cx| close(cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_stop_at_the_full_changelog() {
+        let mut text = String::from(
+            "Faster updates.\n\n- **Sidebar.** Click to download.\n- Fixes a crash.\n",
+        );
+        for index in 0..NOTES {
+            text.push_str(&format!("- Extra {index}\n"));
+        }
+        text.push_str("\n<details>\n<summary>Full changelog</summary>\n\n- feat: everything (abc)\n</details>\n");
+        let notes = parse_notes(&text);
+        assert_eq!(notes.summary, ["Faster updates."]);
+        assert_eq!(
+            notes.items[..2],
+            [
+                (Some("Sidebar.".to_owned()), "Click to download.".to_owned()),
+                (None, "Fixes a crash.".to_owned()),
+            ]
+        );
+        assert_eq!(notes.items.len(), NOTES);
+        assert_eq!(notes.more, 2);
+        assert!(notes.items.iter().all(|(_, text)| !text.contains("feat:")));
     }
 }
