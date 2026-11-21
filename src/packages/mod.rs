@@ -2,7 +2,7 @@ mod archive;
 mod bundled;
 #[cfg(test)]
 pub(crate) mod fake;
-mod github;
+pub(crate) mod github;
 mod manifest;
 mod service;
 mod state;

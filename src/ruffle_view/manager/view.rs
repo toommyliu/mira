@@ -558,6 +558,10 @@ impl Manager {
                 )
             })
             .child(drag_area().flex_1())
+            .children(
+                crate::updates::sidebar_row(cx)
+                    .map(|row| div().flex_none().p(layout.space(2.0)).child(row)),
+            )
     }
 
     fn filter_buttons(

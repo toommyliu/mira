@@ -934,3 +934,18 @@ fn a_setup_set_to_open_in_a_new_window_launches_there_and_leaves_open_accounts_w
     assert_eq!(cx.update(|_, cx| client::clients(cx).len()), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn snapshot_an_update_in_the_sidebar() {
+    shoot(
+        "manager-update-ready",
+        size(px(720.0), px(420.0)),
+        Scene::NotStarted,
+        Some("Daily"),
+        |_, _, cx| {
+            cx.set_global(crate::updates::Updates::ready_preview(
+                semver::Version::new(0, 2, 0),
+            ))
+        },
+    );
+}

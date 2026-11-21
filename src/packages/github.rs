@@ -155,7 +155,7 @@ impl From<reqwest::Error> for GitHubError {
         if error.is_timeout() {
             Self::Network("GitHub took too long to answer".into())
         } else {
-            Self::Network(format!("couldn't reach GitHub: {error}"))
+            Self::Network(format!("couldn't reach GitHub: {}", error.without_url()))
         }
     }
 }
@@ -318,13 +318,60 @@ impl GitHub {
         to: &Path,
         max: u64,
     ) -> Result<(), GitHubError> {
-        let mut response = self
+        let response = self
             .send(
                 &["repos", owner, repo, "zipball", commit.as_str()],
                 None,
                 JSON,
             )
             .await?;
+        Self::save_response(response, to, max, |_| {}).await
+    }
+
+    pub(crate) async fn latest_release<T: serde::de::DeserializeOwned>(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Option<T>, GitHubError> {
+        match self
+            .json(&["repos", owner, repo, "releases", "latest"], None)
+            .await
+        {
+            Ok(release) => Ok(Some(release)),
+            Err(GitHubError::NotFound) => {
+                // GitHub returns 404 both for an empty release feed and for a repo we can't read.
+                self.repository(owner, repo).await?;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn download_asset(
+        &self,
+        owner: &str,
+        repo: &str,
+        id: u64,
+        to: &Path,
+        max: u64,
+        progress: impl FnMut(u64),
+    ) -> Result<(), GitHubError> {
+        let response = self
+            .send(
+                &["repos", owner, repo, "releases", "assets", &id.to_string()],
+                None,
+                "application/octet-stream",
+            )
+            .await?;
+        Self::save_response(response, to, max, progress).await
+    }
+
+    async fn save_response(
+        mut response: Response,
+        to: &Path,
+        max: u64,
+        mut progress: impl FnMut(u64),
+    ) -> Result<(), GitHubError> {
         if response.content_length().is_some_and(|length| length > max) {
             return Err(GitHubError::TooLarge(max));
         }
@@ -336,6 +383,7 @@ impl GitHub {
                 return Err(GitHubError::TooLarge(max));
             }
             file.write_all(&chunk)?;
+            progress(written);
         }
         file.sync_all()?;
         Ok(())
@@ -632,6 +680,14 @@ mod tests {
             "/repos/o/r",
             Reply::json(r#"{"id":7,"name":"R","owner":{"login":"O"},"default_branch":"trunk"}"#),
         );
+        api.route(
+            "/repos/o/r/releases/latest",
+            Reply::json(r#"{"tag_name":"v0.1.2"}"#),
+        );
+        api.route(
+            "/repos/o/r/releases/assets/17",
+            Reply::status(302).header("location", &format!("{}/archive.zip", archive.url())),
+        );
         let github = GitHub::at(&api.url(), Some("secret".into())).unwrap();
         assert_eq!(
             github.repository("o", "r").await.unwrap(),
@@ -649,6 +705,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"zip bytes");
+        let release: serde_json::Value = github.latest_release("o", "r").await.unwrap().unwrap();
+        assert_eq!(release["tag_name"], "v0.1.2");
+        let mut received = 0;
+        github
+            .download_asset("o", "r", 17, &to, 9, |bytes| received = bytes)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"zip bytes");
+        assert_eq!(received, 9);
         assert!(
             api.requests()
                 .iter()
