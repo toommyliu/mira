@@ -5,7 +5,6 @@ use gpui::{
 };
 use mira_ui::{
     StyledExt as _, Theme, h_flex,
-    primitives::Switch,
     theme::{DISABLED_OPACITY, Layout},
     v_flex,
 };
@@ -107,18 +106,4 @@ pub(super) fn choices_row(
                 .child(row_label(label, enabled)),
         )
         .child(div().flex_none().child(choices))
-}
-
-pub(super) fn switch_row(
-    layout: Layout,
-    label: impl Into<SharedString>,
-    enabled: bool,
-    switch: Switch,
-) -> Div {
-    h_flex()
-        .justify_between()
-        .gap(layout.space(2.0))
-        .min_h(layout.control)
-        .child(row_label(label, enabled))
-        .child(switch.disabled(!enabled).hide_label())
 }

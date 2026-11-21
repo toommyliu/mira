@@ -1,7 +1,7 @@
 mod archive;
 mod bundled;
 #[cfg(test)]
-mod fake;
+pub(crate) mod fake;
 mod github;
 mod manifest;
 mod service;
@@ -18,7 +18,9 @@ pub(crate) use bundled::Recommended;
 pub(crate) use github::Locator;
 pub(crate) use manifest::{Manifest, ManifestError};
 pub(crate) use service::{Failure, Updated};
-pub(crate) use state::{Activity, Checked, Status, init, packages, start};
+#[cfg(test)]
+pub(crate) use state::init_against;
+pub(crate) use state::{Activity, Status, init, packages, start};
 pub(crate) use store::Edits;
 
 pub(crate) const RECEIPT: &str = ".mira-install.json";
