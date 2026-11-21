@@ -1,7 +1,10 @@
 use gpui::{
-    AnyElement, App, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement, RenderOnce, SharedString, Stateful, Styled as _, Window, div, px,
+    AnyElement, App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement, Pixels, RenderOnce, SharedString, Stateful, Styled as _, TextRun, Window, div,
+    px,
 };
+
+const LABEL_MIN: Pixels = px(44.0);
 
 use super::tooltip;
 use crate::Tone;
@@ -97,16 +100,37 @@ impl RenderOnce for HoverCard {
     }
 }
 
-pub(super) fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
+pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::Div {
     let layout = theme.layout;
     let typography = theme.typography;
+    let inset = theme.space(2.5);
+    let label_width = card
+        .rows
+        .iter()
+        .map(|(label, _)| {
+            let run = TextRun {
+                len: label.len(),
+                font: gpui::font(theme.font_family.clone()),
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(label.clone(), typography.secondary, &[run], None)
+                .width
+        })
+        .fold(LABEL_MIN, Pixels::max)
+        .min((super::popover::POPOVER_WIDTH - inset * 2.0) / 2.0)
+        .ceil();
     div()
         .flex()
         .flex_col()
         .gap(layout.space(1.5))
         .w(super::popover::POPOVER_WIDTH)
         .max_w_full()
-        .p(theme.space(2.5))
+        .p(inset)
         .rounded(theme.radius.panel)
         .bg(theme.popover)
         .shadow(theme.popup_shadow())
@@ -142,7 +166,7 @@ pub(super) fn popup(card: Card, theme: &crate::Theme) -> gpui::Div {
                 .child(
                     div()
                         .flex_none()
-                        .w(px(44.0))
+                        .w(label_width)
                         .text_color(theme.muted_foreground)
                         .child(label),
                 )

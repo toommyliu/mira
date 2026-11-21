@@ -80,10 +80,10 @@ impl Help {
         }
     }
 
-    fn panel(self, theme: &Theme) -> Div {
+    fn panel(self, theme: &Theme, window: &Window) -> Div {
         match self {
             Help::Label(label) => panel(label, theme),
-            Help::Card(card) => super::hover_card::popup(card, theme),
+            Help::Card(card) => super::hover_card::popup(card, theme, window),
         }
     }
 }
@@ -400,7 +400,7 @@ pub(crate) fn hover(
             let (positioner, from) = placement.resolve(at, measured.get(), viewport);
             let theme = cx.theme();
             let content = help
-                .panel(theme)
+                .panel(theme, window)
                 .font_family(theme.font_family.clone())
                 .font_weight(gpui::FontWeight::NORMAL);
             let content = motion::anchored_frame(content, from, entrance);
