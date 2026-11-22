@@ -2167,6 +2167,17 @@ mod tests {
                     after.get_pixel(x, y),
                     "row stays uncovered"
                 );
+                let pixel = |x, y| {
+                    let (x, y) = point(x, y);
+                    after.get_pixel(x, y)
+                };
+                let edge = pixel(204, 40);
+                assert_eq!(
+                    pixel(300, 8),
+                    edge,
+                    "card edge over the stage matches its edge over the sidebar"
+                );
+                assert_ne!(pixel(208, 40), edge, "card edge stands out from its fill");
             },
         );
     }
