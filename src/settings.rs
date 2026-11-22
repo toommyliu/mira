@@ -1032,6 +1032,9 @@ impl SettingsWindow {
                         change(cx, |settings| settings.skip_update_checks = !on);
                         if on {
                             crate::updates::Updates::check(false, cx).detach();
+                            crate::packages::packages(cx)
+                                .update(cx, |packages, cx| packages.check(true, cx))
+                                .detach();
                         }
                     }),
                 )),

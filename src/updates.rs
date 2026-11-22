@@ -21,7 +21,7 @@ use crate::packages::github::{API, GitHub};
 
 actions!(mira, [CheckForUpdates]);
 
-const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+pub(crate) const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 const SPIN: Duration = Duration::from_secs(1);
 const COOLDOWN: Duration = Duration::from_secs(30);
 static CURRENT: LazyLock<Version> =
@@ -82,6 +82,9 @@ impl InFlight {
 
 pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
+        crate::packages::packages(cx)
+            .update(cx, |packages, cx| packages.check(false, cx))
+            .detach();
         let checking = Updates::check(true, cx);
         cx.spawn(async move |cx| {
             checking.await;

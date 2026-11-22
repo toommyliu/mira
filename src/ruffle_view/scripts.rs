@@ -1162,63 +1162,46 @@ impl ScriptsWindow {
             .collect()
     }
 
-    fn check_for_updates(&self, cx: &App) -> AnyElement {
+    fn review_updates(&self, cx: &App) -> Option<HoverCard> {
+        let pending = self.pending_updates(cx);
+        if pending.is_empty() {
+            return None;
+        }
         let state = packages::packages(cx).read(cx);
         let working = matches!(
             state.activity(),
             Some(packages::Activity::Checking | packages::Activity::Updating(_))
         );
-        let pending = self.pending_updates(cx);
-        if !pending.is_empty() {
-            let title = match pending.len() {
-                1 => SharedString::from("1 update available"),
-                count => format!("{count} updates available").into(),
-            };
-            let card = pending.iter().fold(
-                HoverCard::new("updates-card", title)
-                    .placement(Placement::new(Side::Right, Align::Start)),
-                |card, pending| {
-                    card.row(
-                        pending.name.clone(),
-                        format!("{} → {}", pending.from, pending.to),
-                        Tone::Neutral,
-                    )
-                },
-            );
-            let dialogs = self.package_dialogs.clone();
-            return card
-                .child(
-                    Button::icon("review-updates", Icon::Download, "Review updates")
-                        .size(Size::Small)
-                        .hide_tooltip()
-                        .busy(working)
-                        .disabled(state.activity().is_some())
-                        .on_click(move |_, _, cx| {
-                            dialogs.update(cx, |dialogs, cx| {
-                                dialogs.review_updates(pending.clone(), cx)
-                            })
-                        }),
+        let title = match pending.len() {
+            1 => SharedString::from("1 update available"),
+            count => format!("{count} updates available").into(),
+        };
+        let card = pending.iter().fold(
+            HoverCard::new("updates-card", title)
+                .placement(Placement::new(Side::Right, Align::Start)),
+            |card, pending| {
+                card.row(
+                    pending.name.clone(),
+                    format!("{} → {}", pending.from, pending.to),
+                    Tone::Neutral,
                 )
-                .into_any_element();
-        }
-        let installed = self.library.as_ref().is_some_and(|library| {
-            library.sources.iter().any(|source| {
-                matches!(
-                    source.kind,
-                    SourceKind::Package {
-                        origin: Some(_),
-                        ..
-                    }
-                )
-            })
-        });
+            },
+        );
         let dialogs = self.package_dialogs.clone();
-        Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
-            .size(Size::Small)
-            .busy(working)
-            .disabled(state.activity().is_some() || !installed)
-            .on_click(move |_, _, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)))
-            .into_any_element()
+        Some(
+            card.child(
+                Button::icon("review-updates", Icon::Download, "Review updates")
+                    .size(Size::Small)
+                    .hide_tooltip()
+                    .busy(working)
+                    .disabled(state.activity().is_some())
+                    .on_click(move |_, _, cx| {
+                        dialogs.update(cx, |dialogs, cx| {
+                            dialogs.review_updates(pending.clone(), cx)
+                        })
+                    }),
+            ),
+        )
     }
 
     fn sidebar(&self, theme: &Theme, unfinished: usize, cx: &mut Context<Self>) -> Div {
@@ -1304,7 +1287,7 @@ impl ScriptsWindow {
                 .child(
                     h_flex()
                         .gap(layout.space(1.0))
-                        .child(self.check_for_updates(cx))
+                        .children(self.review_updates(cx))
                         .child(
                             Button::icon("install-package", Icon::Plus, "Install package")
                                 .size(Size::Small)
