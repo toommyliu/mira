@@ -762,8 +762,16 @@ fn trigger(
         ),
         None => on.map(|on| {
             div()
+                .relative()
                 .text_color(theme.muted_foreground)
-                .child(if on { "On" } else { "Off" })
+                .child(div().invisible().child("Off"))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .child(if on { "On" } else { "Off" }),
+                )
                 .into_any_element()
         }),
     };
@@ -1814,6 +1822,33 @@ mod tests {
             px(inset + described + (gap + row) * 4.0 + inset),
             "Auto relogin with its status, then Server, Delay, Retries and Advanced"
         );
+    }
+
+    #[gpui::test]
+    fn toggling_an_automation_keeps_its_trigger_width(cx: &mut gpui::TestAppContext) {
+        struct Triggers;
+
+        impl gpui::Render for Triggers {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let hug = |on: bool| {
+                    div()
+                        .flex_none()
+                        .debug_selector(move || if on { "attack-on" } else { "attack-off" }.into())
+                        .child(trigger("auto-attack", "Auto attack", None, Some(on), cx))
+                };
+                gpui::div()
+                    .flex()
+                    .items_start()
+                    .child(hug(true))
+                    .child(hug(false))
+            }
+        }
+
+        cx.update(mira_ui::init);
+        let (_, cx) = cx.add_window_view(|_, _| Triggers);
+        cx.run_until_parked();
+        let mut width = |selector| cx.debug_bounds(selector).unwrap().size.width;
+        assert_eq!(width("attack-on"), width("attack-off"));
     }
 
     #[gpui::test]
