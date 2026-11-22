@@ -9,7 +9,8 @@ use super::{
     ready, wait_for_action, wait_until_ready,
 };
 use crate::bridge::{
-    self, CallError, Event, Format, GameAction, Loader, Packet, Packets, Subscription, Value,
+    self, CallError, Event, Format, GameAction, Lagged, Loader, Packet, Packets, Subscription,
+    Value,
     packets::{Sender, disconnected, raw, wire},
 };
 
@@ -160,12 +161,22 @@ pub(crate) fn moves(event: &Event) -> bool {
     }
 }
 
-enum Move {
-    Map,
-    Cell { cell: String, pad: String },
+enum Settle {
+    Anywhere,
+    At { cell: String, pad: String },
+    Left,
 }
 
-fn sent_move(event: &Event) -> Option<Move> {
+impl Settle {
+    fn then(self, later: Settle) -> Settle {
+        match (self, later) {
+            (Settle::Anywhere, Settle::At { .. }) => Settle::Anywhere,
+            (_, later) => later,
+        }
+    }
+}
+
+fn sent_move(event: &Event) -> Option<Settle> {
     let packet = raw(event).filter(|packet| packet.from == Sender::Client)?;
     let mut fields = packet.text.split('%').skip(3);
     match (
@@ -174,7 +185,7 @@ fn sent_move(event: &Event) -> Option<Move> {
         fields.next()?,
         fields.next()?,
     ) {
-        ("moveToCell", _room, cell, pad) => Some(Move::Cell {
+        ("moveToCell", _room, cell, pad) => Some(Settle::At {
             cell: cell.to_owned(),
             pad: pad.to_owned(),
         }),
@@ -182,23 +193,58 @@ fn sent_move(event: &Event) -> Option<Move> {
     }
 }
 
-fn own_move(loader: &impl Loader, event: &Event) -> Option<Move> {
+fn own_move(loader: &impl Loader, next: Result<Event, Lagged>) -> Option<Settle> {
+    let event = match next {
+        Ok(event) if disconnected(&event) => return Some(Settle::Left),
+        Ok(event) => event,
+        Err(_) => return Some(Settle::Anywhere),
+    };
     if let Event::SmartFoxDebug { .. } = event {
-        return sent_move(event);
+        return sent_move(&event);
     }
     let mut moved = Vec::new();
-    Kind::MapJoined.read(event, &Myself(loader), &mut moved);
-    Kind::CellChanged.read(event, &Myself(loader), &mut moved);
+    Kind::MapJoined.read(&event, &Myself(loader), &mut moved);
+    Kind::CellChanged.read(&event, &Myself(loader), &mut moved);
     moved.into_iter().find_map(|event| match event {
-        GameEvent::MapJoined { .. } => Some(Move::Map),
+        GameEvent::MapJoined { .. } => Some(Settle::Anywhere),
         GameEvent::CellChanged {
             is_self: true,
             cell,
             pad,
             ..
-        } => Some(Move::Cell { cell, pad }),
+        } => Some(Settle::At { cell, pad }),
         _ => None,
     })
+}
+
+fn shows(loader: &impl Loader, at: Option<(&str, &str)>) -> Result<bool, CallError> {
+    let flag = |path| {
+        Ok::<_, CallError>(bridge::flash::get_game_object(loader, path)?.as_deref() == Some("true"))
+    };
+    if !ready(loader)? || !flag("world.mapEntered")? || flag("world.map.isPlaying")? {
+        return Ok(false);
+    }
+    let here = bridge::player::get_cell(loader)?.unwrap_or_default();
+    let label = bridge::flash::get_game_object(loader, "world.map.currentLabel")?
+        .and_then(|json| serde_json::from_str::<String>(&json).ok());
+    if !label.is_some_and(|label| label.eq_ignore_ascii_case(&here)) {
+        return Ok(false);
+    }
+    let Some((cell, pad)) = at else {
+        return Ok(true);
+    };
+    Ok(here.eq_ignore_ascii_case(cell)
+        && bridge::player::get_pad(loader)?.is_some_and(|here| here.eq_ignore_ascii_case(pad)))
+}
+
+async fn settled(loader: &impl Loader, settle: &Settle) -> Result<Option<Location>, CallError> {
+    let (at, within) = match settle {
+        Settle::Left => return Ok(None),
+        Settle::Anywhere => (None, LOAD_TIMEOUT),
+        Settle::At { cell, pad } => (Some((cell.as_str(), pad.as_str())), MOVE_TIMEOUT),
+    };
+    arrive(loader, within, || Ok(shows(loader, at)?.then_some(true))).await?;
+    location(loader)
 }
 
 pub(crate) async fn track_location(
@@ -206,23 +252,34 @@ pub(crate) async fn track_location(
     events: Subscription,
     report: impl Fn(Option<Location>),
 ) {
+    let mut next = None;
     loop {
-        let read = match events.next().await {
-            Ok(event) if disconnected(&event) => Ok(None),
-            Ok(event) => match own_move(&loader, &event) {
+        let settle = match next.take() {
+            Some(settle) => settle,
+            None => match own_move(&loader, events.next().await) {
+                Some(settle) => settle,
                 None => continue,
-                Some(Move::Map) => map_loaded(&loader).await.and_then(|_| location(&loader)),
-                Some(Move::Cell { cell, pad }) => arrive(&loader, MOVE_TIMEOUT, || {
-                    Ok(bridge::world::is_cell_ready(&loader, &cell, Some(&pad))?.then_some(true))
-                })
-                .await
-                .and_then(|_| location(&loader)),
             },
-            Err(_) => location(&loader),
         };
-        match read {
-            Ok(location) => report(location),
-            Err(error) => tracing::debug!(%error, "couldn't read the player's location"),
+        let outcome = {
+            let settling = settled(&loader, &settle);
+            tokio::pin!(settling);
+            loop {
+                tokio::select! {
+                    biased;
+                    read = &mut settling => break Ok(read),
+                    event = events.next() => {
+                        if let Some(later) = own_move(&loader, event) {
+                            break Err(later);
+                        }
+                    }
+                }
+            }
+        };
+        match outcome {
+            Ok(Ok(location)) => report(location),
+            Ok(Err(error)) => tracing::debug!(%error, "couldn't read the player's location"),
+            Err(later) => next = Some(settle.then(later)),
         }
     }
 }
@@ -815,10 +872,24 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_location_follows_your_own_moves_until_the_connection_drops() {
-        let place = Rc::new(RefCell::new(("battleon", "Enter", "Spawn")));
+        struct Place {
+            map: &'static str,
+            cell: &'static str,
+            pad: &'static str,
+            shown: &'static str,
+            playing: bool,
+        }
+        let at = |map, cell, pad| Place {
+            map,
+            cell,
+            pad,
+            shown: cell,
+            playing: false,
+        };
+        let place = Rc::new(RefCell::new(at("battleon", "Enter", "Spawn")));
         let current = place.clone();
-        let loader = FakeLoader::new(move |callback, _| {
-            let (map, cell, pad) = *current.borrow();
+        let loader = FakeLoader::new(move |callback, args| {
+            let place = current.borrow();
             let texts = |texts: &[&str]| {
                 Value::List(
                     texts
@@ -827,17 +898,32 @@ mod tests {
                         .collect(),
                 )
             };
+            let json = |text: String| Value::String(json!(text).to_string());
             Ok(match callback {
-                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" | "world.isCellReady" => {
-                    Value::Bool(true)
-                }
-                "flash.getGameObjectS" => Value::String(json!("player1").to_string()),
-                "flash.getGameObject" => Value::String(json!(format!("{map}-1234")).to_string()),
-                "player.getMap" => Value::String(map.into()),
-                "player.getCell" => Value::String(cell.into()),
-                "player.getPad" => Value::String(pad.into()),
-                "world.getCells" if map == "battleon" => texts(&["Enter", "r2"]),
+                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
+                "world.isCellReady" => Value::Bool(false),
+                "flash.getGameObjectS" => json("player1".into()),
+                "flash.getGameObject" => match &args[0] {
+                    Value::String(path) if path == "world.strAreaName" => {
+                        json(format!("{}-1234", place.map))
+                    }
+                    Value::String(path) if path == "world.mapEntered" => {
+                        Value::String("true".into())
+                    }
+                    Value::String(path) if path == "world.map.isPlaying" => {
+                        Value::String(place.playing.to_string())
+                    }
+                    Value::String(path) if path == "world.map.currentLabel" => {
+                        json(place.shown.into())
+                    }
+                    other => panic!("unexpected path {other:?}"),
+                },
+                "player.getMap" => Value::String(place.map.into()),
+                "player.getCell" => Value::String(place.cell.into()),
+                "player.getPad" => Value::String(place.pad.into()),
+                "world.getCells" if place.map == "battleon" => texts(&["Enter", "r2", "r3"]),
                 "world.getCells" => texts(&["Enter", "Boss"]),
+                "world.getCellPads" if place.shown == "Enter" => texts(&["Spawn", "Right"]),
                 "world.getCellPads" => texts(&["Spawn", "Left"]),
                 other => panic!("unexpected call {other}"),
             })
@@ -845,12 +931,17 @@ mod tests {
         let events = Rc::new(Events::default());
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
+        let pads = Rc::new(RefCell::new(Vec::new()));
+        let last_pads = pads.clone();
         LocalSet::new()
             .run_until(async {
                 tokio::task::spawn_local(track_location(
                     loader,
                     events.subscribe(moves),
                     move |location| {
+                        if let Some(location) = &location {
+                            *last_pads.borrow_mut() = location.cell_pads.clone();
+                        }
                         seen.borrow_mut().push(location.map(|location| {
                             (
                                 location.map,
@@ -862,61 +953,84 @@ mod tests {
                         }))
                     },
                 ));
+                let settle = || tokio::time::sleep(Duration::from_millis(150));
                 let publish = |packet: serde_json::Value| {
                     events.publish(&Event::ExtensionResponse {
                         packet: packet.to_string(),
                     });
-                    tokio::time::sleep(Duration::from_millis(50))
+                    settle()
+                };
+                let send = |cell: &str, pad: &str| {
+                    events.publish(&Event::SmartFoxDebug {
+                        line: format!(
+                            "[Sending - STR]: %xt%zm%moveToCell%1%{cell}%{pad}%, (len: 32)"
+                        ),
+                    });
                 };
                 let moved = |name: &str, cell: &str, pad: &str| {
                     json!({ "type": "str", "dataObj": ["uotls", "-1", name, format!("strFrame:{cell},strPad:{pad}")] })
                 };
+                let texts = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect();
+                let battleon = |cell: &str, pad: &str| {
+                    Some((
+                        "battleon".into(),
+                        Some(1234),
+                        cell.into(),
+                        pad.into(),
+                        texts(&["Enter", "r2", "r3"]),
+                    ))
+                };
+
                 publish(moved("player2", "r2", "Left")).await;
                 assert_eq!(*reports.borrow(), []);
 
-                *place.borrow_mut() = ("battleon", "r2", "Left");
+                *place.borrow_mut() = at("battleon", "r2", "Left");
                 publish(moved("player1", "r2", "Left")).await;
-                *place.borrow_mut() = ("battleon", "Enter", "Right");
-                events.publish(&Event::SmartFoxDebug {
-                    line: "[Sending - STR]: %xt%zm%moveToCell%1%Enter%Right%, (len: 32)".into(),
-                });
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                *place.borrow_mut() = ("dage", "Enter", "Spawn");
+                assert_eq!(*reports.borrow(), [battleon("r2", "Left")]);
+
+                *place.borrow_mut() = Place {
+                    shown: "r2",
+                    ..at("battleon", "Enter", "Right")
+                };
+                send("Enter", "Right");
+                settle().await;
+                assert_eq!(reports.borrow().len(), 1);
+                *place.borrow_mut() = Place {
+                    playing: true,
+                    ..at("battleon", "Enter", "Right")
+                };
+                settle().await;
+                assert_eq!(reports.borrow().len(), 1);
+                place.borrow_mut().playing = false;
+                settle().await;
+                assert_eq!(reports.borrow().last(), Some(&battleon("Enter", "Right")));
+                assert_eq!(*pads.borrow(), ["Spawn", "Right"]);
+
+                send("r2", "Spawn");
+                send("r3", "Left");
+                *place.borrow_mut() = at("battleon", "r3", "Left");
+                settle().await;
+                assert_eq!(reports.borrow().last(), Some(&battleon("r3", "Left")));
+
+                *place.borrow_mut() = at("dage", "Enter", "Spawn");
                 publish(json!({ "type": "json", "dataObj": { "cmd": "moveToArea", "strMapName": "dage" } }))
                     .await;
+                assert_eq!(
+                    reports.borrow().last(),
+                    Some(&Some((
+                        "dage".into(),
+                        Some(1234),
+                        "Enter".into(),
+                        "Spawn".into(),
+                        texts(&["Enter", "Boss"])
+                    )))
+                );
+
                 events.publish(&Event::Connection {
                     status: "OnConnectionLost".into(),
                 });
-                tokio::time::sleep(Duration::from_millis(50)).await;
-
-                let texts = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect();
-                assert_eq!(
-                    *reports.borrow(),
-                    [
-                        Some((
-                            "battleon".into(),
-                            Some(1234),
-                            "r2".into(),
-                            "Left".into(),
-                            texts(&["Enter", "r2"])
-                        )),
-                        Some((
-                            "battleon".into(),
-                            Some(1234),
-                            "Enter".into(),
-                            "Right".into(),
-                            texts(&["Enter", "r2"])
-                        )),
-                        Some((
-                            "dage".into(),
-                            Some(1234),
-                            "Enter".into(),
-                            "Spawn".into(),
-                            texts(&["Enter", "Boss"])
-                        )),
-                        None,
-                    ]
-                );
+                settle().await;
+                assert_eq!(reports.borrow().last(), Some(&None));
             })
             .await;
     }
