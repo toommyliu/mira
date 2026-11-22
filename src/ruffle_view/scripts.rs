@@ -410,14 +410,23 @@ fn visit(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> io::Result<()> {
             if let Err(error) = visit(root, &path, entries) {
                 tracing::warn!(%error, path = %path.display(), "couldn't read a script folder");
             }
-        } else if scripting::runnable(name) {
+        } else if scripting::runnable(name) || scripting::is_skua(&path) {
+            let text = fs::read_to_string(&path).ok();
+            let skua = scripting::is_skua(&path);
+            if skua
+                && !text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("ScriptMain("))
+            {
+                continue;
+            }
             let folder = dir
                 .strip_prefix(root)
                 .ok()
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .map(|folder| folder.display().to_string().into());
-            let meta = fs::read_to_string(&path)
-                .ok()
+            let meta = text
+                .filter(|_| !skua)
                 .and_then(|text| scripting::read_meta(&path, &text))
                 .unwrap_or_default();
             entries.push(Entry::new(
@@ -3611,6 +3620,14 @@ mod tests {
             ("community/daily.ts", "export const meta = { name: 5 };"),
             ("community/bosses/dage.ts", ""),
             (
+                "community/bosses/Gold.cs",
+                "public class Gold { public void ScriptMain(IScriptInterface bot) { } }",
+            ),
+            (
+                "community/bosses/Helper.cs",
+                "public static class Helper { }",
+            ),
+            (
                 "authoring/package.json",
                 r#"{"name":"Work in progress","mira":{}}"#,
             ),
@@ -3670,6 +3687,7 @@ mod tests {
                 (None, Some("farming"), "hunt.ts"),
                 (Some(0), None, "daily.ts"),
                 (Some(0), Some("bosses"), "dage.ts"),
+                (Some(0), Some("bosses"), "Gold.cs"),
                 (Some(2), None, "draft.ts"),
                 (Some(4), None, "spin.ts"),
                 (Some(8), Some("Dailies"), "Free Daily Boost"),
@@ -3718,7 +3736,7 @@ mod tests {
         assert_eq!(
             sources,
             [
-                (community.as_path(), "community", None, 2),
+                (community.as_path(), "community", None, 3),
                 (missing.as_path(), "unplugged", Some("Can't read"), 0),
                 (authoring.as_path(), "Work in progress", None, 1),
                 (

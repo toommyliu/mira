@@ -42,6 +42,43 @@ public class CompilerTests
     }
 
     [Fact]
+    public void A_script_outside_the_scripts_folder_includes_from_it_and_from_absolute_paths()
+    {
+        var root = Directory.CreateTempSubdirectory("mira-skua-compile-");
+        try
+        {
+            var scripts = Directory.CreateDirectory(Path.Combine(root.FullName, "Scripts")).FullName;
+            var local = Directory.CreateDirectory(Path.Combine(root.FullName, "Mine")).FullName;
+            var cache = Path.Combine(root.FullName, "cache");
+            File.WriteAllText(Path.Combine(scripts, "Helper.cs"), "public static class Helper { public static int Two => 2; }");
+            File.WriteAllText(Path.Combine(scripts, "Other.cs"), "//cs_include Scripts/Helper.cs\npublic static class Other { public static int Four => Helper.Two * 2; }");
+            var mine = Path.Combine(local, "Mine.cs");
+            File.WriteAllText(mine, "public static class Mine { public static int Three => 3; }");
+            var entry = Path.Combine(local, "Gold.cs");
+            File.WriteAllText(entry, $$"""
+                //cs_include {{Path.Combine(scripts, "Helper.cs")}}
+                //cs_include Scripts/Other.cs
+                //cs_include {{mine}}
+                public class Gold
+                {
+                    public int Seven => Other.Four + Mine.Three;
+
+                    public void ScriptMain(IScriptInterface bot) { }
+                }
+                """);
+
+            var compiled = Compiler.Compile(scripts, cache, entry);
+
+            Assert.Equal("Gold", compiled["class"]!.ToString());
+            Assert.True(File.Exists(compiled["assembly"]!.ToString()));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_compile_deletes_builds_unused_for_a_week_and_keeps_the_ones_it_uses()
     {
         var root = Directory.CreateTempSubdirectory("mira-skua-compile-");

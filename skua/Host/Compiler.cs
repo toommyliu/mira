@@ -264,6 +264,8 @@ static class Compiler
         public Files(string root)
         {
             this.root = root;
+            if (!Directory.Exists(root))
+                return;
             foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
                 paths.TryAdd(Path.GetRelativePath(root, file).Replace('\\', '/'), Path.GetRelativePath(root, file).Replace('\\', '/'));
         }
@@ -273,9 +275,14 @@ static class Compiler
             var normalized = relative.Trim().Replace('\\', '/');
             if (normalized.StartsWith("Scripts/", StringComparison.OrdinalIgnoreCase))
                 normalized = normalized["Scripts/".Length..];
-            return paths.TryGetValue(normalized, out var actual)
-                ? new Source(actual, File.ReadAllText(Path.Combine(root, actual)))
-                : null;
+            if (paths.TryGetValue(normalized, out var actual))
+                return new Source(actual, File.ReadAllText(Path.Combine(root, actual)));
+            var outside = relative.Trim();
+            if (!Path.IsPathRooted(outside))
+                return null;
+            if (paths.TryGetValue(Path.GetRelativePath(root, outside).Replace('\\', '/'), out var inside))
+                return new Source(inside, File.ReadAllText(Path.Combine(root, inside)));
+            return File.Exists(outside) ? new Source(outside, File.ReadAllText(outside)) : null;
         }
 
         public List<Source> Closure(IEnumerable<Source> starts)

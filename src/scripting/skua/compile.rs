@@ -16,7 +16,6 @@ use crate::packages::SKUA_FOLDER;
 const POLL: Duration = Duration::from_millis(25);
 const TIMEOUT: Duration = Duration::from_secs(120);
 const LISTED_DIAGNOSTICS: usize = 8;
-const OUTSIDE: &str = "Skua scripts run from the Skua package.";
 
 static COMPILING: Mutex<()> = Mutex::new(());
 
@@ -52,20 +51,16 @@ pub(crate) fn compile(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Compil
     };
     let setup = super::setup().map_err(Halt::Failed)?;
     let scripts = setup.home.join(SKUA_FOLDER);
-    let relative = entry
-        .strip_prefix(&scripts)
-        .ok()
-        .and_then(Path::to_str)
-        .ok_or_else(|| Halt::Failed(OUTSIDE.into()))?;
+    let (root, entry) = locate(entry, &scripts);
     let mut process = super::runner(setup).map_err(Halt::Failed)?;
     process
         .arg("compile")
         .arg("--scripts")
-        .arg(&scripts)
+        .arg(root)
         .arg("--cache")
         .arg(&setup.cache)
         .arg("--entry")
-        .arg(relative)
+        .arg(entry)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = process
@@ -80,6 +75,15 @@ pub(crate) fn compile(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Compil
         return Err(Halt::Failed(super::quit(status, &stderr)));
     }
     parse(&stdout).map_err(Halt::Failed)
+}
+
+fn locate<'a>(entry: &'a Path, scripts: &'a Path) -> (&'a Path, &'a Path) {
+    let root = entry
+        .ancestors()
+        .skip(1)
+        .find(|folder| folder.join("CoreBots.cs").is_file())
+        .unwrap_or(scripts);
+    (root, entry.strip_prefix(root).unwrap_or(entry))
 }
 
 pub(crate) fn describe(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Described, Halt> {
@@ -347,6 +351,31 @@ mod tests {
             )
             .unwrap())
         );
+    }
+
+    #[test]
+    fn a_script_compiles_against_the_nearest_folder_with_core_bots_or_the_package() {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-skua-locate-{:x}", u64::from_ne_bytes(random)));
+        let package = temp.join("skua/Scripts");
+        let clone = temp.join("dev/Scripts");
+        for folder in [&package, &clone] {
+            std::fs::create_dir_all(folder.join("Farm")).unwrap();
+            std::fs::write(folder.join("CoreBots.cs"), "").unwrap();
+        }
+        let mine = temp.join("mine/Gold.cs");
+        assert_eq!(
+            locate(&package.join("Farm/GoldFarm.cs"), &package),
+            (package.as_path(), Path::new("Farm/GoldFarm.cs"))
+        );
+        assert_eq!(
+            locate(&clone.join("Farm/GoldFarm.cs"), &package),
+            (clone.as_path(), Path::new("Farm/GoldFarm.cs"))
+        );
+        assert_eq!(locate(&mine, &package), (package.as_path(), mine.as_path()));
+        std::fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
