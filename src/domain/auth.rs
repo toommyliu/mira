@@ -1,4 +1,7 @@
-use std::{cell::RefCell, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    time::Duration,
+};
 
 use serde::Serialize;
 use tokio::{
@@ -236,6 +239,7 @@ pub(crate) struct Logins {
     turn: Mutex<()>,
     last: RefCell<Option<LastLogin>>,
     gate: Option<&'static LoginGate>,
+    logouts: Cell<u32>,
 }
 
 impl Logins {
@@ -283,7 +287,18 @@ impl Logins {
 
     pub(crate) async fn log_out(&self, loader: &impl Loader) -> Result<(), CallError> {
         let _turn = self.turn().await;
-        bridge::auth::logout(loader)
+        let connected = bridge::auth::is_logged_in(loader).unwrap_or(false);
+        bridge::auth::logout(loader)?;
+        if connected {
+            self.logouts.set(self.logouts.get() + 1);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn take_logout(&self) -> bool {
+        let pending = self.logouts.get();
+        self.logouts.set(pending.saturating_sub(1));
+        pending > 0
     }
 
     pub(crate) async fn log_in(&self, loader: &impl Loader) -> Result<bool, CallError> {

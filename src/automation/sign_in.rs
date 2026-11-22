@@ -13,6 +13,7 @@ pub(crate) enum Status {
     ChooseServer,
     Online(Option<String>),
     Offline,
+    LoggedOut,
     Failed(String),
 }
 
@@ -48,17 +49,22 @@ pub(crate) async fn run(
         Ok(()) => report(Status::ChooseServer),
         Err(error) => return report(Status::Failed(error.to_string())),
     }
-    follow(&loader, &connections, &report).await
+    follow(&loader, &logins, &connections, &report).await
 }
 
-pub(crate) async fn watch(loader: impl Loader, connections: Subscription, report: impl Fn(Status)) {
+pub(crate) async fn watch(
+    loader: impl Loader,
+    logins: Rc<Logins>,
+    connections: Subscription,
+    report: impl Fn(Status),
+) {
     let report = on_change(report);
     if ready(&loader).await {
         report(online(&loader));
     } else {
         report(Status::Offline);
     }
-    follow(&loader, &connections, &report).await
+    follow(&loader, &logins, &connections, &report).await
 }
 
 fn on_change(report: impl Fn(Status)) -> impl Fn(Status) {
@@ -71,7 +77,12 @@ fn on_change(report: impl Fn(Status)) -> impl Fn(Status) {
     }
 }
 
-async fn follow(loader: &impl Loader, connections: &Subscription, report: &impl Fn(Status)) {
+async fn follow(
+    loader: &impl Loader,
+    logins: &Logins,
+    connections: &Subscription,
+    report: &impl Fn(Status),
+) {
     loop {
         match connections.next().await {
             Ok(Event::Connection { status }) if status == "OnConnection" => {
@@ -80,15 +91,23 @@ async fn follow(loader: &impl Loader, connections: &Subscription, report: &impl 
                 }
             }
             Ok(Event::Connection { status }) if status == "OnConnectionLost" => {
-                report(Status::Offline)
+                report(offline(logins))
             }
             Ok(_) => {}
             Err(Lagged) => {
                 if !bridge::auth::is_logged_in(loader).unwrap_or(false) {
-                    report(Status::Offline);
+                    report(offline(logins));
                 }
             }
         }
+    }
+}
+
+fn offline(logins: &Logins) -> Status {
+    if logins.take_logout() {
+        Status::LoggedOut
+    } else {
+        Status::Offline
     }
 }
 
@@ -112,20 +131,24 @@ mod tests {
     use tokio::task::LocalSet;
 
     use super::*;
-    use crate::automation::auto_relogin::tests::World;
+    use crate::{automation::auto_relogin::tests::World, domain::testing::FakeLoader};
 
     struct Running {
         world: World,
         reports: Rc<RefCell<Vec<Status>>>,
+        loader: Rc<FakeLoader>,
+        logins: Rc<Logins>,
     }
 
     fn start(server: Option<&str>) -> Running {
         let (world, loader) = World::new();
+        let loader = Rc::new(loader);
+        let logins = Rc::new(Logins::default());
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
         tokio::task::spawn_local(run(
-            loader,
-            Rc::new(Logins::default()),
+            loader.clone(),
+            logins.clone(),
             world.events.subscribe(auto_relogin::wants),
             Credentials {
                 username: "player1".into(),
@@ -135,21 +158,34 @@ mod tests {
             auto_relogin::Settings::default(),
             move |status| seen.borrow_mut().push(status),
         ));
-        Running { world, reports }
+        Running {
+            world,
+            reports,
+            loader,
+            logins,
+        }
     }
 
     fn watching(connected: bool, dialog: Option<&str>) -> Running {
         let (world, loader) = World::new();
         world.game.borrow_mut().connected = connected;
         world.game.borrow_mut().dialog = dialog.map(str::to_owned);
+        let loader = Rc::new(loader);
+        let logins = Rc::new(Logins::default());
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
         tokio::task::spawn_local(watch(
-            loader,
+            loader.clone(),
+            logins.clone(),
             world.events.subscribe(auto_relogin::wants),
             move |status| seen.borrow_mut().push(status),
         ));
-        Running { world, reports }
+        Running {
+            world,
+            reports,
+            loader,
+            logins,
+        }
     }
 
     async fn settle() {
@@ -157,7 +193,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn an_account_with_a_server_logs_in_joins_it_and_follows_the_connection() {
+    async fn an_account_with_a_server_logs_in_joins_it_and_tells_its_own_logouts_from_drops() {
         LocalSet::new()
             .run_until(async {
                 let running = start(Some("Twilly"));
@@ -167,6 +203,17 @@ mod tests {
                 settle().await;
                 running.world.connect();
                 settle().await;
+                running.logins.log_out(&running.loader).await.unwrap();
+                running.logins.log_out(&running.loader).await.unwrap();
+                settle().await;
+                running.world.connect();
+                settle().await;
+                running.world.lose_connection();
+                running.logins.log_out(&running.loader).await.unwrap();
+                settle().await;
+                running.world.connect();
+                running.logins.log_out(&running.loader).await.unwrap();
+                settle().await;
                 assert_eq!(
                     *running.reports.borrow(),
                     [
@@ -174,6 +221,10 @@ mod tests {
                         Status::Online(Some("Twilly".into())),
                         Status::Offline,
                         Status::Online(Some("Twilly".into())),
+                        Status::LoggedOut,
+                        Status::Online(Some("Twilly".into())),
+                        Status::Offline,
+                        Status::LoggedOut,
                     ]
                 );
             })

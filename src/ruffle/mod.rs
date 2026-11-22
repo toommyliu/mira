@@ -569,9 +569,10 @@ fn run(
                     let bridge = commands_bridge.clone();
                     let connections = bridge.subscribe(auto_relogin::wants);
                     let identified = bridge.clone();
+                    let logins = logins.clone();
                     drop(signing_in.replace(spawn(&inbox, async move {
                         bridge.ready().await;
-                        sign_in::watch(bridge, connections, move |status| {
+                        sign_in::watch(bridge, logins, connections, move |status| {
                             if matches!(status, sign_in::Status::Online(_)) {
                                 match player::identity(&identified) {
                                     Ok(identity) => {

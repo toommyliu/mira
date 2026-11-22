@@ -259,8 +259,10 @@ impl RuffleView {
             },
             (None, Some(Status::ChooseServer)) => Login::ChooseServer,
             (None, Some(Status::Online(_))) => Login::Online,
-            (None, Some(Status::Offline)) if relogging(&self.auto_relogin) => Login::Reconnecting,
-            (None, Some(Status::Offline)) => Login::Disconnected,
+            (None, Some(Status::Offline | Status::LoggedOut)) if relogging(&self.auto_relogin) => {
+                Login::Reconnecting
+            }
+            (None, Some(Status::Offline | Status::LoggedOut)) => Login::Disconnected,
             (None, Some(Status::Failed(error))) => Login::Failed(error.clone().into()),
         };
         let online = login == Login::Online;
@@ -320,10 +322,12 @@ impl RuffleView {
                 ));
             }
             Some(Status::ChooseServer) => return Some(Glance::new("Choose server", Tone::Warning)),
-            Some(Status::Offline) if link.is_none() => {
+            Some(Status::Offline | Status::LoggedOut) if link.is_none() => {
                 return Some(Glance::new("Not logged in", Tone::Neutral));
             }
-            Some(Status::Offline) => return Some(Glance::new("Offline", Tone::Warning)),
+            Some(Status::Offline | Status::LoggedOut) => {
+                return Some(Glance::new("Offline", Tone::Warning));
+            }
             None => match (link, self.loading) {
                 (None, Loading::Done) => None,
                 (_, Loading::Percent(percent)) => {
@@ -406,7 +410,10 @@ impl RuffleView {
 }
 
 fn signed_out(status: Option<&Status>, relogin: &Phase) -> bool {
-    matches!(status, Some(Status::Offline | Status::Failed(_))) && !relogging(relogin)
+    matches!(
+        status,
+        Some(Status::Offline | Status::LoggedOut | Status::Failed(_))
+    ) && !relogging(relogin)
 }
 
 fn relogging(relogin: &Phase) -> bool {
@@ -428,7 +435,7 @@ fn login_label(status: &Status) -> SharedString {
         Status::ChooseServer => "Choose a server".into(),
         Status::Online(Some(server)) => server.clone().into(),
         Status::Online(None) => "Online".into(),
-        Status::Offline => "Offline".into(),
+        Status::Offline | Status::LoggedOut => "Offline".into(),
         Status::Failed(error) => format!("Login failed: {error}").into(),
     }
 }
