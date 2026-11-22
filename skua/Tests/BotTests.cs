@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace Mira.Skua.Tests;
 
 public class BotTests
@@ -69,6 +71,20 @@ public class BotTests
         var result = game.Bot().ShowMessageBox("Use tickets?", "Mode Selector", "Select Amount", "GO FOR BROKE!", "Just crunch the numbers");
 
         Assert.Equal(new global::Skua.Core.Models.DialogResult("Just crunch the numbers", 2), result);
+    }
+
+    [Fact]
+    public void Setting_the_login_to_the_tabs_own_account_succeeds_and_another_account_is_refused()
+    {
+        var bot = Offline.Bot(new Dictionary<string, JsonNode?>
+        {
+            ["flash.getGameObjectS:loginInfo.strUsername"] = "\"Hero\"",
+            ["flash.getGameObjectS:loginInfo.strPassword"] = "\"hunter2\"",
+        });
+
+        bot.Servers.SetLoginInfo("hero", "hunter2");
+        Assert.Throws<NotSupportedException>(() => bot.Servers.SetLoginInfo("Villain", "hunter2"));
+        Assert.Throws<NotSupportedException>(() => bot.Servers.SetLoginInfo("Hero", "wrong"));
     }
 
     [Fact]

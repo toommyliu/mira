@@ -16,7 +16,12 @@ public sealed class Servers(Game game, Paths paths, Func<IScriptInterface> bot) 
     public List<Server> CachedServers => ServerList ?? [];
     public bool IsConnected => paths.Get("sfc.isConnected", false, "sfc");
 
-    public void SetLoginInfo(string username, string password) => throw Unsupported.Member("Servers.SetLoginInfo");
+    public void SetLoginInfo(string username, string password)
+    {
+        var player = bot().Player;
+        if (!string.Equals(username, player.Username, StringComparison.OrdinalIgnoreCase) || password != player.Password)
+            throw new NotSupportedException("Mira logs in as this tab's account, so a script can't switch it to another one.");
+    }
 
     public bool ConnectIP(string serverIp) => throw Unsupported.Member("Servers.ConnectIP");
 
