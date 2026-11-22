@@ -43,6 +43,8 @@ actions!(mira, [OpenCombatProfiles, SaveProfile, NewProfile]);
 const CONTEXT: &str = "CombatProfiles";
 const WIDTH: f32 = 1000.0;
 const HEIGHT: f32 = 640.0;
+const MIN_WIDTH: f32 = 860.0;
+const MIN_HEIGHT: f32 = 420.0;
 
 const PADDING: Pixels = px(16.0);
 const STATUS_WIDTH: Pixels = px(420.0);
@@ -99,14 +101,13 @@ pub(crate) fn open(selected: Option<String>, cx: &mut App) {
             size(px(WIDTH), px(HEIGHT)),
             cx,
         ))),
+        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         titlebar: Some(TitlebarOptions {
             title: Some("Combat Profiles".into()),
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_resizable: false,
-        is_minimizable: false,
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
@@ -1898,8 +1899,16 @@ mod tests {
         name: &str,
         prepare: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
     ) {
+        snapshot_at(name, size(px(WIDTH), px(HEIGHT)), prepare);
+    }
+
+    fn snapshot_at(
+        name: &str,
+        window_size: gpui::Size<Pixels>,
+        prepare: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
+    ) {
         let path = library_file(name);
-        for written in mira_ui::snapshot(name, size(px(WIDTH), px(HEIGHT)), move |window, cx| {
+        for written in mira_ui::snapshot(name, window_size, move |window, cx| {
             combat_profiles::init(path.clone(), cx);
             let editor = cx.new(|cx| Editor::new(window, cx));
             editor.update(cx, |editor, cx| prepare(editor, window, cx));
@@ -1926,6 +1935,14 @@ mod tests {
                 .update(cx, |input, cx| input.set_text("Daily boss", cx));
             editor.select_item(Some(Item::Trigger(0)), window, cx);
         });
+        snapshot_at(
+            "profiles-step-min",
+            size(px(MIN_WIDTH), px(MIN_HEIGHT)),
+            |editor, window, cx| {
+                editor.select_named("Ultra speaker", window, cx);
+                editor.select_item(Some(Item::Step(Lane::Rotation, 2)), window, cx);
+            },
+        );
         snapshot("profiles-empty", |editor, window, cx| {
             editor.drafts.clear();
             editor.select(None, window, cx);
