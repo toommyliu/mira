@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Nodes;
 using Skua.Core.Interfaces;
 using Skua.Core.Models.Items;
 
@@ -8,6 +9,11 @@ public sealed class Drops(Game game) : IScriptDrop
 {
     private readonly HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> ids = [];
+    private readonly HashSet<string> keptNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<int> keptIds = [];
+    private JsonNode? configBefore;
+    private bool enabledChanged;
+    private bool rejectChanged;
     private bool rejectElse;
 
     public event PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
@@ -25,13 +31,14 @@ public sealed class Drops(Game game) : IScriptDrop
         set
         {
             rejectElse = value;
+            rejectChanged = true;
             game.Request("dropRegistry", "configure", new { rejectOthers = value });
         }
     }
 
     public void Add(params string[] added)
     {
-        names.UnionWith(added);
+        names.UnionWith(added.Select(name => name.Trim()));
         game.Request("dropRegistry", "register", new { items = added });
     }
 
@@ -43,33 +50,66 @@ public sealed class Drops(Game game) : IScriptDrop
 
     public void Remove(params string[] removed)
     {
-        names.ExceptWith(removed);
-        game.Request("dropRegistry", "unregister", new { items = removed });
+        var owned = removed.Where(name => names.Contains(name.Trim()) && !keptNames.Contains(name.Trim())).ToArray();
+        if (owned.Length > 0)
+            game.Request("dropRegistry", "unregister", new { items = owned });
+        names.ExceptWith(removed.Select(name => name.Trim()));
     }
 
     public void Remove(params int[] removed)
     {
+        var owned = removed.Where(id => ids.Contains(id) && !keptIds.Contains(id)).ToArray();
+        if (owned.Length > 0)
+            game.Request("dropRegistry", "unregister", new { items = owned.Select(id => new { itemId = id }) });
         ids.ExceptWith(removed);
-        game.Request("dropRegistry", "unregister", new { items = removed.Select(id => new { itemId = id }) });
     }
 
-    public void Clear()
+    public void Clear() => Clear(game.Calls);
+
+    private void Clear(CancellationToken token)
     {
+        object[] owned = [.. names.Where(name => !keptNames.Contains(name)), .. ids.Where(id => !keptIds.Contains(id)).Select(id => new { itemId = id })];
+        if (owned.Length > 0)
+            game.Request("dropRegistry", "unregister", new { items = owned }, token);
         names.Clear();
         ids.Clear();
-        game.Request("dropRegistry", "unregisterAll");
     }
 
     public void Start()
     {
         Enabled = true;
+        enabledChanged = true;
         game.Request("dropRegistry", "configure", new { enabled = true });
     }
 
     public void Stop()
     {
         Enabled = false;
+        enabledChanged = true;
         game.Request("dropRegistry", "configure", new { enabled = false });
+    }
+
+    internal void Remember()
+    {
+        foreach (var item in game.Request("dropRegistry", "registered")?.AsArray() ?? [])
+        {
+            if (item is JsonValue value && value.TryGetValue(out string? name))
+                keptNames.Add(name.Trim());
+            else if (item?["itemId"] is JsonValue id)
+                keptIds.Add(id.GetValue<int>());
+        }
+        configBefore = game.Request("dropRegistry", "config");
+    }
+
+    internal void Restore(CancellationToken token)
+    {
+        Clear(token);
+        if ((enabledChanged || rejectChanged) && configBefore is not null)
+            game.Request("dropRegistry", "configure", new
+            {
+                enabled = enabledChanged ? configBefore["enabled"]?.GetValue<bool>() : null,
+                rejectOthers = rejectChanged ? configBefore["rejectOthers"]?.GetValue<bool>() : null,
+            }, token);
     }
 
     public ValueTask StopAsync()

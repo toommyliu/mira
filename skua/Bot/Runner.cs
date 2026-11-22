@@ -37,10 +37,15 @@ public sealed class Runner : IRunner
         };
         Faults.Warn = game.Warn;
         Thread? events = null;
+        var drops = (Members.Drops)bot.Drops;
+        var quests = (Members.Quests)bot.Quests;
+        var settings = (Members.Options)bot.Options;
         var handlers = Start(() => bot.HandlerSource.Run(bot, run.Token));
         try
         {
             game.Request("skua", "events", new { id = 1 }, game.Stopping);
+            drops.Remember();
+            quests.Remember();
             events = Start(() => Listen(bot, game));
             var (type, main) = Load(start);
             var script = Activator.CreateInstance(type)!;
@@ -59,6 +64,8 @@ public sealed class Runner : IRunner
         var stopped = run.IsCancellationRequested && failure is null;
         StopSkills(bot);
         run.Cancel();
+        events?.Join(Cleanup);
+        handlers.Join(Cleanup);
         if (failure is not null || (stopped && status.RunStopping))
         {
             using var cleanup = new CancellationTokenSource(Cleanup);
@@ -66,8 +73,20 @@ public sealed class Runner : IRunner
             bot.EventSource.Stopping(failure);
             cleanup.Cancel();
         }
-        events?.Join();
-        handlers.Join();
+        using (var teardown = new CancellationTokenSource(Cleanup))
+        {
+            try
+            {
+                drops.Restore(teardown.Token);
+                quests.Restore(teardown.Token);
+                settings.Restore(teardown.Token);
+            }
+            catch (Exception error)
+            {
+                if (error is not OperationCanceledException)
+                    game.Warn($"Mira couldn't undo this script's drop, quest and setting changes: {error.Message}");
+            }
+        }
         bot.Detach();
         Dialogs.Current = null;
         Faults.Fail = null;

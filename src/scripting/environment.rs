@@ -114,11 +114,11 @@ pub(super) fn serve_drops(automation: &Automation, request: DropRequest) -> Repl
             json!(null)
         }
         DropRequest::Unregister { items } => {
-            automation.update_drops(|state| state.unregister(&items));
+            automation.update_drops(|state| unregister_items(&mut state.items, &items));
             json!(null)
         }
         DropRequest::UnregisterAll => {
-            automation.update_drops(|state| state.clear());
+            automation.update_drops(|state| state.items.clear());
             json!(null)
         }
         DropRequest::Registered => json!(automation.drops().items),
@@ -212,8 +212,13 @@ mod tests {
     }
 
     #[test]
-    fn items_match_names_ignoring_case_and_ids_separately() {
+    fn items_match_names_ignoring_case_and_ids_separately_and_leave_sound_marks() {
         let automation = Automation::default();
+        let marked = vec![
+            ItemQuery::Name("Gem".into()),
+            ItemQuery::ItemId { item_id: 5 },
+        ];
+        automation.update_drops(|state| state.sounds = marked.clone());
         serve_drops(
             &automation,
             request(json!({ "op": "register", "items": ["Gem", " gem ", { "itemId": 5 }, ""] })),
@@ -234,6 +239,7 @@ mod tests {
         );
         serve_drops(&automation, request(json!({ "op": "unregisterAll" }))).unwrap();
         assert!(automation.drops().items.is_empty());
+        assert_eq!(automation.drops().sounds, marked);
     }
 
     #[test]

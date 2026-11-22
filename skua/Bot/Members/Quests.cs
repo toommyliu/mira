@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Skua.Core.Interfaces;
 using Skua.Core.Models.Quests;
 
@@ -6,6 +7,10 @@ namespace Mira.Skua.Bot.Members;
 public sealed class Quests(Game game, Paths paths, Func<IScriptInterface> bot) : IScriptQuest
 {
     private readonly Dictionary<int, int> registered = [];
+    private readonly Dictionary<int, JsonNode> kept = [];
+    private readonly HashSet<int> touched = [];
+    private JsonNode? configBefore;
+    private bool configured;
 
     private IScriptInterface Bot => bot();
 
@@ -36,24 +41,49 @@ public sealed class Quests(Game game, Paths paths, Func<IScriptInterface> bot) :
     {
         foreach (var (quest, reward) in quests)
             registered[quest] = reward;
+        touched.UnionWith(quests.Select(entry => entry.questId).Where(kept.ContainsKey));
         game.Request("questRegistry", "register", new
         {
             quests = quests.Select(entry => new { questId = entry.questId, rewardItemId = entry.rewardId > 0 ? entry.rewardId : (int?)null }),
         });
+        configured = true;
         game.Request("questRegistry", "configure", new { enabled = true });
     }
 
     public void UnregisterQuests(params int[] ids)
     {
+        touched.UnionWith(ids.Where(kept.ContainsKey));
+        game.Request("questRegistry", "unregister", new { questIds = ids });
         foreach (var id in ids)
             registered.Remove(id);
-        game.Request("questRegistry", "unregister", new { questIds = ids });
     }
 
-    public void UnregisterAllQuests()
+    public void UnregisterAllQuests() => UnregisterAllQuests(game.Calls);
+
+    private void UnregisterAllQuests(CancellationToken token)
     {
+        var owned = registered.Keys.Where(id => !kept.ContainsKey(id)).ToArray();
+        if (owned.Length > 0)
+            game.Request("questRegistry", "unregister", new { questIds = owned }, token);
         registered.Clear();
-        game.Request("questRegistry", "unregisterAll");
+    }
+
+    internal void Remember()
+    {
+        foreach (var quest in game.Request("questRegistry", "registered")?.AsArray() ?? [])
+            if (quest?["questId"] is JsonValue id)
+                kept[id.GetValue<int>()] = quest.DeepClone();
+        configBefore = game.Request("questRegistry", "config");
+    }
+
+    internal void Restore(CancellationToken token)
+    {
+        UnregisterAllQuests(token);
+        if (touched.Count > 0)
+            game.Request("questRegistry", "register", new { quests = touched.Select(id => kept[id]).ToArray() }, token);
+        touched.Clear();
+        if (configured && configBefore?["enabled"] is { } enabled)
+            game.Request("questRegistry", "configure", new { enabled = enabled.GetValue<bool>() }, token);
     }
 
     public void Load(params int[] ids) => game.Request("quests", "loadBatch", new { questIds = ids });

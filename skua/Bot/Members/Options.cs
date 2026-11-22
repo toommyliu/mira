@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using Skua.Core.Interfaces;
 using Skua.Core.Models;
 
@@ -41,6 +43,7 @@ public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptO
     };
 
     private readonly Dictionary<string, object?> values = [];
+    private readonly ConcurrentDictionary<(string Domain, string Field), JsonNode?> before = new();
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
 
@@ -126,6 +129,13 @@ public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptO
 
     public void Save() { }
 
+    internal void Restore(CancellationToken token)
+    {
+        foreach (var ((domain, field), value) in before)
+            game.Request(domain, "update", new Dictionary<string, object?> { [field] = value }, token);
+        before.Clear();
+    }
+
     private T Get<T>([CallerMemberName] string name = "") =>
         values.TryGetValue(name, out var value) ? (T)value! : Defaults.TryGetValue(name, out var preset) ? (T)preset : default!;
 
@@ -138,6 +148,13 @@ public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptO
         {
             var (key, mapped) = setting(value);
             var (domain, field) = key.Split(':') is [var named, var inner] ? (named, inner) : ("settings", key);
+            if (!before.ContainsKey((domain, field)))
+            {
+                var original = game.Request(domain, "get")?[field]?.DeepClone();
+                if (field == "rendering" && Json.Text(original) == "minimal")
+                    return;
+                before.TryAdd((domain, field), original);
+            }
             game.Request(domain, "update", new Dictionary<string, object?> { [field] = mapped });
         }
         else if (GamePaths.TryGetValue(name, out var path))
