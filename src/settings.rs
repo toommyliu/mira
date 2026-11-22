@@ -1174,10 +1174,12 @@ impl SettingsWindow {
                 ))
                 .row(Row::new(
                     "Font smoothing",
-                    Some("Thicken text strokes, most of all for light text."),
-                    Switch::new("font-smoothing", "Font smoothing", settings.font_smoothing)
+                    Some("Use thinner text instead of the macOS default."),
+                    Switch::new("font-smoothing", "Font smoothing", !settings.font_smoothing)
                         .hide_label()
-                        .on_toggle(|on, _, cx| change(cx, |settings| settings.font_smoothing = on)),
+                        .on_toggle(|on, _, cx| {
+                            change(cx, |settings| settings.font_smoothing = !on)
+                        }),
                 ))
                 .row(Row::new(
                     "Use pointer cursors",
