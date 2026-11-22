@@ -132,6 +132,8 @@ public sealed class Runner : IRunner
         while (!game.Stopping.IsCancellationRequested)
         {
             var next = game.Request("feeds", "next", new { id = 1 }, game.Stopping);
+            if (next?["lagged"]?.GetValue<bool>() == true)
+                game.Warn("Mira fell behind on game packets and dropped some, so this script may miss one it's waiting for.");
             foreach (var item in next?["items"]?.AsArray() ?? [])
                 Deliver(bot, flash, item!.AsObject());
         }

@@ -23,10 +23,10 @@ public sealed class MiraBot : IScriptInterface
         Config = options;
         EventSource = new Events(() => this);
         Services = new Services(this, game, dialogs);
-        Options = new Members.Options(game, paths, flash);
+        Options = new Members.Options(game, paths, flash, () => (Members.Drops)Drops!);
         Combat = new Members.Combat(game, flash, paths, () => Monsters!);
         Player = new Members.Player(game, paths, flash, () => Inventory!);
-        Map = new Members.Map(game, paths, flash, Options, () => Player);
+        Map = new Members.Map(game, paths, flash, Options, () => Player, () => Wait!);
         Monsters = new ScriptMonster(new(() => Flash), new(() => Map), new(() => Player));
         Inventory = new Members.Inventory(game, flash, paths, () => this);
         Bank = new Members.Bank(game, flash, paths, () => this);

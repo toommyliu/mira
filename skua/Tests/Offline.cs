@@ -36,7 +36,9 @@ sealed class Offline(Func<string, JsonObject, JsonNode?> answer) : IConnection
         return Answer(dialog);
     }
 
-    public void Log(string level, string text) { }
+    public ConcurrentQueue<(string Level, string Text)> Logs { get; } = new();
+
+    public void Log(string level, string text) => Logs.Enqueue((level, text));
 
     public MiraBot Bot()
     {

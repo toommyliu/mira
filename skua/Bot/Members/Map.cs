@@ -4,7 +4,7 @@ using Skua.Core.Models.Players;
 
 namespace Mira.Skua.Bot.Members;
 
-public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption options, Func<IScriptPlayer> player) : IScriptMap
+public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption options, Func<IScriptPlayer> player, Func<IScriptWait> wait) : IScriptMap
 {
     public string LastMap { get; set; } = string.Empty;
     public bool Loading => paths.Get("world.mapLoadInProgress", false);
@@ -34,8 +34,11 @@ public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption 
 
     public void JoinPacket(string map, string cell = "Enter", string pad = "Spawn") => Join(map, cell, pad);
 
-    public void Jump(string cell, string pad, bool autoCorrect = true, bool clientOnly = false) =>
-        game.Request("player", "jumpToCell", new { cell, pad });
+    public void Jump(string cell, string pad, bool autoCorrect = true, bool clientOnly = false)
+    {
+        flash.Call("jumpCorrectRoom", cell, pad, autoCorrect, clientOnly);
+        wait().ForCellChange(cell);
+    }
 
     public void GetMapItem(int id) => game.Request("world", "mapItem", new { itemId = id });
 

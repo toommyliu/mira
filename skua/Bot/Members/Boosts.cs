@@ -7,12 +7,12 @@ namespace Mira.Skua.Bot.Members;
 
 public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
 {
-    private static readonly Dictionary<BoostType, (string Kind, string Search)> Types = new()
+    private static readonly Dictionary<BoostType, (string Kind, string Link)> Types = new()
     {
-        [BoostType.Gold] = ("gold", "gold"),
-        [BoostType.Class] = ("classPoints", "class"),
-        [BoostType.Reputation] = ("rep", "rep"),
-        [BoostType.Experience] = ("xp", "xp"),
+        [BoostType.Gold] = ("gold", "gboost"),
+        [BoostType.Class] = ("classPoints", "cpboost"),
+        [BoostType.Reputation] = ("rep", "repboost"),
+        [BoostType.Experience] = ("xp", "xpboost"),
     };
 
     private readonly object gate = new();
@@ -21,6 +21,8 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
     private readonly HashSet<int> kept = [];
     private readonly HashSet<int> owned = [];
     private bool started;
+    private JsonNode? configBefore;
+    private bool enabledChanged;
 
     public event PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
 
@@ -50,7 +52,8 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
     {
         if (!Types.TryGetValue(boostType, out var type) || !bot().Player.LoggedIn)
             return 0;
-        bool Matches(InventoryItem item) => item.Category == ItemCategory.ServerUse && item.Name.Contains(type.Search);
+        bool Matches(InventoryItem item) => item.Category == ItemCategory.ServerUse
+            && string.Equals(item.FileName?.Split("::")[0].Trim(), type.Link, StringComparison.OrdinalIgnoreCase);
         var id = bot().Inventory.Items?.FirstOrDefault(Matches)?.ID ?? 0;
         if (id != 0 || !searchBank)
             return id;
@@ -63,7 +66,15 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
         return id;
     }
 
-    public void Start() => Run(true);
+    public void Start()
+    {
+        lock (gate)
+        {
+            enabledChanged = true;
+            game.Request("boostRegistry", "configure", new { enabled = true });
+        }
+        Run(true);
+    }
 
     public void Stop() => Run(false);
 
@@ -114,9 +125,12 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
     internal void Remember()
     {
         lock (gate)
+        {
             foreach (var item in game.Request("boostRegistry", "registered")?.AsArray() ?? [])
                 if (item is JsonObject entry && entry["itemId"] is JsonValue id)
                     kept.Add(id.GetValue<int>());
+            configBefore = game.Request("boostRegistry", "config");
+        }
     }
 
     internal void Restore(CancellationToken token)
@@ -127,6 +141,8 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
                 game.Request("boostRegistry", "unregister", new { items = owned.Select(id => new { itemId = id }).ToArray() }, token);
             owned.Clear();
             registered.Clear();
+            if (enabledChanged && configBefore?["enabled"] is JsonValue enabled)
+                game.Request("boostRegistry", "configure", new { enabled = enabled.GetValue<bool>() }, token);
         }
     }
 }

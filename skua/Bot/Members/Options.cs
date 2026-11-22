@@ -7,7 +7,7 @@ using Skua.Core.Models;
 
 namespace Mira.Skua.Bot.Members;
 
-public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptOption
+public sealed class Options(Game game, Paths paths, IFlashUtil flash, Func<Drops> drops) : IScriptOption
 {
     private static readonly Dictionary<string, Func<object, (string Key, object? Value)>> Mira = new()
     {
@@ -53,15 +53,24 @@ public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptO
 
     public int ReloginTryDelay { get => Get<int>(); set => Set(value); }
     public int LoginTimeout { get => Get<int>(); set => Set(value); }
-    public bool AcceptACDrops { get => Get<bool>(); set => Set(value); }
+    public bool AcceptACDrops
+    {
+        get => Get<bool>();
+        set
+        {
+            Set(value);
+            drops().Accept(value || AcceptAllDrops, AcceptAllDrops);
+        }
+    }
     public bool AcceptAllDrops
     {
         get => Get<bool>();
         set
         {
             Set(value);
-            if (value)
+            if (value && RejectAllDrops)
                 RejectAllDrops = false;
+            drops().Accept(value || AcceptACDrops, value);
         }
     }
     public bool RejectAllDrops
@@ -70,8 +79,9 @@ public sealed class Options(Game game, Paths paths, IFlashUtil flash) : IScriptO
         set
         {
             Set(value);
-            if (value)
+            if (value && AcceptAllDrops)
                 AcceptAllDrops = false;
+            drops().RejectAllDrops(value);
         }
     }
     public bool AggroAllMonsters { get => Get<bool>(); set => Set(value); }

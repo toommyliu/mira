@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Skua.Core.Models.Items;
 
 namespace Mira.Skua.Tests;
 
@@ -38,6 +39,80 @@ public class BotTests
         Assert.Equal(["yulgar", "tercessuinotlim-4242", "bludrut-9999", "battleon-100000"],
             joins.Select(call => (string?)call["map"]));
         Assert.All(joins, call => Assert.Equal("public", (string?)call["rooms"]?["kind"]));
+    }
+
+    [Fact]
+    public void A_jump_keeps_its_pad_correction_and_client_only_flags()
+    {
+        var game = new Offline();
+        var bot = game.Bot();
+
+        bot.Map.Jump("r2", "Left");
+        bot.Map.Jump("r3", "Right", autoCorrect: false, clientOnly: true);
+
+        Assert.Equal(["""["r2","Left",true,false]""", """["r3","Right",false,true]"""], game.Calls
+            .Where(call => (string?)call["function"] == "skua.jumpCorrectRoom")
+            .Select(call => call["args"]!.ToJsonString()));
+    }
+
+    [Fact]
+    public void Drop_options_decide_what_mira_accepts_and_rejects()
+    {
+        var config = new JsonObject
+        {
+            ["enabled"] = false,
+            ["acceptAc"] = false,
+            ["acceptAcMemberOnly"] = false,
+            ["acceptNonAc"] = false,
+            ["acceptNonAcMemberOnly"] = false,
+            ["rejectOthers"] = false,
+        };
+        var bot = new Offline((key, request) =>
+        {
+            if (key == "dropRegistry.configure")
+                foreach (var (field, value) in request)
+                    if (config.ContainsKey(field))
+                        config[field] = value?.DeepClone();
+            return null;
+        }).Bot();
+        string Config() => config.ToJsonString();
+
+        bot.Options.AcceptACDrops = true;
+        Assert.Equal("""{"enabled":true,"acceptAc":true,"acceptAcMemberOnly":true,"acceptNonAc":false,"acceptNonAcMemberOnly":false,"rejectOthers":false}""", Config());
+
+        bot.Options.RejectAllDrops = true;
+        Assert.Equal("""{"enabled":true,"acceptAc":true,"acceptAcMemberOnly":true,"acceptNonAc":false,"acceptNonAcMemberOnly":false,"rejectOthers":true}""", Config());
+
+        bot.Options.AcceptAllDrops = true;
+        Assert.False(bot.Options.RejectAllDrops);
+        Assert.Equal("""{"enabled":true,"acceptAc":true,"acceptAcMemberOnly":true,"acceptNonAc":true,"acceptNonAcMemberOnly":true,"rejectOthers":false}""", Config());
+
+        bot.Options.AcceptAllDrops = false;
+        bot.Drops.RejectElse = true;
+        Assert.Equal("""{"enabled":true,"acceptAc":true,"acceptAcMemberOnly":true,"acceptNonAc":false,"acceptNonAcMemberOnly":false,"rejectOthers":true}""", Config());
+    }
+
+    [Fact]
+    public void A_boost_is_found_by_its_kind_and_not_by_words_in_its_name()
+    {
+        static JsonObject Item(int id, string name, string link) =>
+            new() { ["ItemID"] = id, ["sName"] = name, ["sType"] = "ServerUse", ["sLink"] = link };
+        var items = new JsonArray(
+            Item(1, "Golden Gate Ticket", ""),
+            Item(2, "Short XP Boost", "xpboost::20"),
+            Item(3, "Gold Boost! (20 min)", "gboost::20"),
+            Item(4, "Class Boost! (60 min)", "cpboost::60"));
+        var bot = new Offline((key, _) => key switch
+        {
+            "skua.isLoggedIn:" => true,
+            "flash.getGameObject:world.myAvatar.items" => items.ToJsonString(),
+            _ => null,
+        }).Bot();
+
+        Assert.Equal(2, bot.Boosts.GetBoostID(BoostType.Experience, searchBank: false));
+        Assert.Equal(3, bot.Boosts.GetBoostID(BoostType.Gold, searchBank: false));
+        Assert.Equal(4, bot.Boosts.GetBoostID(BoostType.Class, searchBank: false));
+        Assert.Equal(0, bot.Boosts.GetBoostID(BoostType.Reputation, searchBank: false));
     }
 
     [Fact]

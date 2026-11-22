@@ -11,10 +11,10 @@ public sealed class Drops(Game game) : IScriptDrop
     private readonly HashSet<int> ids = [];
     private readonly HashSet<string> keptNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> keptIds = [];
+    private readonly HashSet<string> configured = [];
     private JsonNode? configBefore;
-    private bool enabledChanged;
-    private bool rejectChanged;
     private bool rejectElse;
+    private bool rejectAll;
 
     public event PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
 
@@ -31,8 +31,7 @@ public sealed class Drops(Game game) : IScriptDrop
         set
         {
             rejectElse = value;
-            rejectChanged = true;
-            game.Request("dropRegistry", "configure", new { rejectOthers = value });
+            Configure(new() { ["rejectOthers"] = rejectElse || rejectAll });
         }
     }
 
@@ -78,15 +77,39 @@ public sealed class Drops(Game game) : IScriptDrop
     public void Start()
     {
         Enabled = true;
-        enabledChanged = true;
-        game.Request("dropRegistry", "configure", new { enabled = true });
+        Configure(new() { ["enabled"] = true });
     }
 
     public void Stop()
     {
         Enabled = false;
-        enabledChanged = true;
-        game.Request("dropRegistry", "configure", new { enabled = false });
+        Configure(new() { ["enabled"] = false });
+    }
+
+    internal void Accept(bool ac, bool nonAc)
+    {
+        Enabled = true;
+        Configure(new()
+        {
+            ["enabled"] = true,
+            ["acceptAc"] = ac,
+            ["acceptAcMemberOnly"] = ac,
+            ["acceptNonAc"] = nonAc,
+            ["acceptNonAcMemberOnly"] = nonAc,
+        });
+    }
+
+    internal void RejectAllDrops(bool value)
+    {
+        rejectAll = value;
+        Enabled = true;
+        Configure(new() { ["enabled"] = true, ["rejectOthers"] = rejectElse || rejectAll });
+    }
+
+    private void Configure(JsonObject changes)
+    {
+        configured.UnionWith(changes.Select(change => change.Key));
+        game.Request("dropRegistry", "configure", changes);
     }
 
     internal void Remember()
@@ -104,12 +127,9 @@ public sealed class Drops(Game game) : IScriptDrop
     internal void Restore(CancellationToken token)
     {
         Clear(token);
-        if ((enabledChanged || rejectChanged) && configBefore is not null)
-            game.Request("dropRegistry", "configure", new
-            {
-                enabled = enabledChanged ? configBefore["enabled"]?.GetValue<bool>() : null,
-                rejectOthers = rejectChanged ? configBefore["rejectOthers"]?.GetValue<bool>() : null,
-            }, token);
+        if (configured.Count > 0 && configBefore is not null)
+            game.Request("dropRegistry", "configure",
+                new JsonObject(configured.Select(field => KeyValuePair.Create(field, configBefore[field]?.DeepClone()))), token);
     }
 
     public ValueTask StopAsync()
