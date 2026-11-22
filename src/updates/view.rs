@@ -74,36 +74,34 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
             .into_any_element()
         }
     };
-    h_flex()
+    v_flex()
         .debug_selector(|| "settings-update-footer".into())
         .flex_none()
-        .h(theme.typography.secondary_line * 2.0)
         .m(theme.space(2.0))
         .pl(theme.space(2.0))
-        .gap(theme.space(2.0))
-        .justify_between()
         .text_caption(theme.typography)
         .text_color(theme.muted_foreground)
         .child(
-            v_flex()
-                .min_w_0()
-                .justify_center()
-                .child(
-                    div()
-                        .debug_selector(|| "settings-update-version".into())
-                        .truncate()
-                        .text_color(theme.foreground)
-                        .child(VERSION),
-                )
+            div()
+                .debug_selector(|| "settings-update-version".into())
+                .truncate()
+                .text_color(theme.foreground)
+                .child(VERSION),
+        )
+        .child(
+            h_flex()
+                .h(theme.typography.secondary_line)
+                .gap(theme.space(2.0))
+                .justify_between()
                 .child(
                     h_flex()
                         .min_w_0()
                         .gap(theme.space(1.5))
                         .child(div().min_w_0().truncate().child(status))
                         .when(failed, |row| row.child(failed_mark(cx))),
-                ),
+                )
+                .child(action),
         )
-        .child(action)
 }
 
 const NOTES: usize = 8;
