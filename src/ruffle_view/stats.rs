@@ -46,8 +46,8 @@ pub(super) fn overlay(
         .map(|frame| frame.logic_ms.max(frame.render_ms))
         .fold(4.0, f64::max);
     let (logic_color, render_color) = (
-        theme.chart[if theme.dark_mode { 0 } else { 3 }],
-        theme.chart[1],
+        gpui::Hsla::from(gpui::rgb(if theme.dark_mode { 0xd4d4d4 } else { 0x404040 })),
+        gpui::Hsla::from(gpui::rgb(0x737373)),
     );
     let (column_line, row_line, axis) = (theme.ring, theme.border, theme.muted_foreground);
     let panel = div()

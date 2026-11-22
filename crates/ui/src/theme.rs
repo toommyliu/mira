@@ -239,7 +239,6 @@ pub struct Theme {
     pub sidebar_accent_foreground: Hsla,
     pub sidebar_border: Hsla,
     pub sidebar_ring: Hsla,
-    pub chart: [Hsla; 5],
 }
 impl Global for Theme {}
 
@@ -314,7 +313,6 @@ impl Theme {
             sidebar_accent_foreground: secondary_foreground,
             sidebar_border: border,
             sidebar_ring: ring,
-            chart: [0.87, 0.556, 0.439, 0.371, 0.269].map(gray),
         }
     }
     pub fn for_window(appearance: WindowAppearance) -> Self {
