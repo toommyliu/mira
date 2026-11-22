@@ -489,7 +489,8 @@ pub(crate) fn open(
         |scripts: &ScriptsWindow| &scripts.client,
         |scripts, window, cx| {
             scripts.retarget(target, cx);
-            scripts.reopen(window, cx);
+            scripts.rescan(cx);
+            window.focus(&scripts.search.focus_handle(cx), cx);
         },
         cx,
     ) {
@@ -562,7 +563,7 @@ pub(super) struct ScriptsWindow {
     package_dialogs: Entity<PackageDialogs>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
-    _subscriptions: [Subscription; 6],
+    _subscriptions: [Subscription; 7],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -614,7 +615,6 @@ impl ScriptsWindow {
                 if let PackageEvent::Installed(dir) = event {
                     this.set_page(Page::Library(Some(this.packages.join(dir))), cx);
                 }
-                this.generation += 1;
                 this.rescan(cx);
             }),
             cx.observe(&client, |this, _, cx| this.show(cx)),
@@ -650,6 +650,11 @@ impl ScriptsWindow {
             }),
             cx.on_blur(&room.focus_handle(cx), window, |this, _, cx| {
                 this.show_saved_room(cx);
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.rescan(cx);
+                }
             }),
         ];
         let mut scripts = Self {
@@ -715,12 +720,6 @@ impl ScriptsWindow {
         self.chosen = None;
         self.show_saved_room(cx);
         self.select_last_run(cx);
-    }
-
-    fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.generation += 1;
-        self.rescan(cx);
-        window.focus(&self.search.focus_handle(cx), cx);
     }
 
     fn view(&self) -> Option<Entity<RuffleView>> {
@@ -797,6 +796,7 @@ impl ScriptsWindow {
     }
 
     fn rescan(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
         let built_in = self.folder.clone();
         let added = settings::script_folders(cx).to_vec();
         let packages = self.packages.clone();
@@ -4230,6 +4230,61 @@ Cells visited: Enter, r1, r2, r3, r4.";
             );
             assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
         });
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn returning_to_the_window_picks_up_script_changes(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-refocus-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "export const meta = { name: \"Hunt\" };");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let names = |cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, cx| {
+                scripts
+                    .rows(cx)
+                    .iter()
+                    .filter_map(|row| match row {
+                        Row::Script(entry) => Some(entry.name.to_string()),
+                        Row::Source(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(names(cx), ["Hunt"]);
+
+        cx.deactivate_window();
+        write(
+            "scripts/hunt.ts",
+            "export const meta = { name: \"Hunt Ultra\" };",
+        );
+        write("scripts/daily.ts", "");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(names(cx), ["daily.ts", "Hunt Ultra"]);
         fs::remove_dir_all(temp).unwrap();
     }
 
