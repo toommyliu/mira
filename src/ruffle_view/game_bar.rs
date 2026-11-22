@@ -428,9 +428,9 @@ pub(super) fn on_actions<E: gpui::InteractiveElement>(
             view.update(cx, |view, cx| view.toggle_option(option, cx));
             let after = on(view.read(cx));
             if after != before {
-                let state = if after { "On" } else { "Off" };
-                let status = format!("{}: {state}", option.label());
-                let _ = client.update(cx, |client, cx| client.show_status(status, cx));
+                let _ = client.update(cx, |client, cx| {
+                    client.show_status(option.label(), after, cx)
+                });
             }
         })
 }

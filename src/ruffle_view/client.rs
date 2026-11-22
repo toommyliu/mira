@@ -61,7 +61,7 @@ const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 const STATUS_LINGER: Duration = Duration::from_millis(1500);
-const STATUS_PADDING: Pixels = px(14.0);
+const STATUS_PADDING: Pixels = px(16.0);
 
 fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
     tabs.iter()
@@ -127,8 +127,9 @@ pub struct Client {
 }
 
 struct Status {
-    text: SharedString,
-    shown: usize,
+    states: [SharedString; 2],
+    on: bool,
+    entered: Instant,
     left: Option<Instant>,
     _hide: Task<()>,
 }
@@ -1004,7 +1005,7 @@ impl Client {
         }
     }
 
-    pub(super) fn show_status(&mut self, text: String, cx: &mut Context<Self>) {
+    pub(super) fn show_status(&mut self, option: &str, on: bool, cx: &mut Context<Self>) {
         let hide = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(STATUS_LINGER).await;
             let _ = this.update(cx, |this: &mut Self, cx| {
@@ -1014,14 +1015,17 @@ impl Client {
                 cx.notify();
             });
         });
-        let shown = match &self.status {
-            Some(status) if status.left.is_none() => status.shown,
-            Some(status) => status.shown + 1,
-            None => 0,
+        let entered = match &self.status {
+            Some(status) if status.left.is_none() => status.entered,
+            _ => cx.background_executor().now(),
         };
         self.status = Some(Status {
-            text: text.into(),
-            shown,
+            states: [
+                format!("{option}: Off").into(),
+                format!("{option}: On").into(),
+            ],
+            on,
+            entered,
             left: None,
             _hide: hide,
         });
@@ -1032,8 +1036,8 @@ impl Client {
         let layout = cx.theme().layout;
         let typography = cx.theme().typography;
         let status = self.status.as_ref()?;
-        let opacity = match status.left {
-            None => 1.0,
+        let progress = match status.left {
+            None => mira_ui::motion::settling(status.entered, window, cx),
             Some(since) => match mira_ui::motion::leaving(since, window, cx) {
                 Some(opacity) => opacity,
                 None => {
@@ -1044,32 +1048,32 @@ impl Client {
         };
         let mut font = window.text_style().font();
         font.weight = gpui::FontWeight::MEDIUM;
-        let run = gpui::TextRun {
-            len: status.text.len(),
-            font,
-            color: gpui::Hsla::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let text = window
-            .text_system()
-            .shape_line(status.text.clone(), typography.body, &[run], None)
-            .width;
-        let width = mira_ui::motion::glide(
-            ("hotkey-status-width", status.shown),
-            None,
-            f32::from(text.ceil() + STATUS_PADDING * 2.0 + px(4.0)),
-            window,
-            cx,
-        );
+        let widest = status
+            .states
+            .iter()
+            .map(|state| {
+                let run = gpui::TextRun {
+                    len: state.len(),
+                    font: font.clone(),
+                    color: gpui::Hsla::default(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .shape_line(state.clone(), typography.body, &[run], None)
+                    .width
+            })
+            .fold(Pixels::ZERO, Pixels::max);
+        let text = status.states[usize::from(status.on)].clone();
         let theme = cx.theme();
         let pill = div()
             .id("hotkey-status")
             .debug_selector(|| "hotkey-status".into())
             .role(Role::Status)
-            .aria_label(status.text.clone())
-            .w(px(width))
+            .aria_label(text.clone())
+            .w(widest.ceil() + STATUS_PADDING * 2.0)
             .max_w_full()
             .px(STATUS_PADDING)
             .py(layout.space(2.0))
@@ -1081,9 +1085,8 @@ impl Client {
             .line_height(typography.body_line)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.foreground)
-            .text_center()
             .whitespace_nowrap()
-            .child(div().overflow_hidden().child(status.text.clone()));
+            .child(div().overflow_hidden().child(text));
         Some(
             h_flex()
                 .absolute()
@@ -1092,11 +1095,7 @@ impl Client {
                 .right_0()
                 .justify_center()
                 .px(layout.space(3.0))
-                .opacity(opacity)
-                .child(mira_ui::motion::fade(
-                    ("hotkey-status-shown", status.shown),
-                    pill,
-                )),
+                .child(mira_ui::motion::from_above(pill, progress)),
         )
     }
 
@@ -1747,18 +1746,18 @@ mod tests {
     ) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (client, cx) = client_window(cx);
-        let show = |status: &str, cx: &mut gpui::VisualTestContext| {
-            let status = status.to_owned();
-            client.update(cx, |client, cx| client.show_status(status, cx));
+        let show = |option: &str, on: bool, cx: &mut gpui::VisualTestContext| {
+            client.update(cx, |client, cx| client.show_status(option, on, cx));
             cx.run_until_parked();
             cx.debug_bounds("hotkey-status")
                 .map(|bounds| bounds.size.width)
         };
-        let short = show("Anti-AFK: On", cx);
+        let short = show("Anti-AFK", true, cx);
         cx.executor().advance_clock(STATUS_LINGER / 2);
-        let long = show("Skip cutscenes: Off", cx);
+        let long = show("Skip cutscenes", false, cx);
         assert!(short.is_some());
         assert!(long > short);
+        assert_eq!(show("Skip cutscenes", true, cx), long);
         cx.executor().advance_clock(STATUS_LINGER * 3 / 4);
         cx.run_until_parked();
         assert!(cx.debug_bounds("hotkey-status").is_some());
@@ -1780,7 +1779,7 @@ mod tests {
                 crate::settings::init(folder.join("settings.json"), |_| {}, cx);
                 let client = Client::empty_for_tests(&folder, cx);
                 client.update(cx, |client, cx| {
-                    client.show_status("Infinite range: On".into(), cx)
+                    client.show_status("Infinite range", true, cx)
                 });
                 cx.new(|_| Shown(client))
             },
