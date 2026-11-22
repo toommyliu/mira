@@ -3605,3 +3605,52 @@ fn clicking_a_trailing_switch_label_toggles_it(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(toggled.get(), Some(true));
 }
+
+struct ManyTabs {
+    scroll: gpui::ScrollHandle,
+}
+
+impl Render for ManyTabs {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::{
+            ActiveTheme as _,
+            primitives::{Tab, Tabs},
+        };
+        cx.theme()
+            .sidebar_pane()
+            .h_full()
+            .child(div().flex_none().h(gpui::px(40.0)))
+            .child(
+                Tabs::new("sessions", "Tabs", 30, |index| {
+                    Tab::new(format!("Player{index}"))
+                })
+                .vertical()
+                .track_scroll(&self.scroll)
+                .on_reorder(|_, _, _, _| {}),
+            )
+            .child(div().flex_1())
+    }
+}
+
+#[gpui::test]
+fn a_scrolling_tab_list_scrolls_inside_a_short_sidebar(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, ScrollDelta, ScrollEvent, TouchPhase, point, px, size};
+    cx.update(mira_ui::init);
+    let scroll = gpui::ScrollHandle::new();
+    let (_, cx) = cx.add_window_view(|_, _| ManyTabs {
+        scroll: scroll.clone(),
+    });
+    cx.simulate_resize(size(px(240.0), px(300.0)));
+    cx.run_until_parked();
+    let list = scroll.bounds();
+    assert!(list.bottom() <= px(300.0), "{list:?}");
+    cx.simulate_event(ScrollEvent {
+        position: list.origin + point(px(40.0), px(40.0)),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+        source: Default::default(),
+    });
+    cx.run_until_parked();
+    assert!(scroll.offset().y < px(0.0), "{:?}", scroll.offset());
+}

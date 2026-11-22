@@ -64,7 +64,13 @@ const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 const STATUS_LINGER: Duration = Duration::from_millis(1500);
 const STATUS_PADDING: Pixels = px(16.0);
 
-fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
+fn fully_visible(
+    viewport: (f32, f32),
+    scrolled: f32,
+    max_scroll: f32,
+    tabs: &[(f32, f32)],
+) -> Vec<usize> {
+    let scrolled = scrolled.clamp(-max_scroll, 0.0);
     tabs.iter()
         .enumerate()
         .filter(|(_, (top, bottom))| {
@@ -1210,6 +1216,7 @@ impl Client {
         fully_visible(
             (f32::from(viewport.top()), f32::from(viewport.bottom())),
             f32::from(self.tab_scroll.offset().y),
+            f32::from(self.tab_scroll.max_offset().y),
             &tabs,
         )
     }
@@ -1303,7 +1310,7 @@ impl Client {
                     )
                     .child(self.grid_toggle(cx)),
             )
-            .child(div().flex_none().child(tabs))
+            .child(tabs)
             .child(drag_area().flex_1())
             .children(
                 crate::updates::button(Placement::new(Side::Right, Align::End), cx).map(|update| {
@@ -1729,10 +1736,14 @@ mod tests {
         let tabs: Vec<_> = (0..12)
             .map(|index| (index as f32 * 30.0, index as f32 * 30.0 + 28.0))
             .collect();
-        assert_eq!(fully_visible((0.0, 130.0), 0.0, &tabs), [0, 1, 2, 3]);
-        assert_eq!(fully_visible((0.0, 130.0), -45.0, &tabs), [2, 3, 4]);
+        assert_eq!(fully_visible((0.0, 130.0), 0.0, 228.0, &tabs), [0, 1, 2, 3]);
+        assert_eq!(fully_visible((0.0, 130.0), -45.0, 228.0, &tabs), [2, 3, 4]);
         assert_eq!(
-            fully_visible((0.0, 1000.0), 0.0, &tabs),
+            fully_visible((0.0, 130.0), -1000.0, 228.0, &tabs),
+            [8, 9, 10, 11]
+        );
+        assert_eq!(
+            fully_visible((0.0, 1000.0), 0.0, 0.0, &tabs),
             (0..9).collect::<Vec<_>>()
         );
     }

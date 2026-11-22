@@ -1026,18 +1026,7 @@ impl Editor {
                     .text_color(theme.muted_foreground)
                     .child(text)
             }))
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .min_h_0()
-                    .child(v_flex().min_h_0().child(profiles))
-                    .child(Scrollbar::new(
-                        "profiles-scrollbar",
-                        self.profile_scroll.clone(),
-                    )),
-            )
+            .child(profiles)
             .child(drag_area().flex_1())
             .when(issues > 0, |sidebar| {
                 sidebar.child(
