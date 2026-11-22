@@ -1055,8 +1055,7 @@ impl SettingsWindow {
                         if on {
                             crate::updates::Updates::check(false, cx).detach();
                             crate::packages::packages(cx)
-                                .update(cx, |packages, cx| packages.check(true, cx))
-                                .detach();
+                                .update(cx, |packages, cx| packages.check_when_idle(true, cx));
                         }
                     }),
                 )),

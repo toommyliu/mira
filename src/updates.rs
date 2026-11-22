@@ -83,8 +83,7 @@ impl InFlight {
 pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
         crate::packages::packages(cx)
-            .update(cx, |packages, cx| packages.check(false, cx))
-            .detach();
+            .update(cx, |packages, cx| packages.check_when_idle(false, cx));
         let checking = Updates::check(true, cx);
         cx.spawn(async move |cx| {
             checking.await;
