@@ -818,6 +818,43 @@ export default function* () {
 }
 
 #[test]
+fn a_run_refusing_game_calls_stops_without_its_cleanup_reaching_the_game() {
+    let folder = Folder::new(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+import { Auth } from "mira";
+
+export default function* () {
+  console.log("running");
+  yield* Effect.never.pipe(Effect.ensuring(Effect.ignore(Auth.logout())));
+}
+"#,
+    )]);
+    let player = FakePlayer::default();
+    let started = start(
+        &folder,
+        "main.ts",
+        Limits::default(),
+        player.answering(|_, _| Some(Ok(json!(null)))),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while started.logs.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the script started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    started.run.refuse_game_calls();
+    started.run.stop();
+    assert_eq!(started.finish().outcome, Outcome::Stopped);
+    assert!(
+        !player
+            .seen()
+            .iter()
+            .any(|seen| matches!(seen, Seen::Call(_, Request::Auth(A::Logout)))),
+        "the cleanup logged out"
+    );
+}
+
+#[test]
 fn stopping_during_the_exit_logout_still_reports_the_exit() {
     let folder = Folder::new(&[(
         "main.ts",

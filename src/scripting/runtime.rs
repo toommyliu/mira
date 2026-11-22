@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -83,6 +83,7 @@ pub(crate) struct Launch {
 pub(crate) struct Run {
     commands: mpsc::Sender<Command>,
     clock: Arc<Clock>,
+    refusing: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -97,6 +98,13 @@ impl Run {
     ) -> std::io::Result<Self> {
         static RUNS: AtomicU64 = AtomicU64::new(0);
         let run = RunId(RUNS.fetch_add(1, Ordering::Relaxed));
+        let refusing = Arc::new(AtomicBool::new(false));
+        let refused = refusing.clone();
+        let player: Player = Box::new(move |message| {
+            if !(refused.load(Ordering::SeqCst) && matches!(message, ToPlayer::Call(_))) {
+                player(message);
+            }
+        });
         let (commands, inbox) = mpsc::channel();
         let replies = commands.clone();
         let clock = Clock::new();
@@ -119,6 +127,7 @@ impl Run {
         Ok(Self {
             commands,
             clock,
+            refusing,
             thread: Some(thread),
         })
     }
@@ -126,6 +135,10 @@ impl Run {
     pub(crate) fn stop(&self) {
         self.clock.request_stop();
         let _ = self.commands.send(Command::Stop);
+    }
+
+    pub(crate) fn refuse_game_calls(&self) {
+        self.refusing.store(true, Ordering::SeqCst);
     }
 }
 

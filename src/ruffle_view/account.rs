@@ -166,6 +166,7 @@ impl RuffleView {
     }
 
     pub(super) fn identify(&mut self, player: &str, cx: &mut Context<Self>) -> bool {
+        self.bind_script(player, cx);
         let id = AccountId::of(player);
         if self.account.as_ref().is_some_and(|link| link.id() == id) {
             return false;

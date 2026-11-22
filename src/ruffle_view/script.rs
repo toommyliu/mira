@@ -35,6 +35,7 @@ struct Restart {
 
 struct Loaded {
     launch: Launch,
+    character: Option<AccountId>,
     phase: Phase,
     since: Instant,
 }
@@ -84,6 +85,16 @@ impl Script {
         )
     }
 
+    fn bind(&mut self, character: &AccountId) -> bool {
+        let running = self.running();
+        match &mut self.loaded {
+            Some(loaded) if running => {
+                loaded.character.get_or_insert_with(|| character.clone()) == character
+            }
+            _ => true,
+        }
+    }
+
     pub(super) fn entry(&self) -> Option<&PathBuf> {
         self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
@@ -104,6 +115,7 @@ impl Script {
             launch,
             phase,
             since,
+            ..
         } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         let phase = match phase {
@@ -186,13 +198,22 @@ impl RuffleView {
         }
         self.script.leaving = None;
         self.script.restart = None;
+        let character = self.character().map(AccountId::of);
         if !fresh || !self.safe_start_stop(cx) {
-            return self.run_script(launch, cx);
+            return self.run_script(launch, character, cx);
         }
         let ready = launch.clone();
-        let moving = self.retreat(cx, move |this, cx| this.run_script(ready, cx));
+        let moving = self.retreat(cx, move |this, cx| {
+            let character = this
+                .script
+                .loaded
+                .as_mut()
+                .and_then(|loaded| loaded.character.take());
+            this.run_script(ready, character, cx)
+        });
         self.script.loaded = Some(Loaded {
             launch,
+            character,
             phase: Phase::Preparing { _moving: moving },
             since: Instant::now(),
         });
@@ -223,7 +244,7 @@ impl RuffleView {
         })
     }
 
-    fn run_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
+    fn run_script(&mut self, launch: Launch, character: Option<AccountId>, cx: &mut Context<Self>) {
         script_names::refresh(&launch.entry, cx);
         let inbox = self.session.inbox();
         let path = launch.entry.clone();
@@ -289,6 +310,7 @@ impl RuffleView {
                 };
                 self.script.loaded = Some(Loaded {
                     launch,
+                    character,
                     phase: Phase::Finished(outcome.clone()),
                     since: Instant::now(),
                 });
@@ -298,6 +320,7 @@ impl RuffleView {
         };
         self.script.loaded = Some(Loaded {
             launch,
+            character,
             phase,
             since: Instant::now(),
         });
@@ -471,6 +494,30 @@ impl RuffleView {
         self.end_run(cx);
     }
 
+    pub(super) fn bind_script(&mut self, player: &str, cx: &mut Context<Self>) {
+        if self.script.bind(&AccountId::of(player)) {
+            return;
+        }
+        if let Some(entry) = self.script.entry() {
+            self.span.in_scope(|| {
+                tracing::warn!(
+                    target: "mira::script",
+                    path = %entry.display(),
+                    character = player,
+                    "stopped the script because a different character signed in"
+                )
+            });
+        }
+        if let Some(Loaded {
+            phase: Phase::Running { run, .. },
+            ..
+        }) = &self.script.loaded
+        {
+            run.refuse_game_calls();
+        }
+        self.stop_script(cx);
+    }
+
     pub(super) fn resume_script(&mut self, cx: &mut Context<Self>) {
         if !self.online() || self.script.running() {
             return;
@@ -496,5 +543,47 @@ impl RuffleView {
             self.start_script(launch, cx);
         }
         self.changed(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scripting::Supplied;
+
+    fn preparing(character: Option<&str>) -> Script {
+        Script {
+            loaded: Some(Loaded {
+                launch: Launch {
+                    entry: PathBuf::from("hunt.ts"),
+                    inputs: Supplied::Values(Default::default()),
+                },
+                character: character.map(AccountId::of),
+                phase: Phase::Preparing {
+                    _moving: Task::ready(()),
+                },
+                since: Instant::now(),
+            }),
+            ..Script::default()
+        }
+    }
+
+    #[test]
+    fn a_run_keeps_going_only_for_the_character_it_started_on() {
+        let (wildfox, kestrel) = (AccountId::of("wildfox"), AccountId::of("kestrel"));
+
+        let mut started = preparing(Some("Wildfox"));
+        assert!(started.bind(&wildfox));
+        assert!(!started.bind(&kestrel));
+
+        let mut unidentified = preparing(None);
+        assert!(unidentified.bind(&kestrel));
+        assert!(!unidentified.bind(&wildfox));
+
+        let mut ended = preparing(Some("wildfox"));
+        if let Some(loaded) = &mut ended.loaded {
+            loaded.phase = Phase::Finished(Outcome::Stopped);
+        }
+        assert!(ended.bind(&kestrel));
     }
 }
