@@ -539,6 +539,7 @@ impl RenderOnce for Tabs {
             Axis::Horizontal
         };
         let on_key = self.on_select;
+        let scrolls = self.scroll.is_some();
         let tab = self.tab;
         let list = div()
             .id(self.id.clone())
@@ -564,6 +565,9 @@ impl RenderOnce for Tabs {
                     nav::step(Some(selected), count, step, true, |_| true),
                     &on_key,
                 ) {
+                    if scrolls {
+                        nav::request_reveal(cx);
+                    }
                     on_select(next, window, cx);
                 }
                 cx.stop_propagation();

@@ -130,7 +130,7 @@ impl Packages {
         self.status.get(dir)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "storyboard"))]
     pub(crate) fn mark(&mut self, dir: &str, status: Status) {
         self.status.insert(dir.to_owned(), status);
     }
