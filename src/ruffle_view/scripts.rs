@@ -111,7 +111,6 @@ struct Source {
     name: SharedString,
     kind: SourceKind,
     problem: Option<SharedString>,
-    scripts: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -125,7 +124,6 @@ impl Library {
         let index = Some(self.sources.len());
         match scanned {
             Ok(entries) => {
-                source.scripts = entries.len();
                 self.entries.extend(entries.into_iter().map(|entry| Entry {
                     source: index,
                     ..entry
@@ -214,7 +212,6 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
             name: name.into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         library.add(source, scan(root));
     }
@@ -258,7 +255,6 @@ fn package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
             origin: origin.clone(),
         },
         problem,
-        scripts: 0,
     };
     let bytes = match fs::read(source.root.join("package.json")) {
         Ok(bytes) => bytes,
@@ -379,7 +375,6 @@ struct SourceRow {
     qualifier: Option<SharedString>,
     description: Option<SharedString>,
     path: SharedString,
-    scripts: Option<usize>,
     release: Option<(&'static str, SharedString)>,
     state: Option<SourceState>,
 }
@@ -1020,13 +1015,6 @@ impl ScriptsWindow {
             qualifier: None,
             description: None,
             path: home_relative(&self.folder),
-            scripts: library.map(|library| {
-                library
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.source.is_none())
-                    .count()
-            }),
             release: None,
             state: None,
         };
@@ -1057,7 +1045,6 @@ impl ScriptsWindow {
                     SourceKind::Folder => None,
                 },
                 path: home_relative(&source.root),
-                scripts: source.problem.is_none().then_some(source.scripts),
                 release: release(&source.kind),
                 state,
             }
@@ -1207,11 +1194,10 @@ impl ScriptsWindow {
     fn sidebar(&self, theme: &Theme, unfinished: usize, cx: &mut Context<Self>) -> Div {
         let layout = theme.layout;
         let current = (!self.searching(cx)).then_some(&self.page);
-        let total = self.library.as_ref().map(|library| library.entries.len());
         let this = cx.weak_entity();
         let pages = Tabs::new("pages", "Views", PAGES.len(), move |index| {
             let (label, count) = match PAGES[index] {
-                Page::Library(_) => ("Library", total),
+                Page::Library(_) => ("Library", None),
                 Page::Queue => ("Queue", (unfinished > 0).then_some(unfinished)),
                 Page::Log => ("Log", None),
             };
@@ -1518,9 +1504,6 @@ impl ScriptsWindow {
                             .and_then(|state| source_mark(&marks, state)),
                     ),
             );
-            if let Some(scripts) = row.scripts {
-                tab = tab.end_slot(SharedString::from(scripts.to_string()));
-            }
             if let Some(state) = &row.state {
                 tab = tab.description(state.description());
             }
@@ -3180,7 +3163,7 @@ mod tests {
                 (Some(4), None, "spin.ts"),
             ]
         );
-        let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
+        let sources: Vec<(&Path, &str, Option<&str>)> = library
             .sources
             .iter()
             .map(|source| {
@@ -3188,7 +3171,6 @@ mod tests {
                     source.root.as_path(),
                     source.name.as_ref(),
                     source.problem.as_deref(),
-                    source.scripts,
                 )
             })
             .collect();
@@ -3200,40 +3182,27 @@ mod tests {
         assert_eq!(
             sources,
             [
-                (community.as_path(), "community", None, 2),
-                (missing.as_path(), "unplugged", Some("Can't read"), 0),
-                (authoring.as_path(), "Work in progress", None, 1),
-                (
-                    packages.join("broken").as_path(),
-                    "broken",
-                    Some(invalid),
-                    0
-                ),
-                (
-                    packages.join("dailies").as_path(),
-                    "@lucent/dailies",
-                    None,
-                    1
-                ),
+                (community.as_path(), "community", None),
+                (missing.as_path(), "unplugged", Some("Can't read")),
+                (authoring.as_path(), "Work in progress", None),
+                (packages.join("broken").as_path(), "broken", Some(invalid)),
+                (packages.join("dailies").as_path(), "@lucent/dailies", None),
                 (
                     packages.join("deleted").as_path(),
                     "deleted",
-                    Some("Its package.json is missing."),
-                    0
+                    Some("Its package.json is missing.")
                 ),
                 (
                     packages.join("future").as_path(),
                     "future",
-                    Some("Needs Mira 999.0.0 or newer."),
-                    0
+                    Some("Needs Mira 999.0.0 or newer.")
                 ),
                 (
                     packages.join("stripped").as_path(),
                     "stripped",
                     Some(
                         "This isn't a Mira script package. Its package.json needs a \"mira\" field."
-                    ),
-                    0
+                    )
                 ),
             ]
         );
@@ -3269,7 +3238,6 @@ mod tests {
             name: name.to_owned().into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         let library = Library {
             entries: vec![
