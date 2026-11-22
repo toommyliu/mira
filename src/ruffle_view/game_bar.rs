@@ -4,7 +4,8 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseDownEvent,
     ParentElement as _, Pixels, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, WeakEntity, Window, actions, div, prelude::FluentBuilder as _, px,
+    Styled as _, Subscription, WeakEntity, Window, actions, div, point,
+    prelude::FluentBuilder as _, px,
 };
 
 use mira_ui::{
@@ -1430,7 +1431,9 @@ fn jump_panel(
     let cells_scroll = window
         .use_keyed_state("jump-cells", cx, |_, _| {
             let scroll = ScrollHandle::new();
-            scroll.scroll_to_item(start.row);
+            // scroll_to_item is dropped on the first frame, before the list has measured its viewport.
+            let centered = layout.control * (start.row as f32 + 0.5 - VISIBLE_CELLS / 2.0);
+            scroll.set_offset(point(px(0.0), -centered));
             scroll
         })
         .read(cx)
@@ -2367,9 +2370,9 @@ mod tests {
             let location = Location {
                 map: "battleon".into(),
                 room: None,
-                cell: "r3".into(),
+                cell: "r16".into(),
                 pad: "Left".into(),
-                cells: (1..=14).map(|cell| format!("r{cell}")).collect(),
+                cells: (1..=24).map(|cell| format!("r{cell}")).collect(),
                 cell_pads: vec!["Left".into(), "Right".into()],
             };
             Scene {
