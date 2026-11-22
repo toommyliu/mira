@@ -5,7 +5,7 @@ identifier=com.mira.app
 icon=Mira
 if [ "${1-}" = --dev ]; then
     name='Mira (Dev)'
-    identifier=com.mira.dev
+    identifier=com.mira.app.dev
     icon=MiraDev
     shift
 fi
