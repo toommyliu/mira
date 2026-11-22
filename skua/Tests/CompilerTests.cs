@@ -31,7 +31,9 @@ public class CompilerTests
             var second = Compiler.Compile(scripts, cache, "Flaky.cs");
 
             Assert.Empty(first["options"]!["fields"]!.AsArray());
+            Assert.Contains("The game isn't ready.", first["options"]!["unread"]!.ToString());
             Assert.Equal("Collect", second["options"]!["fields"]![0]!["key"]!.ToString());
+            Assert.Null(second["options"]!["unread"]);
         }
         finally
         {

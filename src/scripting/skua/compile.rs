@@ -26,6 +26,13 @@ pub(crate) struct Compiled {
     pub(super) core: Option<PathBuf>,
     pub(super) class: String,
     pub(crate) definition: Definition,
+    pub(super) unread: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Described {
+    Inputs(Option<Definition>),
+    Unread(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,12 +82,14 @@ pub(crate) fn compile(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Compil
     parse(&stdout).map_err(Halt::Failed)
 }
 
-pub(crate) fn describe(
-    entry: &Path,
-    stopped: &dyn Fn() -> bool,
-) -> Result<Option<Definition>, Halt> {
-    let definition = compile(entry, stopped)?.definition;
-    Ok((!definition.fields().is_empty()).then_some(definition))
+pub(crate) fn describe(entry: &Path, stopped: &dyn Fn() -> bool) -> Result<Described, Halt> {
+    let compiled = compile(entry, stopped)?;
+    Ok(match compiled.unread {
+        Some(reason) => Described::Unread(reason),
+        None => Described::Inputs(
+            (!compiled.definition.fields().is_empty()).then_some(compiled.definition),
+        ),
+    })
 }
 
 fn finish(
@@ -142,6 +151,7 @@ struct Raw {
 #[derive(Deserialize)]
 struct RawOptions {
     fields: Vec<RawField>,
+    unread: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +214,7 @@ fn parse(stdout: &str) -> Result<Compiled, String> {
         core: raw.core,
         class: raw.class,
         definition: Definition::new(fields),
+        unread: raw.options.unread,
     })
 }
 
@@ -278,6 +289,12 @@ mod tests {
             "]}}}\n"
         ))
         .unwrap();
+        assert_eq!(compiled.unread, None);
+        let unread = parse(
+            r#"{"ok":{"assembly":"/c/e.dll","core":null,"class":"Lich","options":{"fields":[],"unread":"Object reference not set"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(unread.unread.as_deref(), Some("Object reference not set"));
         assert_eq!(compiled.assembly, PathBuf::from("/c/e.dll"));
         assert_eq!(compiled.core, Some(PathBuf::from("/c/core.dll")));
         assert_eq!(compiled.class, "FreeDailyBoost");

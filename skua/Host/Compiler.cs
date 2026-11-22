@@ -196,7 +196,13 @@ static class Compiler
         catch (Exception error)
         {
             Console.Error.WriteLine($"Couldn't read the script's options: {error}");
-            return new JsonObject { ["fields"] = new JsonArray() };
+            var cause = error is System.Reflection.TargetInvocationException { InnerException: { } inner } ? inner : error;
+            var origin = cause.StackTrace?.Split('\n', StringSplitOptions.TrimEntries).FirstOrDefault();
+            return new JsonObject
+            {
+                ["fields"] = new JsonArray(),
+                ["unread"] = string.IsNullOrEmpty(origin) ? cause.Message : $"{cause.Message} ({origin})",
+            };
         }
         finally
         {

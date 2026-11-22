@@ -14,6 +14,7 @@ fn compiled() -> Compiled {
         core: None,
         class: "FreeDailyBoost".into(),
         definition: Definition::new(Vec::new()),
+        unread: None,
     }
 }
 
@@ -529,6 +530,23 @@ fn free_daily_boost_runs_through_the_real_worker() {
     assert!(
         logs.iter().any(|line| line.contains("Bot Configured")),
         "{logs:#?}"
+    );
+}
+
+#[test]
+fn a_script_whose_options_could_not_be_read_gets_the_saved_values_as_they_are() {
+    let saved: Values = serde_json::from_value(json!({ "Mode": "Farm Mode" })).unwrap();
+    let unread = Compiled {
+        unread: Some("needs the game".into()),
+        ..compiled()
+    };
+    assert_eq!(
+        options("Lich.cs", &unread, &Supplied::Values(saved.clone())),
+        Ok(saved.clone())
+    );
+    assert_eq!(
+        options("Lich.cs", &compiled(), &Supplied::Values(saved)),
+        Ok(Values::new())
     );
 }
 

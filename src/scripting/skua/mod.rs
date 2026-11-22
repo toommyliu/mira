@@ -15,7 +15,7 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
-pub(crate) use compile::{Compiled, Halt, compile, describe};
+pub(crate) use compile::{Compiled, Described, Halt, compile, describe};
 pub(crate) use worker::Inbound;
 use worker::{Ended, Worker};
 
@@ -23,9 +23,9 @@ use super::{
     calls::{self, Call, CallId, Replier, Reply, ToPlayer},
     dialog::{self, Dialog, ToDialogs},
     feeds::{Feed, FeedId, Feeds},
-    inputs::{self, Values},
+    inputs::{self, Supplied, Values},
     limits::Clock,
-    runtime::{Command, Launch, Link, Log, Outcome},
+    runtime::{Command, Launch, Level, Link, Log, Outcome},
 };
 use crate::bridge::{self, CallError, EXPORTS, Event as LoaderEvent, Loader, Subscription};
 
@@ -289,7 +289,15 @@ pub(super) fn execute(
         Err(Halt::Stopped) => return Outcome::Stopped,
         Err(Halt::Failed(message)) => return failed(message),
     };
-    let options = match inputs::resolve(&display, &compiled.definition, &launch.inputs) {
+    if let Some(reason) = &compiled.unread {
+        log(
+            Level::Warn,
+            &format!(
+                "Mira couldn't read {display}'s options, so it starts with its defaults and any values you saved. {reason}"
+            ),
+        );
+    }
+    let options = match options(&display, &compiled, &launch.inputs) {
         Ok(options) => options,
         Err(message) => return failed(message),
     };
@@ -307,6 +315,13 @@ pub(super) fn execute(
         grace: STOP_GRACE,
     }
     .run(&compiled, &launch.entry, options, clock, commands)
+}
+
+fn options(display: &str, compiled: &Compiled, supplied: &Supplied) -> Result<Values, String> {
+    match (&compiled.unread, supplied) {
+        (Some(_), Supplied::Values(values)) => Ok(values.clone()),
+        _ => inputs::resolve(display, &compiled.definition, supplied),
+    }
 }
 
 struct Session {

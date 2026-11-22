@@ -718,7 +718,9 @@ enum FormState {
         title: &'static str,
         message: SharedString,
     },
-    Plain,
+    Plain {
+        unread: Option<SharedString>,
+    },
     Fields {
         definition: Definition,
         drafts: Vec<FieldDraft>,
@@ -1871,7 +1873,7 @@ impl ScriptsWindow {
                 let read = read.await;
                 let _ = this.update(cx, |this, cx| {
                     this.loading.remove(&key);
-                    this.loaded(key, generation, read, cx);
+                    this.loaded(key, generation, read, None, cx);
                     cx.notify();
                 });
             }
@@ -1936,17 +1938,27 @@ impl ScriptsWindow {
                             key,
                             generation,
                             Err(("This Skua script can't start", message)),
+                            None,
                             cx,
                         ),
-                        Ok(definition) => this.loaded(
-                            key,
-                            generation,
-                            Ok(Declared {
-                                meta: Meta::default(),
-                                inputs: Ok(definition),
-                            }),
-                            cx,
-                        ),
+                        Ok(described) => {
+                            let (definition, unread) = match described {
+                                scripting::SkuaDescribed::Inputs(definition) => (definition, None),
+                                scripting::SkuaDescribed::Unread(reason) => {
+                                    (None, Some(reason.into()))
+                                }
+                            };
+                            this.loaded(
+                                key,
+                                generation,
+                                Ok(Declared {
+                                    meta: Meta::default(),
+                                    inputs: Ok(definition),
+                                }),
+                                unread,
+                                cx,
+                            );
+                        }
                     }
                     cx.notify();
                 });
@@ -1990,6 +2002,7 @@ impl ScriptsWindow {
         key: FormKey,
         generation: u64,
         read: Result<Declared, (&'static str, String)>,
+        unread: Option<SharedString>,
         cx: &mut Context<Self>,
     ) {
         let (meta, read) = match read {
@@ -2012,7 +2025,7 @@ impl ScriptsWindow {
                 title,
                 message: message.into(),
             },
-            Ok(None) => FormState::Plain,
+            Ok(None) => FormState::Plain { unread },
             Ok(Some(definition)) => {
                 let saved = match &key {
                     FormKey::Script(path) => match script_inputs::saved(path, cx) {
@@ -2162,7 +2175,11 @@ impl ScriptsWindow {
     fn launch_values(&self, path: &Path, cx: &App) -> Option<(Option<&Definition>, Values)> {
         match &self.forms.get(&FormKey::Script(path.to_owned()))?.state {
             FormState::Broken { .. } => None,
-            FormState::Plain => Some((None, Values::new())),
+            FormState::Plain { unread: None } => Some((None, Values::new())),
+            FormState::Plain { unread: Some(_) } => match script_inputs::saved(path, cx) {
+                Supplied::Values(values) => Some((None, values)),
+                Supplied::StoreUnreadable => Some((None, Values::new())),
+            },
             FormState::Fields {
                 definition, drafts, ..
             } => {
@@ -2188,7 +2205,7 @@ impl ScriptsWindow {
 
     fn entry_ready(&self, id: EntryId) -> bool {
         match self.forms.get(&FormKey::Entry(id)).map(|form| &form.state) {
-            Some(FormState::Plain) => true,
+            Some(FormState::Plain { .. }) => true,
             Some(FormState::Fields {
                 definition, drafts, ..
             }) => values(definition, drafts).is_some(),
@@ -2286,9 +2303,7 @@ impl ScriptsWindow {
                         .into_any_element(),
                 ];
             }
-            FormState::Plain => {
-                return vec![muted(theme, "This script has no inputs.").into_any_element()];
-            }
+            FormState::Plain { unread } => return vec![no_inputs(theme, unread.as_ref())],
             FormState::Fields {
                 definition,
                 drafts,
@@ -2609,9 +2624,7 @@ impl ScriptsWindow {
                     .body(message.clone())
                     .into_any_element(),
             ],
-            Some(FormState::Plain) => {
-                vec![muted(theme, "This script has no inputs.").into_any_element()]
-            }
+            Some(FormState::Plain { unread }) => vec![no_inputs(theme, unread.as_ref())],
             Some(FormState::Fields { definition, .. }) => queued
                 .values
                 .as_ref()
@@ -3449,6 +3462,19 @@ fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
+fn no_inputs(theme: &Theme, unread: Option<&SharedString>) -> AnyElement {
+    match unread {
+        None => muted(theme, "This script has no inputs.").into_any_element(),
+        Some(reason) => Alert::new(
+            "options-unread",
+            Tone::Warning,
+            "Couldn't read this script's options",
+        )
+        .body(format!("It runs with its defaults. {reason}"))
+        .into_any_element(),
+    }
+}
+
 struct QueueRow {
     name: SharedString,
     folder: SharedString,
@@ -4175,44 +4201,54 @@ mod tests {
             ),
         ]);
         let size = gpui::size(px(360.0), px(320.0));
-        for written in mira_ui::snapshot("scripts-skua-inputs", size, move |window, cx| {
+        let unread: SharedString = "Object reference not set to an instance of an object. (at CoreBots.CheckInventory(String item, Int32 quant, Boolean toInv) in CoreBots.cs:line 938)".into();
+        let scenes = [
+            ("scripts-skua-inputs", Some(definition), None),
+            ("scripts-skua-unread", None, Some(unread)),
+        ];
+        for (name, definition, unread) in scenes {
             let temp = temp.clone();
-            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
-            crate::script_inputs::init(temp.join("script-inputs.json"), cx);
-            crate::packages::init(
-                temp.join("packages"),
-                temp.join("skua"),
-                temp.join("github-token"),
-                cx,
-            );
-            let key = FormKey::Script(temp.join("skua/Scripts/Dailies/FreeDailyBoost.cs"));
-            let scripts = cx.new(|cx| {
-                let client = Client::empty_for_tests(&temp, cx);
-                ScriptsWindow::new(
-                    client,
-                    temp.join("scripts"),
-                    temp.join("types"),
-                    Target::Selected,
-                    window,
+            for written in mira_ui::snapshot(name, size, move |window, cx| {
+                let temp = temp.clone();
+                crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+                crate::script_inputs::init(temp.join("script-inputs.json"), cx);
+                crate::packages::init(
+                    temp.join("packages"),
+                    temp.join("skua"),
+                    temp.join("github-token"),
                     cx,
-                )
-            });
-            let shown = key.clone();
-            let definition = definition.clone();
-            scripts.update(cx, |scripts, cx| {
-                scripts.loaded(
-                    shown,
-                    0,
-                    Ok(Declared {
-                        meta: Meta::default(),
-                        inputs: Ok(Some(definition)),
-                    }),
-                    cx,
-                )
-            });
-            cx.new(|_| SkuaInputs(scripts, key))
-        }) {
-            assert!(written.exists(), "{} was not written", written.display());
+                );
+                let key = FormKey::Script(temp.join("skua/Scripts/Dailies/FreeDailyBoost.cs"));
+                let scripts = cx.new(|cx| {
+                    let client = Client::empty_for_tests(&temp, cx);
+                    ScriptsWindow::new(
+                        client,
+                        temp.join("scripts"),
+                        temp.join("types"),
+                        Target::Selected,
+                        window,
+                        cx,
+                    )
+                });
+                let shown = key.clone();
+                let definition = definition.clone();
+                let unread = unread.clone();
+                scripts.update(cx, |scripts, cx| {
+                    scripts.loaded(
+                        shown,
+                        0,
+                        Ok(Declared {
+                            meta: Meta::default(),
+                            inputs: Ok(definition),
+                        }),
+                        unread,
+                        cx,
+                    )
+                });
+                cx.new(|_| SkuaInputs(scripts, key))
+            }) {
+                assert!(written.exists(), "{} was not written", written.display());
+            }
         }
     }
 

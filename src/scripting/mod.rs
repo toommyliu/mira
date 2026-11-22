@@ -37,8 +37,8 @@ pub(crate) use limits::Limits;
 pub(crate) use modules::runnable;
 pub(crate) use runtime::{Launch, Level, Limit, Outcome, Run};
 pub(crate) use skua::{
-    Halt as SkuaHalt, Setup as SkuaSetup, describe as describe_skua, init as init_skua,
-    is_entry as is_skua,
+    Described as SkuaDescribed, Halt as SkuaHalt, Setup as SkuaSetup, describe as describe_skua,
+    init as init_skua, is_entry as is_skua,
 };
 pub(crate) use typings::{install_types, link_types};
 #[cfg(test)]
