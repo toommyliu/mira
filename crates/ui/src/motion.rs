@@ -9,10 +9,11 @@ pub const ARRIVE: Duration = Duration::from_millis(100);
 pub const LEAVE: Duration = Duration::from_millis(100);
 pub const TRAVEL: Duration = Duration::from_millis(150);
 pub const GLIDE: Duration = Duration::from_millis(400);
-const BREATH: Duration = Duration::from_millis(2400);
+pub const SETTLE: Duration = Duration::from_millis(200);
 const SWEEP: Duration = Duration::from_millis(1400);
 const SPIN: Duration = Duration::from_millis(1000);
 const ARRIVE_DISTANCE: f32 = 8.0;
+const SETTLE_DISTANCE: f32 = 4.0;
 
 pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
@@ -66,6 +67,13 @@ pub(crate) fn anchored_frame<E: Styled>(element: E, from: From, progress: f32) -
     }
 }
 
+pub fn from_above<E: Styled>(element: E, progress: f32) -> E {
+    element
+        .relative()
+        .top(px((progress - 1.0) * SETTLE_DISTANCE))
+        .opacity(progress)
+}
+
 pub fn fade<E: IntoElement + Styled + 'static>(
     id: impl Into<ElementId>,
     element: E,
@@ -75,15 +83,6 @@ pub fn fade<E: IntoElement + Styled + 'static>(
         Animation::new(ARRIVE).with_easing(ease_out),
         |element, t| element.opacity(t),
     )
-}
-
-pub fn breathe<E: IntoElement + Styled + 'static>(
-    id: impl Into<ElementId>,
-    element: E,
-) -> AnimationElement<E> {
-    element.with_animation(id, Animation::new(BREATH).repeat(), |element, t| {
-        element.opacity(1.0 - 0.6 * (t * std::f32::consts::PI).sin().powi(2))
-    })
 }
 
 pub fn spin(id: impl Into<ElementId>, element: Svg, cx: &App) -> AnyElement {
@@ -121,6 +120,18 @@ pub fn leaving(since: Instant, window: &mut Window, cx: &App) -> Option<f32> {
     }
     window.request_animation_frame();
     Some(1.0 - ease_out(t))
+}
+
+pub fn settling(since: Instant, window: &mut Window, cx: &App) -> f32 {
+    if cx.reduce_motion() {
+        return 1.0;
+    }
+    let t = (cx.background_executor().now() - since).as_secs_f32() / SETTLE.as_secs_f32();
+    if t >= 1.0 {
+        return 1.0;
+    }
+    window.request_animation_frame();
+    ease_out_quint(t)
 }
 
 struct Tween {

@@ -1,17 +1,20 @@
 use std::{
     fs::{self, File},
     io::{self, Write},
+    panic::{self, PanicHookInfo},
     path::Path,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use chrono::{Local, SecondsFormat};
+use tracing::Subscriber;
 use tracing_subscriber::{
     EnvFilter, Layer as _,
+    field::RecordFields,
     fmt::{
-        self,
-        format::Writer,
-        time::{FormatTime, SystemTime},
+        self, FormatFields,
+        format::{DefaultFields, Writer},
     },
     layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
@@ -24,33 +27,70 @@ pub(crate) struct Logging(Vec<Arc<Mutex<Output>>>);
 
 pub(crate) fn init() -> Logging {
     let console = output(Box::new(io::stdout()));
-    let mut outputs = vec![console.clone()];
-    let console_layer = fmt::layer()
-        .without_time()
-        .with_writer(move || CoalescingWriter(console.clone()))
-        .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")));
-    let (opened, file_layer) = match log_file() {
-        Ok(file) => {
-            let sink = output(Box::new(file));
-            outputs.push(sink.clone());
-            let layer = fmt::layer()
-                .without_time()
-                .with_ansi(false)
-                .with_writer(move || CoalescingWriter(sink.clone()))
-                .with_filter(EnvFilter::new(FILE_FILTER));
-            (Ok(()), Some(layer))
-        }
+    let console_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let (opened, file) = match log_file() {
+        Ok(file) => (Ok(()), Some(output(Box::new(file)))),
         Err(error) => (Err(error), None),
     };
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(file_layer)
-        .init();
+    let outputs = std::iter::once(console.clone())
+        .chain(file.clone())
+        .collect();
+    subscriber(console, console_filter, file).init();
+    panic::set_hook(Box::new(log_panic));
     match opened {
         Ok(()) => tracing::info!("writing the log file to {LOG_FILE}"),
         Err(error) => tracing::warn!(%error, "couldn't open the log file"),
     }
     Logging(outputs)
+}
+
+fn subscriber(
+    console: Arc<Mutex<Output>>,
+    console_filter: EnvFilter,
+    file: Option<Arc<Mutex<Output>>>,
+) -> impl Subscriber + Send + Sync {
+    let console = fmt::layer()
+        .without_time()
+        .with_writer(move || CoalescingWriter(console.clone()))
+        .with_filter(console_filter);
+    let file = file.map(|sink| {
+        fmt::layer()
+            .fmt_fields(FileFields::default())
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || CoalescingWriter(sink.clone()))
+            .with_filter(EnvFilter::new(FILE_FILTER))
+    });
+    tracing_subscriber::registry().with(console).with(file)
+}
+
+// Each fmt layer caches a span's formatted fields under its field formatter's type. Sharing
+// DefaultFields with the console would put the console's color codes into the file.
+#[derive(Default)]
+struct FileFields(DefaultFields);
+
+impl<'writer> FormatFields<'writer> for FileFields {
+    fn format_fields<R: RecordFields>(
+        &self,
+        writer: Writer<'writer>,
+        fields: R,
+    ) -> std::fmt::Result {
+        self.0.format_fields(writer, fields)
+    }
+}
+
+fn log_panic(info: &PanicHookInfo) {
+    let thread = std::thread::current();
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    tracing::error!(
+        target: "mira::panic",
+        thread = thread.name().unwrap_or("unnamed"),
+        location = info.location().map(tracing::field::display),
+        panic = info.payload_as_str().map(tracing::field::debug),
+        %backtrace,
+        "panicked"
+    );
 }
 
 fn log_file() -> io::Result<File> {
@@ -141,10 +181,7 @@ impl Output {
     }
 
     fn write_line(&mut self, line: &[u8], count: u64) -> io::Result<()> {
-        let mut timestamp = String::new();
-        SystemTime
-            .format_time(&mut Writer::new(&mut timestamp))
-            .map_err(io::Error::other)?;
+        let timestamp = Local::now().to_rfc3339_opts(SecondsFormat::Micros, false);
         let mut text = Vec::with_capacity(timestamp.len() + line.len() + 16);
         write!(text, "{timestamp} ")?;
         text.extend_from_slice(line.strip_suffix(b"\n").unwrap_or(line));
@@ -187,6 +224,54 @@ mod tests {
             .map(|line| line.split_once(' ').unwrap().1)
             .collect();
         assert_eq!(lines, ["a", "b", "b (x3)", "c"]);
+    }
+
+    fn shared() -> (Arc<Mutex<Vec<u8>>>, Arc<Mutex<Output>>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = output(Box::new(Shared(written.clone())));
+        (written, sink)
+    }
+
+    fn text(written: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(written.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn file_lines_show_spans_without_color_codes() {
+        let (_, console) = shared();
+        let (file, sink) = shared();
+        let subscriber = subscriber(console, EnvFilter::new("info"), Some(sink));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error_span!("session", id = 3).in_scope(|| tracing::info!("signed in"));
+        });
+        let text = text(&file);
+        assert!(text.contains("INFO session{id=3}: "), "{text}");
+        assert!(!text.contains('\x1b'), "{text:?}");
+    }
+
+    #[test]
+    fn panics_reach_the_log_file() {
+        let (_, console) = shared();
+        let (file, sink) = shared();
+        let subscriber = subscriber(console, EnvFilter::new("info"), Some(sink));
+        tracing::subscriber::with_default(subscriber, || {
+            let previous = panic::take_hook();
+            panic::set_hook(Box::new(log_panic));
+            let caught = tracing::error_span!("session", id = 7)
+                .in_scope(|| panic::catch_unwind(|| panic!("the len is 0")));
+            panic::set_hook(previous);
+            assert!(caught.is_err());
+        });
+        let text = text(&file);
+        assert!(
+            text.contains("ERROR session{id=7}: mira::panic: panicked thread="),
+            "{text}"
+        );
+        assert!(text.contains(concat!("location=", file!())), "{text}");
+        assert!(
+            text.contains(r#"panic="the len is 0" backtrace="#),
+            "{text}"
+        );
     }
 
     #[test]

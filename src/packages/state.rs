@@ -101,7 +101,7 @@ pub(crate) fn start(cx: &mut App) {
                 return;
             };
             if let Err(message) = checked.await {
-                tracing::info!(%message, "couldn't check packages for updates");
+                tracing::info!(error = %message, "couldn't check packages for updates");
             }
         })
         .detach();
@@ -239,7 +239,7 @@ impl Packages {
                             this.status.remove(&root);
                         }
                         Err(message) if quiet => {
-                            tracing::info!(root = %root.display(), %message, "couldn't check a package for updates");
+                            tracing::info!(root = %root.display(), error = %message, "couldn't check a package for updates");
                         }
                         Err(message) => {
                             checked.failed += 1;

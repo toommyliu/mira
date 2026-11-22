@@ -743,6 +743,71 @@ fn dialog_moves_tab_between_its_controls_without_a_focus_scope(cx: &mut TestAppC
     assert_eq!(pressed.get(), Some("leave"));
 }
 
+struct CloseTab {
+    open: bool,
+    closing: FocusHandle,
+    next: FocusHandle,
+}
+
+impl Render for CloseTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .when(self.open, |root| {
+                root.child(div().track_focus(&self.closing).size_full())
+            })
+            .child(div().track_focus(&self.next).size_full())
+            .child(
+                Dialog::new("close-tab", self.open, "Close tab?")
+                    .alert()
+                    .action(Button::new("cancel", "Cancel").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.open = false;
+                            cx.notify();
+                        },
+                    )))
+                    .action(Button::new("close", "Close tab").on_click(cx.listener(
+                        |this, _, window, cx| {
+                            this.open = false;
+                            window.focus(&this.next, cx);
+                            cx.notify();
+                        },
+                    ))),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_dialog_leaves_focus_where_its_response_moved_it(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = CloseTab {
+            open: false,
+            closing: cx.focus_handle(),
+            next: cx.focus_handle(),
+        };
+        window.activate_window();
+        window.focus(&view.closing, cx);
+        view
+    });
+    cx.run_until_parked();
+    let (closing, next) = view.read_with(cx, |view, _| (view.closing.clone(), view.next.clone()));
+    let open = |cx: &mut VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    };
+    open(cx);
+    press(cx, "enter");
+    assert!(cx.update(|window, _| closing.is_focused(window)));
+    open(cx);
+    press(cx, "tab");
+    press(cx, "enter");
+    assert!(cx.update(|window, _| next.is_focused(window)));
+}
+
 struct SaveChanges {
     pressed: Rc<Cell<Option<&'static str>>>,
 }

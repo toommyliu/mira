@@ -97,7 +97,8 @@ pub(super) fn value(field: &Field, draft: &Draft) -> Result<Json, SharedString> 
                 "Enter a number"
             };
             let parsed = parse_number(text).ok_or(enter)?;
-            check_number(parsed, *integer, *min, *max).map_err(|reason| capitalize(&reason))?;
+            check_number(parsed, *integer, *min, *max)
+                .map_err(|reason| SharedString::from(super::capitalized(&reason)))?;
             Ok(number(parsed))
         }
         (Kind::Boolean { .. }, Draft::Toggle(on)) => Ok(Json::from(*on)),
@@ -147,14 +148,6 @@ fn parse_number(text: &str) -> Option<f64> {
         return None;
     }
     text.parse().ok().filter(|value: &f64| value.is_finite())
-}
-
-fn capitalize(text: &str) -> SharedString {
-    let mut characters = text.chars();
-    match characters.next() {
-        Some(first) => format!("{}{}", first.to_uppercase(), characters.as_str()).into(),
-        None => SharedString::default(),
-    }
 }
 
 pub(super) fn shown(field: &Field, value: &Json) -> SharedString {

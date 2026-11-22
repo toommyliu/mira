@@ -68,10 +68,40 @@ impl Settings {
 pub(crate) enum Phase {
     Off,
     Armed,
-    Waiting,
-    Attempt { attempt: u32, of: u32 },
-    Backoff { attempt: u32, of: u32 },
+    Waiting(Countdown),
+    Attempt {
+        attempt: u32,
+        of: u32,
+    },
+    Backoff {
+        attempt: u32,
+        of: u32,
+        countdown: Countdown,
+    },
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Countdown {
+    pub(crate) from: std::time::Instant,
+    pub(crate) until: std::time::Instant,
+}
+
+impl Countdown {
+    fn starting(length: Duration) -> Self {
+        let from = Instant::now().into_std();
+        Self {
+            from,
+            until: from + length,
+        }
+    }
+
+    fn extended(self, by: Duration) -> Self {
+        Self {
+            until: Instant::now().into_std() + by,
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,14 +269,28 @@ pub(crate) async fn recover(
     settings: &Settings,
     phase: impl Fn(Phase),
 ) -> Result<(), AttemptError> {
-    phase(Phase::Waiting);
-    sleep(Duration::from_secs(settings.delay_seconds.into())).await;
     let of = settings.retries + 1;
     let cap = Duration::from_secs(settings.backoff_cap_seconds.into());
     let mut backoff = Duration::from_secs(settings.backoff_seconds.into()).min(cap);
+    let mut wait = Duration::from_secs(settings.delay_seconds.into());
     let mut attempt = 1;
     loop {
-        logins.space_out().await;
+        let waiting = |countdown| match attempt {
+            1 => Phase::Waiting(countdown),
+            _ => Phase::Backoff {
+                attempt: attempt - 1,
+                of,
+                countdown,
+            },
+        };
+        let countdown = Countdown::starting(wait);
+        phase(waiting(countdown));
+        sleep(wait).await;
+        let queued = logins.reserve_slot();
+        if !queued.is_zero() {
+            phase(waiting(countdown.extended(queued)));
+            sleep(queued).await;
+        }
         phase(Phase::Attempt { attempt, of });
         let turn = logins.turn().await;
         let result = attempt_once(loader, credentials, server).await;
@@ -255,8 +299,7 @@ pub(crate) async fn recover(
             Ok(()) => return Ok(()),
             Err(error) if error.retryable() && attempt < of => {
                 tracing::warn!(%error, attempt, "auto relogin attempt failed");
-                phase(Phase::Backoff { attempt, of });
-                sleep(backoff).await;
+                wait = backoff;
                 backoff = (backoff * 2).min(cap);
                 attempt += 1;
             }
@@ -465,9 +508,13 @@ pub(super) mod tests {
     }
 
     fn start(settings: Settings) -> Running {
+        start_with(settings, Logins::default())
+    }
+
+    fn start_with(settings: Settings, logins: Logins) -> Running {
         let (world, loader) = World::new();
         let loader = Rc::new(loader);
-        let logins = Rc::new(Logins::default());
+        let logins = Rc::new(logins);
         let (sender, receiver) = watch::channel(settings);
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
@@ -490,6 +537,28 @@ pub(super) mod tests {
 
     async fn after(seconds: u64) {
         sleep(Duration::from_secs(seconds)).await;
+    }
+
+    fn countdown_ends(running: &Running) -> Vec<Duration> {
+        let start = running.world.start.into_std();
+        let mut ends: Vec<Duration> = Vec::new();
+        let mut last: Option<Countdown> = None;
+        for report in running.reports.borrow().iter() {
+            let countdown = match report {
+                Report::Phase(Phase::Waiting(countdown) | Phase::Backoff { countdown, .. }) => {
+                    *countdown
+                }
+                _ => continue,
+            };
+            let end = countdown.until - start;
+            if last.is_some_and(|last| last.from == countdown.from) {
+                *ends.last_mut().unwrap() = end;
+            } else {
+                ends.push(end);
+            }
+            last = Some(countdown);
+        }
+        ends
     }
 
     fn last_phase(running: &Running) -> Option<Phase> {
@@ -566,7 +635,36 @@ pub(super) mod tests {
                     gaps,
                     [5, 10, 12, 12].map(|seconds| outcome_wait + Duration::from_secs(seconds))
                 );
+                assert_eq!(countdown_ends(&running), logins);
                 assert_eq!(running.world.game.borrow().connects, ["Twilly"]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_login_queued_behind_another_tab_extends_its_countdown() {
+        LocalSet::new()
+            .run_until(async {
+                let gate: &'static _ = Box::leak(Box::new(crate::domain::auth::LoginGate::new()));
+                let tabs = [
+                    start_with(enabled(), Logins::gated(gate)),
+                    start_with(enabled(), Logins::gated(gate)),
+                ];
+                for tab in &tabs {
+                    tab.world.connect();
+                }
+                after(1).await;
+                for tab in &tabs {
+                    tab.world.lose_connection();
+                }
+                after(30).await;
+                let [first, second] = tabs.map(|tab| {
+                    let login = tab.world.game.borrow().logins[0];
+                    (countdown_ends(&tab), login)
+                });
+                assert_eq!(first.0, [first.1]);
+                assert_eq!(second.0, [second.1]);
+                assert_ne!(first.1, second.1);
             })
             .await;
     }

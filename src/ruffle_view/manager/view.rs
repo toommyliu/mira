@@ -38,12 +38,11 @@ use crate::{
     accounts::{Account, AccountId},
     net,
     ruffle_view::{
-        account::file_name,
         account_card::{
-            Action, CHOOSE_IN_GAME, Card, Job, Line, Mood, Presence, Status, ago, card,
-            script_name, status,
+            Action, CHOOSE_IN_GAME, Card, Job, Line, Mood, Presence, Status, ago, card, status,
         },
         client::{CloseSession, bar_title, drag_area, window_bar},
+        script_names,
         scripts::{fit_path_to, home_relative},
     },
     setups::Setup,
@@ -175,9 +174,10 @@ fn script_items(
     header: &'static str,
     current: Option<Option<&Path>>,
     window: &Window,
-    theme: &Theme,
+    cx: &App,
     run: Pick,
 ) -> Vec<MenuItem> {
+    let theme = cx.theme();
     let item = |label: SharedString, script: Option<PathBuf>| {
         let this = this.clone();
         let run = run.clone();
@@ -199,7 +199,7 @@ fn script_items(
             let folder = script.parent().map(home_relative).unwrap_or_default();
             let hidden = script.to_path_buf();
             let refresh = this.clone();
-            let row = item(file_name(script).into(), Some(script.to_path_buf()))
+            let row = item(script_names::name(script, cx), Some(script.to_path_buf()))
                 .description(fit_path_to(&folder, SCRIPT_PATH_WIDTH, window, theme));
             let row = if current == Some(Some(script)) {
                 row
@@ -279,7 +279,7 @@ fn account_menu(
                 "Recent",
                 None,
                 window,
-                cx.theme(),
+                cx,
                 run_pick(targets.to_vec()),
             ),
         ));
@@ -803,7 +803,7 @@ impl Manager {
                 "Start with",
                 Some(current.as_deref()),
                 window,
-                cx.theme(),
+                cx,
                 pick,
             ));
             items.push(MenuItem::separator());
@@ -853,7 +853,7 @@ impl Manager {
         let Some(script) = setup.script.as_deref() else {
             return menu(Some("Start")).into_any_element();
         };
-        let name = script_name(script);
+        let name = script_names::name(script, cx);
         let done = self.done(setup, cx).len();
         let (label, start, tooltip) = match self.primary_start(setup, cx) {
             Some(Start::Fresh) => (
@@ -927,7 +927,7 @@ impl Manager {
                     setup
                         .script
                         .as_deref()
-                        .map_or_else(|| "None".to_owned(), file_name),
+                        .map_or_else(|| "None".into(), |script| script_names::name(script, cx)),
                 )
                 .variant(Variant::Outline)
                 .size(Size::Small)
@@ -963,7 +963,7 @@ impl Manager {
                     "Recent",
                     Some(current.as_deref()),
                     window,
-                    cx.theme(),
+                    cx,
                     pick,
                 ));
                 items
@@ -1594,15 +1594,7 @@ impl Manager {
             .max_height(px(320.0))
             .trigger(menu_button("run-selected-trigger", "Run script"))
             .items(move |window, cx| {
-                script_items(
-                    &this,
-                    &scripts,
-                    "Recent",
-                    None,
-                    window,
-                    cx.theme(),
-                    run.clone(),
-                )
+                script_items(&this, &scripts, "Recent", None, window, cx, run.clone())
             });
         let launchable = selected
             .iter()
@@ -1949,7 +1941,7 @@ impl Manager {
             } => {
                 let one = conflicts.len() == 1;
                 (
-                    format!("Run {}?", script_name(script)),
+                    format!("Run {}?", script_names::name(script, cx)),
                     match conflicts.as_slice() {
                         [(name, running)] => format!("{name} is already running {running}."),
                         many => format!(

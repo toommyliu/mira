@@ -26,7 +26,6 @@ pub enum Icon {
     Download,
 
     CircleCheck,
-    Clock,
     Ellipsis,
     Eye,
     EyeOff,
@@ -82,7 +81,6 @@ impl Icon {
             Icon::CircleStop => "icons/circle-stop.svg",
             Icon::CircleAlert => "icons/circle-alert.svg",
             Icon::CircleCheck => "icons/circle-check.svg",
-            Icon::Clock => "icons/clock.svg",
             Icon::Ellipsis => "icons/ellipsis.svg",
             Icon::Download => "icons/download.svg",
             Icon::Eye => "icons/eye.svg",

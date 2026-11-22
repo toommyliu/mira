@@ -24,7 +24,8 @@ use super::{
 use mira_ui::{
     ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
-        Align, Button, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem, Tabs,
+        Align, Button, Dialog, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem,
+        Tabs,
         button::{Size, Variant},
     },
     theme::CONTROL_SM,
@@ -61,7 +62,7 @@ const BAR_PADDING: Pixels = px(6.0);
 pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 const STATUS_LINGER: Duration = Duration::from_millis(1500);
-const STATUS_PADDING: Pixels = px(14.0);
+const STATUS_PADDING: Pixels = px(16.0);
 
 fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
     tabs.iter()
@@ -123,12 +124,20 @@ pub struct Client {
     pacing: bool,
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
+    closing: Option<Closing>,
     _activation: Subscription,
 }
 
+struct Closing {
+    open: bool,
+    view: EntityId,
+    title: SharedString,
+}
+
 struct Status {
-    text: SharedString,
-    shown: usize,
+    states: [SharedString; 2],
+    on: bool,
+    entered: Instant,
     left: Option<Instant>,
     _hide: Task<()>,
 }
@@ -285,6 +294,7 @@ pub(crate) fn init(
     armies: Armies,
     cx: &mut App,
 ) {
+    super::script_names::init(cx);
     cx.set_global(Game {
         shared: Shared {
             extras: Rc::new(extras::Store::open(data.join("as3.json"))),
@@ -468,6 +478,8 @@ impl Client {
         let client = cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
                 .detach();
+            cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
+                .detach();
             Client {
                 extras,
                 data,
@@ -492,6 +504,7 @@ impl Client {
                 pacing: false,
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
+                closing: None,
                 _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                     if window.is_window_active() {
                         activated(window.window_handle().window_id(), cx);
@@ -511,6 +524,8 @@ impl Client {
     pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
         cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+                .detach();
+            cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
                 .detach();
             Client {
                 extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
@@ -532,6 +547,7 @@ impl Client {
                 pacing: false,
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
+                closing: None,
                 _activation: Subscription::new(|| {}),
             }
         })
@@ -642,7 +658,7 @@ impl Client {
 
     pub(crate) fn summary(&self, account: &AccountId, cx: &App) -> Option<Summary> {
         let index = self.session_of(account, cx)?;
-        Some(self.sessions[index].view.read(cx).summary())
+        Some(self.sessions[index].view.read(cx).summary(cx))
     }
 
     pub(crate) fn launch(
@@ -895,11 +911,93 @@ impl Client {
         }
     }
 
+    fn asking(&self) -> bool {
+        self.closing.as_ref().is_some_and(|closing| closing.open)
+    }
+
+    fn request_close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(index).filter(|_| !self.asking()) else {
+            return;
+        };
+        let running = session
+            .view
+            .read(cx)
+            .script
+            .state(cx)
+            .is_some_and(|state| state.running());
+        if running && settings::confirm_close(cx) {
+            self.closing = Some(Closing {
+                open: true,
+                view: session.view.entity_id(),
+                title: format!("Close {}?", session.title(cx)).into(),
+            });
+            cx.notify();
+        } else {
+            self.close_session(index, window, cx);
+        }
+    }
+
+    fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self
+            .closing
+            .as_ref()
+            .filter(|closing| closing.open)
+            .map(|closing| closing.view)
+        else {
+            return;
+        };
+        if let Some(index) = self
+            .sessions
+            .iter()
+            .position(|session| session.view.entity_id() == view)
+        {
+            self.close_session(index, window, cx);
+        }
+    }
+
+    fn dismiss_close(&mut self, cx: &mut Context<Self>) {
+        if let Some(closing) = &mut self.closing {
+            closing.open = false;
+            cx.notify();
+        }
+    }
+
+    fn close_dialog(&self, cx: &mut Context<Self>) -> Option<Dialog> {
+        let closing = self.closing.as_ref()?;
+        let dismiss = cx.weak_entity();
+        Some(
+            Dialog::new("close-tab", closing.open, closing.title.clone())
+                .alert()
+                .description("A script is still running. Closing this tab will stop it and log out of the game.")
+                .action(
+                    Button::new("close-tab-cancel", "Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_close(cx))),
+                )
+                .action(
+                    Button::new("close-tab-confirm", "Close tab")
+                        .variant(Variant::Danger)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.confirm_close(window, cx)),
+                        ),
+                )
+                .on_close(move |_, cx| {
+                    dismiss.update(cx, |this, cx| this.dismiss_close(cx)).ok();
+                }),
+        )
+    }
+
     fn close_session(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.sessions.len() {
             return;
         }
         let session = self.sessions.remove(index);
+        if let Some(closing) = self
+            .closing
+            .as_mut()
+            .filter(|closing| closing.view == session.view.entity_id())
+        {
+            closing.open = false;
+        }
         let account = session.view.read(cx).account_id();
         if let Some(account) = &account
             && self.launches.remove(account)
@@ -907,7 +1005,7 @@ impl Client {
             cx.notify();
         }
         if let Some(account) = account
-            && let Some(mut last) = session.view.read(cx).script.state()
+            && let Some(mut last) = session.view.read(cx).script.state(cx)
         {
             if matches!(
                 last.phase,
@@ -925,7 +1023,7 @@ impl Client {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.sessions.len() {
+        if index < self.sessions.len() && !self.asking() {
             self.active = index;
             self.show(window, cx);
         }
@@ -999,7 +1097,7 @@ impl Client {
         }
     }
 
-    pub(super) fn show_status(&mut self, text: String, cx: &mut Context<Self>) {
+    pub(super) fn show_status(&mut self, option: &str, on: bool, cx: &mut Context<Self>) {
         let hide = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(STATUS_LINGER).await;
             let _ = this.update(cx, |this: &mut Self, cx| {
@@ -1009,14 +1107,17 @@ impl Client {
                 cx.notify();
             });
         });
-        let shown = match &self.status {
-            Some(status) if status.left.is_none() => status.shown,
-            Some(status) => status.shown + 1,
-            None => 0,
+        let entered = match &self.status {
+            Some(status) if status.left.is_none() => status.entered,
+            _ => cx.background_executor().now(),
         };
         self.status = Some(Status {
-            text: text.into(),
-            shown,
+            states: [
+                format!("{option}: Off").into(),
+                format!("{option}: On").into(),
+            ],
+            on,
+            entered,
             left: None,
             _hide: hide,
         });
@@ -1027,8 +1128,8 @@ impl Client {
         let layout = cx.theme().layout;
         let typography = cx.theme().typography;
         let status = self.status.as_ref()?;
-        let opacity = match status.left {
-            None => 1.0,
+        let progress = match status.left {
+            None => mira_ui::motion::settling(status.entered, window, cx),
             Some(since) => match mira_ui::motion::leaving(since, window, cx) {
                 Some(opacity) => opacity,
                 None => {
@@ -1039,32 +1140,32 @@ impl Client {
         };
         let mut font = window.text_style().font();
         font.weight = gpui::FontWeight::MEDIUM;
-        let run = gpui::TextRun {
-            len: status.text.len(),
-            font,
-            color: gpui::Hsla::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let text = window
-            .text_system()
-            .shape_line(status.text.clone(), typography.body, &[run], None)
-            .width;
-        let width = mira_ui::motion::glide(
-            ("hotkey-status-width", status.shown),
-            None,
-            f32::from(text.ceil() + STATUS_PADDING * 2.0 + px(4.0)),
-            window,
-            cx,
-        );
+        let widest = status
+            .states
+            .iter()
+            .map(|state| {
+                let run = gpui::TextRun {
+                    len: state.len(),
+                    font: font.clone(),
+                    color: gpui::Hsla::default(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .shape_line(state.clone(), typography.body, &[run], None)
+                    .width
+            })
+            .fold(Pixels::ZERO, Pixels::max);
+        let text = status.states[usize::from(status.on)].clone();
         let theme = cx.theme();
         let pill = div()
             .id("hotkey-status")
             .debug_selector(|| "hotkey-status".into())
             .role(Role::Status)
-            .aria_label(status.text.clone())
-            .w(px(width))
+            .aria_label(text.clone())
+            .w(widest.ceil() + STATUS_PADDING * 2.0)
             .max_w_full()
             .px(STATUS_PADDING)
             .py(layout.space(2.0))
@@ -1076,9 +1177,8 @@ impl Client {
             .line_height(typography.body_line)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.foreground)
-            .text_center()
             .whitespace_nowrap()
-            .child(div().overflow_hidden().child(status.text.clone()));
+            .child(div().overflow_hidden().child(text));
         Some(
             h_flex()
                 .absolute()
@@ -1087,11 +1187,7 @@ impl Client {
                 .right_0()
                 .justify_center()
                 .px(layout.space(3.0))
-                .opacity(opacity)
-                .child(mira_ui::motion::fade(
-                    ("hotkey-status-shown", status.shown),
-                    pill,
-                )),
+                .child(mira_ui::motion::from_above(pill, progress)),
         )
     }
 
@@ -1140,8 +1236,8 @@ impl Client {
                     number: session.number,
                     view: session.view.entity_id(),
                     title: session.title(cx),
-                    glance: view.glance(),
-                    details: view.details(),
+                    glance: view.glance(cx),
+                    details: view.details(cx),
                     hint: self
                         .shortcut_hints
                         .then(|| shortcut_for(&shortcuts, index))
@@ -1167,7 +1263,7 @@ impl Client {
             let client = client.clone();
             tab.on_close(move |window, cx| {
                 client
-                    .update(cx, |client, cx| client.close_session(index, window, cx))
+                    .update(cx, |client, cx| client.request_close(index, window, cx))
                     .ok();
             })
         })
@@ -1546,7 +1642,7 @@ impl Client {
                 if this.sessions.is_empty() {
                     window.remove_window();
                 } else {
-                    this.close_session(this.active, window, cx);
+                    this.request_close(this.active, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| this.step(1, window, cx)))
@@ -1597,6 +1693,7 @@ impl Client {
                     .children(self.status(window, cx)),
             )
             .child(self.sidebar_toggle(window, cx))
+            .children(self.close_dialog(cx))
     }
 }
 
@@ -1742,18 +1839,18 @@ mod tests {
     ) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (client, cx) = client_window(cx);
-        let show = |status: &str, cx: &mut gpui::VisualTestContext| {
-            let status = status.to_owned();
-            client.update(cx, |client, cx| client.show_status(status, cx));
+        let show = |option: &str, on: bool, cx: &mut gpui::VisualTestContext| {
+            client.update(cx, |client, cx| client.show_status(option, on, cx));
             cx.run_until_parked();
             cx.debug_bounds("hotkey-status")
                 .map(|bounds| bounds.size.width)
         };
-        let short = show("Anti-AFK: On", cx);
+        let short = show("Anti-AFK", true, cx);
         cx.executor().advance_clock(STATUS_LINGER / 2);
-        let long = show("Skip cutscenes: Off", cx);
+        let long = show("Skip cutscenes", false, cx);
         assert!(short.is_some());
         assert!(long > short);
+        assert_eq!(show("Skip cutscenes", true, cx), long);
         cx.executor().advance_clock(STATUS_LINGER * 3 / 4);
         cx.run_until_parked();
         assert!(cx.debug_bounds("hotkey-status").is_some());
@@ -1775,7 +1872,31 @@ mod tests {
                 crate::settings::init(folder.join("settings.json"), |_| {}, cx);
                 let client = Client::empty_for_tests(&folder, cx);
                 client.update(cx, |client, cx| {
-                    client.show_status("Infinite range: On".into(), cx)
+                    client.show_status("Infinite range", true, cx)
+                });
+                cx.new(|_| Shown(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_close_running_tab() {
+        let folder = std::env::temp_dir().join("mira-close-tab-snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in mira_ui::snapshot(
+            "client-close-running-tab",
+            gpui::size(px(720.0), px(420.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, cx| {
+                    client.closing = Some(Closing {
+                        open: true,
+                        view: cx.entity_id(),
+                        title: "Close Player1?".into(),
+                    });
                 });
                 cx.new(|_| Shown(client))
             },

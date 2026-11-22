@@ -209,7 +209,7 @@ mod tests {
     use crate::{
         ruffle_view::{
             Login, ScriptPhase,
-            account_card::tests::{online, signing_in},
+            account_card::tests::{online, queued, signing_in},
         },
         setups::Member,
     };
@@ -284,7 +284,7 @@ mod tests {
     fn stopping_a_setup_targets_its_own_script_including_ones_still_waiting_to_start() {
         let waiting = Presence::Waiting {
             place: 1,
-            script: Some("/s/daily.ts".into()),
+            script: Some(queued("/s/daily.ts")),
             open: None,
         };
         let queued = online("/s/daily.ts", ScriptPhase::Queued);

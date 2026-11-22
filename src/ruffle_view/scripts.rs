@@ -47,6 +47,7 @@ use super::{
     queue::{self, EntryId, Queue},
     script::failure,
     script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
+    script_names,
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
@@ -594,7 +595,8 @@ pub(crate) fn open(
         |scripts: &ScriptsWindow| &scripts.client,
         |scripts, window, cx| {
             scripts.retarget(target, cx);
-            scripts.reopen(window, cx);
+            scripts.rescan(cx);
+            window.focus(&scripts.search.focus_handle(cx), cx);
         },
         cx,
     ) {
@@ -676,7 +678,7 @@ pub(super) struct ScriptsWindow {
     core_bots: Entity<CoreBotsPage>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Vec<Subscription>>,
-    _subscriptions: [Subscription; 6],
+    _subscriptions: [Subscription; 8],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -763,7 +765,6 @@ impl ScriptsWindow {
                 if let PackageEvent::Installed(root) = event {
                     this.set_page(Page::Library(Some(root.clone())), cx);
                 }
-                this.generation += 1;
                 this.rescan(cx);
             }),
             cx.observe(&client, |this, _, cx| this.show(cx)),
@@ -800,6 +801,12 @@ impl ScriptsWindow {
             cx.on_blur(&room.focus_handle(cx), window, |this, _, cx| {
                 this.show_saved_room(cx);
             }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.rescan(cx);
+                }
+            }),
+            cx.observe_global::<script_names::Names>(|_, cx| cx.notify()),
         ];
         let mut scripts = Self {
             client,
@@ -900,12 +907,6 @@ impl ScriptsWindow {
             .update(cx, |page, cx| page.show(account, view, cx));
     }
 
-    fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.generation += 1;
-        self.rescan(cx);
-        window.focus(&self.search.focus_handle(cx), cx);
-    }
-
     fn view(&self) -> Option<Entity<RuffleView>> {
         self.shown.as_ref()?.view.upgrade()
     }
@@ -921,7 +922,7 @@ impl ScriptsWindow {
 
     fn run_status(&self, cx: &App) -> Option<RunStatus> {
         let script = &self.view()?.read(cx).script;
-        let state = script.state()?;
+        let state = script.state(cx)?;
         let activity = match state.phase {
             ScriptPhase::Running => Activity::Running,
             ScriptPhase::NeedsInput => Activity::NeedsYou,
@@ -939,7 +940,7 @@ impl ScriptsWindow {
             _ => None,
         };
         Some(RunStatus {
-            text: script.status()?.into(),
+            text: script.status(cx)?.into(),
             activity,
             failure,
             stop: (script.stoppable() && state.phase != ScriptPhase::Stopping)
@@ -980,6 +981,7 @@ impl ScriptsWindow {
     }
 
     fn rescan(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
         let built_in = self.folder.clone();
         let added = settings::script_folders(cx).to_vec();
         let packages = self.packages.clone();
@@ -1004,6 +1006,13 @@ impl ScriptsWindow {
                     Some(Row::Script(entry)) => Some(entry.path.clone()),
                     _ => None,
                 };
+                script_names::learn(
+                    scanned
+                        .entries
+                        .iter()
+                        .map(|entry| (entry.path.clone(), entry.name.clone())),
+                    cx,
+                );
                 this.library = Some(scanned);
                 if this.scope(cx).is_none() {
                     this.page = Page::Library(None);
@@ -2572,7 +2581,7 @@ impl ScriptsWindow {
             .into_any_element()
     }
 
-    fn about(&self, path: &Path, key: &FormKey) -> About {
+    fn about(&self, path: &Path, key: &FormKey, cx: &App) -> About {
         let meta = self.forms.get(key).map(|form| &form.meta);
         let listed = self
             .library
@@ -2584,7 +2593,7 @@ impl ScriptsWindow {
                 .and_then(|meta| meta.name.clone())
                 .map(SharedString::from)
                 .or_else(|| listed.map(|entry| entry.name.clone()))
-                .unwrap_or_else(|| file_name(path).into()),
+                .unwrap_or_else(|| script_names::name(path, cx)),
             description: meta
                 .and_then(|meta| meta.description.clone())
                 .map(SharedString::from)
@@ -2603,7 +2612,7 @@ impl ScriptsWindow {
         let errors = self.input_errors(&entry.path, cx);
         let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
         let key = FormKey::Script(entry.path.clone());
-        let about = self.about(&entry.path, &key);
+        let about = self.about(&entry.path, &key, cx);
         Some(Detail {
             heading: heading(theme, &about, home_relative(&entry.path), None).into_any_element(),
             body: self.inputs(theme, &key, cx),
@@ -2624,7 +2633,7 @@ impl ScriptsWindow {
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
-        let about = self.about(&queued.script, &key);
+        let about = self.about(&queued.script, &key, cx);
         let body = match self.forms.get(&key).map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
@@ -2688,7 +2697,7 @@ impl ScriptsWindow {
             .iter()
             .map(|queued| {
                 let key = FormKey::Entry(queued.id);
-                let name = self.about(&queued.script, &key).name;
+                let name = self.about(&queued.script, &key, cx).name;
                 let form = self.forms.get(&key).map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
@@ -4999,6 +5008,66 @@ Cells visited: Enter, r1, r2, r3, r4.";
             );
             assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
         });
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn returning_to_the_window_picks_up_script_changes(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-refocus-{:x}", u64::from_ne_bytes(random)));
+        let write = |file: &str, contents: &str| {
+            let path = temp.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        };
+        write("scripts/hunt.ts", "export const meta = { name: \"Hunt\" };");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let names = |cx: &mut gpui::VisualTestContext| {
+            scripts.read_with(cx, |scripts, cx| {
+                scripts
+                    .rows(cx)
+                    .iter()
+                    .filter_map(|row| match row {
+                        Row::Script(entry) => Some(entry.name.to_string()),
+                        Row::Source(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(names(cx), ["Hunt"]);
+
+        cx.deactivate_window();
+        write(
+            "scripts/hunt.ts",
+            "export const meta = { name: \"Hunt Ultra\" };",
+        );
+        write("scripts/daily.ts", "");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(names(cx), ["daily.ts", "Hunt Ultra"]);
         fs::remove_dir_all(temp).unwrap();
     }
 

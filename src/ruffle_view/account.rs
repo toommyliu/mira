@@ -3,10 +3,10 @@ use std::{
     time::Instant,
 };
 
-use gpui::{Context, EventEmitter, SharedString};
+use gpui::{App, Context, EventEmitter, SharedString};
 use mira_ui::Tone;
 
-use super::{Loading, RuffleView};
+use super::{Loading, RuffleView, script_names};
 use crate::{
     accounts::{Account, AccountId},
     automation::{auto_relogin::Phase, sign_in::Status},
@@ -77,6 +77,21 @@ pub(crate) struct ScriptState {
     pub(crate) since: Option<Instant>,
 }
 
+impl ScriptState {
+    pub(crate) fn queued(entry: &Path, cx: &App) -> Self {
+        Self {
+            entry: entry.to_path_buf(),
+            name: script_names::name(entry, cx),
+            phase: ScriptPhase::Queued,
+            since: None,
+        }
+    }
+
+    pub(crate) fn running(&self) -> bool {
+        matches!(self.phase, ScriptPhase::Running | ScriptPhase::NeedsInput)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ScriptPhase {
     Queued,
@@ -125,7 +140,7 @@ impl RuffleView {
         script: Option<(PathBuf, Values)>,
         cx: &mut Context<Self>,
     ) {
-        self.account = Some(Link::new(account));
+        self.link(account);
         if let Some((script, values)) = script {
             self.queue.add(script, values);
             self.queue.play();
@@ -138,16 +153,27 @@ impl RuffleView {
     }
 
     pub(super) fn adopt(&mut self, account: &Account, cx: &mut Context<Self>) {
-        self.account = Some(Link::new(account));
+        self.link(account);
         self.changed(cx);
     }
 
+    fn link(&mut self, account: &Account) {
+        if self.linked_account() != Some(account.id()) {
+            self.span
+                .in_scope(|| tracing::info!(account = %account.username, "linked an account"));
+        }
+        self.account = Some(Link::new(account));
+    }
+
     pub(super) fn identify(&mut self, player: &str, cx: &mut Context<Self>) -> bool {
+        self.bind_script(player, cx);
         let id = AccountId::of(player);
         if self.account.as_ref().is_some_and(|link| link.id() == id) {
             return false;
         }
-        if self.account.take().is_some() {
+        if let Some(link) = self.account.take() {
+            self.span
+                .in_scope(|| tracing::info!(account = %link.username, "unlinked the account"));
             self.queue.pause();
         }
         cx.emit(Identified(player.to_owned()));
@@ -216,7 +242,7 @@ impl RuffleView {
         cx.notify();
     }
 
-    pub(crate) fn summary(&self) -> Summary {
+    pub(crate) fn summary(&self, cx: &App) -> Summary {
         let login = match (&self.error, self.status.as_ref()) {
             (Some(error), _) => Login::Broken(error.clone().into()),
             (None, None) => Login::Loading(match self.loading {
@@ -233,8 +259,10 @@ impl RuffleView {
             },
             (None, Some(Status::ChooseServer)) => Login::ChooseServer,
             (None, Some(Status::Online(_))) => Login::Online,
-            (None, Some(Status::Offline)) if relogging(&self.auto_relogin) => Login::Reconnecting,
-            (None, Some(Status::Offline)) => Login::Disconnected,
+            (None, Some(Status::Offline | Status::LoggedOut)) if relogging(&self.auto_relogin) => {
+                Login::Reconnecting
+            }
+            (None, Some(Status::Offline | Status::LoggedOut)) => Login::Disconnected,
             (None, Some(Status::Failed(error))) => Login::Failed(error.clone().into()),
         };
         let online = login == Login::Online;
@@ -260,21 +288,16 @@ impl RuffleView {
                 level: identity.level,
                 class: identity.class.clone().map(Into::into),
             });
-        let queued = self.waiting().map(|script| ScriptState {
-            entry: script.to_path_buf(),
-            name: file_name(script).into(),
-            phase: ScriptPhase::Queued,
-            since: None,
-        });
+        let queued = self.waiting().map(|script| ScriptState::queued(script, cx));
         Summary {
             login,
             place,
             character,
-            script: queued.or_else(|| self.script.state()),
+            script: queued.or_else(|| self.script.state(cx)),
         }
     }
 
-    pub(super) fn glance(&self) -> Option<Glance> {
+    pub(super) fn glance(&self, cx: &App) -> Option<Glance> {
         let link = self.account.as_ref();
         let queued = self.waiting();
         if self.error.is_some() {
@@ -299,10 +322,12 @@ impl RuffleView {
                 ));
             }
             Some(Status::ChooseServer) => return Some(Glance::new("Choose server", Tone::Warning)),
-            Some(Status::Offline) if link.is_none() => {
+            Some(Status::Offline | Status::LoggedOut) if link.is_none() => {
                 return Some(Glance::new("Not logged in", Tone::Neutral));
             }
-            Some(Status::Offline) => return Some(Glance::new("Offline", Tone::Warning)),
+            Some(Status::Offline | Status::LoggedOut) => {
+                return Some(Glance::new("Offline", Tone::Warning));
+            }
             None => match (link, self.loading) {
                 (None, Loading::Done) => None,
                 (_, Loading::Percent(percent)) => {
@@ -311,18 +336,19 @@ impl RuffleView {
                 (_, _) => return Some(Glance::new("Loading", Tone::Neutral)),
             },
         };
-        let script = self.script_status();
-        if let Some(name) = self.script.loaded()
+        let script = self.script_status(cx);
+        if let Some(entry) = self.script.entry()
             && self.script.failed()
             && queued.is_none()
         {
+            let name = script_names::name(entry, cx);
             return Some(Glance::new(format!("{name} failed"), Tone::Danger));
         }
         if self.script.running() {
             return script.map(|status| Glance::new(status, Tone::Accent));
         }
         if let Some(queued) = queued {
-            let waiting = format!("Waiting to run {}", file_name(queued));
+            let waiting = format!("Waiting to run {}", script_names::name(queued, cx));
             return Some(Glance::new(waiting, Tone::Neutral));
         }
         match script {
@@ -331,17 +357,16 @@ impl RuffleView {
         }
     }
 
-    pub(super) fn details(&self) -> Details {
+    pub(super) fn details(&self, cx: &App) -> Details {
         let status = self.status.as_ref();
         let queued = self.waiting();
         let server = match status {
             Some(Status::Online(server)) => server.clone().map(Into::into),
             _ => None,
         };
-        let script = match queued {
-            Some(queued) => Some(file_name(queued).into()),
-            None => self.script.loaded().cloned(),
-        };
+        let script = queued
+            .or_else(|| self.script.entry().map(PathBuf::as_path))
+            .map(|script| script_names::name(script, cx));
         let error = match (&self.error, status) {
             (Some(error), _) | (None, Some(Status::Failed(error))) => Some(error.clone().into()),
             _ => self
@@ -385,13 +410,16 @@ impl RuffleView {
 }
 
 fn signed_out(status: Option<&Status>, relogin: &Phase) -> bool {
-    matches!(status, Some(Status::Offline | Status::Failed(_))) && !relogging(relogin)
+    matches!(
+        status,
+        Some(Status::Offline | Status::LoggedOut | Status::Failed(_))
+    ) && !relogging(relogin)
 }
 
 fn relogging(relogin: &Phase) -> bool {
     matches!(
         relogin,
-        Phase::Waiting | Phase::Attempt { .. } | Phase::Backoff { .. }
+        Phase::Waiting(_) | Phase::Attempt { .. } | Phase::Backoff { .. }
     )
 }
 
@@ -407,7 +435,7 @@ fn login_label(status: &Status) -> SharedString {
         Status::ChooseServer => "Choose a server".into(),
         Status::Online(Some(server)) => server.clone().into(),
         Status::Online(None) => "Online".into(),
-        Status::Offline => "Offline".into(),
+        Status::Offline | Status::LoggedOut => "Offline".into(),
         Status::Failed(error) => format!("Login failed: {error}").into(),
     }
 }
@@ -422,15 +450,21 @@ pub(crate) fn file_name(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::auto_relogin::Countdown;
 
     #[test]
     fn launch_signs_a_logged_out_tab_back_in() {
         let failed = Status::Failed("Wrong password".into());
         let attempt = Phase::Attempt { attempt: 1, of: 3 };
+        let now = std::time::Instant::now();
+        let waiting = Phase::Waiting(Countdown {
+            from: now,
+            until: now,
+        });
         assert!(signed_out(Some(&Status::Offline), &Phase::Off));
         assert!(signed_out(Some(&Status::Offline), &Phase::Armed));
         assert!(signed_out(Some(&failed), &Phase::Off));
-        assert!(!signed_out(Some(&Status::Offline), &Phase::Waiting));
+        assert!(!signed_out(Some(&Status::Offline), &waiting));
         assert!(!signed_out(Some(&Status::Offline), &attempt));
         assert!(!signed_out(Some(&Status::Online(None)), &Phase::Armed));
         assert!(!signed_out(

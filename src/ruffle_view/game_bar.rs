@@ -3,18 +3,18 @@ use std::{rc::Rc, time::Instant};
 use gpui::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseDownEvent,
-    ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, actions, div,
+    ParentElement as _, Pixels, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, WeakEntity, Window, actions, div, point,
     prelude::FluentBuilder as _, px,
 };
 
 use mira_ui::{
-    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _,
+    ActiveTheme as _, FocusNext, FocusPrevious, PointerCursor as _, StyledExt as _, Tone,
     components::Disclosure,
-    h_flex, motion,
+    h_flex,
     nav::{self, Axis, Step, Typeahead},
     primitives::{
-        Button, DropdownMenu, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric,
+        Button, Dot, DropdownMenu, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric,
         PopoverClose, Scrollbar, Spinner, Switch,
         button::{Size, Variant},
         divider, icon,
@@ -27,7 +27,7 @@ use super::RuffleView;
 use crate::{
     automation::{
         auto_attack,
-        auto_relogin::{self, Phase},
+        auto_relogin::{self, Countdown, Phase},
         game_settings::{FrameRate, RenderingMode, Settings as GameSettings},
         settings::Automation,
     },
@@ -428,9 +428,9 @@ pub(super) fn on_actions<E: gpui::InteractiveElement>(
             view.update(cx, |view, cx| view.toggle_option(option, cx));
             let after = on(view.read(cx));
             if after != before {
-                let state = if after { "On" } else { "Off" };
-                let status = format!("{}: {state}", option.label());
-                let _ = client.update(cx, |client, cx| client.show_status(status, cx));
+                let _ = client.update(cx, |client, cx| {
+                    client.show_status(option.label(), after, cx)
+                });
             }
         })
 }
@@ -686,46 +686,9 @@ fn jump_key(
 }
 
 enum Detail {
-    Text(SharedString),
+    Stopped,
     Working(SharedString),
-    Waiting(SharedString),
-}
-
-#[derive(IntoElement)]
-struct Busy {
-    id: ElementId,
-    label: SharedString,
-    waiting: bool,
-}
-
-impl RenderOnce for Busy {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let target = if self.waiting { 0.0 } else { 1.0 };
-        let spinning = motion::travel((self.id.clone(), "spinning"), target, window, cx);
-        let layer = |opacity: f32| div().absolute().inset_0().opacity(opacity);
-        div()
-            .relative()
-            .flex_none()
-            .size(px(14.0))
-            .when(spinning < 1.0, |busy| {
-                let clock = icon(Icon::Clock, cx.theme().foreground);
-                let clock = if cx.reduce_motion() {
-                    clock.into_any_element()
-                } else {
-                    motion::breathe((self.id.clone(), "pulse"), clock).into_any_element()
-                };
-                busy.child(
-                    layer(1.0 - spinning)
-                        .id((self.id.clone(), "clock"))
-                        .role(Role::ProgressIndicator)
-                        .aria_label(self.label.clone())
-                        .child(clock),
-                )
-            })
-            .when(spinning > 0.0, |busy| {
-                busy.child(layer(spinning).child(Spinner::new(self.id).label(self.label)))
-            })
-    }
+    Counting(SharedString, Countdown),
 }
 
 fn relogin_value(view: &RuffleView) -> Option<Detail> {
@@ -736,8 +699,10 @@ fn relogin_value(view: &RuffleView) -> Option<Detail> {
         Phase::Attempt { attempt, of } => {
             Some(Detail::Working(format!("Attempt {attempt} of {of}").into()))
         }
-        Phase::Waiting | Phase::Backoff { .. } => Some(Detail::Waiting("Waiting".into())),
-        Phase::Failed(_) => Some(Detail::Text("Stopped".into())),
+        Phase::Waiting(countdown) | Phase::Backoff { countdown, .. } => {
+            Some(Detail::Counting("Waiting".into(), *countdown))
+        }
+        Phase::Failed(_) => Some(Detail::Stopped),
         Phase::Off | Phase::Armed => None,
     }
 }
@@ -745,12 +710,12 @@ fn relogin_value(view: &RuffleView) -> Option<Detail> {
 fn status(phase: &Phase) -> Option<String> {
     match phase {
         Phase::Off | Phase::Armed => None,
-        Phase::Waiting => Some("Connection lost, waiting to log in".into()),
+        Phase::Waiting(_) => Some("Connection lost, waiting to log in".into()),
         Phase::Attempt { attempt, of } => Some(format!("Logging in, attempt {attempt} of {of}")),
-        Phase::Backoff { attempt, of } => Some(format!(
+        Phase::Backoff { attempt, of, .. } => Some(format!(
             "Attempt {attempt} of {of} failed, waiting to retry"
         )),
-        Phase::Failed(reason) => Some(format!("Stopped: {reason}")),
+        Phase::Failed(reason) => Some(format!("Stopped: {}", super::capitalized(reason))),
     }
 }
 
@@ -774,38 +739,37 @@ fn trigger(
         None => "",
     };
     let label = match &value {
-        Some(Detail::Text(value) | Detail::Working(value) | Detail::Waiting(value)) => {
+        Some(Detail::Stopped) => format!("{title}{state}: Stopped"),
+        Some(Detail::Working(value) | Detail::Counting(value, _)) => {
             format!("{title}{state}: {value}")
         }
         None => format!("{title}{state}"),
     };
-    let shrinks = matches!(value, Some(Detail::Text(_)));
-    bar_button(id, label)
-        .when(shrinks, |trigger| trigger.flex_shrink(1.0).min_w_0())
-        .child(
-            div()
-                .flex_none()
-                .when(on == Some(true), |title| title.text_color(theme.foreground))
-                .child(title),
-        )
-        .children(value.map(|value| {
-            let waiting = matches!(value, Detail::Waiting(_));
-            match value {
-                Detail::Text(value) => div()
-                    .min_w_0()
-                    .max_w(px(120.0))
-                    .truncate()
-                    .text_color(theme.muted_foreground)
-                    .child(value)
-                    .into_any_element(),
-                Detail::Working(label) | Detail::Waiting(label) => Busy {
-                    id: SharedString::from(format!("{id}-working")).into(),
-                    label,
-                    waiting,
-                }
+    let status = match value {
+        Some(Detail::Stopped) => Some(Dot::new(Tone::Attention).into_any_element()),
+        Some(Detail::Working(label)) => Some(
+            Spinner::new(SharedString::from(format!("{id}-working")))
+                .label(label)
+                .size(px(14.0))
                 .into_any_element(),
-            }
-        }))
+        ),
+        Some(Detail::Counting(label, countdown)) => Some(
+            Spinner::new(SharedString::from(format!("{id}-countdown")))
+                .label(label)
+                .size(px(14.0))
+                .countdown(countdown.from, countdown.until)
+                .into_any_element(),
+        ),
+        None => on.map(|on| {
+            div()
+                .text_color(theme.muted_foreground)
+                .child(if on { "On" } else { "Off" })
+                .into_any_element()
+        }),
+    };
+    bar_button(id, label)
+        .child(div().flex_none().child(title))
+        .children(status)
 }
 
 enum ScriptControl {
@@ -825,9 +789,13 @@ struct Bar {
 }
 
 pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
-    let script = match view.script.loaded() {
-        Some(name) if view.script.stoppable() => ScriptControl::Stop(name.clone()),
-        loaded => ScriptControl::Start(loaded.cloned()),
+    let loaded = view
+        .script
+        .entry()
+        .map(|entry| super::script_names::name(entry, cx));
+    let script = match loaded {
+        Some(name) if view.script.stoppable() => ScriptControl::Stop(name),
+        loaded => ScriptControl::Start(loaded),
     };
     let bar = Bar {
         inset: view.bar_inset,
@@ -1463,7 +1431,9 @@ fn jump_panel(
     let cells_scroll = window
         .use_keyed_state("jump-cells", cx, |_, _| {
             let scroll = ScrollHandle::new();
-            scroll.scroll_to_item(start.row);
+            // scroll_to_item is dropped on the first frame, before the list has measured its viewport.
+            let centered = layout.control * (start.row as f32 + 0.5 - VISIBLE_CELLS / 2.0);
+            scroll.set_offset(point(px(0.0), -centered));
             scroll
         })
         .read(cx)
@@ -2206,6 +2176,15 @@ mod tests {
     }
 
     fn relogin_scene(tuned: bool, servers: Vec<String>, inputs: Inputs) -> Scene {
+        let phase = if tuned {
+            Phase::Armed
+        } else {
+            Phase::Attempt { attempt: 2, of: 3 }
+        };
+        relogin_scene_in(phase, tuned, servers, inputs)
+    }
+
+    fn relogin_scene_in(phase: Phase, tuned: bool, servers: Vec<String>, inputs: Inputs) -> Scene {
         let automation = Automation::default();
         automation.update_auto_relogin(|settings| {
             settings.enabled = true;
@@ -2215,11 +2194,6 @@ mod tests {
                 settings.server = Some("Twilly".into());
             }
         });
-        let phase = if tuned {
-            Phase::Armed
-        } else {
-            Phase::Attempt { attempt: 2, of: 3 }
-        };
         Scene {
             title: "Auto relogin",
             rows: true,
@@ -2243,6 +2217,10 @@ mod tests {
         });
         snapshot("game-relogin-advanced", 400.0, |cx| {
             relogin_fixture(true, Vec::new(), cx)
+        });
+        snapshot("game-relogin-stopped", 400.0, move |cx| {
+            let failed = Phase::Failed("login didn't reach server selection".into());
+            relogin_scene_in(failed, false, few(), Inputs::new(cx))
         });
         for (name, keys) in [
             ("game-relogin-focus-server", &["down", "down"][..]),
@@ -2302,7 +2280,7 @@ mod tests {
         );
     }
 
-    struct Bars(fn() -> Vec<Bar>);
+    struct Bars(fn() -> Vec<Bar>, WeakEntity<RuffleView>);
 
     impl gpui::Render for Bars {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2319,41 +2297,67 @@ mod tests {
                 .children((self.0)().into_iter().enumerate().map(|(index, bar)| {
                     div()
                         .id(("bar", index))
-                        .child(menubar(bar, WeakEntity::new_invalid(), cx))
+                        .child(menubar(bar, self.1.clone(), cx))
                 }))
         }
     }
 
     #[test]
     fn snapshot_bar() {
-        for path in mira_ui::snapshot("game-bar", gpui::size(px(900.0), px(200.0)), |_, cx| {
+        for path in mira_ui::snapshot("game-bar", gpui::size(px(900.0), px(300.0)), |_, cx| {
             cx.new(|_| {
-                Bars(|| {
-                    let bar = |relogin_detail: Option<Detail>, attack, script| Bar {
-                        inset: px(84.0),
-                        live: true,
-                        relogin: relogin_detail.is_some(),
-                        login_captured: true,
-                        relogin_detail,
-                        attack,
-                        script,
-                        toggle_panel: None,
-                    };
-                    vec![
-                        bar(None, false, ScriptControl::Start(None)),
-                        bar(None, true, ScriptControl::Start(Some("hunt.ts".into()))),
-                        bar(
-                            Some(Detail::Working("Attempt 2 of 3".into())),
-                            true,
-                            ScriptControl::Stop("hunt.ts".into()),
-                        ),
-                        Bar {
-                            live: false,
-                            login_captured: false,
-                            ..bar(None, false, ScriptControl::Start(None))
-                        },
-                    ]
-                })
+                Bars(
+                    || {
+                        let bar = |relogin, relogin_detail, attack, script| Bar {
+                            inset: px(84.0),
+                            live: true,
+                            relogin,
+                            login_captured: true,
+                            relogin_detail,
+                            attack,
+                            script,
+                            toggle_panel: None,
+                        };
+                        let now = Instant::now();
+                        let countdown = Countdown {
+                            from: now - std::time::Duration::from_secs(2),
+                            until: now + std::time::Duration::from_secs(3),
+                        };
+                        vec![
+                            bar(false, None, false, ScriptControl::Start(None)),
+                            bar(
+                                true,
+                                None,
+                                true,
+                                ScriptControl::Start(Some("hunt.ts".into())),
+                            ),
+                            bar(
+                                true,
+                                Some(Detail::Counting("Waiting".into(), countdown)),
+                                true,
+                                ScriptControl::Stop("hunt.ts".into()),
+                            ),
+                            bar(
+                                true,
+                                Some(Detail::Working("Attempt 2 of 3".into())),
+                                true,
+                                ScriptControl::Stop("hunt.ts".into()),
+                            ),
+                            bar(
+                                true,
+                                Some(Detail::Stopped),
+                                false,
+                                ScriptControl::Start(Some("hunt.ts".into())),
+                            ),
+                            Bar {
+                                live: false,
+                                login_captured: false,
+                                ..bar(false, None, false, ScriptControl::Start(None))
+                            },
+                        ]
+                    },
+                    WeakEntity::new_invalid(),
+                )
             })
         }) {
             assert!(path.exists(), "{} was not written", path.display());
@@ -2366,9 +2370,9 @@ mod tests {
             let location = Location {
                 map: "battleon".into(),
                 room: None,
-                cell: "r3".into(),
+                cell: "r16".into(),
                 pad: "Left".into(),
-                cells: (1..=14).map(|cell| format!("r{cell}")).collect(),
+                cells: (1..=24).map(|cell| format!("r{cell}")).collect(),
                 cell_pads: vec!["Left".into(), "Right".into()],
             };
             Scene {

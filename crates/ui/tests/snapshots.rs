@@ -1142,6 +1142,20 @@ fn snapshot_progress_arcs() {
             }))
             .into_any_element()
     });
+    scene("progress-arcs-countdown", 260.0, 90.0, |_, _| {
+        let now = std::time::Instant::now();
+        let second = std::time::Duration::from_secs(1);
+        div()
+            .flex()
+            .items_center()
+            .gap(px(16.0))
+            .children([0, 1, 3, 5].map(|elapsed| {
+                mira_ui::primitives::Spinner::new(("countdown", elapsed))
+                    .size(px(24.0))
+                    .countdown(now - second * elapsed, now - second * elapsed + second * 4)
+            }))
+            .into_any_element()
+    });
 }
 
 #[test]

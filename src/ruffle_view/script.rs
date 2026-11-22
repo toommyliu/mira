@@ -1,8 +1,10 @@
 use std::{path::PathBuf, time::Instant};
 
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task};
 
-use super::{RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs};
+use super::{
+    RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs, script_names,
+};
 use crate::{
     account_settings,
     accounts::AccountId,
@@ -33,7 +35,7 @@ struct Restart {
 
 struct Loaded {
     launch: Launch,
-    name: SharedString,
+    character: Option<AccountId>,
     phase: Phase,
     since: Instant,
 }
@@ -83,12 +85,18 @@ impl Script {
         )
     }
 
-    pub(super) fn entry(&self) -> Option<&PathBuf> {
-        self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
+    fn bind(&mut self, character: &AccountId) -> bool {
+        let running = self.running();
+        match &mut self.loaded {
+            Some(loaded) if running => {
+                loaded.character.get_or_insert_with(|| character.clone()) == character
+            }
+            _ => true,
+        }
     }
 
-    pub(super) fn loaded(&self) -> Option<&SharedString> {
-        self.loaded.as_ref().map(|loaded| &loaded.name)
+    pub(super) fn entry(&self) -> Option<&PathBuf> {
+        self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
 
     pub(super) fn failure(&self) -> Option<String> {
@@ -102,12 +110,12 @@ impl Script {
         Some(self.dialogs.as_ref()?.view.clone())
     }
 
-    pub(super) fn state(&self) -> Option<ScriptState> {
+    pub(super) fn state(&self, cx: &App) -> Option<ScriptState> {
         let Loaded {
             launch,
-            name,
             phase,
             since,
+            ..
         } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         let phase = match phase {
@@ -127,14 +135,15 @@ impl Script {
         };
         Some(ScriptState {
             entry: launch.entry.clone(),
-            name: name.clone(),
+            name: script_names::name(&launch.entry, cx),
             phase,
             since: Some(*since),
         })
     }
 
-    pub(super) fn status(&self) -> Option<String> {
-        let Loaded { name, phase, .. } = self.loaded.as_ref()?;
+    pub(super) fn status(&self, cx: &App) -> Option<String> {
+        let Loaded { launch, phase, .. } = self.loaded.as_ref()?;
+        let name = script_names::name(&launch.entry, cx);
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         match phase {
             Phase::Preparing { .. } => Some(format!("Starting {name}")),
@@ -189,15 +198,22 @@ impl RuffleView {
         }
         self.script.leaving = None;
         self.script.restart = None;
+        let character = self.character().map(AccountId::of);
         if !fresh || !self.safe_start_stop(cx) {
-            return self.run_script(launch, cx);
+            return self.run_script(launch, character, cx);
         }
-        let name = super::account::file_name(&launch.entry).into();
         let ready = launch.clone();
-        let moving = self.retreat(cx, move |this, cx| this.run_script(ready, cx));
+        let moving = self.retreat(cx, move |this, cx| {
+            let character = this
+                .script
+                .loaded
+                .as_mut()
+                .and_then(|loaded| loaded.character.take());
+            this.run_script(ready, character, cx)
+        });
         self.script.loaded = Some(Loaded {
             launch,
-            name,
+            character,
             phase: Phase::Preparing { _moving: moving },
             since: Instant::now(),
         });
@@ -219,48 +235,55 @@ impl RuffleView {
     ) -> Task<()> {
         let (moved, arrived) = async_channel::bounded(1);
         self.session.command(Command::Retreat(moved));
+        let span = self.span.clone();
         cx.spawn(async move |this, cx| {
             if let Ok(Err(error)) = arrived.recv().await {
-                tracing::warn!(%error, "couldn't move somewhere safe");
+                span.in_scope(|| tracing::warn!(%error, "couldn't move somewhere safe"));
             }
             let _ = this.update(cx, |this, cx| then(this, cx));
         })
     }
 
-    fn run_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
-        let name: SharedString = super::account::file_name(&launch.entry).into();
+    fn run_script(&mut self, launch: Launch, character: Option<AccountId>, cx: &mut Context<Self>) {
+        script_names::refresh(&launch.entry, cx);
         let inbox = self.session.inbox();
         let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let (asks, asked) = async_channel::unbounded();
-        let started = Run::start(
-            launch.clone(),
-            Limits::default(),
-            Box::new(|level, message| match level {
-                Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
-                Level::Info => tracing::info!(target: "mira::script", "{message}"),
-                Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
-                Level::Error => tracing::error!(target: "mira::script", "{message}"),
-            }),
-            Box::new(move |message| inbox.post(Msg::Script(message))),
-            Box::new(move |message| {
-                let _ = asks.try_send(message);
-            }),
-            move |outcome| {
-                if let Outcome::Failed { message, stack } = &outcome {
-                    let stack = stack
-                        .as_deref()
-                        .map(|stack| format!("\n{stack}"))
-                        .unwrap_or_default();
-                    tracing::warn!(target: "mira::script", "{} failed: {message}{stack}", path.display());
-                }
-                let _ = finished.try_send(outcome);
-            },
-        );
+        let started = self.span.in_scope(|| {
+            Run::start(
+                launch.clone(),
+                Limits::default(),
+                Box::new(|level, message| match level {
+                    Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
+                    Level::Info => tracing::info!(target: "mira::script", "{message}"),
+                    Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
+                    Level::Error => tracing::error!(target: "mira::script", "{message}"),
+                }),
+                Box::new(move |message| inbox.post(Msg::Script(message))),
+                Box::new(move |message| {
+                    let _ = asks.try_send(message);
+                }),
+                move |outcome| {
+                    if let Outcome::Failed { message, stack } = &outcome {
+                        tracing::warn!(
+                            target: "mira::script",
+                            path = %path.display(),
+                            error = %message,
+                            stack = stack.as_deref(),
+                            "script failed"
+                        );
+                    }
+                    let _ = finished.try_send(outcome);
+                },
+            )
+        });
         let phase = match started {
             Ok(run) => {
                 let dialogs = self.script_dialogs(cx);
-                dialogs.update(cx, |dialogs, cx| dialogs.start(name.clone(), asked, cx));
+                dialogs.update(cx, |dialogs, cx| {
+                    dialogs.start(launch.entry.clone(), asked, cx)
+                });
                 cx.spawn(async move |this, cx| {
                     if let Ok(outcome) = outcome.recv().await {
                         let _ = this.update(cx, |this, cx| this.script_ended(outcome, cx));
@@ -273,14 +296,21 @@ impl RuffleView {
                 }
             }
             Err(error) => {
-                tracing::warn!(target: "mira::script", "{} failed: {error}", launch.entry.display());
+                self.span.in_scope(|| {
+                    tracing::warn!(
+                        target: "mira::script",
+                        path = %launch.entry.display(),
+                        %error,
+                        "couldn't start the script"
+                    )
+                });
                 let outcome = Outcome::Failed {
                     message: error.to_string(),
                     stack: None,
                 };
                 self.script.loaded = Some(Loaded {
                     launch,
-                    name,
+                    character,
                     phase: Phase::Finished(outcome.clone()),
                     since: Instant::now(),
                 });
@@ -290,7 +320,7 @@ impl RuffleView {
         };
         self.script.loaded = Some(Loaded {
             launch,
-            name,
+            character,
             phase,
             since: Instant::now(),
         });
@@ -379,8 +409,8 @@ impl RuffleView {
         self.changed(cx);
     }
 
-    pub(super) fn script_status(&self) -> Option<String> {
-        let status = self.script.status()?;
+    pub(super) fn script_status(&self, cx: &App) -> Option<String> {
+        let status = self.script.status(cx)?;
         Some(match self.queue.ahead() {
             queued @ 1.. if self.script.running() => format!("{status} · {queued} queued"),
             _ => status,
@@ -464,6 +494,30 @@ impl RuffleView {
         self.end_run(cx);
     }
 
+    pub(super) fn bind_script(&mut self, player: &str, cx: &mut Context<Self>) {
+        if self.script.bind(&AccountId::of(player)) {
+            return;
+        }
+        if let Some(entry) = self.script.entry() {
+            self.span.in_scope(|| {
+                tracing::warn!(
+                    target: "mira::script",
+                    path = %entry.display(),
+                    character = player,
+                    "stopped the script because a different character signed in"
+                )
+            });
+        }
+        if let Some(Loaded {
+            phase: Phase::Running { run, .. },
+            ..
+        }) = &self.script.loaded
+        {
+            run.refuse_game_calls();
+        }
+        self.stop_script(cx);
+    }
+
     pub(super) fn resume_script(&mut self, cx: &mut Context<Self>) {
         if !self.online() || self.script.running() {
             return;
@@ -489,5 +543,47 @@ impl RuffleView {
             self.start_script(launch, cx);
         }
         self.changed(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scripting::Supplied;
+
+    fn preparing(character: Option<&str>) -> Script {
+        Script {
+            loaded: Some(Loaded {
+                launch: Launch {
+                    entry: PathBuf::from("hunt.ts"),
+                    inputs: Supplied::Values(Default::default()),
+                },
+                character: character.map(AccountId::of),
+                phase: Phase::Preparing {
+                    _moving: Task::ready(()),
+                },
+                since: Instant::now(),
+            }),
+            ..Script::default()
+        }
+    }
+
+    #[test]
+    fn a_run_keeps_going_only_for_the_character_it_started_on() {
+        let (wildfox, kestrel) = (AccountId::of("wildfox"), AccountId::of("kestrel"));
+
+        let mut started = preparing(Some("Wildfox"));
+        assert!(started.bind(&wildfox));
+        assert!(!started.bind(&kestrel));
+
+        let mut unidentified = preparing(None);
+        assert!(unidentified.bind(&kestrel));
+        assert!(!unidentified.bind(&wildfox));
+
+        let mut ended = preparing(Some("wildfox"));
+        if let Some(loaded) = &mut ended.loaded {
+            loaded.phase = Phase::Finished(Outcome::Stopped);
+        }
+        assert!(ended.bind(&kestrel));
     }
 }

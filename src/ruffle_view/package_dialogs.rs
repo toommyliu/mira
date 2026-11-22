@@ -298,7 +298,7 @@ impl PackageDialogs {
         let task = packages::packages(cx).update(cx, |packages, cx| packages.check(false, cx));
         cx.spawn(async move |_, _| {
             if let Err(message) = task.await {
-                tracing::warn!(%message, "couldn't check packages for updates");
+                tracing::warn!(error = %message, "couldn't check packages for updates");
             }
         })
         .detach();
