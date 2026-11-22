@@ -1527,7 +1527,6 @@ fn jump_panel(
         };
         let hover = spot.clone();
         let travel = travel.clone();
-        let pressed = theme.pressed(theme.background, theme.muted, theme.foreground);
         h_flex()
             .id(id)
             .flex_none()
@@ -1541,7 +1540,6 @@ fn jump_panel(
             .when(*spot.read(cx) == spot_here, |row| {
                 row.bg(theme.ghost_hover())
             })
-            .active(move |style| style.bg(pressed))
             .child(div().flex_none().w(px(12.0)).when(here, |mark| {
                 mark.child(icon(Icon::Check, theme.foreground).size(px(12.0)))
             }))

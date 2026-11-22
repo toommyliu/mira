@@ -195,7 +195,7 @@ pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::
         .child(
             div()
                 .mb(layout.space(0.5))
-                .truncate()
+                .line_clamp(2)
                 .text_size(typography.body)
                 .line_height(typography.body_line)
                 .font_weight(FontWeight::MEDIUM)

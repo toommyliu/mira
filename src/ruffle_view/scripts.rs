@@ -1717,7 +1717,7 @@ impl ScriptsWindow {
                 h_flex()
                     .min_w_0()
                     .gap(marks.space(1.5))
-                    .child(div().flex_none().child(row.name.clone()))
+                    .child(div().min_w_0().truncate().child(row.name.clone()))
                     .children(row.qualifier.clone().map(|qualifier| {
                         div()
                             .min_w_0()
@@ -4360,6 +4360,75 @@ mod tests {
         for written in mira_ui::snapshot_with(name, size, build, interact) {
             assert!(written.exists(), "{} was not written", written.display());
         }
+    }
+
+    const STRESS: &[(&str, &str)] = &[
+        (
+            "scripts/legion/daily-quests-and-weekly-bosses/ultra-bosses-with-a-very-long-folder-name/legion-revenant-fealty-and-exalted-crown-farm-with-fallbacks.ts",
+            r#"export const meta = { name: "Legion Revenant fealty and Exalted Crown farm with every fallback room", description: "Farms all three Legion Fealty quests in order, banks the rewards between runs, swaps to the fallback room when the first one is full, and stops when the Exalted Crown drops or the bank has no free slot left. Needs Legion Revenant unlocked and at least 50 free inventory slots before it starts." };
+export const inputs = {
+  target: { type: "string", label: "The monster or the comma separated list of monsters this script should hunt first", description: "Use the exact in-game names, separated by commas, in the order the script should try them. Names with apostrophes are fine.", required: true },
+  kills: { type: "number", label: "How many kills before banking the drops", description: "A whole number from 1 to 100000.", integer: true, min: 1, max: 100000, default: 100000 },
+  loot: { type: "boolean", label: "Pick up every drop including the ones nobody wants", description: "Turn this off if the inventory fills up before the run ends, which it will." },
+  mode: { type: "select", label: "Mode", options: ["Farm the quest items only and skip everything else", "Quest", "Merge"], default: "Farm the quest items only and skip everything else" },
+  buy: { type: "select", label: "Buy", options: ["Exalted Crown of the Undead Legion Champion", "Helm of the Eternal Void Highlord", "Cape", "Sword", "Shield", "Pet"], multiple: true, default: ["Exalted Crown of the Undead Legion Champion", "Helm of the Eternal Void Highlord", "Cape"] },
+} as const;
+export default function* () {}"#,
+        ),
+        (
+            "scripts/Wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww.ts",
+            "",
+        ),
+        ("scripts/a.ts", ""),
+        (
+            "packages/long/package.json",
+            r#"{"name":"The Complete Legion Revenant And Void Highlord Farming Collection","version":"12.345.6789-beta.12","description":"Every farm the community has written for Legion Revenant, Void Highlord, Archmage and the seasonal events, kept up to date weekly by volunteers.","mira":{}}"#,
+        ),
+        ("packages/long/scripts/daily.ts", ""),
+    ];
+
+    #[test]
+    fn snapshot_stress() {
+        let select: fn(&mut ScriptsWindow) = |_| {};
+        for (name, size) in [
+            ("stress-scripts", (WIDTH, HEIGHT)),
+            ("stress-scripts-min", (MIN_WIDTH, MIN_HEIGHT)),
+        ] {
+            snapshot_window(
+                name,
+                size,
+                "Sepulchure farm alt with a long name",
+                STRESS,
+                select,
+            );
+        }
+        for (name, size) in [
+            ("stress-scripts-long", (WIDTH, 900.0)),
+            ("stress-scripts-long-min", (MIN_WIDTH, MIN_HEIGHT)),
+        ] {
+            snapshot_window(name, size, "Alt 1", STRESS, |scripts| scripts.selected = 2);
+        }
+        snapshot_window_with(
+            "stress-scripts-package-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            STRESS,
+            |_| {},
+            |cx, window| {
+                update_scripts(cx, window, |scripts, cx| {
+                    let root = scripts.library.as_ref().and_then(|library| {
+                        library
+                            .sources
+                            .iter()
+                            .find(|source| source.root.ends_with("long"))
+                            .map(|source| source.root.clone())
+                    });
+                    if let Some(root) = root {
+                        scripts.set_page(Page::Library(Some(root)), cx);
+                    }
+                });
+            },
+        );
     }
 
     const NESTED: &[(&str, &str)] = &[

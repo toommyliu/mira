@@ -56,6 +56,7 @@ const SERVER_MENU_WIDTH: gpui::Pixels = px(360.0);
 const BAR_ROOM: gpui::Pixels = px(64.0);
 const NARROW_BAR: gpui::Pixels = px(640.0);
 const COMPACT_HEADER: gpui::Pixels = px(760.0);
+const START_MIN_WIDTH: gpui::Pixels = px(112.0);
 const QUICK_ACTION_ROOM: gpui::Pixels = px(44.0);
 
 fn mood_color(theme: &Theme, mood: Mood) -> Hsla {
@@ -303,22 +304,24 @@ fn account_menu(
         ]);
         if !in_setup {
             let removed = account.clone();
-            items.push(
-                targets_item(
-                    &this,
-                    &targets,
-                    "Remove account…",
-                    move |manager, _, _, cx| {
-                        manager.ask(
-                            Ask::Remove {
-                                account: removed.clone(),
-                            },
-                            cx,
-                        )
-                    },
-                )
-                .danger(),
-            );
+            let mut remove = targets_item(
+                &this,
+                &targets,
+                "Remove account…",
+                move |manager, _, _, cx| {
+                    manager.ask(
+                        Ask::Remove {
+                            account: removed.clone(),
+                        },
+                        cx,
+                    )
+                },
+            )
+            .danger();
+            if let Some(blocked) = super::busy(&account.id(), "removing it", cx) {
+                remove = remove.disabled(true).description(blocked);
+            }
+            items.push(remove);
         }
         items
     })
@@ -491,7 +494,7 @@ impl Manager {
             let tab = Tab::new(row.name.clone())
                 .description(description)
                 .child(label(row.name.clone(), &row.statuses))
-                .child(caption)
+                .detail(caption)
                 .end_slot(count(row.statuses.len()))
                 .menu(move |_, _| setup_menu(&this, &menu_name));
             match &row.script {
@@ -708,9 +711,18 @@ impl Manager {
             .child(
                 self.header_row(theme)
                     .child(
-                        h_flex().flex_1().min_w_0().overflow_hidden().children(
-                            self.filter_buttons(theme, &RUN_FILTERS, statuses, compact, cx),
-                        ),
+                        h_flex()
+                            .flex_grow(1.0)
+                            .flex_shrink(1.0)
+                            .min_w_0()
+                            .overflow_hidden()
+                            .children(self.filter_buttons(
+                                theme,
+                                &RUN_FILTERS,
+                                statuses,
+                                compact,
+                                cx,
+                            )),
                     )
                     .child(
                         Button::new("edit-setup", "Edit")
@@ -737,7 +749,12 @@ impl Manager {
                     .px(layout.space(3.0))
                     .pt(layout.space(1.5))
                     .pb(layout.space(2.0))
-                    .child(div().flex_1().child(bar))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_h(theme.typography.secondary_line)
+                            .child(div().flex_1().child(bar)),
+                    )
                     .children(when.map(|when| {
                         div()
                             .flex_none()
@@ -857,11 +874,15 @@ impl Manager {
         };
         let setup_name = setup.name.clone();
         h_flex()
+            .min_w_0()
+            .flex_shrink(1000.0)
             .child(
                 Button::new("start-setup", label)
                     .variant(Variant::Primary)
                     .size(Size::Small)
                     .joined(Joined::Next)
+                    .flex_shrink(1.0)
+                    .min_w(START_MIN_WIDTH)
                     .tooltip(tooltip)
                     .disabled(empty)
                     .end_slot(
@@ -910,6 +931,8 @@ impl Manager {
                 )
                 .variant(Variant::Outline)
                 .size(Size::Small)
+                .flex_shrink(1.0)
+                .min_w_0()
                 .when_some(setup.script.as_deref(), |button, script| {
                     button.tooltip(home_relative(script))
                 })
@@ -999,6 +1022,8 @@ impl Manager {
                             }))
                             .child(
                                 v_flex()
+                                    .min_w_0()
+                                    .max_w_full()
                                     .gap(layout.space(1.0))
                                     .child(label("Script"))
                                     .child(script_menu),
@@ -1088,12 +1113,14 @@ impl Manager {
         let badge = if card.state.as_ref() == card.status.label() {
             badge.into_any_element()
         } else {
-            Tooltip::new(
-                SharedString::from(format!("card-state-{}", account.username)),
-                card.state.clone(),
-                badge,
-            )
-            .into_any_element()
+            div()
+                .flex_none()
+                .child(Tooltip::new(
+                    SharedString::from(format!("card-state-{}", account.username)),
+                    card.state.clone(),
+                    badge,
+                ))
+                .into_any_element()
         };
         let row = |glyph: Icon, label: &'static str, body: AnyElement| {
             h_flex()
@@ -1796,7 +1823,7 @@ impl Manager {
                 server_items(&servers, Some(current.as_deref()), cx.theme(), &pick)
             });
         let checking = matches!(self.servers.check, Check::Idle | Check::Running);
-        let refresh = Button::icon("refresh-servers", Icon::RotateCcw, "Refresh servers")
+        let refresh = Button::icon("refresh-servers", Icon::RefreshCw, "Refresh servers")
             .variant(Variant::Ghost)
             .size(Size::XSmall)
             .icon_size(px(14.0))
@@ -1999,8 +2026,8 @@ impl Manager {
             Ask::Remove { account } => (
                 format!("Remove {}?", account.name),
                 format!(
-                    "This deletes the saved login for {} and takes it out of any setups. If its \
-                     tab is open, the tab stays open.",
+                    "This deletes the saved login and settings for {} and takes it out of any \
+                     setups.",
                     account.name
                 ),
                 vec![

@@ -152,6 +152,7 @@ pub struct RuffleView {
 impl RuffleView {
     pub fn new(
         data: std::path::PathBuf,
+        storage: std::path::PathBuf,
         device: reqwest::header::HeaderValue,
         armies: crate::army::Armies,
         extras: Rc<extras::Store>,
@@ -166,6 +167,7 @@ impl RuffleView {
         let session = Runtime::spawn(
             native.surface(),
             data,
+            storage,
             device,
             failed,
             outputs_tx,

@@ -8,9 +8,8 @@ use gpui::{
 
 use super::menu::{
     ItemsBuilder, MENU_MAX_HEIGHT, MenuItem, MenuState, WINDOW_MARGIN, dismiss, dismiss_probe,
-    first_navigable, open, popup, presence, state,
+    first_navigable, open, popup, state,
 };
-use crate::motion::From;
 
 #[derive(IntoElement)]
 pub struct ContextMenu {
@@ -55,7 +54,7 @@ impl RenderOnce for ContextMenu {
             Some(state) => state,
             None => state(&self.id, false, window, cx),
         };
-        let shown = presence(&state, window, cx).is_some();
+        let shown = state.read(cx).is_open();
         let area = window
             .use_keyed_state((self.id.clone(), "area"), cx, |_, _| {
                 Rc::new(std::cell::Cell::new(gpui::Bounds::default()))
@@ -112,7 +111,6 @@ impl RenderOnce for ContextMenu {
                                         self.label.clone(),
                                         items,
                                         MENU_MAX_HEIGHT,
-                                        From::Above,
                                         &state,
                                         window,
                                         cx,

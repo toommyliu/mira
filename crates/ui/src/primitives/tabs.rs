@@ -28,6 +28,7 @@ pub struct Tab {
     end: Option<AnyElement>,
     description: Option<SharedString>,
     children: Vec<AnyElement>,
+    detail: Option<AnyElement>,
     on_close: Option<Handler>,
     menu: Option<ItemsBuilder>,
     hover_card: Option<HoverCard>,
@@ -41,6 +42,7 @@ impl Tab {
             end: None,
             description: None,
             children: Vec::new(),
+            detail: None,
             on_close: None,
             menu: None,
             hover_card: None,
@@ -59,6 +61,11 @@ impl Tab {
 
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn detail(mut self, element: impl IntoElement) -> Self {
+        self.detail = Some(element.into_any_element());
         self
     }
 
@@ -302,52 +309,10 @@ impl Render {
         } else {
             theme.sidebar_accent
         };
-        base.flex()
-            .flex_none()
+        let line = div()
+            .flex()
             .items_start()
             .gap(layout.space(2.0))
-            .px(layout.space(2.0))
-            .min_h(height)
-            .py(padding_y)
-            .rounded(theme.radius.control)
-            .group(GROUP)
-            .text_body(typography)
-            .text_color(theme.sidebar_foreground)
-            .when(current, |tab| {
-                let fill = if page {
-                    crate::theme::perceptual_mix(
-                        theme.sidebar_accent,
-                        theme.sidebar_accent_foreground,
-                        0.05,
-                    )
-                } else {
-                    theme.sidebar_accent
-                };
-                tab.bg(fill)
-                    .text_color(theme.sidebar_accent_foreground)
-                    .when(!page, |row| row.font_weight(FontWeight::MEDIUM))
-            })
-            .when(!current && pose == Pose::Rest, |tab| {
-                tab.hover(|style| style.bg(hover_fill))
-            })
-            .active(|style| {
-                style.bg(theme.pressed(
-                    theme.sidebar,
-                    theme.sidebar_accent,
-                    theme.sidebar_foreground,
-                ))
-            })
-            .when(current && self.ring, |tab| {
-                tab.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(theme.radius.control)
-                        .border_2()
-                        .border_color(theme.sidebar_ring)
-                        .child(crate::nav::reveal_probe()),
-                )
-            })
             .when_some(tab.start, |row, start| {
                 row.child(h_flex().flex_none().h(typography.body_line).child(start))
             })
@@ -423,7 +388,47 @@ impl Render {
                                 .on_click(move |_, window, cx| close(window, cx)),
                         ),
                 )
+            });
+        base.flex()
+            .flex_col()
+            .flex_none()
+            .px(layout.space(2.0))
+            .min_h(height)
+            .py(padding_y)
+            .rounded(theme.radius.control)
+            .group(GROUP)
+            .text_body(typography)
+            .text_color(theme.sidebar_foreground)
+            .when(current, |tab| {
+                let fill = if page {
+                    crate::theme::perceptual_mix(
+                        theme.sidebar_accent,
+                        theme.sidebar_accent_foreground,
+                        0.05,
+                    )
+                } else {
+                    theme.sidebar_accent
+                };
+                tab.bg(fill)
+                    .text_color(theme.sidebar_accent_foreground)
+                    .when(!page, |row| row.font_weight(FontWeight::MEDIUM))
             })
+            .when(!current && pose == Pose::Rest, |tab| {
+                tab.hover(|style| style.bg(hover_fill))
+            })
+            .when(current && self.ring, |tab| {
+                tab.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(theme.radius.control)
+                        .border_2()
+                        .border_color(theme.sidebar_ring)
+                        .child(crate::nav::reveal_probe()),
+                )
+            })
+            .child(line)
+            .children(tab.detail)
     }
 
     fn horizontal_tab(&self, base: Stateful<Div>, tab: Tab, current: bool) -> Stateful<Div> {

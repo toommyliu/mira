@@ -1,5 +1,6 @@
 mod bundle;
 mod release;
+mod relocate;
 mod view;
 
 use std::{
@@ -13,6 +14,7 @@ use semver::Version;
 
 use bundle::Staged;
 use release::Update;
+pub(crate) use relocate::offer as offer_move;
 pub(crate) use view::{button, dot, footer};
 
 use crate::packages::github::{API, GitHub};
@@ -389,7 +391,7 @@ impl Updates {
         let installing = staged.clone();
         let task = cx.background_spawn(async move {
             installing.install()?;
-            if let Err(error) = installing.relaunch() {
+            if let Err(error) = bundle::reopen(&installing.target) {
                 tracing::warn!(%error, "couldn't reopen Mira after installing the update");
             }
             anyhow::Ok(())

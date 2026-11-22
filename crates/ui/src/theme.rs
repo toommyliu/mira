@@ -475,9 +475,6 @@ impl Theme {
         self.destructive
             .opacity(if self.dark_mode { 0.5 } else { 1.0 })
     }
-    pub fn pressed(&self, surface: Hsla, hover: Hsla, ink: Hsla) -> Hsla {
-        perceptual_mix(surface.blend(hover), ink, 0.1)
-    }
     pub fn tone(&self, tone: Tone) -> (Hsla, Hsla, Hsla) {
         match tone {
             Tone::Neutral => (

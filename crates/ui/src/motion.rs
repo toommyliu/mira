@@ -55,18 +55,6 @@ pub enum From {
     Below,
 }
 
-pub fn arrive<E: IntoElement + Styled + 'static>(
-    id: impl Into<ElementId>,
-    element: E,
-    from: From,
-) -> AnimationElement<E> {
-    element.with_animation(
-        id,
-        Animation::new(ARRIVE).with_easing(ease),
-        move |element, t| anchored_frame(element, from, t),
-    )
-}
-
 pub(crate) fn anchored_frame<E: Styled>(element: E, from: From, progress: f32) -> E {
     let shift = px((1.0 - progress) * ARRIVE_DISTANCE);
     let element = element.relative().opacity(progress);

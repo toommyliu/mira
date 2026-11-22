@@ -179,13 +179,6 @@ impl RenderOnce for ToggleGroup {
                     })
                     .when(checked, |segment| segment.bg(theme.muted))
                     .hover(|style| style.bg(theme.ghost_hover()).text_color(theme.foreground))
-                    .active(|style| {
-                        style.bg(theme.pressed(
-                            theme.background,
-                            theme.ghost_hover(),
-                            theme.foreground,
-                        ))
-                    })
                     .when(checked && ring, |segment| {
                         segment.child(theme.halo(
                             theme.ring.opacity(0.5),

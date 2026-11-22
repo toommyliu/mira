@@ -388,11 +388,6 @@ impl RenderOnce for Button {
         } else {
             (bg, hover)
         };
-        let active = match (self.swatch, self.variant) {
-            (true, _) => clear,
-            (_, Variant::Inset) => fg.opacity(0.24),
-            _ => theme.pressed(theme.background, hover, fg),
-        };
         let radius = if self.swatch {
             self.size.height(theme.layout)
         } else if self.size == Size::XSmall {
@@ -538,13 +533,9 @@ impl RenderOnce for Button {
                     })
                     .when(!inert, |face| {
                         face.group_hover(FACE_GROUP, |style| style.bg(hover))
-                            .group_active(FACE_GROUP, |style| {
-                                if nudge {
-                                    style.bg(active).top(px(1.0)).bottom(px(-1.0))
-                                } else {
-                                    style.bg(active)
-                                }
-                            })
+                    })
+                    .when(nudge, |face| {
+                        face.group_active(FACE_GROUP, |style| style.top(px(1.0)).bottom(px(-1.0)))
                     }),
             )
             .when(!inert, |button| button.pointer_cursor(&theme))

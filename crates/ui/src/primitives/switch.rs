@@ -107,16 +107,6 @@ impl RenderOnce for Switch {
         let control = track(self.small, t, &theme)
             .id("track")
             .mt(px((20.0 - if self.small { 14.0 } else { TRACK_H }) / 2.0))
-            .when(!self.disabled, |control| {
-                let (fill, ink) = if on {
-                    (theme.primary, theme.primary_foreground)
-                } else {
-                    (off_fill(&theme), theme.foreground)
-                };
-                control.group_active("switch", |style| {
-                    style.bg(theme.pressed(theme.background, fill, ink))
-                })
-            })
             .when(ring, |control| {
                 control.border_color(theme.ring).child(theme.ring_around(
                     theme.ring,

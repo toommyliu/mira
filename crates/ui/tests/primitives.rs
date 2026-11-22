@@ -237,6 +237,57 @@ fn a_long_menu_with_submenus_scrolls_inside_the_window(cx: &mut TestAppContext) 
     );
 }
 
+struct SessionRow;
+
+impl Render for SessionRow {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let menu = |selector: &'static str| {
+            move |_: &mut Window, _: &mut gpui::App| {
+                vec![
+                    MenuItem::action("Packets", |_, _| {})
+                        .start_slot(div().debug_selector(move || selector.into())),
+                ]
+            }
+        };
+        div().size_full().p(gpui::px(40.0)).child(
+            mira_ui::primitives::ContextMenu::new("row", "Session")
+                .child(
+                    div().flex().child(
+                        div().debug_selector(|| "more-trigger".into()).child(
+                            DropdownMenu::new("more")
+                                .trigger(Button::new("more", "Actions"))
+                                .items(menu("dropdown")),
+                        ),
+                    ),
+                )
+                .items(menu("context")),
+        )
+    }
+}
+
+#[gpui::test]
+fn right_clicking_an_open_dropdown_trigger_leaves_one_menu_open(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        SessionRow
+    });
+    cx.run_until_parked();
+    let trigger = cx.debug_bounds("more-trigger").unwrap().center();
+    cx.simulate_click(trigger, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("dropdown").is_some());
+    cx.simulate_mouse_down(trigger, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(trigger, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("context").is_some());
+    assert!(cx.debug_bounds("dropdown").is_none());
+}
+
 struct ProfileRow {
     focus: FocusHandle,
     picked: Rc<Cell<Option<&'static str>>>,

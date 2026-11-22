@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseDownEvent, ParentElement, Pixels, Point, Refineable as _, RenderOnce, Role,
-    SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    KeyDownEvent, MouseDownEvent, ParentElement, Refineable as _, RenderOnce, Role, SharedString,
+    Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
 };
 
 use super::{
@@ -13,7 +13,7 @@ use super::{
     popover::{self, Content},
 };
 use crate::{
-    ActiveTheme as _, FOCUS_SCOPE, h_flex, motion,
+    ActiveTheme as _, FOCUS_SCOPE, h_flex,
     nav::{self, Step},
 };
 
@@ -154,10 +154,10 @@ impl Bar {
         .filter(|&index| index != from)
     }
 
-    fn over_trigger(&self, at: Point<Pixels>, cx: &App) -> bool {
+    fn over_trigger(&self, event: &MouseDownEvent, cx: &App) -> bool {
         self.states
             .iter()
-            .any(|state| menu::over_trigger(state, at, cx))
+            .any(|state| menu::over_trigger(state, event, cx))
     }
 
     fn show(
@@ -361,13 +361,13 @@ fn render_entry(
     if let Panel::Popover { rows, .. } = &panel {
         popover::focus_first_on_open(&id, &state, *rows, window, cx);
     }
-    let Some(shown) = menu::presence(&state, window, cx) else {
+    if !is_open {
         return trigger.into_any_element();
-    };
+    }
     let on_outside: PressHandler = {
         let bar = bar.clone();
         Rc::new(move |event, window, cx| {
-            if bar.over_trigger(event.position, cx) {
+            if bar.over_trigger(event, cx) {
                 return;
             }
             menu::close(&bar.states[index], false, window, cx);
@@ -385,9 +385,7 @@ fn render_entry(
                 on_outside,
                 window,
                 cx,
-                |from, window| {
-                    menu::popup(&id, label, items, MENU_MAX_HEIGHT, from, &state, window, cx)
-                },
+                |window| menu::popup(&id, label, items, MENU_MAX_HEIGHT, &state, window, cx),
             )
         }
         Panel::Popover { content, rows } => {
@@ -406,7 +404,7 @@ fn render_entry(
                 on_outside,
                 window,
                 cx,
-                |from, _| menu::fading(motion::arrive((id.clone(), "popover"), panel, from), shown),
+                |_| panel.into_any_element(),
             )
         }
     };
