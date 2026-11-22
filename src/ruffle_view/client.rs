@@ -1545,7 +1545,7 @@ pub(crate) fn bar(cx: &App) -> gpui::Div {
         .gap(layout.space(0.5))
         .h(cx.theme().layout.chrome)
         .pr(BAR_PADDING)
-        .bg(theme.background)
+        .bg(theme.frame)
         .border_b_1()
         .border_color(theme.border)
 }
@@ -1622,8 +1622,8 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (bar_background, bar_border) = (cx.theme().background, cx.theme().border);
-        let show_empty_bar = self.sidebar == Sidebar::Hidden && self.sessions.is_empty();
+        let (bar_background, bar_border) = (cx.theme().frame, cx.theme().border);
+        let show_empty_bar = self.sessions.is_empty();
         div()
             .window_text(cx.theme())
             .id("client")
@@ -2030,7 +2030,7 @@ mod tests {
                     div()
                         .w(theme.layout.sidebar)
                         .h_full()
-                        .bg(theme.sidebar)
+                        .bg(theme.frame)
                         .child(
                             Tabs::new("sessions", "Tabs", 1, move |_| {
                                 let (view, title) = (row.view, row.title.clone());
@@ -2082,7 +2082,7 @@ mod tests {
                     div()
                         .w(theme.layout.sidebar)
                         .h_full()
-                        .bg(theme.sidebar)
+                        .bg(theme.frame)
                         .child(
                             Tabs::new("sessions", "Tabs", rows.len(), move |index| {
                                 let row = &rows[index];
