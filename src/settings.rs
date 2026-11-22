@@ -217,6 +217,13 @@ impl QuitShortcut {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct CollapsedSources {
+    pub(crate) folders: bool,
+    pub(crate) packages: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
@@ -237,6 +244,7 @@ struct Settings {
     skip_update_checks: bool,
     separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
+    collapsed_sources: CollapsedSources,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
 }
@@ -428,6 +436,14 @@ pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
     change(cx, |settings| settings.sidebar = open);
 }
 
+pub(crate) fn collapsed_sources(cx: &App) -> CollapsedSources {
+    cx.global::<Store>().settings.collapsed_sources
+}
+
+pub(crate) fn collapse_sources(cx: &mut App, edit: impl FnOnce(&mut CollapsedSources)) {
+    persist(cx, |settings| edit(&mut settings.collapsed_sources));
+}
+
 pub(crate) fn script_folders(cx: &App) -> &[PathBuf] {
     &cx.global::<Store>().settings.script_folders
 }
@@ -507,18 +523,24 @@ fn choose(appearance: Appearance, cx: &mut App) {
 }
 
 fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
+    if persist(cx, edit) {
+        let on_change = cx.global::<Store>().on_change;
+        apply(cx);
+        on_change(cx);
+    }
+}
+
+fn persist(cx: &mut App, edit: impl FnOnce(&mut Settings)) -> bool {
     let store = cx.global_mut::<Store>();
     let before = store.settings.clone();
     edit(&mut store.settings);
     if store.settings == before {
-        return;
+        return false;
     }
     if let Err(error) = store.settings.save(&store.path) {
         tracing::warn!(%error, path = %store.path.display(), "couldn't save settings");
     }
-    let on_change = store.on_change;
-    apply(cx);
-    on_change(cx);
+    true
 }
 
 fn apply(cx: &mut App) {
@@ -1032,6 +1054,8 @@ impl SettingsWindow {
                         change(cx, |settings| settings.skip_update_checks = !on);
                         if on {
                             crate::updates::Updates::check(false, cx).detach();
+                            crate::packages::packages(cx)
+                                .update(cx, |packages, cx| packages.check_when_idle(true, cx));
                         }
                     }),
                 )),
@@ -1542,6 +1566,10 @@ mod tests {
             skip_update_checks: true,
             separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
+            collapsed_sources: CollapsedSources {
+                folders: true,
+                packages: false,
+            },
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
         chosen.save(&path).unwrap();
@@ -1551,6 +1579,7 @@ mod tests {
         assert_eq!(saved["colors"]["dark"]["accent"], "#3B82F6");
         assert_eq!(saved["textSize"], 15);
         assert_eq!(saved["separateAqwSettings"], true);
+        assert_eq!(saved["collapsedSources"]["folders"], true);
         assert_eq!(
             serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
                 .unwrap()

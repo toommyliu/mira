@@ -41,6 +41,7 @@ pub(crate) struct Packages {
     token: Option<String>,
     activity: Option<Activity>,
     status: HashMap<String, Status>,
+    queued_check: Option<bool>,
 }
 
 struct Shared(Entity<Packages>);
@@ -83,14 +84,20 @@ pub(crate) fn start(cx: &mut App) {
             if let Err(error) = prepared.await {
                 tracing::warn!(%error, "couldn't clean up unfinished package downloads");
             }
-            let Ok(checked) = this.update(cx, |this, cx| {
+            let _ = this.update(cx, |this, cx| {
                 this.activity = None;
-                this.check(true, cx)
-            }) else {
-                return;
-            };
-            if let Err(message) = checked.await {
-                tracing::info!(error = %message, "couldn't check packages for updates");
+                cx.notify();
+            });
+            loop {
+                let checking = this.update(cx, |this, cx| {
+                    if crate::settings::check_updates(cx) {
+                        this.check_when_idle(true, cx);
+                    }
+                });
+                if checking.is_err() {
+                    return;
+                }
+                cx.background_executor().timer(crate::updates::EVERY).await;
             }
         })
         .detach();
@@ -111,6 +118,7 @@ impl Packages {
             token,
             activity: None,
             status: HashMap::new(),
+            queued_check: None,
         }
     }
 
@@ -122,7 +130,7 @@ impl Packages {
         self.status.get(dir)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "storyboard"))]
     pub(crate) fn mark(&mut self, dir: &str, status: Status) {
         self.status.insert(dir.to_owned(), status);
     }
@@ -206,6 +214,20 @@ impl Packages {
             })
             .map_err(|error| error.to_string())
         })
+    }
+
+    pub(crate) fn check_when_idle(&mut self, quiet: bool, cx: &mut Context<Self>) {
+        if self.activity.is_some() {
+            self.queued_check = Some(self.queued_check.unwrap_or(true) && quiet);
+            return;
+        }
+        let checked = self.check(quiet, cx);
+        cx.spawn(async move |_, _| {
+            if let Err(message) = checked.await {
+                tracing::info!(error = %message, "couldn't check packages for updates");
+            }
+        })
+        .detach();
     }
 
     pub(crate) fn update(
@@ -312,6 +334,9 @@ impl Packages {
             let _ = this.update(cx, |this, cx| {
                 this.activity = None;
                 cx.notify();
+                if let Some(quiet) = this.queued_check.take() {
+                    this.check_when_idle(quiet, cx);
+                }
             });
             result
         })
@@ -339,6 +364,7 @@ mod tests {
         let fake = Fake::start();
         let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
         cx.update(|cx| {
+            crate::settings::init(root.join("settings.json"), |_| {}, cx);
             cx.set_global(Shared(packages.clone()));
             start(cx);
         });
@@ -350,6 +376,98 @@ mod tests {
         assert_eq!(early, Err(Failure::Other(BUSY.into())));
         cx.run_until_parked();
         packages.read_with(cx, |packages, _| assert_eq!(packages.activity(), None));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
+    async fn launch_checks_follow_the_check_automatically_switch(cx: &mut TestAppContext) {
+        let newer = "c".repeat(40);
+        for (automatic, expected) in [
+            (false, None),
+            (true, Some(Status::Available(Sha::parse(&newer).unwrap()))),
+        ] {
+            let root = scratch("state");
+            let (_bin, trash) = Bin::new(&root);
+            let store = Store::new(root.join("packages"), trash);
+            let (staged, files) = stage_files(&store, &[("scripts/a.ts", "a")]);
+            store.publish(staged, "o-r", &receipt(files)).unwrap();
+            let fake = Fake::start();
+            fake.route(
+                "/repositories/7",
+                Reply::json(r#"{"id":7,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#),
+            );
+            fake.route(
+                "/repos/o/r/branches/main",
+                Reply::json(format!(
+                    r#"{{"commit":{{"sha":"{newer}","commit":{{"tree":{{"sha":"{newer}"}}}}}}}}"#
+                )),
+            );
+            fs::write(
+                root.join("settings.json"),
+                format!(r#"{{"skipUpdateChecks":{}}}"#, !automatic),
+            )
+            .unwrap();
+            let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
+            cx.update(|cx| {
+                crate::settings::init(root.join("settings.json"), |_| {}, cx);
+                cx.set_global(Shared(packages.clone()));
+                start(cx);
+            });
+            cx.run_until_parked();
+            packages.read_with(cx, |packages, _| {
+                assert_eq!(
+                    packages.status("o-r"),
+                    expected.as_ref(),
+                    "automatic: {automatic}"
+                );
+            });
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    async fn a_check_asked_for_while_busy_runs_once_the_work_ends(cx: &mut TestAppContext) {
+        let root = scratch("state");
+        let (_bin, trash) = Bin::new(&root);
+        let store = Store::new(root.join("packages"), trash);
+        let (staged, files) = stage_files(&store, &[("scripts/a.ts", "a")]);
+        store
+            .publish(staged, "o-r", &receipt(files.clone()))
+            .unwrap();
+        let (staged, _) = stage_files(&store, &[("scripts/a.ts", "a")]);
+        let gone = super::store::Receipt {
+            repository: 8,
+            repo: "gone".into(),
+            ..receipt(files)
+        };
+        store.publish(staged, "o-gone", &gone).unwrap();
+        let fake = Fake::start();
+        fake.route(
+            "/repositories/7",
+            Reply::json(r#"{"id":7,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#),
+        );
+        let newer = "c".repeat(40);
+        fake.route(
+            "/repos/o/r/branches/main",
+            Reply::json(format!(
+                r#"{{"commit":{{"sha":"{newer}","commit":{{"tree":{{"sha":"{newer}"}}}}}}}}"#
+            )),
+        );
+        let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
+        let uninstall = packages.update(cx, |packages, cx| {
+            let uninstall = packages.uninstall("o-gone".into(), cx);
+            packages.check_when_idle(false, cx);
+            uninstall
+        });
+        assert_eq!(uninstall.await, Ok(()));
+        cx.run_until_parked();
+        packages.read_with(cx, |packages, _| {
+            assert_eq!(
+                packages.status("o-r"),
+                Some(&Status::Available(Sha::parse(&newer).unwrap())),
+                "the check runs after the uninstall instead of being dropped"
+            );
+        });
         fs::remove_dir_all(root).unwrap();
     }
 

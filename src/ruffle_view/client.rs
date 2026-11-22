@@ -526,7 +526,7 @@ impl Client {
         Ok(client)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "storyboard"))]
     pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
         cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())

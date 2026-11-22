@@ -53,7 +53,8 @@ use crate::{
     scripting::{
         self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
     },
-    settings, shortcuts,
+    settings::{self, CollapsedSources},
+    shortcuts,
 };
 
 actions!(mira, [OpenScripts, LoadScript, AddToQueue]);
@@ -111,7 +112,6 @@ struct Source {
     name: SharedString,
     kind: SourceKind,
     problem: Option<SharedString>,
-    scripts: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -125,7 +125,6 @@ impl Library {
         let index = Some(self.sources.len());
         match scanned {
             Ok(entries) => {
-                source.scripts = entries.len();
                 self.entries.extend(entries.into_iter().map(|entry| Entry {
                     source: index,
                     ..entry
@@ -214,7 +213,6 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path) -> Library {
             name: name.into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         library.add(source, scan(root));
     }
@@ -258,7 +256,6 @@ fn package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
             origin: origin.clone(),
         },
         problem,
-        scripts: 0,
     };
     let bytes = match fs::read(source.root.join("package.json")) {
         Ok(bytes) => bytes,
@@ -379,7 +376,6 @@ struct SourceRow {
     qualifier: Option<SharedString>,
     description: Option<SharedString>,
     path: SharedString,
-    scripts: Option<usize>,
     release: Option<(&'static str, SharedString)>,
     state: Option<SourceState>,
 }
@@ -548,8 +544,6 @@ pub(super) struct ScriptsWindow {
     room: Entity<Input>,
     selected: usize,
     page: Page,
-    folders_open: bool,
-    packages_open: bool,
     queued: usize,
     chosen: Option<PathBuf>,
     forms: HashMap<FormKey, Form>,
@@ -559,7 +553,8 @@ pub(super) struct ScriptsWindow {
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
     error_cursor: Option<usize>,
-    source_scroll: ScrollHandle,
+    folder_scroll: ScrollHandle,
+    package_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
@@ -672,8 +667,6 @@ impl ScriptsWindow {
             room,
             selected: 0,
             page: Page::Library(None),
-            folders_open: true,
-            packages_open: true,
             queued: 0,
             chosen: None,
             forms: HashMap::new(),
@@ -683,7 +676,8 @@ impl ScriptsWindow {
             displayed: None,
             detail_scroll: ScrollHandle::new(),
             error_cursor: None,
-            source_scroll: ScrollHandle::new(),
+            folder_scroll: ScrollHandle::new(),
+            package_scroll: ScrollHandle::new(),
             package_dialogs,
             toasts,
             _view_changes: None,
@@ -1020,13 +1014,6 @@ impl ScriptsWindow {
             qualifier: None,
             description: None,
             path: home_relative(&self.folder),
-            scripts: library.map(|library| {
-                library
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.source.is_none())
-                    .count()
-            }),
             release: None,
             state: None,
         };
@@ -1057,7 +1044,6 @@ impl ScriptsWindow {
                     SourceKind::Folder => None,
                 },
                 path: home_relative(&source.root),
-                scripts: source.problem.is_none().then_some(source.scripts),
                 release: release(&source.kind),
                 state,
             }
@@ -1162,73 +1148,55 @@ impl ScriptsWindow {
             .collect()
     }
 
-    fn check_for_updates(&self, cx: &App) -> AnyElement {
+    fn review_updates(&self, cx: &App) -> Option<HoverCard> {
+        let pending = self.pending_updates(cx);
+        if pending.is_empty() {
+            return None;
+        }
         let state = packages::packages(cx).read(cx);
         let working = matches!(
             state.activity(),
             Some(packages::Activity::Checking | packages::Activity::Updating(_))
         );
-        let pending = self.pending_updates(cx);
-        if !pending.is_empty() {
-            let title = match pending.len() {
-                1 => SharedString::from("1 update available"),
-                count => format!("{count} updates available").into(),
-            };
-            let card = pending.iter().fold(
-                HoverCard::new("updates-card", title)
-                    .placement(Placement::new(Side::Right, Align::Start)),
-                |card, pending| {
-                    card.row(
-                        pending.name.clone(),
-                        format!("{} → {}", pending.from, pending.to),
-                        Tone::Neutral,
-                    )
-                },
-            );
-            let dialogs = self.package_dialogs.clone();
-            return card
-                .child(
-                    Button::icon("review-updates", Icon::Download, "Review updates")
-                        .size(Size::Small)
-                        .hide_tooltip()
-                        .busy(working)
-                        .disabled(state.activity().is_some())
-                        .on_click(move |_, _, cx| {
-                            dialogs.update(cx, |dialogs, cx| {
-                                dialogs.review_updates(pending.clone(), cx)
-                            })
-                        }),
+        let title = match pending.len() {
+            1 => SharedString::from("1 update available"),
+            count => format!("{count} updates available").into(),
+        };
+        let card = pending.iter().fold(
+            HoverCard::new("updates-card", title)
+                .placement(Placement::new(Side::Right, Align::Start)),
+            |card, pending| {
+                card.row(
+                    pending.name.clone(),
+                    format!("{} → {}", pending.from, pending.to),
+                    Tone::Neutral,
                 )
-                .into_any_element();
-        }
-        let installed = self.library.as_ref().is_some_and(|library| {
-            library.sources.iter().any(|source| {
-                matches!(
-                    source.kind,
-                    SourceKind::Package {
-                        origin: Some(_),
-                        ..
-                    }
-                )
-            })
-        });
+            },
+        );
         let dialogs = self.package_dialogs.clone();
-        Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
-            .size(Size::Small)
-            .busy(working)
-            .disabled(state.activity().is_some() || !installed)
-            .on_click(move |_, _, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)))
-            .into_any_element()
+        Some(
+            card.child(
+                Button::icon("review-updates", Icon::Download, "Review updates")
+                    .size(Size::Small)
+                    .hide_tooltip()
+                    .busy(working)
+                    .disabled(state.activity().is_some())
+                    .on_click(move |_, _, cx| {
+                        dialogs.update(cx, |dialogs, cx| {
+                            dialogs.review_updates(pending.clone(), cx)
+                        })
+                    }),
+            ),
+        )
     }
 
     fn sidebar(&self, theme: &Theme, unfinished: usize, cx: &mut Context<Self>) -> Div {
         let layout = theme.layout;
         let current = (!self.searching(cx)).then_some(&self.page);
-        let total = self.library.as_ref().map(|library| library.entries.len());
         let this = cx.weak_entity();
         let pages = Tabs::new("pages", "Views", PAGES.len(), move |index| {
             let (label, count) = match PAGES[index] {
-                Page::Library(_) => ("Library", total),
+                Page::Library(_) => ("Library", None),
                 Page::Queue => ("Queue", (unfinished > 0).then_some(unfinished)),
                 Page::Log => ("Log", None),
             };
@@ -1248,30 +1216,63 @@ impl ScriptsWindow {
             let _ = this.update(cx, |this, cx| this.set_page(PAGES[index].clone(), cx));
         });
         let (folders, installed) = self.source_rows(cx);
+        let collapsed = settings::collapsed_sources(cx);
         let toggles = cx.weak_entity();
-        let caption =
-            |id: &'static str, label: &'static str, open: bool, set: fn(&mut Self, bool)| {
-                let this = toggles.clone();
-                h_flex()
-                    .flex_none()
-                    .h(layout.control)
-                    .justify_between()
-                    .pl(layout.space(4.0))
-                    .pr(layout.space(2.0))
-                    .child(Disclosure::new(id, label, open).caption().on_toggle(
-                        move |open, _, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                set(this, open);
-                                cx.notify();
-                            });
-                        },
+        let caption = |id: &'static str,
+                       label: &'static str,
+                       collapsed: bool,
+                       set: fn(&mut CollapsedSources, bool)| {
+            let this = toggles.clone();
+            h_flex()
+                .flex_none()
+                .h(layout.control)
+                .justify_between()
+                .pl(layout.space(4.0))
+                .pr(layout.space(2.0))
+                .child(Disclosure::new(id, label, !collapsed).caption().on_toggle(
+                    move |open, _, cx| {
+                        let _ = this.update(cx, |_, cx| {
+                            settings::collapse_sources(cx, |sources| set(sources, !open));
+                            cx.notify();
+                        });
+                    },
+                ))
+        };
+        let section = |caption: Div, list: Option<Tabs>, scroll: &ScrollHandle| {
+            let faded = scroll.max_offset().y + scroll.offset().y > px(0.5);
+            let fade = theme.typography.body_line;
+            v_flex().min_h_0().child(caption).children(list.map(|list| {
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .child(mira_ui::nav::pane_start_above(
+                        scroll.clone(),
+                        if faded { fade } else { px(0.0) },
                     ))
-            };
-        let folders = self
-            .folders_open
+                    .child(list.track_scroll(scroll))
+                    .child(mira_ui::nav::pane_end())
+                    .when(faded, |list| {
+                        list.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right(Scrollbar::GUTTER)
+                                .bottom_0()
+                                .h(fade)
+                                .bg(linear_gradient(
+                                    180.0,
+                                    linear_color_stop(theme.frame.opacity(0.0), 0.0),
+                                    linear_color_stop(theme.frame, 0.7),
+                                )),
+                        )
+                    })
+            }))
+        };
+        let folders = (!collapsed.folders)
             .then(|| self.source_list("folders", "Folders", folders, theme, cx));
-        let installed = self
-            .packages_open
+        let installed = (!collapsed.packages && !installed.is_empty())
             .then(|| self.source_list("packages", "Packages", installed, theme, cx));
         let busy = packages::packages(cx).read(cx).activity().is_some();
         let installing = matches!(
@@ -1279,45 +1280,45 @@ impl ScriptsWindow {
             Some(packages::Activity::Installing)
         );
         let dialogs = self.package_dialogs.clone();
-        let sources = v_flex()
-            .child(
-                caption(
-                    "folders-toggle",
-                    "Folders",
-                    self.folders_open,
-                    |this, open| this.folders_open = open,
-                )
-                .child(
-                    Button::icon("add-folder", Icon::Plus, "Add folder")
-                        .size(Size::Small)
-                        .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
-                ),
+        let folders = section(
+            caption(
+                "folders-toggle",
+                "Folders",
+                collapsed.folders,
+                |sources, collapsed| sources.folders = collapsed,
             )
-            .children(folders)
             .child(
-                caption(
-                    "packages-toggle",
-                    "Packages",
-                    self.packages_open,
-                    |this, open| this.packages_open = open,
-                )
-                .child(
-                    h_flex()
-                        .gap(layout.space(1.0))
-                        .child(self.check_for_updates(cx))
-                        .child(
-                            Button::icon("install-package", Icon::Plus, "Install package")
-                                .size(Size::Small)
-                                .busy(installing)
-                                .disabled(busy)
-                                .on_click(move |_, window, cx| {
-                                    dialogs
-                                        .update(cx, |dialogs, cx| dialogs.open_install(window, cx))
-                                }),
-                        ),
-                ),
+                Button::icon("add-folder", Icon::Plus, "Add folder")
+                    .size(Size::Small)
+                    .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
+            ),
+            folders,
+            &self.folder_scroll,
+        );
+        let installed = section(
+            caption(
+                "packages-toggle",
+                "Packages",
+                collapsed.packages,
+                |sources, collapsed| sources.packages = collapsed,
             )
-            .children(installed);
+            .child(
+                h_flex()
+                    .gap(layout.space(1.0))
+                    .children(self.review_updates(cx))
+                    .child(
+                        Button::icon("install-package", Icon::Plus, "Install package")
+                            .size(Size::Small)
+                            .busy(installing)
+                            .disabled(busy)
+                            .on_click(move |_, window, cx| {
+                                dialogs.update(cx, |dialogs, cx| dialogs.open_install(window, cx))
+                            }),
+                    ),
+            ),
+            installed,
+            &self.package_scroll,
+        );
         theme
             .sidebar_pane()
             .h_full()
@@ -1339,24 +1340,12 @@ impl ScriptsWindow {
             .child(pages)
             .child(
                 div()
-                    .relative()
-                    .flex()
-                    .flex_col()
+                    .grid()
+                    .grid_cols(1)
+                    .grid_rows_max_content(2)
                     .min_h_0()
-                    .my(-RING_ROOM)
-                    .child(
-                        div()
-                            .id("sources")
-                            .min_h_0()
-                            .py(RING_ROOM)
-                            .overflow_y_scroll()
-                            .track_scroll(&self.source_scroll)
-                            .child(sources),
-                    )
-                    .child(
-                        Scrollbar::new("sources-scrollbar", self.source_scroll.clone())
-                            .persistent(),
-                    ),
+                    .child(folders)
+                    .child(installed),
             )
             .child(drag_area().flex_1())
             .child(
@@ -1535,9 +1524,6 @@ impl ScriptsWindow {
                             .and_then(|state| source_mark(&marks, state)),
                     ),
             );
-            if let Some(scripts) = row.scripts {
-                tab = tab.end_slot(SharedString::from(scripts.to_string()));
-            }
             if let Some(state) = &row.state {
                 tab = tab.description(state.description());
             }
@@ -3111,6 +3097,229 @@ fn options_panel(
         .into_any_element()
 }
 
+#[cfg(any(test, feature = "storyboard"))]
+pub(crate) fn board() -> crate::storyboard::Board {
+    use crate::storyboard::{Board, Story};
+    Board {
+        name: "Scripts",
+        size: size(px(WIDTH), px(HEIGHT)),
+        min_size: size(px(MIN_WIDTH), px(MIN_HEIGHT)),
+        stories: vec![
+            Story {
+                name: "A few sources",
+                build: |window, cx| {
+                    sources_story(
+                        "A few sources",
+                        2,
+                        2,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Update waiting",
+                build: |window, cx| {
+                    sources_story(
+                        "Update waiting",
+                        2,
+                        2,
+                        Sources::UpdateWaiting,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Broken sources",
+                build: |window, cx| {
+                    sources_story(
+                        "Broken sources",
+                        2,
+                        2,
+                        Sources::Broken,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "No packages",
+                build: |window, cx| {
+                    sources_story("No packages", 2, 0, Sources::Healthy, EXPANDED, window, cx)
+                },
+            },
+            Story {
+                name: "Many folders",
+                build: |window, cx| {
+                    sources_story(
+                        "Many folders",
+                        12,
+                        3,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Many of both",
+                build: |window, cx| {
+                    sources_story(
+                        "Many of both",
+                        12,
+                        10,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Folders collapsed",
+                build: |window, cx| {
+                    let collapsed = CollapsedSources {
+                        folders: true,
+                        packages: false,
+                    };
+                    sources_story(
+                        "Folders collapsed",
+                        12,
+                        3,
+                        Sources::Healthy,
+                        collapsed,
+                        window,
+                        cx,
+                    )
+                },
+            },
+        ],
+    }
+}
+
+#[cfg(any(test, feature = "storyboard"))]
+const EXPANDED: CollapsedSources = CollapsedSources {
+    folders: false,
+    packages: false,
+};
+
+#[cfg(any(test, feature = "storyboard"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sources {
+    Healthy,
+    UpdateWaiting,
+    Broken,
+}
+
+#[cfg(any(test, feature = "storyboard"))]
+fn sources_story(
+    name: &str,
+    folders: usize,
+    installed: usize,
+    sources: Sources,
+    collapsed: CollapsedSources,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyView {
+    const FOLDERS: [&str; 12] = [
+        "community",
+        "bosses",
+        "dailies",
+        "merge",
+        "rep",
+        "classes",
+        "quests",
+        "events",
+        "story",
+        "weekly",
+        "ultras",
+        "legion",
+    ];
+    const PACKAGES: [&str; 10] = [
+        "Daily quests",
+        "Farming",
+        "Legion",
+        "Nulgath",
+        "Ultras",
+        "Void",
+        "Armies",
+        "Drops",
+        "Gold",
+        "Faction",
+    ];
+    let folder = crate::storyboard::scratch(name);
+    let script = |dir: &Path| {
+        fs::create_dir_all(dir).expect("create a story folder");
+        fs::write(dir.join("hunt.ts"), "").expect("write a story script");
+    };
+    let package = |name: &str, manifest: &str| {
+        let root = folder
+            .join("packages")
+            .join(name.to_lowercase().replace(' ', "-"));
+        script(&root.join("scripts"));
+        fs::write(root.join("package.json"), manifest).expect("write a story manifest");
+        root
+    };
+    let theme = cx.theme().clone();
+    script(&folder.join("scripts"));
+    for added in settings::script_folders(cx).to_vec() {
+        settings::remove_script_folder(&added, cx);
+    }
+    settings::collapse_sources(cx, |sources| *sources = collapsed);
+    for name in &FOLDERS[..folders] {
+        let added = folder.join("aqw").join(name);
+        script(&added);
+        settings::add_script_folder(added, cx);
+    }
+    for name in &PACKAGES[..installed] {
+        let root = package(name, &format!(r#"{{"name":"{name}","mira":{{}}}}"#));
+        if sources == Sources::UpdateWaiting && *name == "Daily quests" {
+            let commit = format!("4e1c2f0{}", "0".repeat(33));
+            fs::write(
+                root.join(packages::RECEIPT),
+                format!(
+                    r#"{{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
+                ),
+            )
+            .expect("write a story receipt");
+        }
+    }
+    if sources == Sources::Broken {
+        settings::add_script_folder(folder.join("aqw").join("unplugged"), cx);
+        package(
+            "future",
+            r#"{"name":"future","mira":{"requires":"999.0.0"}}"#,
+        );
+    }
+    crate::packages::init(folder.join("packages"), folder.join("github-token"), cx);
+    if sources == Sources::UpdateWaiting {
+        let newer =
+            packages::Sha::parse(&format!("9a8b7c6{}", "0".repeat(33))).expect("a story commit");
+        crate::packages::packages(cx).update(cx, |packages, _| {
+            packages.mark("daily-quests", Status::Available(newer))
+        });
+    }
+    cx.set_global(theme);
+    let client = Client::empty_for_tests(&folder, cx);
+    cx.new(|cx| {
+        ScriptsWindow::new(
+            client,
+            folder.join("scripts"),
+            folder.join("types"),
+            Target::Selected,
+            window,
+            cx,
+        )
+    })
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3197,7 +3406,7 @@ mod tests {
                 (Some(4), None, "spin.ts"),
             ]
         );
-        let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
+        let sources: Vec<(&Path, &str, Option<&str>)> = library
             .sources
             .iter()
             .map(|source| {
@@ -3205,7 +3414,6 @@ mod tests {
                     source.root.as_path(),
                     source.name.as_ref(),
                     source.problem.as_deref(),
-                    source.scripts,
                 )
             })
             .collect();
@@ -3217,40 +3425,27 @@ mod tests {
         assert_eq!(
             sources,
             [
-                (community.as_path(), "community", None, 2),
-                (missing.as_path(), "unplugged", Some("Can't read"), 0),
-                (authoring.as_path(), "Work in progress", None, 1),
-                (
-                    packages.join("broken").as_path(),
-                    "broken",
-                    Some(invalid),
-                    0
-                ),
-                (
-                    packages.join("dailies").as_path(),
-                    "@lucent/dailies",
-                    None,
-                    1
-                ),
+                (community.as_path(), "community", None),
+                (missing.as_path(), "unplugged", Some("Can't read")),
+                (authoring.as_path(), "Work in progress", None),
+                (packages.join("broken").as_path(), "broken", Some(invalid)),
+                (packages.join("dailies").as_path(), "@lucent/dailies", None),
                 (
                     packages.join("deleted").as_path(),
                     "deleted",
-                    Some("Its package.json is missing."),
-                    0
+                    Some("Its package.json is missing.")
                 ),
                 (
                     packages.join("future").as_path(),
                     "future",
-                    Some("Needs Mira 999.0.0 or newer."),
-                    0
+                    Some("Needs Mira 999.0.0 or newer.")
                 ),
                 (
                     packages.join("stripped").as_path(),
                     "stripped",
                     Some(
                         "This isn't a Mira script package. Its package.json needs a \"mira\" field."
-                    ),
-                    0
+                    )
                 ),
             ]
         );
@@ -3286,7 +3481,6 @@ mod tests {
             name: name.to_owned().into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         let library = Library {
             entries: vec![
@@ -3434,6 +3628,7 @@ mod tests {
         let size = gpui::size(px(WIDTH), px(HEIGHT));
         let build = |window: &mut Window, cx: &mut App| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::settings::collapse_sources(cx, |sources| *sources = Default::default());
             crate::settings::add_script_folder(temp.join("community"), cx);
             crate::settings::add_script_folder(temp.join("unplugged"), cx);
             crate::settings::add_script_folder(temp.join("backup/scripts"), cx);
@@ -3478,10 +3673,10 @@ mod tests {
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
-                    update_scripts(cx, window, |scripts, cx| {
-                        scripts.folders_open = false;
-                        cx.notify();
-                    })
+                    cx.update(|cx| {
+                        crate::settings::collapse_sources(cx, |sources| sources.folders = true)
+                    });
+                    update_scripts(cx, window, |_, cx| cx.notify())
                 }),
             ),
             (
@@ -3493,14 +3688,15 @@ mod tests {
                         Some(gpui::MouseButton::Left),
                     );
                     move |cx, window| {
-                        update_scripts(cx, window, |scripts, cx| {
-                            scripts.folders_open = false;
-                            cx.notify();
+                        cx.update(|cx| {
+                            crate::settings::collapse_sources(cx, |sources| sources.folders = true)
                         });
+                        update_scripts(cx, window, |_, cx| cx.notify());
                         collapse(cx, window);
-                        update_scripts(cx, window, |scripts, _| {
-                            assert!(!scripts.packages_open, "the click collapses Packages")
-                        });
+                        assert!(
+                            cx.update(|cx| crate::settings::collapsed_sources(cx).packages),
+                            "the click collapses Packages"
+                        );
                         for key in ["shift-tab", "tab"] {
                             cx.update_window(window, |_, window, cx| {
                                 window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
@@ -4568,6 +4764,66 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert!(
             at_mode < at_offset,
             "tabbing on to Mode scrolls further, even with Offset still marked invalid"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn arrowing_through_sources_keeps_the_selected_one_in_view(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-arrow-{:x}", u64::from_ne_bytes(random)));
+        let folders: Vec<PathBuf> = (0..8)
+            .map(|index| temp.join(format!("folder-{index}")))
+            .collect();
+        for folder in folders.iter().chain([&temp.join("scripts")]) {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("hunt.ts"), "").unwrap();
+        }
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            for folder in &folders {
+                crate::settings::add_script_folder(folder.clone(), cx);
+            }
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        cx.simulate_click(gpui::point(px(100.0), px(222.0)), gpui::Modifiers::none());
+        cx.run_until_parked();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("down");
+            cx.run_until_parked();
+        }
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let shown = scripts.read_with(cx, |scripts, _| scripts.page.clone());
+        assert_eq!(shown, Page::Library(Some(folders[3].clone())));
+        let (viewport, row) = scripts.read_with(cx, |scripts, _| {
+            let scroll = &scripts.folder_scroll;
+            let laid_out = scroll.bounds_for_item(4).unwrap();
+            (
+                scroll.bounds(),
+                laid_out.top() + scroll.offset().y..laid_out.bottom() + scroll.offset().y,
+            )
+        });
+        let fade = cx.update(|_, cx| cx.theme().typography.body_line);
+        assert!(
+            row.start >= viewport.top() && row.end <= viewport.bottom() - fade,
+            "the selected folder sits fully in view above the fade: {row:?} in {viewport:?}"
         );
         fs::remove_dir_all(temp).unwrap();
     }

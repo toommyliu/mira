@@ -79,6 +79,8 @@ pub(crate) use packets::{OpenPackets, open as open_packets};
 pub(crate) use profiles::{
     OpenCombatProfiles, bind_keys as bind_profile_keys, open as open_combat_profiles,
 };
+#[cfg(any(test, feature = "storyboard"))]
+pub(crate) use scripts::board as scripts_board;
 pub(crate) use scripts::{LoadScript, OpenScripts};
 pub(crate) use shown_tab::Target;
 
