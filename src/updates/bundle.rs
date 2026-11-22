@@ -14,7 +14,7 @@ use objc2_foundation::{
 use semver::Version;
 
 pub(super) const APP: &str = "Mira.app";
-pub(super) const ID: &str = "local.mira.app";
+pub(super) const ID: &str = "com.mira.app";
 
 pub(super) fn packaged() -> Option<PathBuf> {
     let bundle = NSBundle::mainBundle();
