@@ -27,6 +27,11 @@ pub(crate) enum Request {
         default: Option<String>,
         placeholder: Option<String>,
     },
+    Choose {
+        message: String,
+        title: Option<String>,
+        choices: Vec<String>,
+    },
 }
 
 pub(crate) enum ToDialogs {
@@ -47,7 +52,7 @@ impl Dialog {
 
     pub(crate) fn accept(self, entered: &str) {
         let value = match self.request {
-            Request::Alert { .. } => Json::Null,
+            Request::Alert { .. } | Request::Choose { .. } => Json::Null,
             Request::Confirm { .. } => Json::Bool(true),
             Request::Prompt { .. } => Json::from(entered),
         };
@@ -56,10 +61,14 @@ impl Dialog {
 
     pub(crate) fn cancel(self) {
         let value = match self.request {
-            Request::Alert { .. } | Request::Prompt { .. } => Json::Null,
+            Request::Alert { .. } | Request::Prompt { .. } | Request::Choose { .. } => Json::Null,
             Request::Confirm { .. } => Json::Bool(false),
         };
         self.reply.send(Ok(value));
+    }
+
+    pub(crate) fn pick(self, choice: usize) {
+        self.reply.send(Ok(Json::from(choice)));
     }
 }
 

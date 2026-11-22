@@ -24,18 +24,19 @@ public sealed class Dialogs(Game game)
 
     public DialogResult Choose(string message, string? title, string[] buttons)
     {
-        switch (buttons.Length)
+        if (buttons.Length == 0)
         {
-            case 0:
-                Alert(message, title);
-                return new DialogResult("OK", 0);
-            case 1:
-                Alert(message, title);
-                return new DialogResult(buttons[0], 0);
-            default:
-                var first = Confirm(message, title, buttons[0], buttons[1]);
-                return first ? new DialogResult(buttons[0], 0) : new DialogResult(buttons[1], 1);
+            Alert(message, title);
+            return new DialogResult("OK", 0);
         }
+        var picked = game.Ask(new JsonObject
+        {
+            ["op"] = "choose", ["message"] = message, ["title"] = Title(title),
+            ["choices"] = new JsonArray(buttons.Select(button => (JsonNode?)button).ToArray()),
+        });
+        return picked is JsonValue answer && answer.TryGetValue(out int index) && index >= 0 && index < buttons.Length
+            ? new DialogResult(buttons[index], index)
+            : DialogResult.Cancelled;
     }
 
     private static string? Title(string? title) => string.IsNullOrWhiteSpace(title) ? null : title;

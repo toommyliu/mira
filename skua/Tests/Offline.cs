@@ -14,6 +14,10 @@ sealed class Offline(Func<string, JsonObject, JsonNode?> answer) : IConnection
 
     public ConcurrentQueue<JsonObject> Calls { get; } = new();
 
+    public ConcurrentQueue<JsonObject> Asks { get; } = new();
+
+    public Func<JsonObject, JsonNode?> Answer { get; init; } = _ => null;
+
     public CancellationToken Stopping => CancellationToken.None;
 
     public JsonNode? Call(JsonObject request, CancellationToken cancel)
@@ -26,7 +30,11 @@ sealed class Offline(Func<string, JsonObject, JsonNode?> answer) : IConnection
         return answer(key, request);
     }
 
-    public JsonNode? Ask(JsonObject dialog, CancellationToken cancel) => null;
+    public JsonNode? Ask(JsonObject dialog, CancellationToken cancel)
+    {
+        Asks.Enqueue(dialog);
+        return Answer(dialog);
+    }
 
     public void Log(string level, string text) { }
 

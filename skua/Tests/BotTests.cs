@@ -50,6 +50,28 @@ public class BotTests
     }
 
     [Fact]
+    public void Closing_a_choice_returns_cancelled_instead_of_a_button()
+    {
+        var game = new Offline { Answer = _ => null };
+
+        var result = game.Bot().ShowMessageBox("Use tickets?", "Mode Selector", "Select Amount", "GO FOR BROKE!", "Just crunch the numbers");
+
+        Assert.Equal(new global::Skua.Core.Models.DialogResult("Cancel", -1), result);
+        Assert.Equal(["Select Amount", "GO FOR BROKE!", "Just crunch the numbers"],
+            Assert.Single(game.Asks)["choices"]!.AsArray().Select(choice => (string?)choice));
+    }
+
+    [Fact]
+    public void Picking_a_choice_returns_its_text_and_position()
+    {
+        var game = new Offline { Answer = _ => 2 };
+
+        var result = game.Bot().ShowMessageBox("Use tickets?", "Mode Selector", "Select Amount", "GO FOR BROKE!", "Just crunch the numbers");
+
+        Assert.Equal(new global::Skua.Core.Models.DialogResult("Just crunch the numbers", 2), result);
+    }
+
+    [Fact]
     public void A_stopped_run_sends_no_more_requests()
     {
         var game = new Recorder();
