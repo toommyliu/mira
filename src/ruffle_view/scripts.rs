@@ -24,7 +24,7 @@ use mira_ui::{
         Input, InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side,
         Switch, Tab, Tabs, Toaster, VirtualList,
         button::{Size, Variant},
-        icon,
+        icon, small_icon,
     },
     theme::RING_ROOM,
     v_flex,
@@ -1361,9 +1361,10 @@ impl ScriptsWindow {
             )
             .child(drag_area().flex_1())
             .child(
-                div()
+                v_flex()
                     .flex_none()
                     .p(layout.space(2.0))
+                    .child(self.options_popover(theme, cx))
                     .child(self.open_file(theme, cx)),
             )
     }
@@ -1906,10 +1907,16 @@ impl ScriptsWindow {
         cx.notify();
     }
 
-    fn options_popover(&self, cx: &mut Context<Self>) -> Popover {
+    fn options_popover(&self, theme: &Theme, cx: &mut Context<Self>) -> Popover {
         let this = cx.entity().downgrade();
         Popover::new("options")
-            .trigger(Button::new("options", "Options").end_slot(Icon::ChevronDown))
+            .trigger(
+                Button::new("options", "Options")
+                    .variant(Variant::Ghost)
+                    .w_full()
+                    .child(div().flex_1().child("Options"))
+                    .end_slot(small_icon(Icon::ChevronRight, theme.muted_foreground)),
+            )
             .content(move |_, _, cx| {
                 let Some(scripts) = this.upgrade() else {
                     return div().into_any_element();
@@ -1917,7 +1924,10 @@ impl ScriptsWindow {
                 let scripts = scripts.read(cx);
                 options_panel(this.clone(), scripts.options(cx), scripts.room.clone(), cx)
             })
-            .align(Align::Start)
+            .placement(Placement {
+                side_offset: theme.space(3.0) + px(1.0),
+                ..Placement::new(Side::Right, Align::End)
+            })
             .width(px(376.0))
     }
 
@@ -2770,7 +2780,7 @@ impl Render for ScriptsWindow {
         }
         .relative()
         .child(Toaster::layer(&self.toasts, window, cx));
-        let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
+        let footer = theme.footer().flex_wrap();
         let footer =
             match page {
                 Page::Library(_) => Some(
@@ -3058,7 +3068,7 @@ fn options_panel(
     v_flex()
         .gap(layout.space(2.0))
         .when(!editable, |options| {
-            options.child(note("Log in to change script settings.", true, &theme))
+            options.child(note("Log in to change options.", true, &theme))
         })
         .child(
             Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
@@ -3923,38 +3933,51 @@ export default function* () {}"#,
     }
 
     #[test]
-    fn snapshot_options_open_from_the_footer() {
-        snapshot_window_with(
-            "scripts-options-open-min",
-            (MIN_WIDTH, MIN_HEIGHT),
-            "Alt 1",
-            NESTED,
-            |_| {},
-            |cx, window| {
-                let position = gpui::point(px(264.0), px(MIN_HEIGHT - 20.0));
-                for event in [
-                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        click_count: 1,
-                        first_mouse: false,
-                        modifiers: Default::default(),
-                    }),
-                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        click_count: 1,
-                        modifiers: Default::default(),
-                    }),
-                ] {
-                    cx.update_window(window, |_, window, cx| {
-                        window.dispatch_event(event, cx);
-                    })
-                    .expect("click Options");
-                    cx.run_until_parked();
-                }
-            },
-        );
+    fn snapshot_options_open_from_the_sidebar() {
+        let pages: [(&str, fn(&mut ScriptsWindow)); 3] = [
+            ("scripts-options-open-min", |_| {}),
+            ("scripts-options-open-queue-min", |scripts| {
+                scripts.page = Page::Queue
+            }),
+            ("scripts-options-open-log-min", |scripts| {
+                scripts.page = Page::Log
+            }),
+        ];
+        for (name, setup) in pages {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                setup,
+                open_options,
+            );
+        }
+    }
+
+    fn open_options(cx: &mut gpui::HeadlessAppContext, window: gpui::AnyWindowHandle) {
+        let position = gpui::point(px(100.0), px(MIN_HEIGHT - 50.0));
+        for event in [
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+                modifiers: Default::default(),
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers: Default::default(),
+            }),
+        ] {
+            cx.update_window(window, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            })
+            .expect("click Options");
+            cx.run_until_parked();
+        }
     }
 
     #[test]
