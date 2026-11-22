@@ -1,0 +1,23 @@
+targets = ["aarch64-apple-darwin"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+accepted = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "OFL-1.1",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[exr.clarify]
+license = "BSD-3-Clause"
+
+[[exr.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "97e4d3aa7a9e8ac31979c16ca8bb2b628a9cb72c3362185ad2bf4ad77f43551f"
