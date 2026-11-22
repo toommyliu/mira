@@ -29,7 +29,6 @@ impl AssetSource for Assets {
             "icons/chevron-up.svg" => include_str!("../assets/icons/lucide/chevron-up.svg"),
             "icons/circle-alert.svg" => include_str!("../assets/icons/lucide/circle-alert.svg"),
             "icons/circle-check.svg" => include_str!("../assets/icons/lucide/circle-check.svg"),
-            "icons/clock.svg" => include_str!("../assets/icons/lucide/clock.svg"),
             "icons/ellipsis.svg" => include_str!("../assets/icons/lucide/ellipsis.svg"),
             "icons/download.svg" => include_str!("../assets/icons/lucide/download.svg"),
             "icons/eye.svg" => include_str!("../assets/icons/lucide/eye.svg"),

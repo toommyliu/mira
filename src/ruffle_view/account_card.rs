@@ -6,7 +6,7 @@ use std::{
 use gpui::SharedString;
 use mira_ui::Tone;
 
-use super::{Login, ScriptPhase, ScriptState, Summary, scripts::home_relative};
+use super::{Login, ScriptPhase, ScriptState, Summary, capitalized, scripts::home_relative};
 use crate::accounts::Account;
 
 pub(super) const CHOOSE_IN_GAME: &str = "Choose in game";
@@ -466,13 +466,6 @@ fn ended(script: &ScriptState, now: Instant) -> Line {
 
 fn none() -> Job {
     Job::Line(Line::new("—", Mood::Quiet))
-}
-
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(chars).collect()
-    })
 }
 
 pub(super) fn span(elapsed: Duration) -> String {

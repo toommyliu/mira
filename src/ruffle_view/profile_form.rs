@@ -132,7 +132,7 @@ impl FormStep {
         if self.when.is_empty() {
             return "Always".into();
         }
-        capitalized(
+        super::capitalized(
             &self
                 .when
                 .iter()
@@ -281,14 +281,6 @@ impl Rule {
             },
         }
     }
-}
-
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
 }
 
 fn at_most<T>(bound: &Bound<T>) -> bool {

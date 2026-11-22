@@ -214,7 +214,7 @@ pub(crate) struct LoginGate {
 }
 
 impl LoginGate {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             next: std::sync::Mutex::new(None),
         }
@@ -250,10 +250,19 @@ impl Logins {
         self.turn.lock().await
     }
 
+    pub(crate) fn reserve_slot(&self) -> Duration {
+        self.gate.map_or(Duration::ZERO, |gate| {
+            gate.reserve(
+                Instant::now(),
+                LOGIN_GAP + crate::jitter::up_to(LOGIN_JITTER),
+            )
+        })
+    }
+
     pub(crate) async fn space_out(&self) {
-        if let Some(gate) = self.gate {
-            let gap = LOGIN_GAP + crate::jitter::up_to(LOGIN_JITTER);
-            sleep(gate.reserve(Instant::now(), gap)).await;
+        let wait = self.reserve_slot();
+        if !wait.is_zero() {
+            sleep(wait).await;
         }
     }
 

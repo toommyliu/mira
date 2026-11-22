@@ -10,7 +10,6 @@ pub const LEAVE: Duration = Duration::from_millis(100);
 pub const TRAVEL: Duration = Duration::from_millis(150);
 pub const GLIDE: Duration = Duration::from_millis(400);
 pub const SETTLE: Duration = Duration::from_millis(200);
-const BREATH: Duration = Duration::from_millis(2400);
 const SWEEP: Duration = Duration::from_millis(1400);
 const SPIN: Duration = Duration::from_millis(1000);
 const ARRIVE_DISTANCE: f32 = 8.0;
@@ -84,15 +83,6 @@ pub fn fade<E: IntoElement + Styled + 'static>(
         Animation::new(ARRIVE).with_easing(ease_out),
         |element, t| element.opacity(t),
     )
-}
-
-pub fn breathe<E: IntoElement + Styled + 'static>(
-    id: impl Into<ElementId>,
-    element: E,
-) -> AnimationElement<E> {
-    element.with_animation(id, Animation::new(BREATH).repeat(), |element, t| {
-        element.opacity(1.0 - 0.6 * (t * std::f32::consts::PI).sin().powi(2))
-    })
 }
 
 pub fn spin(id: impl Into<ElementId>, element: Svg, cx: &App) -> AnyElement {

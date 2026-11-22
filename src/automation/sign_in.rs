@@ -38,8 +38,8 @@ pub(crate) async fn run(
         &settings,
         |phase| match phase {
             Phase::Attempt { attempt, of } => report(Status::LoggingIn { attempt, of }),
-            Phase::Backoff { attempt, of } => report(Status::Retrying { attempt, of }),
-            Phase::Off | Phase::Armed | Phase::Waiting | Phase::Failed(_) => {}
+            Phase::Backoff { attempt, of, .. } => report(Status::Retrying { attempt, of }),
+            Phase::Off | Phase::Armed | Phase::Waiting(_) | Phase::Failed(_) => {}
         },
     )
     .await;

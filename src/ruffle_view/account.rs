@@ -407,7 +407,7 @@ fn signed_out(status: Option<&Status>, relogin: &Phase) -> bool {
 fn relogging(relogin: &Phase) -> bool {
     matches!(
         relogin,
-        Phase::Waiting | Phase::Attempt { .. } | Phase::Backoff { .. }
+        Phase::Waiting(_) | Phase::Attempt { .. } | Phase::Backoff { .. }
     )
 }
 
@@ -438,15 +438,21 @@ pub(crate) fn file_name(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::auto_relogin::Countdown;
 
     #[test]
     fn launch_signs_a_logged_out_tab_back_in() {
         let failed = Status::Failed("Wrong password".into());
         let attempt = Phase::Attempt { attempt: 1, of: 3 };
+        let now = std::time::Instant::now();
+        let waiting = Phase::Waiting(Countdown {
+            from: now,
+            until: now,
+        });
         assert!(signed_out(Some(&Status::Offline), &Phase::Off));
         assert!(signed_out(Some(&Status::Offline), &Phase::Armed));
         assert!(signed_out(Some(&failed), &Phase::Off));
-        assert!(!signed_out(Some(&Status::Offline), &Phase::Waiting));
+        assert!(!signed_out(Some(&Status::Offline), &waiting));
         assert!(!signed_out(Some(&Status::Offline), &attempt));
         assert!(!signed_out(Some(&Status::Online(None)), &Phase::Armed));
         assert!(!signed_out(
