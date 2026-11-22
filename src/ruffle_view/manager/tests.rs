@@ -870,6 +870,26 @@ fn stopping_a_script_names_it_by_its_meta(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_a_running_account_asks_only_while_the_setting_is_on(cx: &mut gpui::TestAppContext) {
+    let (manager, cx, dir) = open_manager("close-running", View::All, cx);
+    let asks = |cx: &mut gpui::VisualTestContext| {
+        manager.update(cx, |manager, cx| {
+            manager.confirm = None;
+            let targets = accounts(manager, &["kestrel"]);
+            manager.close(targets, cx);
+            manager
+                .confirm
+                .as_ref()
+                .is_some_and(|confirm| matches!(confirm.ask, Ask::Close { .. }))
+        })
+    };
+    assert!(asks(cx));
+    cx.update(|_, cx| crate::settings::set_confirm_close(false, cx));
+    assert!(!asks(cx));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn start_with_remembers_the_script_only_once_the_start_goes_ahead(cx: &mut gpui::TestAppContext) {
     let (manager, cx, dir) = open_manager("start-with", View::All, cx);
     let remembered = |cx: &mut gpui::VisualTestContext| {

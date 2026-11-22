@@ -86,6 +86,10 @@ impl ScriptState {
             since: None,
         }
     }
+
+    pub(crate) fn running(&self) -> bool {
+        matches!(self.phase, ScriptPhase::Running | ScriptPhase::NeedsInput)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

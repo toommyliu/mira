@@ -841,7 +841,7 @@ impl Manager {
                     .is_some_and(|presence| presence.running().is_some())
             })
             .count();
-        if running == 0 {
+        if running == 0 || !crate::settings::confirm_close(cx) {
             self.close_now(targets, cx);
         } else {
             self.ask(Ask::Close { targets, running }, cx);

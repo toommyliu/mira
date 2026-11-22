@@ -36,14 +36,8 @@ impl Presence {
     }
 
     pub(super) fn running(&self) -> Option<&Path> {
-        match self.live()?.script.as_ref()? {
-            ScriptState {
-                entry,
-                phase: ScriptPhase::Running | ScriptPhase::NeedsInput,
-                ..
-            } => Some(entry),
-            _ => None,
-        }
+        let script = self.live()?.script.as_ref()?;
+        script.running().then_some(script.entry.as_path())
     }
 
     pub(super) fn queued(&self) -> Option<&Path> {

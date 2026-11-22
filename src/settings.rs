@@ -222,6 +222,7 @@ impl QuitShortcut {
 struct Settings {
     start: Start,
     quit_shortcut: QuitShortcut,
+    skip_close_confirmation: bool,
     sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
@@ -401,6 +402,14 @@ pub(crate) fn start(cx: &App) -> Start {
 
 pub(crate) fn quit_shortcut(cx: &App) -> QuitShortcut {
     cx.global::<Store>().settings.quit_shortcut
+}
+
+pub(crate) fn confirm_close(cx: &App) -> bool {
+    !cx.global::<Store>().settings.skip_close_confirmation
+}
+
+pub(crate) fn set_confirm_close(on: bool, cx: &mut App) {
+    change(cx, |settings| settings.skip_close_confirmation = !on);
 }
 
 pub(crate) fn check_updates(cx: &App) -> bool {
@@ -966,22 +975,34 @@ impl SettingsWindow {
                 ),
             ))),
             Block::Section(
-                Section::titled("Confirmations").row(Row::new(
-                    "Quit shortcut",
-                    Some(settings.quit_shortcut.description()),
-                    Select::new(
-                        "quit-shortcut",
+                Section::titled("Confirmations")
+                    .row(Row::new(
                         "Quit shortcut",
-                        QuitShortcut::ALL.map(QuitShortcut::label),
-                        quit,
-                    )
-                    .width(px(136.0))
-                    .on_select(|index, _, cx| {
-                        change(cx, |settings| {
-                            settings.quit_shortcut = QuitShortcut::ALL[index]
-                        })
-                    }),
-                )),
+                        Some(settings.quit_shortcut.description()),
+                        Select::new(
+                            "quit-shortcut",
+                            "Quit shortcut",
+                            QuitShortcut::ALL.map(QuitShortcut::label),
+                            quit,
+                        )
+                        .width(px(136.0))
+                        .on_select(|index, _, cx| {
+                            change(cx, |settings| {
+                                settings.quit_shortcut = QuitShortcut::ALL[index]
+                            })
+                        }),
+                    ))
+                    .row(Row::new(
+                        "Tab close confirmation",
+                        Some("Ask before closing tabs and stopping their running scripts."),
+                        Switch::new(
+                            "confirm-close",
+                            "Tab close confirmation",
+                            !settings.skip_close_confirmation,
+                        )
+                        .hide_label()
+                        .on_toggle(|on, _, cx| set_confirm_close(on, cx)),
+                    )),
             ),
             Block::Section(
                 Section::titled("Client").row(Row::new(
@@ -1495,12 +1516,14 @@ mod tests {
         assert!(!Settings::default().font_smoothing);
         assert_eq!(Settings::default().start, Start::Client);
         assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
+        assert!(!Settings::default().skip_close_confirmation);
         assert!(!Settings::default().sidebar);
         assert!(!Settings::default().skip_update_checks);
         assert!(!Settings::default().separate_aqw_settings);
         let chosen = Settings {
             start: Start::Manager,
             quit_shortcut: QuitShortcut::DoublePress,
+            skip_close_confirmation: true,
             sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,

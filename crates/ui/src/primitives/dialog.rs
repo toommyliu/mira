@@ -131,6 +131,7 @@ impl RenderOnce for Dialog {
         if self.open != was_open {
             let opening = self.open;
             let return_focus = opening.then(|| window.focused(cx)).flatten();
+            let held = window.focused(cx).is_none() || focus.contains_focused(window, cx);
             let restore = state.update(cx, |state, cx| {
                 state.was_open = opening;
                 state.closed_at = (!opening).then(|| cx.background_executor().now());
@@ -138,7 +139,7 @@ impl RenderOnce for Dialog {
                     state.return_focus = return_focus;
                     None
                 } else {
-                    state.return_focus.take()
+                    state.return_focus.take().filter(|_| held)
                 }
             });
             let focus = focus.clone();
