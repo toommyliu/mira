@@ -506,13 +506,16 @@ impl Theme {
             .border(width)
             .border_color(color)
     }
+    pub fn surface_edge(&self) -> Hsla {
+        self.foreground.opacity(0.1)
+    }
     pub fn surface_ring(&self, radius: Pixels) -> Div {
         div()
             .absolute()
-            .inset(px(-1.0))
-            .rounded(radius + px(1.0))
+            .inset_0()
+            .rounded(radius)
             .border_1()
-            .border_color(self.foreground.opacity(0.1))
+            .border_color(self.surface_edge())
     }
     pub fn popup_shadow(&self) -> Vec<BoxShadow> {
         let black = gpui::black().opacity(0.1);

@@ -1281,9 +1281,7 @@ impl Manager {
                             .primary
                             .opacity(if theme.dark_mode { 0.1 } else { 0.05 }))
                 } else {
-                    card.border_color(gpui::transparent_black())
-                        .bg(theme.card)
-                        .child(theme.surface_ring(theme.radius.panel))
+                    card.border_color(theme.surface_edge()).bg(theme.card)
                 }
             })
             .role(Role::CheckBox)
