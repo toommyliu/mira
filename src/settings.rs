@@ -715,7 +715,6 @@ fn open(cx: &mut App) {
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_minimizable: false,
         window_min_size: Some(size(px(SETTINGS_MIN_WIDTH), px(SETTINGS_MIN_HEIGHT))),
         ..Default::default()
     };
