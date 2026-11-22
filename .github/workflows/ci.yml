@@ -19,13 +19,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: rustup toolchain install --profile minimal --component rustfmt
       - run: cargo fmt --check
       - run: pnpm fmt:check
       - run: pnpm lint
@@ -40,13 +39,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: rustup toolchain install --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: pnpm check:gpui
       - run: cargo clippy --locked --workspace --all-targets
