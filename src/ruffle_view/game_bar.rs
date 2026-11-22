@@ -819,7 +819,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .h(cx.theme().layout.chrome)
         .gap(layout.space(0.5))
         .pr(layout.space(1.5))
-        .bg(theme.background)
+        .bg(theme.frame)
         .border_b_1()
         .border_color(theme.border)
         .child(super::client::drag_area().flex_none().w(bar.inset))

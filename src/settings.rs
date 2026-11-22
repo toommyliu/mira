@@ -1606,6 +1606,12 @@ mod tests {
         assert!(
             serde_json::from_str::<Settings>(r#"{"colors":{"dark":{"primary":"blue"}}}"#).is_err()
         );
+        let saved: Settings =
+            serde_json::from_str(r##"{"colors":{"dark":{"sidebar":"#101010"}}}"##).unwrap();
+        assert_eq!(
+            saved.colors.dark.keys().collect::<Vec<_>>(),
+            [&ColorToken::Frame]
+        );
     }
 
     #[gpui::test]
