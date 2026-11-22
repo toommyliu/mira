@@ -1,8 +1,10 @@
 use std::{path::PathBuf, time::Instant};
 
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task};
 
-use super::{RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs};
+use super::{
+    RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs, script_names,
+};
 use crate::{
     account_settings,
     accounts::AccountId,
@@ -33,7 +35,6 @@ struct Restart {
 
 struct Loaded {
     launch: Launch,
-    name: SharedString,
     phase: Phase,
     since: Instant,
 }
@@ -87,10 +88,6 @@ impl Script {
         self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
 
-    pub(super) fn loaded(&self) -> Option<&SharedString> {
-        self.loaded.as_ref().map(|loaded| &loaded.name)
-    }
-
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
             Phase::Finished(outcome) => failure(outcome),
@@ -102,10 +99,9 @@ impl Script {
         Some(self.dialogs.as_ref()?.view.clone())
     }
 
-    pub(super) fn state(&self) -> Option<ScriptState> {
+    pub(super) fn state(&self, cx: &App) -> Option<ScriptState> {
         let Loaded {
             launch,
-            name,
             phase,
             since,
         } = self.loaded.as_ref()?;
@@ -127,14 +123,15 @@ impl Script {
         };
         Some(ScriptState {
             entry: launch.entry.clone(),
-            name: name.clone(),
+            name: script_names::name(&launch.entry, cx),
             phase,
             since: Some(*since),
         })
     }
 
-    pub(super) fn status(&self) -> Option<String> {
-        let Loaded { name, phase, .. } = self.loaded.as_ref()?;
+    pub(super) fn status(&self, cx: &App) -> Option<String> {
+        let Loaded { launch, phase, .. } = self.loaded.as_ref()?;
+        let name = script_names::name(&launch.entry, cx);
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         match phase {
             Phase::Preparing { .. } => Some(format!("Starting {name}")),
@@ -192,12 +189,10 @@ impl RuffleView {
         if !fresh || !self.safe_start_stop(cx) {
             return self.run_script(launch, cx);
         }
-        let name = super::account::file_name(&launch.entry).into();
         let ready = launch.clone();
         let moving = self.retreat(cx, move |this, cx| this.run_script(ready, cx));
         self.script.loaded = Some(Loaded {
             launch,
-            name,
             phase: Phase::Preparing { _moving: moving },
             since: Instant::now(),
         });
@@ -228,7 +223,7 @@ impl RuffleView {
     }
 
     fn run_script(&mut self, launch: Launch, cx: &mut Context<Self>) {
-        let name: SharedString = super::account::file_name(&launch.entry).into();
+        script_names::refresh(&launch.entry, cx);
         let inbox = self.session.inbox();
         let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
@@ -260,7 +255,9 @@ impl RuffleView {
         let phase = match started {
             Ok(run) => {
                 let dialogs = self.script_dialogs(cx);
-                dialogs.update(cx, |dialogs, cx| dialogs.start(name.clone(), asked, cx));
+                dialogs.update(cx, |dialogs, cx| {
+                    dialogs.start(launch.entry.clone(), asked, cx)
+                });
                 cx.spawn(async move |this, cx| {
                     if let Ok(outcome) = outcome.recv().await {
                         let _ = this.update(cx, |this, cx| this.script_ended(outcome, cx));
@@ -280,7 +277,6 @@ impl RuffleView {
                 };
                 self.script.loaded = Some(Loaded {
                     launch,
-                    name,
                     phase: Phase::Finished(outcome.clone()),
                     since: Instant::now(),
                 });
@@ -290,7 +286,6 @@ impl RuffleView {
         };
         self.script.loaded = Some(Loaded {
             launch,
-            name,
             phase,
             since: Instant::now(),
         });
@@ -379,8 +374,8 @@ impl RuffleView {
         self.changed(cx);
     }
 
-    pub(super) fn script_status(&self) -> Option<String> {
-        let status = self.script.status()?;
+    pub(super) fn script_status(&self, cx: &App) -> Option<String> {
+        let status = self.script.status(cx)?;
         Some(match self.queue.ahead() {
             queued @ 1.. if self.script.running() => format!("{status} · {queued} queued"),
             _ => status,

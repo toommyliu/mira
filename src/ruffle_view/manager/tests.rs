@@ -8,7 +8,7 @@ use gpui::{AppContext as _, Context, Focusable as _, Size, Window, px, size};
 use reqwest::header::HeaderValue;
 
 use super::{
-    Fake, Manager, View,
+    Ask, Fake, Manager, View,
     run::{Runs, Start},
 };
 use crate::{
@@ -58,6 +58,15 @@ fn ended(name: &str, phase: ScriptPhase, at: Instant) -> ScriptState {
         name: name.into(),
         phase,
         since: Some(at),
+    }
+}
+
+fn waiting(name: &str) -> ScriptState {
+    ScriptState {
+        entry: script(name),
+        name: name.into(),
+        phase: ScriptPhase::Queued,
+        since: None,
     }
 }
 
@@ -162,7 +171,7 @@ fn fake(scene: Scene, now: Instant) -> (Fake, Option<Instant>) {
                     id("forestoftallpines"),
                     Presence::Waiting {
                         place: 1,
-                        script: Some(script("daily.ts")),
+                        script: Some(waiting("daily.ts")),
                         open: None,
                     },
                 ),
@@ -587,7 +596,7 @@ fn snapshot_every_card_state() {
             "queued-to-log-in",
             Presence::Waiting {
                 place: 2,
-                script: Some(script("daily.ts")),
+                script: Some(waiting("daily.ts")),
                 open: None,
             },
         ),
@@ -830,6 +839,37 @@ fn reopening_mira_opens_the_configured_window_only_when_all_windows_are_closed()
 }
 
 #[gpui::test]
+fn stopping_a_script_names_it_by_its_meta(cx: &mut gpui::TestAppContext) {
+    let (manager, cx, dir) = open_manager("meta-name", View::All, cx);
+    cx.update(|_, cx| crate::ruffle_view::script_names::init(cx));
+    let hunt = dir.join("hunt.ts");
+    std::fs::write(&hunt, "export const meta = { name: \"Hunt\" };").unwrap();
+    manager.update(cx, |manager, cx| {
+        let running = ScriptState {
+            phase: ScriptPhase::Running,
+            ..ScriptState::queued(&hunt, cx)
+        };
+        if let Some(fake) = &mut manager.fake {
+            fake.presences.insert(
+                id("wildfox"),
+                online("wildfox", "yulgar", "Enter", Some(running)),
+            );
+        }
+    });
+    cx.run_until_parked();
+    let title = manager.update(cx, |manager, cx| {
+        let targets = accounts(manager, &["wildfox"]);
+        manager.stop(targets, cx);
+        match &manager.confirm.as_ref().unwrap().ask {
+            Ask::Stop { title, .. } => title.clone(),
+            _ => panic!("stopping asks first"),
+        }
+    });
+    assert_eq!(title, "Stop Hunt on wildfox?");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn start_with_remembers_the_script_only_once_the_start_goes_ahead(cx: &mut gpui::TestAppContext) {
     let (manager, cx, dir) = open_manager("start-with", View::All, cx);
     let remembered = |cx: &mut gpui::VisualTestContext| {
@@ -1023,7 +1063,7 @@ fn snapshot_stress() {
             "wide",
             Presence::Waiting {
                 place: 128,
-                script: Some(script(long_script)),
+                script: Some(waiting(long_script)),
                 open: None,
             },
         ),

@@ -825,9 +825,13 @@ struct Bar {
 }
 
 pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl IntoElement {
-    let script = match view.script.loaded() {
-        Some(name) if view.script.stoppable() => ScriptControl::Stop(name.clone()),
-        loaded => ScriptControl::Start(loaded.cloned()),
+    let loaded = view
+        .script
+        .entry()
+        .map(|entry| super::script_names::name(entry, cx));
+    let script = match loaded {
+        Some(name) if view.script.stoppable() => ScriptControl::Stop(name),
+        loaded => ScriptControl::Start(loaded),
     };
     let bar = Bar {
         inset: view.bar_inset,

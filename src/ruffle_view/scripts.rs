@@ -41,6 +41,7 @@ use super::{
     queue::{self, EntryId, Queue},
     script::failure,
     script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
+    script_names,
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
@@ -563,7 +564,7 @@ pub(super) struct ScriptsWindow {
     package_dialogs: Entity<PackageDialogs>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
-    _subscriptions: [Subscription; 7],
+    _subscriptions: [Subscription; 8],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -656,6 +657,7 @@ impl ScriptsWindow {
                     this.rescan(cx);
                 }
             }),
+            cx.observe_global::<script_names::Names>(|_, cx| cx.notify()),
         ];
         let mut scripts = Self {
             client,
@@ -737,7 +739,7 @@ impl ScriptsWindow {
 
     fn run_status(&self, cx: &App) -> Option<RunStatus> {
         let script = &self.view()?.read(cx).script;
-        let state = script.state()?;
+        let state = script.state(cx)?;
         let activity = match state.phase {
             ScriptPhase::Running => Activity::Running,
             ScriptPhase::NeedsInput => Activity::NeedsYou,
@@ -755,7 +757,7 @@ impl ScriptsWindow {
             _ => None,
         };
         Some(RunStatus {
-            text: script.status()?.into(),
+            text: script.status(cx)?.into(),
             activity,
             failure,
             stop: (script.stoppable() && state.phase != ScriptPhase::Stopping)
@@ -820,6 +822,13 @@ impl ScriptsWindow {
                     Some(Row::Script(entry)) => Some(entry.path.clone()),
                     _ => None,
                 };
+                script_names::learn(
+                    scanned
+                        .entries
+                        .iter()
+                        .map(|entry| (entry.path.clone(), entry.name.clone())),
+                    cx,
+                );
                 this.library = Some(scanned);
                 if this.scope(cx).is_none() {
                     this.page = Page::Library(None);
@@ -2211,7 +2220,7 @@ impl ScriptsWindow {
         let meta = self.forms.get(&key).map(|form| &form.meta);
         let name = meta
             .and_then(|meta| meta.name.clone())
-            .unwrap_or_else(|| file_name(&queued.script));
+            .unwrap_or_else(|| script_names::name(&queued.script, cx).into());
         let description = meta
             .and_then(|meta| meta.description.clone())
             .map(|description| muted(theme, description).into_any_element());
@@ -2282,7 +2291,7 @@ impl ScriptsWindow {
                 let form = self.forms.get(&FormKey::Entry(queued.id));
                 let name = form
                     .and_then(|form| form.meta.name.clone())
-                    .unwrap_or_else(|| file_name(&queued.script));
+                    .unwrap_or_else(|| script_names::name(&queued.script, cx).into());
                 let form = form.map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {

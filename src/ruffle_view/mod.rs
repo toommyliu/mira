@@ -19,6 +19,7 @@ mod queue;
 mod script;
 mod script_dialog;
 mod script_form;
+mod script_names;
 mod scripts;
 mod shown_tab;
 mod stats;

@@ -17,9 +17,10 @@ use reqwest::header::HeaderValue;
 
 use self::run::{Filter, Runs, Start, Stoppable, plan, setup_work, stoppable};
 use super::{
-    Client, Updated,
-    account_card::{Presence, script_name},
+    Client, ScriptState, Updated,
+    account_card::Presence,
     client::{self, Home, Layout},
+    script_names,
 };
 use mira_ui::primitives::{Input, InputEvent, text_field};
 
@@ -328,7 +329,9 @@ fn presence(client: &Client, account: &AccountId, cx: &App) -> Presence {
     if let Some((place, _)) = client.waiting(account) {
         return Presence::Waiting {
             place,
-            script: client.waiting_script(account),
+            script: client
+                .waiting_script(account)
+                .map(|script| ScriptState::queued(&script, cx)),
             open: client.summary(account, cx),
         };
     }
@@ -409,6 +412,8 @@ impl Manager {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+            .detach();
+        cx.observe_global::<script_names::Names>(|_, cx| cx.notify())
             .detach();
         let focus = cx.focus_handle();
         let search = cx.new(|cx| {
@@ -674,7 +679,7 @@ impl Manager {
             match presences.get(&account.id()).and_then(Presence::running) {
                 Some(running) if running == script => {}
                 Some(running) => {
-                    conflicts.push((account.name.clone(), script_name(running)));
+                    conflicts.push((account.name.clone(), script_names::name(running, cx).into()));
                     plan.push(account);
                 }
                 None => plan.push(account),
@@ -766,7 +771,12 @@ impl Manager {
             })
             .collect();
         let script = (scripts.len() == 1)
-            .then(|| scripts.iter().next().map(|script| script_name(script)))
+            .then(|| {
+                scripts
+                    .iter()
+                    .next()
+                    .map(|script| script_names::name(script, cx))
+            })
             .flatten();
         let one = (names.len() == 1).then(|| names[0].clone());
         let title = match (setup, &one, &script) {

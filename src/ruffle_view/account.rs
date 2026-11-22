@@ -3,10 +3,10 @@ use std::{
     time::Instant,
 };
 
-use gpui::{Context, EventEmitter, SharedString};
+use gpui::{App, Context, EventEmitter, SharedString};
 use mira_ui::Tone;
 
-use super::{Loading, RuffleView};
+use super::{Loading, RuffleView, script_names};
 use crate::{
     accounts::{Account, AccountId},
     automation::{auto_relogin::Phase, sign_in::Status},
@@ -75,6 +75,17 @@ pub(crate) struct ScriptState {
     pub(crate) name: SharedString,
     pub(crate) phase: ScriptPhase,
     pub(crate) since: Option<Instant>,
+}
+
+impl ScriptState {
+    pub(crate) fn queued(entry: &Path, cx: &App) -> Self {
+        Self {
+            entry: entry.to_path_buf(),
+            name: script_names::name(entry, cx),
+            phase: ScriptPhase::Queued,
+            since: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,7 +227,7 @@ impl RuffleView {
         cx.notify();
     }
 
-    pub(crate) fn summary(&self) -> Summary {
+    pub(crate) fn summary(&self, cx: &App) -> Summary {
         let login = match (&self.error, self.status.as_ref()) {
             (Some(error), _) => Login::Broken(error.clone().into()),
             (None, None) => Login::Loading(match self.loading {
@@ -260,21 +271,16 @@ impl RuffleView {
                 level: identity.level,
                 class: identity.class.clone().map(Into::into),
             });
-        let queued = self.waiting().map(|script| ScriptState {
-            entry: script.to_path_buf(),
-            name: file_name(script).into(),
-            phase: ScriptPhase::Queued,
-            since: None,
-        });
+        let queued = self.waiting().map(|script| ScriptState::queued(script, cx));
         Summary {
             login,
             place,
             character,
-            script: queued.or_else(|| self.script.state()),
+            script: queued.or_else(|| self.script.state(cx)),
         }
     }
 
-    pub(super) fn glance(&self) -> Option<Glance> {
+    pub(super) fn glance(&self, cx: &App) -> Option<Glance> {
         let link = self.account.as_ref();
         let queued = self.waiting();
         if self.error.is_some() {
@@ -311,18 +317,19 @@ impl RuffleView {
                 (_, _) => return Some(Glance::new("Loading", Tone::Neutral)),
             },
         };
-        let script = self.script_status();
-        if let Some(name) = self.script.loaded()
+        let script = self.script_status(cx);
+        if let Some(entry) = self.script.entry()
             && self.script.failed()
             && queued.is_none()
         {
+            let name = script_names::name(entry, cx);
             return Some(Glance::new(format!("{name} failed"), Tone::Danger));
         }
         if self.script.running() {
             return script.map(|status| Glance::new(status, Tone::Accent));
         }
         if let Some(queued) = queued {
-            let waiting = format!("Waiting to run {}", file_name(queued));
+            let waiting = format!("Waiting to run {}", script_names::name(queued, cx));
             return Some(Glance::new(waiting, Tone::Neutral));
         }
         match script {
@@ -331,17 +338,16 @@ impl RuffleView {
         }
     }
 
-    pub(super) fn details(&self) -> Details {
+    pub(super) fn details(&self, cx: &App) -> Details {
         let status = self.status.as_ref();
         let queued = self.waiting();
         let server = match status {
             Some(Status::Online(server)) => server.clone().map(Into::into),
             _ => None,
         };
-        let script = match queued {
-            Some(queued) => Some(file_name(queued).into()),
-            None => self.script.loaded().cloned(),
-        };
+        let script = queued
+            .or_else(|| self.script.entry().map(PathBuf::as_path))
+            .map(|script| script_names::name(script, cx));
         let error = match (&self.error, status) {
             (Some(error), _) | (None, Some(Status::Failed(error))) => Some(error.clone().into()),
             _ => self

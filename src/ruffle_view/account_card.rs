@@ -1,12 +1,12 @@
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
 use gpui::SharedString;
 use mira_ui::Tone;
 
-use super::{Login, ScriptPhase, ScriptState, Summary, account::file_name, scripts::home_relative};
+use super::{Login, ScriptPhase, ScriptState, Summary, scripts::home_relative};
 use crate::accounts::Account;
 
 pub(super) const CHOOSE_IN_GAME: &str = "Choose in game";
@@ -16,7 +16,7 @@ pub(super) enum Presence {
     Open(Summary),
     Waiting {
         place: usize,
-        script: Option<PathBuf>,
+        script: Option<ScriptState>,
         open: Option<Summary>,
     },
     Unopened(SharedString),
@@ -52,7 +52,7 @@ impl Presence {
             ..
         } = self
         {
-            return Some(script);
+            return Some(&script.entry);
         }
         match self.live()?.script.as_ref()? {
             ScriptState {
@@ -274,7 +274,7 @@ pub(super) fn card(account: &Account, presence: &Presence, done: bool, now: Inst
             "Queued",
             Job::Line(
                 match script {
-                    Some(script) => Line::new(script_name(script), Mood::Quiet).path(script),
+                    Some(script) => Line::new(script.name.clone(), Mood::Quiet).path(&script.entry),
                     None => Line::new("", Mood::Quiet),
                 }
                 .time(Some(format!("#{place}"))),
@@ -491,13 +491,10 @@ pub(super) fn ago(elapsed: Duration) -> String {
     }
 }
 
-pub(super) fn script_name(script: &Path) -> String {
-    file_name(script)
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::ruffle_view::account::file_name;
 
     pub(in super::super) fn online(entry: &str, phase: ScriptPhase) -> Presence {
         Presence::Open(Summary {
@@ -511,6 +508,15 @@ pub(super) mod tests {
                 since: None,
             }),
         })
+    }
+
+    pub(in super::super) fn queued(entry: &str) -> ScriptState {
+        ScriptState {
+            entry: entry.into(),
+            name: file_name(Path::new(entry)).into(),
+            phase: ScriptPhase::Queued,
+            since: None,
+        }
     }
 
     pub(in super::super) fn signing_in(login: Login) -> Presence {
@@ -606,7 +612,7 @@ pub(super) mod tests {
         assert_eq!(job(&ended).0, "daily.ts finished 20m ago");
         let queued = Presence::Waiting {
             place: 2,
-            script: Some("/s/daily.ts".into()),
+            script: Some(queued("/s/daily.ts")),
             open: None,
         };
         assert_eq!(job(&queued), ("daily.ts".to_owned(), Some("#2".to_owned())));

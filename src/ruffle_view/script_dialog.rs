@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, rc::Rc};
+use std::{collections::VecDeque, path::PathBuf, rc::Rc};
 
 use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, FocusHandle, Focusable as _,
@@ -12,6 +12,7 @@ use mira_ui::{
     v_flex,
 };
 
+use super::script_names;
 use crate::scripting::{CallId, Dialog as Asked, DialogRequest, ToDialogs};
 
 const CONTEXT: &str = "ScriptDialog";
@@ -25,7 +26,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 pub(super) struct ScriptDialogs {
-    script: SharedString,
+    script: PathBuf,
     queue: VecDeque<Asked>,
     last: Option<DialogRequest>,
     prompt: Option<Prompt>,
@@ -110,7 +111,7 @@ struct Prompt {
 impl ScriptDialogs {
     pub(super) fn new(stop: impl Fn(&mut App) + 'static, cx: &mut Context<Self>) -> Self {
         Self {
-            script: SharedString::default(),
+            script: PathBuf::new(),
             queue: VecDeque::new(),
             last: None,
             prompt: None,
@@ -125,7 +126,7 @@ impl ScriptDialogs {
 
     pub(super) fn start(
         &mut self,
-        script: SharedString,
+        script: PathBuf,
         messages: async_channel::Receiver<ToDialogs>,
         cx: &mut Context<Self>,
     ) {
@@ -259,7 +260,7 @@ impl Render for ScriptDialogs {
             message,
             cancel,
             accept,
-        } = Content::of(request, &self.script);
+        } = Content::of(request, &script_names::name(&self.script, cx));
         let theme = cx.theme();
         let overflowing = self.scroll.max_offset().y > px(0.0);
         let scroller = div()

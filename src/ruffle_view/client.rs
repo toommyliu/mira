@@ -285,6 +285,7 @@ pub(crate) fn init(
     armies: Armies,
     cx: &mut App,
 ) {
+    super::script_names::init(cx);
     cx.set_global(Game {
         shared: Shared {
             extras: Rc::new(extras::Store::open(data.join("as3.json"))),
@@ -468,6 +469,8 @@ impl Client {
         let client = cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
                 .detach();
+            cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
+                .detach();
             Client {
                 extras,
                 data,
@@ -511,6 +514,8 @@ impl Client {
     pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
         cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
+                .detach();
+            cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
                 .detach();
             Client {
                 extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
@@ -642,7 +647,7 @@ impl Client {
 
     pub(crate) fn summary(&self, account: &AccountId, cx: &App) -> Option<Summary> {
         let index = self.session_of(account, cx)?;
-        Some(self.sessions[index].view.read(cx).summary())
+        Some(self.sessions[index].view.read(cx).summary(cx))
     }
 
     pub(crate) fn launch(
@@ -907,7 +912,7 @@ impl Client {
             cx.notify();
         }
         if let Some(account) = account
-            && let Some(mut last) = session.view.read(cx).script.state()
+            && let Some(mut last) = session.view.read(cx).script.state(cx)
         {
             if matches!(
                 last.phase,
@@ -1140,8 +1145,8 @@ impl Client {
                     number: session.number,
                     view: session.view.entity_id(),
                     title: session.title(cx),
-                    glance: view.glance(),
-                    details: view.details(),
+                    glance: view.glance(cx),
+                    details: view.details(cx),
                     hint: self
                         .shortcut_hints
                         .then(|| shortcut_for(&shortcuts, index))
