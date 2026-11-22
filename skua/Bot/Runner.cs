@@ -40,12 +40,14 @@ public sealed class Runner : IRunner
         var drops = (Members.Drops)bot.Drops;
         var quests = (Members.Quests)bot.Quests;
         var settings = (Members.Options)bot.Options;
+        var boosts = (Members.Boosts)bot.Boosts;
         var handlers = Start(() => bot.HandlerSource.Run(bot, run.Token));
         try
         {
             game.Request("skua", "events", new { id = 1 }, game.Stopping);
             drops.Remember();
             quests.Remember();
+            boosts.Remember();
             events = Start(() => Listen(bot, game));
             var (type, main) = Load(start);
             var script = Activator.CreateInstance(type)!;
@@ -80,11 +82,12 @@ public sealed class Runner : IRunner
                 drops.Restore(teardown.Token);
                 quests.Restore(teardown.Token);
                 settings.Restore(teardown.Token);
+                boosts.Restore(teardown.Token);
             }
             catch (Exception error)
             {
                 if (error is not OperationCanceledException)
-                    game.Warn($"Mira couldn't undo this script's drop, quest and setting changes: {error.Message}");
+                    game.Warn($"Mira couldn't undo this script's drop, quest, boost and setting changes: {error.Message}");
             }
         }
         bot.Detach();

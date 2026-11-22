@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Nodes;
 using Skua.Core.Interfaces;
 using Skua.Core.Models.Items;
 
@@ -17,6 +18,8 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
     private readonly object gate = new();
     private readonly Dictionary<BoostType, (bool Use, int Id)> chosen = Types.Keys.ToDictionary(type => type, _ => (false, 0));
     private readonly HashSet<int> registered = [];
+    private readonly HashSet<int> kept = [];
+    private readonly HashSet<int> owned = [];
     private bool started;
 
     public event PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
@@ -96,7 +99,8 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
 
     private void Sync()
     {
-        var wanted = started ? chosen.Values.Where(boost => boost.Use && boost.Id > 0).Select(boost => boost.Id).ToHashSet() : [];
+        var wanted = started ? chosen.Values.Where(boost => boost.Use && boost.Id > 0 && !kept.Contains(boost.Id)).Select(boost => boost.Id).ToHashSet() : [];
+        owned.UnionWith(wanted);
         var dropped = registered.Except(wanted).Select(id => new { itemId = id }).ToArray();
         var added = wanted.Except(registered).Select(id => new { itemId = id }).ToArray();
         if (dropped.Length > 0)
@@ -105,5 +109,24 @@ public sealed class Boosts(Game game, Func<IScriptInterface> bot) : IScriptBoost
             game.Request("boostRegistry", "register", new { items = added });
         registered.Clear();
         registered.UnionWith(wanted);
+    }
+
+    internal void Remember()
+    {
+        lock (gate)
+            foreach (var item in game.Request("boostRegistry", "registered")?.AsArray() ?? [])
+                if (item is JsonObject entry && entry["itemId"] is JsonValue id)
+                    kept.Add(id.GetValue<int>());
+    }
+
+    internal void Restore(CancellationToken token)
+    {
+        lock (gate)
+        {
+            if (owned.Count > 0)
+                game.Request("boostRegistry", "unregister", new { items = owned.Select(id => new { itemId = id }).ToArray() }, token);
+            owned.Clear();
+            registered.Clear();
+        }
     }
 }

@@ -75,6 +75,13 @@ public class RunnerTests
                         bot.Options.InfiniteRange = true;
                         bot.Options.AutoRelogin = true;
                         bot.Options.LagKiller = true;
+                        bot.Boosts.UseGoldBoost = true;
+                        bot.Boosts.GoldBoostID = 900;
+                        bot.Boosts.UseClassBoost = true;
+                        bot.Boosts.ClassBoostID = 901;
+                        bot.Boosts.Start();
+                        bot.Boosts.Stop();
+                        bot.Boosts.Start();
                     }
                 }
                 """);
@@ -90,6 +97,8 @@ public class RunnerTests
             Assert.DoesNotContain(game.Calls, call => (string?)call["domain"] == "dropRegistry" && (string?)call["op"] == "unregister" && (call["items"]!.ToJsonString().Contains("Player Pick", StringComparison.OrdinalIgnoreCase) || call["items"]!.ToJsonString().Contains("Never Added")));
             Assert.Equal("""{"enabled":false,"rejectOthers":false}""", registry.DropConfig.ToJsonString());
             Assert.Equal([(1, 77)], registry.Quests);
+            Assert.Equal(["\"Gold Boost! (20 min)\"", """{"itemId":900}"""], registry.Boosts.Select(boost => boost.ToJsonString()));
+            Assert.DoesNotContain(game.Calls, call => (string?)call["domain"] == "boostRegistry" && (string?)call["op"] == "unregister" && call["items"]!.ToJsonString().Contains("900"));
             Assert.Equal("""{"enabled":false}""", registry.QuestConfig.ToJsonString());
             Assert.Equal("""{"infiniteRange":false,"customName":"Hero","rendering":"minimal"}""", registry.Settings.ToJsonString());
             Assert.DoesNotContain(game.Calls, call => (string?)call["op"] == "update" && call.ContainsKey("rendering"));
@@ -163,6 +172,7 @@ public class RunnerTests
         public List<JsonNode> Drops { get; } = ["Player Pick"];
         public JsonObject DropConfig { get; } = new() { ["enabled"] = false, ["rejectOthers"] = false };
         public List<(int Id, int? Reward)> Quests { get; } = [(1, 77)];
+        public List<JsonNode> Boosts { get; } = ["Gold Boost! (20 min)", new JsonObject { ["itemId"] = 900 }];
         public JsonObject QuestConfig { get; } = new() { ["enabled"] = false };
         public JsonObject Settings { get; } = new() { ["infiniteRange"] = false, ["customName"] = "Hero", ["rendering"] = "minimal" };
         public JsonObject Relogin { get; } = new() { ["enabled"] = false, ["server"] = null };
@@ -216,6 +226,16 @@ public class RunnerTests
                     case "questRegistry.configure":
                         Configure(QuestConfig, request);
                         return QuestConfig.DeepClone();
+                    case "boostRegistry.registered":
+                        return new JsonArray(Boosts.Select(boost => boost.DeepClone()).ToArray());
+                    case "boostRegistry.register":
+                        foreach (var item in request["items"]!.AsArray())
+                            if (!Boosts.Any(boost => JsonNode.DeepEquals(boost, item)))
+                                Boosts.Add(item!.DeepClone());
+                        break;
+                    case "boostRegistry.unregister":
+                        Boosts.RemoveAll(boost => request["items"]!.AsArray().Any(item => JsonNode.DeepEquals(boost, item)));
+                        break;
                     case "settings.get":
                         return Settings.DeepClone();
                     case "settings.update":
