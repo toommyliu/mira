@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::Instrument as _;
 use url::Url;
 
 use crate::net::GameHost;
@@ -144,7 +145,7 @@ impl Net {
             deliver(SocketEvent::Failed);
             return;
         };
-        self.track(self.rt.spawn(async move {
+        self.spawn(async move {
             let connecting = async { crate::net::dial(&host, port).await };
             let stream = match tokio::time::timeout(timeout, connecting).await {
                 Ok(Ok(stream)) => stream,
@@ -185,10 +186,11 @@ impl Net {
             };
             tokio::select! { _ = reading => {}, _ = writing => {} }
             deliver(SocketEvent::Closed);
-        }));
+        });
     }
 
-    fn track(&self, task: tokio::task::JoinHandle<()>) {
+    fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let task = self.rt.spawn(task.in_current_span());
         let mut tasks = self.tasks.lock().unwrap();
         tasks.retain(|task| !task.is_finished());
         tasks.push(task.abort_handle());

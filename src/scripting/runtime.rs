@@ -101,9 +101,11 @@ impl Run {
         let replies = commands.clone();
         let clock = Clock::new();
         let shared = clock.clone();
+        let span = tracing::Span::current();
         let thread = thread::Builder::new()
             .name("mira-script".into())
             .spawn(move || {
+                let _span = span.entered();
                 let link = Link {
                     run,
                     player: Rc::new(player),

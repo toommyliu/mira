@@ -28,7 +28,12 @@ mod text_input;
 #[path = "macos.rs"]
 mod native;
 
-use std::{ops::Range, path::PathBuf, rc::Rc};
+use std::{
+    ops::Range,
+    path::PathBuf,
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{
     account_settings::{self, Options},
@@ -118,6 +123,7 @@ const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_millis(5
 
 pub struct RuffleView {
     session: Runtime,
+    span: tracing::Span,
     error: Option<String>,
     loading: Loading,
     tiled: bool,
@@ -164,6 +170,9 @@ impl RuffleView {
         let (outputs_tx, outputs) = async_channel::unbounded();
         let (stats_tx, mut stats) = tokio::sync::watch::channel(None);
         let automation = Automation::default();
+        static SESSIONS: AtomicU64 = AtomicU64::new(1);
+        // At error level the span stays enabled under any filter, so every event names its session.
+        let span = tracing::error_span!("session", id = SESSIONS.fetch_add(1, Ordering::Relaxed));
         let session = Runtime::spawn(
             native.surface(),
             data,
@@ -177,6 +186,7 @@ impl RuffleView {
             crate::combat_profiles::watch(cx),
             armies,
             native.supports_display_frames(),
+            span.clone(),
         )?;
         let inbox = session.inbox();
         native.connect_frames(move |shown_at| inbox.request_frame(shown_at));
@@ -436,6 +446,7 @@ impl RuffleView {
             ];
             Self {
                 session,
+                span,
                 error: None,
                 loading: Loading::Started,
                 tiled: false,

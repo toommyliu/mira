@@ -36,7 +36,7 @@ impl Net {
         let device = self.device.clone();
         let deadline = tokio::time::Instant::now() + self.deadline;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.track(self.rt.spawn(async move {
+        self.spawn(async move {
             let mut response =
                 match tokio::time::timeout_at(deadline, send(&http, &cookies, &device, request))
                     .await
@@ -93,7 +93,7 @@ impl Net {
                     }
                 }
             }
-        }));
+        });
         async move { rx.await.unwrap_or(Err(NetError::Shutdown)) }
     }
 }

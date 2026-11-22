@@ -214,9 +214,10 @@ impl RuffleView {
     ) -> Task<()> {
         let (moved, arrived) = async_channel::bounded(1);
         self.session.command(Command::Retreat(moved));
+        let span = self.span.clone();
         cx.spawn(async move |this, cx| {
             if let Ok(Err(error)) = arrived.recv().await {
-                tracing::warn!(%error, "couldn't move somewhere safe");
+                span.in_scope(|| tracing::warn!(%error, "couldn't move somewhere safe"));
             }
             let _ = this.update(cx, |this, cx| then(this, cx));
         })
@@ -228,30 +229,34 @@ impl RuffleView {
         let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let (asks, asked) = async_channel::unbounded();
-        let started = Run::start(
-            launch.clone(),
-            Limits::default(),
-            Box::new(|level, message| match level {
-                Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
-                Level::Info => tracing::info!(target: "mira::script", "{message}"),
-                Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
-                Level::Error => tracing::error!(target: "mira::script", "{message}"),
-            }),
-            Box::new(move |message| inbox.post(Msg::Script(message))),
-            Box::new(move |message| {
-                let _ = asks.try_send(message);
-            }),
-            move |outcome| {
-                if let Outcome::Failed { message, stack } = &outcome {
-                    let stack = stack
-                        .as_deref()
-                        .map(|stack| format!("\n{stack}"))
-                        .unwrap_or_default();
-                    tracing::warn!(target: "mira::script", "{} failed: {message}{stack}", path.display());
-                }
-                let _ = finished.try_send(outcome);
-            },
-        );
+        let started = self.span.in_scope(|| {
+            Run::start(
+                launch.clone(),
+                Limits::default(),
+                Box::new(|level, message| match level {
+                    Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
+                    Level::Info => tracing::info!(target: "mira::script", "{message}"),
+                    Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
+                    Level::Error => tracing::error!(target: "mira::script", "{message}"),
+                }),
+                Box::new(move |message| inbox.post(Msg::Script(message))),
+                Box::new(move |message| {
+                    let _ = asks.try_send(message);
+                }),
+                move |outcome| {
+                    if let Outcome::Failed { message, stack } = &outcome {
+                        tracing::warn!(
+                            target: "mira::script",
+                            path = %path.display(),
+                            error = %message,
+                            stack = stack.as_deref(),
+                            "script failed"
+                        );
+                    }
+                    let _ = finished.try_send(outcome);
+                },
+            )
+        });
         let phase = match started {
             Ok(run) => {
                 let dialogs = self.script_dialogs(cx);
@@ -270,7 +275,14 @@ impl RuffleView {
                 }
             }
             Err(error) => {
-                tracing::warn!(target: "mira::script", "{} failed: {error}", launch.entry.display());
+                self.span.in_scope(|| {
+                    tracing::warn!(
+                        target: "mira::script",
+                        path = %launch.entry.display(),
+                        %error,
+                        "couldn't start the script"
+                    )
+                });
                 let outcome = Outcome::Failed {
                     message: error.to_string(),
                     stack: None,

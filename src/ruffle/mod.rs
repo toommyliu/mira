@@ -146,6 +146,7 @@ impl Runtime {
         profiles: tokio::sync::watch::Receiver<Arc<Library>>,
         armies: Armies,
         display_frames: bool,
+        span: tracing::Span,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let inbox = Inbox {
@@ -156,6 +157,7 @@ impl Runtime {
         let thread = thread::Builder::new()
             .name("mira-player".into())
             .spawn(move || {
+                let _session = span.entered();
                 if let Err(error) = run(
                     surface,
                     data,

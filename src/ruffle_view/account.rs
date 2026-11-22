@@ -136,7 +136,7 @@ impl RuffleView {
         script: Option<(PathBuf, Values)>,
         cx: &mut Context<Self>,
     ) {
-        self.account = Some(Link::new(account));
+        self.link(account);
         if let Some((script, values)) = script {
             self.queue.add(script, values);
             self.queue.play();
@@ -149,8 +149,16 @@ impl RuffleView {
     }
 
     pub(super) fn adopt(&mut self, account: &Account, cx: &mut Context<Self>) {
-        self.account = Some(Link::new(account));
+        self.link(account);
         self.changed(cx);
+    }
+
+    fn link(&mut self, account: &Account) {
+        if self.linked_account() != Some(account.id()) {
+            self.span
+                .in_scope(|| tracing::info!(account = %account.username, "linked an account"));
+        }
+        self.account = Some(Link::new(account));
     }
 
     pub(super) fn identify(&mut self, player: &str, cx: &mut Context<Self>) -> bool {
@@ -158,7 +166,9 @@ impl RuffleView {
         if self.account.as_ref().is_some_and(|link| link.id() == id) {
             return false;
         }
-        if self.account.take().is_some() {
+        if let Some(link) = self.account.take() {
+            self.span
+                .in_scope(|| tracing::info!(account = %link.username, "unlinked the account"));
             self.queue.pause();
         }
         cx.emit(Identified(player.to_owned()));
