@@ -401,7 +401,20 @@ pub(crate) fn trigger_probe(state: &Entity<MenuState>) -> impl IntoElement {
     canvas(
         move |area, window, cx| {
             let menu = state.read(cx);
-            if menu.trigger_bounds.replace(area) != area && menu.open {
+            let moved = menu.trigger_bounds.replace(area) != area;
+            if !menu.open {
+                return;
+            }
+            if area.intersect(&window.content_mask().bounds).is_empty() {
+                let state = state.clone();
+                window.defer(cx, move |window, cx| {
+                    let menu = state.read(cx);
+                    if menu.open {
+                        let restore = menu.focus.contains_focused(window, cx);
+                        close(&state, restore, window, cx);
+                    }
+                });
+            } else if moved {
                 window.request_animation_frame();
             }
         },

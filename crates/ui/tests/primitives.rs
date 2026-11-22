@@ -2832,6 +2832,68 @@ fn an_open_popover_closes_when_its_window_stops_being_active(cx: &mut TestAppCon
     );
 }
 
+struct PopoverInPane {
+    pane: gpui::ScrollHandle,
+}
+
+impl Render for PopoverInPane {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().pt(gpui::px(200.0)).child(
+            div()
+                .id("pane")
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(&self.pane)
+                .child(
+                    mira_ui::primitives::Popover::new("options")
+                        .trigger(Button::new("options", "Options"))
+                        .default_open(true),
+                )
+                .child(div().h(gpui::px(4000.0))),
+        )
+    }
+}
+
+#[gpui::test]
+fn an_open_popover_closes_once_its_trigger_scrolls_out_of_view(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let pane = gpui::ScrollHandle::new();
+    let (_, cx) = cx.add_window_view({
+        let pane = pane.clone();
+        move |window, _| {
+            window.activate_window();
+            PopoverInPane { pane }
+        }
+    });
+    cx.run_until_parked();
+    let wheel = |cx: &mut VisualTestContext, dy: f32| {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(600.0), px(600.0)),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(dy))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    let opened = cx.debug_bounds("popover-panel").expect("opens by default");
+
+    wheel(cx, -10.0);
+    assert_eq!(pane.offset().y, px(-10.0));
+    let moved = cx
+        .debug_bounds("popover-panel")
+        .expect("a partly visible trigger keeps its popover");
+    assert_eq!(moved.top(), opened.top() - px(10.0));
+
+    wheel(cx, -40.0);
+    assert_eq!(pane.offset().y, px(-50.0));
+    assert!(
+        cx.debug_bounds("popover-panel").is_none(),
+        "a popover whose trigger scrolled away stays pinned to the window edge over other controls"
+    );
+}
+
 #[gpui::test]
 fn arrows_continue_from_a_clicked_row_in_a_row_popover(cx: &mut TestAppContext) {
     use gpui::{Modifiers, point, px};
