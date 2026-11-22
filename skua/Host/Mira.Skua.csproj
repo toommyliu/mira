@@ -4,6 +4,7 @@
     <AssemblyName>Mira.Skua</AssemblyName>
     <RootNamespace>Mira.Skua</RootNamespace>
     <UseAppHost>false</UseAppHost>
+    <RollForward>Major</RollForward>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

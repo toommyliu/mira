@@ -6,7 +6,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
-    process::{Command as Process, ExitStatus, Stdio},
+    process::{Child, Command as Process, ExitStatus, Stdio},
     sync::{Arc, Mutex, OnceLock, PoisonError, mpsc},
     thread,
     time::{Duration, Instant},
@@ -30,9 +30,12 @@ use super::{
 use crate::bridge::{self, CallError, EXPORTS, Event as LoaderEvent, Loader, Subscription};
 
 const STOP_GRACE: Duration = Duration::from_secs(10);
-const NO_DOTNET: &str = "Skua scripts need .NET 10. Install it from dot.net.";
+const NO_DOTNET: &str = "Skua scripts need .NET 10 or later. Install it from dot.net.";
+const RUNTIME: &str = "Microsoft.NETCore.App ";
+const RUNTIME_MAJOR: u32 = 10;
 const SHELL_WAIT: Duration = Duration::from_secs(5);
-const NO_RUNTIME: &str = "Skua scripts need the .NET 10 runtime. Install it from dot.net.";
+const PROBE_WAIT: Duration = Duration::from_secs(5);
+const NO_RUNTIME: &str = "Skua scripts need the .NET 10 runtime or later. Install it from dot.net.";
 const NO_RUNNER: &str =
     "This copy of Mira can't run Skua scripts because its Skua runner is missing.";
 const CALLABLE: [&str; 2] = ["skua.", "flash."];
@@ -44,7 +47,7 @@ pub(crate) struct Setup {
 }
 
 static SETUP: OnceLock<Setup> = OnceLock::new();
-static SHELL_DOTNET: Mutex<Option<PathBuf>> = Mutex::new(None);
+static DOTNET: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 pub(crate) fn init(setup: Setup) {
     let _ = SETUP.set(setup);
@@ -72,31 +75,86 @@ fn runner(setup: &Setup) -> Result<Process, String> {
 }
 
 fn dotnet() -> Option<PathBuf> {
-    on_path(env::var_os("PATH")).or_else(|| {
-        let mut found = SHELL_DOTNET.lock().unwrap_or_else(PoisonError::into_inner);
-        if !found.as_ref().is_some_and(|dotnet| dotnet.is_file()) {
-            let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
-            *found = from_login_shell(&shell);
-        }
-        found.clone()
-    })
+    let mut found = DOTNET.lock().unwrap_or_else(PoisonError::into_inner);
+    if !found.as_ref().is_some_and(|dotnet| dotnet.is_file()) {
+        let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+        *found = usable(
+            on_path(env::var_os("PATH"))
+                .into_iter()
+                .chain(std::iter::once_with(|| from_login_shell(&shell)).flatten()),
+        );
+    }
+    found.clone()
 }
 
-fn on_path(path: Option<OsString>) -> Option<PathBuf> {
+fn usable(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find(|dotnet| dotnet.is_file() && runs_skua(dotnet, PROBE_WAIT))
+}
+
+fn runs_skua(dotnet: &Path, wait: Duration) -> bool {
+    let listed = env::temp_dir().join(format!("mira-dotnet-runtimes-{}", std::process::id()));
+    let spawned = fs::File::create(&listed).and_then(|output| {
+        Process::new(dotnet)
+            .arg("--list-runtimes")
+            .stdin(Stdio::null())
+            .stdout(output)
+            .stderr(Stdio::null())
+            .spawn()
+    });
+    let finished = spawned.is_ok_and(|mut child| {
+        exited(&mut child, Instant::now() + wait).is_some_and(|status| status.success())
+    });
+    let text = fs::read_to_string(&listed);
+    let _ = fs::remove_file(&listed);
+    finished
+        && text.is_ok_and(|text| {
+            text.lines()
+                .filter_map(|line| line.strip_prefix(RUNTIME))
+                .filter_map(|version| version.split('.').next()?.parse::<u32>().ok())
+                .any(|major| major >= RUNTIME_MAJOR)
+        })
+}
+
+fn exited(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn on_path(path: Option<OsString>) -> Vec<PathBuf> {
     path.iter()
         .flat_map(env::split_paths)
         .map(|dir| dir.join("dotnet"))
-        .find(|dotnet| dotnet.is_file())
+        .collect()
 }
 
-fn from_login_shell(shell: &OsStr) -> Option<PathBuf> {
+fn from_login_shell(shell: &OsStr) -> Vec<PathBuf> {
+    which_all(shell)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| PathBuf::from(line.trim()))
+        .filter(|dotnet| dotnet.is_absolute() && dotnet.is_file())
+        .collect()
+}
+
+fn which_all(shell: &OsStr) -> Option<String> {
     let answer = env::temp_dir().join(format!("mira-dotnet-{}", std::process::id()));
     let mut child = Process::new(shell)
         .args([
             "-l",
             "-i",
             "-c",
-            r#"/usr/bin/which dotnet > "$MIRA_DOTNET""#,
+            r#"/usr/bin/which -a dotnet > "$MIRA_DOTNET""#,
         ])
         .env("MIRA_DOTNET", &answer)
         .stdin(Stdio::null())
@@ -104,25 +162,11 @@ fn from_login_shell(shell: &OsStr) -> Option<PathBuf> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + SHELL_WAIT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
+    let status = exited(&mut child, Instant::now() + SHELL_WAIT);
     let text = fs::read_to_string(&answer);
     let _ = fs::remove_file(&answer);
-    if !status?.success() {
-        return None;
-    }
-    let dotnet = PathBuf::from(text.ok()?.trim());
-    (dotnet.is_absolute() && dotnet.is_file()).then_some(dotnet)
+    status?.success().then_some(())?;
+    text.ok()
 }
 
 fn not_started(error: &io::Error) -> String {

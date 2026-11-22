@@ -74,7 +74,9 @@ pub(super) fn is(locator: &Locator) -> bool {
 pub(super) fn recommended() -> Recommended {
     Recommended {
         name: NAME.into(),
-        description: Some("Run Skua scripts in Mira. Experimental, and needs .NET 10.".into()),
+        description: Some(
+            "Run Skua scripts in Mira. Experimental, and needs .NET 10 or later.".into(),
+        ),
         locator: Locator {
             owner: OWNER.into(),
             repo: REPO.into(),

@@ -533,21 +533,42 @@ fn free_daily_boost_runs_through_the_real_worker() {
 }
 
 #[test]
-fn dotnet_is_found_on_path_first_then_through_the_login_shell() {
+fn the_first_dotnet_with_net_10_or_later_is_used_from_path_then_the_login_shell() {
     use std::os::unix::fs::PermissionsExt;
 
     let mut random = [0; 8];
     getrandom::getrandom(&mut random).unwrap();
     let temp = std::env::temp_dir().join(format!("mira-dotnet-{:x}", u64::from_ne_bytes(random)));
-    let (bin, mise) = (temp.join("bin"), temp.join("mise/dotnet-root"));
-    for dir in [&bin, &mise] {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("dotnet"), "").unwrap();
-    }
-    let path = std::env::join_paths([temp.join("empty"), bin.clone()]).unwrap();
-    assert_eq!(on_path(Some(path)), Some(bin.join("dotnet")));
-    assert_eq!(on_path(Some(temp.join("empty").into())), None);
+    let fake = |dir: &str, runtimes: &str| {
+        let dir = temp.join(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dotnet = dir.join("dotnet");
+        std::fs::write(&dotnet, format!("#!/bin/sh\nprintf '{runtimes}'\n")).unwrap();
+        std::fs::set_permissions(&dotnet, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dotnet
+    };
+    let old = fake(
+        "old",
+        "Microsoft.AspNetCore.App 10.0.1 [/x]\\nMicrosoft.NETCore.App 8.0.11 [/x]\\n",
+    );
+    let current = fake("current", "Microsoft.NETCore.App 10.0.15 [/x]\\n");
+    let next = fake("next", "Microsoft.NETCore.App 11.0.0 [/x]\\n");
+    let path =
+        std::env::join_paths([temp.join("empty"), temp.join("old"), temp.join("current")]).unwrap();
+    assert_eq!(usable(on_path(Some(path))), Some(current));
+    assert_eq!(usable([old.clone(), next.clone()]), Some(next));
+    assert_eq!(usable([old]), None);
+    let hung = temp.join("hung/dotnet");
+    std::fs::create_dir_all(hung.parent().unwrap()).unwrap();
+    std::fs::write(&hung, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&hung, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let probing = Instant::now();
+    assert!(!runs_skua(&hung, Duration::from_millis(200)));
+    assert!(probing.elapsed() < Duration::from_secs(5));
 
+    let mise = temp.join("mise/dotnet-root");
+    std::fs::create_dir_all(&mise).unwrap();
+    std::fs::write(mise.join("dotnet"), "").unwrap();
     std::fs::write(
         temp.join(".zshrc"),
         "path=(\"$ZDOTDIR/mise/dotnet-root\" $path)\nalias dotnet='dotnet --nologo'\necho 'from the rc files'\n",
@@ -565,8 +586,8 @@ fn dotnet_is_found_on_path_first_then_through_the_login_shell() {
     std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::set_permissions(mise.join("dotnet"), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
-        from_login_shell(shell.as_os_str()),
-        Some(mise.join("dotnet"))
+        from_login_shell(shell.as_os_str()).first(),
+        Some(&mise.join("dotnet"))
     );
     std::fs::remove_dir_all(temp).unwrap();
 }
