@@ -3261,7 +3261,7 @@ export default function* () {
     { timeout: "5 seconds" },
   );
   yield* Army.sync("done");
-  yield* taunt.stop;
+  yield* taunt.stop();
   console.log("done");
 }
 "#,
@@ -3577,7 +3577,7 @@ export default function* () {
     },
   });
   yield* Script.sleep("50 millis");
-  yield* rotation.stop;
+  yield* rotation.stop();
   console.log(turns);
 }
 "#,
