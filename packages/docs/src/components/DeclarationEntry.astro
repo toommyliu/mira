@@ -1,0 +1,61 @@
+---
+import type { Declaration } from "../reference/model.ts";
+import { declarationTokens, signatureTokens, typeTokens } from "../reference/tokens.ts";
+import Code from "./Code.astro";
+import Comment from "./Comment.astro";
+
+interface Props {
+  declaration: Declaration;
+  links: ReadonlyMap<number, string>;
+}
+
+const { declaration, links } = Astro.props;
+const body = declaration.body;
+---
+
+<section class="entry" id={declaration.anchor}>
+  <h3>
+    <a href={`#${declaration.anchor}`}>{declaration.name}</a>
+    <span class="kind">{declaration.keyword}</span>
+  </h3>
+  {
+    (body.kind === "alias" || declaration.typeParameters.length > 0) && (
+      <Code tokens={declarationTokens(declaration, links)} />
+    )
+  }
+  <Comment comment={declaration.comment} links={links} />
+  {
+    body.kind === "shape" && body.properties.length > 0 && (
+      <dl class="fields">
+        {body.properties.map((property) =>
+          property.body.kind === "value" ? (
+            <div class="field" id={`${declaration.anchor}.${property.anchor}`}>
+              <dt>
+                <code>
+                  {property.path}
+                  {property.body.optional ? "?" : ""}
+                </code>
+                <Code inline tokens={typeTokens(property.body.type, links)} />
+              </dt>
+              <dd>
+                <Comment comment={property.comment} links={links} />
+              </dd>
+            </div>
+          ) : null,
+        )}
+      </dl>
+    )
+  }
+  {
+    body.kind === "shape" &&
+      body.methods.map((method) => (
+        <div class="method" id={`${declaration.anchor}.${method.anchor}`}>
+          {method.body.kind === "call" &&
+            method.body.signatures.map((signature) => (
+              <Code tokens={signatureTokens(method.path, signature, links)} />
+            ))}
+          <Comment comment={method.comment} links={links} />
+        </div>
+      ))
+  }
+</section>

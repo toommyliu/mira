@@ -1,0 +1,35 @@
+---
+import type { Heading } from "../layouts/Layout.astro";
+
+interface Props {
+  headings: readonly Heading[];
+  collapsible?: boolean;
+}
+
+const { headings, collapsible = false } = Astro.props;
+let group = -1;
+const items = headings.map((heading) => {
+  if (heading.depth === 2 || group === -1) group += 1;
+  return { ...heading, group };
+});
+const sections = items.filter((item) => item.depth === 2).length;
+---
+
+<ul class="contents-list">
+  {
+    items.map((item) => (
+      <li
+        class={`depth-${item.depth}`}
+        data-group={item.group}
+        data-open={collapsible && item.depth === 3 && item.group === 0 ? "" : undefined}
+        style={
+          collapsible && item.depth === 2
+            ? `--before: ${item.group}; --after: ${sections - 1 - item.group}`
+            : undefined
+        }
+      >
+        <a href={`#${item.slug}`}>{item.text}</a>
+      </li>
+    ))
+  }
+</ul>

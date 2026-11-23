@@ -1,0 +1,29 @@
+---
+import type { Token } from "../reference/tokens.ts";
+import WrapButton from "./WrapButton.astro";
+
+interface Props {
+  tokens: readonly Token[];
+  inline?: boolean;
+  bare?: boolean;
+}
+
+const { tokens, inline = false, bare = false } = Astro.props;
+const parts = tokens.map((token) => ({
+  ...token,
+  className: token.kind === undefined ? undefined : `t-${token.kind}`,
+}));
+---
+
+{
+  inline ? (
+    <code class="type">{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code>
+  ) : bare ? (
+    <pre class="code"><code>{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code></pre>
+  ) : (
+    <div class="code-block">
+      <pre class="code"><code>{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code></pre>
+      <WrapButton />
+    </div>
+  )
+}

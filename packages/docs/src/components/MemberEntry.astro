@@ -1,0 +1,46 @@
+---
+import type { Member } from "../reference/model.ts";
+import { signatureTokens, typeTokens, valueTokens } from "../reference/tokens.ts";
+import Code from "./Code.astro";
+import Comment from "./Comment.astro";
+
+interface Props {
+  member: Member;
+  owner: string | undefined;
+  links: ReadonlyMap<number, string>;
+}
+
+const { member, owner, links } = Astro.props;
+const path = owner === undefined ? member.path : `${owner}.${member.path}`;
+const body = member.body;
+const errors =
+  body.kind === "call"
+    ? body.signatures.flatMap((signature) =>
+        signature.result.kind === "yields" && signature.result.error !== undefined
+          ? [signature.result.error]
+          : [],
+      )
+    : [];
+---
+
+<section class="entry" id={member.anchor}>
+  <h3>
+    <a href={`#${member.anchor}`}>{member.path}</a>
+    <span class="kind">{body.kind === "call" ? "function" : "property"}</span>
+  </h3>
+  {
+    body.kind === "call" ? (
+      body.signatures.map((signature) => <Code tokens={signatureTokens(path, signature, links)} />)
+    ) : (
+      <Code tokens={valueTokens({ ...member, path, body }, links)} />
+    )
+  }
+  <Comment comment={member.comment} links={links} />
+  {
+    errors.map((error) => (
+      <p class="fails">
+        Fails with <Code inline tokens={typeTokens(error, links)} />.
+      </p>
+    ))
+  }
+</section>

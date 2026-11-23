@@ -31,6 +31,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm check:bridge
+      - run: pnpm --filter @mira/docs build
 
   clippy:
     name: Clippy

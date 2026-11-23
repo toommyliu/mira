@@ -1,0 +1,16 @@
+---
+import { renderMarkdown } from "../markdown.ts";
+import { commentMarkdown } from "../reference/comment.ts";
+import type { Comment } from "../reference/model.ts";
+
+interface Props {
+  comment: Comment | undefined;
+  links: ReadonlyMap<number, string>;
+}
+
+const { comment, links } = Astro.props;
+const markdown = comment === undefined ? "" : commentMarkdown(comment, links);
+const html = markdown === "" ? "" : await renderMarkdown(markdown);
+---
+
+{html !== "" && <div class="comment" set:html={html} />}
