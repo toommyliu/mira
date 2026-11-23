@@ -8,7 +8,9 @@ use super::{
 use crate::{
     account_settings,
     accounts::AccountId,
+    packages,
     ruffle::{Command, Msg},
+    script_inputs,
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
 };
 
@@ -26,6 +28,12 @@ pub(super) struct Script {
     dialogs: Option<Dialogs>,
     leaving: Option<Task<()>>,
     restart: Option<Restart>,
+    next: Option<Next>,
+}
+
+struct Next {
+    launch: Launch,
+    start: bool,
 }
 
 struct Restart {
@@ -47,6 +55,7 @@ struct Dialogs {
 }
 
 enum Phase {
+    Ready,
     Preparing { _moving: Task<()> },
     Running { run: Run, stopping: bool },
     Interrupted,
@@ -95,6 +104,43 @@ impl Script {
         }
     }
 
+    fn load(&mut self, launch: Launch, start: bool) {
+        self.next = Some(Next { launch, start });
+    }
+
+    fn hold_next(&mut self) {
+        if let Some(next) = &mut self.next {
+            next.start = false;
+        }
+    }
+
+    fn end(&mut self, outcome: Outcome, interrupted: bool) {
+        if let Some(loaded) = &mut self.loaded {
+            loaded.since = Instant::now();
+            loaded.phase = if interrupted {
+                Phase::Interrupted
+            } else {
+                Phase::Finished(outcome)
+            };
+        }
+    }
+
+    fn take_next(&mut self) -> bool {
+        if self.stoppable() {
+            return false;
+        }
+        let Some(Next { launch, start }) = self.next.take() else {
+            return false;
+        };
+        self.loaded = Some(Loaded {
+            launch,
+            character: None,
+            phase: Phase::Ready,
+            since: Instant::now(),
+        });
+        start
+    }
+
     pub(super) fn entry(&self) -> Option<&PathBuf> {
         self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
@@ -102,7 +148,9 @@ impl Script {
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
             Phase::Finished(outcome) => failure(outcome),
-            Phase::Preparing { .. } | Phase::Running { .. } | Phase::Interrupted => None,
+            Phase::Ready | Phase::Preparing { .. } | Phase::Running { .. } | Phase::Interrupted => {
+                None
+            }
         }
     }
 
@@ -119,6 +167,7 @@ impl Script {
         } = self.loaded.as_ref()?;
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         let phase = match phase {
+            Phase::Ready => return None,
             Phase::Preparing { .. } => ScriptPhase::Running,
             Phase::Interrupted => ScriptPhase::Queued,
             Phase::Running {
@@ -146,6 +195,7 @@ impl Script {
         let name = script_names::name(&launch.entry, cx);
         let waiting = self.dialogs.as_ref().is_some_and(|dialogs| dialogs.waiting);
         match phase {
+            Phase::Ready => None,
             Phase::Preparing { .. } => Some(format!("Starting {name}")),
             Phase::Interrupted => Some(format!("{name} restarts after reconnecting")),
             Phase::Running {
@@ -182,6 +232,16 @@ pub(super) fn failure(outcome: &Outcome) -> Option<String> {
 }
 
 impl RuffleView {
+    pub(super) fn load_script(&mut self, entry: PathBuf, start: bool, cx: &mut Context<Self>) {
+        let inputs = script_inputs::saved(&entry, cx);
+        self.stop_script(cx);
+        self.script.load(Launch { entry, inputs }, start);
+        if self.script.take_next() {
+            self.start_loaded_script(cx);
+        }
+        self.changed(cx);
+    }
+
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
         if let Some(loaded) = &self.script.loaded {
             self.start_script(loaded.launch.clone(), cx);
@@ -250,9 +310,11 @@ impl RuffleView {
         let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let (asks, asked) = async_channel::unbounded();
+        let installed = packages::packages(cx).read(cx).root().to_owned();
         let started = self.span.in_scope(|| {
             Run::start(
                 launch.clone(),
+                installed,
                 Limits::default(),
                 Box::new(|level, message| match level {
                     Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
@@ -379,17 +441,11 @@ impl RuffleView {
         }
         let finished =
             !interrupted && matches!(outcome, Outcome::Completed | Outcome::Exited { .. });
-        if let Some(loaded) = &mut self.script.loaded {
-            loaded.since = Instant::now();
-            if finished {
-                cx.emit(Finished(loaded.launch.entry.clone()));
-            }
-            loaded.phase = if interrupted {
-                Phase::Interrupted
-            } else {
-                Phase::Finished(outcome)
-            };
+        if finished && let Some(entry) = self.script.entry() {
+            cx.emit(Finished(entry.clone()));
         }
+        self.script.end(outcome, interrupted);
+        let start = self.script.take_next();
         if let Some(dialogs) = &self.script.dialogs {
             dialogs.view.update(cx, |dialogs, cx| dialogs.end(cx));
         }
@@ -398,7 +454,13 @@ impl RuffleView {
         } else {
             self.resume_script(cx);
             self.run_next(ran, cx);
-            if ran && !logout && self.online() && !self.script.running() && self.safe_start_stop(cx)
+            if start {
+                self.start_loaded_script(cx);
+            } else if ran
+                && !logout
+                && self.online()
+                && !self.script.running()
+                && self.safe_start_stop(cx)
             {
                 self.script.leaving = Some(self.retreat(cx, |this, cx| {
                     this.script.leaving = None;
@@ -424,6 +486,7 @@ impl RuffleView {
     }
 
     pub(super) fn stop_script(&mut self, cx: &mut Context<Self>) {
+        self.script.hold_next();
         self.queue.pause();
         self.skip_script(cx);
         self.changed(cx);
@@ -432,13 +495,11 @@ impl RuffleView {
     pub(super) fn skip_script(&mut self, cx: &mut Context<Self>) {
         let restart = self.script.restart.take();
         if let Some(Loaded {
-            phase: phase @ Phase::Interrupted,
-            since,
+            phase: Phase::Interrupted,
             ..
-        }) = &mut self.script.loaded
+        }) = &self.script.loaded
         {
-            *phase = Phase::Finished(Outcome::Stopped);
-            *since = Instant::now();
+            self.script.end(Outcome::Stopped, false);
             if restart.is_some_and(|restart| restart.queued) {
                 self.queue.ended(&Outcome::Stopped, Instant::now());
             }
@@ -585,5 +646,43 @@ mod tests {
             loaded.phase = Phase::Finished(Outcome::Stopped);
         }
         assert!(ended.bind(&kestrel));
+    }
+
+    #[test]
+    fn a_loaded_file_replaces_the_run_once_it_ends_and_starts_only_when_asked() {
+        let farm = || Launch {
+            entry: PathBuf::from("farm.ts"),
+            inputs: Supplied::Values(Default::default()),
+        };
+
+        let mut idle = Script::default();
+        idle.load(farm(), false);
+        assert!(!idle.take_next(), "loading alone doesn't start the file");
+        assert_eq!(idle.entry(), Some(&PathBuf::from("farm.ts")));
+        assert!(!idle.stoppable());
+        assert_eq!(idle.failure(), None);
+
+        let mut running = preparing(None);
+        running.load(farm(), true);
+        assert!(!running.take_next());
+        assert_eq!(running.entry(), Some(&PathBuf::from("hunt.ts")));
+        assert!(running.stoppable());
+        running.end(Outcome::Stopped, false);
+        assert!(
+            running.take_next(),
+            "the file starts once the run has ended"
+        );
+        assert_eq!(running.entry(), Some(&PathBuf::from("farm.ts")));
+        assert!(!running.take_next());
+
+        let mut stopped = preparing(None);
+        stopped.load(farm(), true);
+        stopped.hold_next();
+        stopped.end(Outcome::Stopped, false);
+        assert!(
+            !stopped.take_next(),
+            "Stop during the handoff keeps the file idle"
+        );
+        assert_eq!(stopped.entry(), Some(&PathBuf::from("farm.ts")));
     }
 }

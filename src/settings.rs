@@ -244,6 +244,7 @@ struct Settings {
     skip_update_checks: bool,
     separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
+    start_replacements: bool,
     collapsed_sources: CollapsedSources,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
@@ -434,6 +435,14 @@ pub(crate) fn sidebar(cx: &App) -> bool {
 
 pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
     change(cx, |settings| settings.sidebar = open);
+}
+
+pub(crate) fn start_replacements(cx: &App) -> bool {
+    cx.global::<Store>().settings.start_replacements
+}
+
+pub(crate) fn set_start_replacements(on: bool, cx: &mut App) {
+    persist(cx, |settings| settings.start_replacements = on);
 }
 
 pub(crate) fn collapsed_sources(cx: &App) -> CollapsedSources {
@@ -1566,6 +1575,7 @@ mod tests {
             skip_update_checks: true,
             separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
+            start_replacements: true,
             collapsed_sources: CollapsedSources {
                 folders: true,
                 packages: false,

@@ -90,6 +90,7 @@ pub(crate) struct Run {
 impl Run {
     pub(crate) fn start(
         launch: Launch,
+        packages: PathBuf,
         limits: Limits,
         log: Log,
         player: Player,
@@ -120,7 +121,15 @@ impl Run {
                     dialogs: Rc::new(dialogs),
                     commands: replies,
                 };
-                let outcome = execute(&launch, limits, &shared, &inbox, log, link.clone());
+                let outcome = execute(
+                    &launch,
+                    &packages,
+                    limits,
+                    &shared,
+                    &inbox,
+                    log,
+                    link.clone(),
+                );
                 (link.player)(ToPlayer::Ended(run));
                 finish(outcome);
             })?;
@@ -161,13 +170,14 @@ type Settled = Rc<RefCell<Option<Outcome>>>;
 
 fn execute(
     launch: &Launch,
+    packages: &Path,
     limits: Limits,
     clock: &Arc<Clock>,
     commands: &mpsc::Receiver<Command>,
     log: Log,
     link: Link,
 ) -> Outcome {
-    let modules = match Modules::for_entry(&launch.entry) {
+    let modules = match Modules::for_entry(&launch.entry, packages) {
         Ok(modules) => modules,
         Err(message) => return failed(message),
     };
@@ -176,7 +186,7 @@ fn execute(
         Err(message) => return failed(message),
     };
     let path = Path::new(&entry);
-    let display = modules.display(path);
+    let display = modules.display(&entry);
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) => return failed(format!("couldn't read {display}: {error}")),

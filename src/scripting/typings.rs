@@ -2,15 +2,27 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::Path,
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
+use serde_json::Value;
 use tracing::warn;
+
+use super::modules::importable;
 
 include!(concat!(env!("OUT_DIR"), "/script_types.rs"));
 
 const STAMP: &str = "version";
+const CONFIG: &str = "tsconfig.json";
+
+static WRITING: Mutex<()> = Mutex::new(());
+
+fn writing() -> MutexGuard<'static, ()> {
+    WRITING.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 pub(crate) fn install_types(dir: &Path) -> io::Result<()> {
+    let _writing = writing();
     let partial = dir.with_extension("partial");
     let replaced = dir.with_extension("old");
     remove(&partial)?;
@@ -34,6 +46,42 @@ pub(crate) fn install_types(dir: &Path) -> io::Result<()> {
     remove(&replaced)
 }
 
+pub(crate) fn link_packages(types: &Path, packages: &Path) {
+    if let Err(error) = map_packages(types, packages) {
+        warn!(%error, path = %types.display(), "couldn't map the installed packages for editors");
+    }
+}
+
+fn map_packages(types: &Path, packages: &Path) -> io::Result<()> {
+    let _writing = writing();
+    let base = FILES
+        .iter()
+        .find(|(path, _)| *path == CONFIG)
+        .map(|(_, text)| *text)
+        .expect("the script types include a tsconfig.json");
+    let mut config: Value = serde_json::from_str(base)?;
+    let paths = config
+        .pointer_mut("/compilerOptions/paths")
+        .and_then(Value::as_object_mut)
+        .expect("the script types' tsconfig.json maps paths");
+    for (name, main) in importable(packages) {
+        paths
+            .entry(name)
+            .or_insert_with(|| serde_json::json!([main]));
+    }
+    let text = format!("{}\n", serde_json::to_string_pretty(&config)?);
+    let target = types.join(CONFIG);
+    if fs::read_to_string(&target).is_ok_and(|current| current == text) {
+        return Ok(());
+    }
+    let partial = target.with_extension("json.partial");
+    match fs::write(&partial, text) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(()) => fs::rename(partial, target),
+    }
+}
+
 pub(crate) fn link_types<'a>(folders: impl IntoIterator<Item = &'a Path>, types: &Path) {
     for folder in folders {
         if let Err(error) = link(folder, types) {
@@ -43,7 +91,7 @@ pub(crate) fn link_types<'a>(folders: impl IntoIterator<Item = &'a Path>, types:
 }
 
 fn link(folder: &Path, types: &Path) -> io::Result<()> {
-    let config = serde_json::json!({ "extends": types.join("tsconfig.json") });
+    let config = serde_json::json!({ "extends": types.join(CONFIG) });
     let created = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -111,6 +159,47 @@ mod tests {
         assert_ne!(fs::read_to_string(&config).unwrap(), "edited");
         assert_eq!(fs::read_to_string(types.join(STAMP)).unwrap(), VERSION);
         assert!(!types.join("unknown.d.ts").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_packages_map_to_their_main_for_editors() {
+        let root = scratch();
+        let types = root.join("types");
+        let packages = root.join("packages");
+        install_types(&types).unwrap();
+        let add = |dir: &str, name: &str| {
+            let package = packages.join(dir);
+            fs::create_dir_all(&package).unwrap();
+            fs::write(
+                package.join("package.json"),
+                format!(r#"{{"name":"{name}","main":"index.ts","mira":{{}}}}"#),
+            )
+            .unwrap();
+            fs::write(package.join("index.ts"), "").unwrap();
+            fs::canonicalize(package.join("index.ts")).unwrap()
+        };
+        let paths = || {
+            let config: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(types.join(CONFIG)).unwrap()).unwrap();
+            config["compilerOptions"]["paths"].clone()
+        };
+
+        let dailies = add("o-dailies", "@mira/dailies");
+        add("o-mira", "mira");
+        add("o-twin", "twin");
+        add("p-twin", "twin");
+        link_packages(&types, &packages);
+        let mapped = paths();
+        assert_eq!(mapped["@mira/dailies"], serde_json::json!([dailies]));
+        assert_eq!(mapped["mira"], serde_json::json!(["./mira.d.ts"]));
+        assert!(mapped.get("twin").is_none());
+
+        fs::remove_dir_all(packages.join("o-dailies")).unwrap();
+        link_packages(&types, &packages);
+        assert!(paths().get("@mira/dailies").is_none());
+        assert!(paths().get("effect").is_some());
 
         fs::remove_dir_all(root).unwrap();
     }

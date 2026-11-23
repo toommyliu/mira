@@ -117,6 +117,7 @@ fn start_with(
             entry: folder.0.join(entry),
             inputs,
         },
+        folder.0.join("packages"),
         limits,
         Box::new(move |level, message| {
             let prefix = if level == Level::Error { "error: " } else { "" };
@@ -585,6 +586,130 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
         None,
     );
     assert_eq!(failure(&finished.outcome).0, "Needs Mira 999.0.0 or newer.");
+}
+
+#[test]
+fn scripts_import_installed_packages_by_name() {
+    let long = "a".repeat(200);
+    let manifest = |name: &str, main: Option<&str>| {
+        let main = main.map_or(String::new(), |main| format!(r#""main":"{main}","#));
+        format!(r#"{{"name":"{name}",{main}"mira":{{}}}}"#)
+    };
+    let importer = |name: &str| {
+        format!(
+            "import {{ Dailies }} from \"{name}\";\nexport default function* () {{ console.log(Dailies.run()); }}\n"
+        )
+    };
+    let dailies = manifest("@mira/dailies", Some("index.ts"));
+    let escape = manifest("escape", Some("index.ts"));
+    let twin = manifest("twin", Some("index.ts"));
+    let files = [
+        ("outside.ts", "export const secret = 1;\n".to_owned()),
+        ("packages/o-mira-dailies/package.json", dailies),
+        (
+            "packages/o-mira-dailies/index.ts",
+            "import { ready } from \"./lib/ready.ts\";\nexport const Dailies = { run: (): string => ready };\n".into(),
+        ),
+        (
+            "packages/o-mira-dailies/lib/ready.ts",
+            "export const ready = \"ready\";\n".into(),
+        ),
+        ("scripts/dailies.ts", importer("@mira/dailies")),
+        ("added/dailies.ts", importer("@mira/dailies")),
+        (
+            "packages/o-consumer/package.json",
+            manifest("consumer", None),
+        ),
+        ("packages/o-consumer/scripts/dailies.ts", importer("@mira/dailies")),
+        (&format!("packages/{long}/package.json"), escape),
+        (
+            &format!("packages/{long}/index.ts"),
+            "import \"../../outside.ts\";\nexport const Dailies = {};\n".into(),
+        ),
+        ("scripts/escape.ts", importer("escape")),
+        (
+            "packages/o-outside/package.json",
+            manifest("outside", Some("../../outside.ts")),
+        ),
+        ("scripts/outside.ts", importer("outside")),
+        ("packages/o-none/package.json", manifest("none", None)),
+        ("scripts/none.ts", importer("none")),
+        ("packages/o-gone/package.json", manifest("gone", Some("index.ts"))),
+        ("scripts/gone.ts", importer("gone")),
+        (
+            "packages/o-folder/package.json",
+            manifest("folder", Some("lib")),
+        ),
+        ("packages/o-folder/lib/index.ts", String::new()),
+        ("scripts/folder.ts", importer("folder")),
+        (
+            "packages/o-newer/package.json",
+            r#"{"name":"twin","main":"index.ts","mira":{"requires":"999.0.0"}}"#.into(),
+        ),
+        ("packages/o-twin/package.json", twin.clone()),
+        ("packages/o-twin/index.ts", String::new()),
+        ("packages/p-twin/package.json", twin),
+        ("packages/p-twin/index.ts", String::new()),
+        ("scripts/twin.ts", importer("twin")),
+        (
+            "packages/o-broken/package.json",
+            r#"{"name":"broken","main":5,"mira":{}}"#.into(),
+        ),
+        ("scripts/broken.ts", importer("broken")),
+        ("scripts/missing.ts", importer("@mira/missing")),
+    ];
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    let folder = Folder::new(&files);
+
+    for entry in [
+        "scripts/dailies.ts",
+        "added/dailies.ts",
+        "packages/o-consumer/scripts/dailies.ts",
+    ] {
+        let finished = run_in(&folder, entry, Limits::default(), None);
+        assert_eq!(finished.outcome, Outcome::Completed, "{entry}");
+        assert_eq!(finished.logs, ["ready"], "{entry}");
+    }
+    for (entry, message) in [
+        (
+            "scripts/escape.ts",
+            "Can't import ../../outside.ts from escape/index.ts: it is outside the package's folder",
+        ),
+        (
+            "scripts/outside.ts",
+            "Can't import outside from outside.ts: its main, ../../outside.ts, is outside the package's folder",
+        ),
+        (
+            "scripts/none.ts",
+            "Can't import none from none.ts: the package has no \"main\" in its package.json",
+        ),
+        (
+            "scripts/gone.ts",
+            "Can't import gone from gone.ts: its main, index.ts, doesn't exist",
+        ),
+        (
+            "scripts/folder.ts",
+            "Can't import folder from folder.ts: its main, lib, isn't a .ts, .mts, .js or .mjs file",
+        ),
+        (
+            "scripts/twin.ts",
+            "Can't import twin from twin.ts: more than one installed package has that name: o-newer, o-twin, p-twin",
+        ),
+        (
+            "scripts/broken.ts",
+            "Can't import broken from broken.ts: Its package.json isn't valid: \"main\" must be a string.",
+        ),
+        (
+            "scripts/missing.ts",
+            "Can't import @mira/missing from missing.ts: no installed package has that name; scripts can import mira, mira/http, mira/schema, effect, effect/<Module>, installed packages and their own files",
+        ),
+    ] {
+        let finished = run_in(&folder, entry, Limits::default(), None);
+        assert_eq!(failure(&finished.outcome).0, message, "{entry}");
+    }
 }
 
 #[test]

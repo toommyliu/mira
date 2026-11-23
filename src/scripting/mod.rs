@@ -35,6 +35,6 @@ pub(crate) use inputs::{
 pub(crate) use limits::Limits;
 pub(crate) use modules::runnable;
 pub(crate) use runtime::{Launch, Level, Limit, Outcome, Run};
-pub(crate) use typings::{install_types, link_types};
+pub(crate) use typings::{install_types, link_packages, link_types};
 #[cfg(test)]
 mod tests;

@@ -48,6 +48,7 @@ fn main() -> anyhow::Result<()> {
     let armies = army::Armies::new(files.join("armies"));
     let scripts = files.join("scripts");
     let types = data.join("types");
+    let installed_packages = files.join("packages");
     let app = mira_platform::application();
     app.on_reopen(ruffle_view::open_launch_window);
     app.with_quit_mode(gpui::QuitMode::Explicit)
@@ -78,7 +79,18 @@ fn main() -> anyhow::Result<()> {
                     account_settings::init(data.join("account-settings"), cx);
                     combat_profiles::init(data.join("combat-profiles.json"), cx);
                     script_inputs::init(data.join("script-inputs.json"), cx);
-                    packages::init(files.join("packages"), data.join("github-token"), cx);
+                    packages::init(installed_packages.clone(), data.join("github-token"), cx);
+                    let (mapped, mapping) = (types.clone(), installed_packages.clone());
+                    cx.observe(&packages::packages(cx), move |state, cx| {
+                        if state.read(cx).activity().is_none() {
+                            let (types, packages) = (mapped.clone(), mapping.clone());
+                            cx.background_spawn(async move {
+                                scripting::link_packages(&types, &packages);
+                            })
+                            .detach();
+                        }
+                    })
+                    .detach();
                     packages::start(cx);
                     updates::start(cx);
                     let installed = types.clone();
@@ -90,6 +102,7 @@ fn main() -> anyhow::Result<()> {
                             tracing::warn!(%error, path = %installed.display(), "couldn't install the script types");
                         }
                         scripting::link_types(folders.iter().map(PathBuf::as_path), &installed);
+                        scripting::link_packages(&installed, &installed_packages);
                     })
                     .detach();
                     app_menu::set_menus(cx);
