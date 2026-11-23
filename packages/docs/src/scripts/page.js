@@ -11,12 +11,16 @@ function setup() {
   const scroller = () => (own() ? main : document.documentElement);
   const viewTop = () => (own() ? main.getBoundingClientRect().top : 0);
 
-  const state = history.state;
-  const target = location.hash
-    ? document.getElementById(decodeURIComponent(location.hash.slice(1)))
-    : null;
-  if (typeof state?.scroll === "number") scroller().scrollTop = state.scroll;
-  else target?.scrollIntoView({ block: "start" });
+  const restore = () => {
+    const scroll = history.state?.scroll;
+    const target = location.hash
+      ? document.getElementById(decodeURIComponent(location.hash.slice(1)))
+      : null;
+    if (typeof scroll === "number") scroller().scrollTop = scroll;
+    else if (target !== null) target.scrollIntoView({ block: "start" });
+    else scroller().scrollTop = 0;
+  };
+  restore();
   if (own() && document.activeElement === document.body) main.focus({ preventScroll: true });
 
   const path = (/** @type {string} */ pathname) =>
@@ -37,6 +41,16 @@ function setup() {
   main.addEventListener("scroll", saveSoon, { passive: true, signal });
   window.addEventListener("scroll", saveSoon, { passive: true, signal });
   window.addEventListener("pagehide", save, { signal });
+  const page = location.pathname + location.search;
+  window.addEventListener(
+    "popstate",
+    () => {
+      if (location.pathname + location.search !== page) return;
+      window.clearTimeout(saving);
+      restore();
+    },
+    { signal },
+  );
   signal.addEventListener("abort", () => window.clearTimeout(saving));
 
   const aside = /** @type {HTMLElement | null} */ (document.querySelector(".contents"));
