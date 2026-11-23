@@ -549,6 +549,7 @@ main:focus {
 
 .prose {
   max-width: 760px;
+  margin-inline: auto;
 }
 
 .prose h1 {
