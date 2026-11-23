@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { getCollection, render } from "astro:content";
 
+import { commentText } from "../reference/comment.ts";
 import { load } from "../reference/project.ts";
 
 export type Group = "namespace" | "function" | "type" | "doc";
@@ -12,7 +13,17 @@ export type Entry = {
   readonly href: string;
   readonly context: string;
   readonly code: boolean;
+  readonly text: string;
 };
+
+function plain(markdown: string): string {
+  return markdown
+    .replace(/^```.*$/gm, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_#>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export const GET: APIRoute = async () => {
   const entries: Entry[] = [];
@@ -25,6 +36,7 @@ export const GET: APIRoute = async () => {
       href,
       context: "",
       code: false,
+      text: plain(doc.body ?? ""),
     });
     const { headings } = await render(doc);
     for (const heading of headings.filter((heading) => heading.depth <= 3)) {
@@ -35,6 +47,7 @@ export const GET: APIRoute = async () => {
         href: `${href}#${heading.slug}`,
         context: doc.data.title,
         code: false,
+        text: "",
       });
     }
   }
@@ -49,6 +62,7 @@ export const GET: APIRoute = async () => {
       href,
       context: page.binding?.kind === "named" ? page.specifier : "",
       code: true,
+      text: commentText(page.comment),
     });
     for (const member of page.members) {
       entries.push({
@@ -58,6 +72,7 @@ export const GET: APIRoute = async () => {
         href: `${href}#${member.anchor}`,
         context: page.specifier,
         code: true,
+        text: commentText(member.comment),
       });
     }
     for (const type of page.types) {
@@ -68,6 +83,7 @@ export const GET: APIRoute = async () => {
         href: `${href}#${type.anchor}`,
         context: page.title,
         code: true,
+        text: commentText(type.comment),
       });
     }
   }

@@ -19,6 +19,15 @@ function inline(markdown: string): string {
   return fenced?.[1] === undefined ? markdown : `\`${fenced[1]}\``;
 }
 
+export function commentText(comment: Comment | undefined): string {
+  if (comment === undefined) return "";
+  return comment.summary
+    .map((part) => part.text.replaceAll("`", ""))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function commentMarkdown(comment: Comment, links: Links): string {
   const blocks = [text(comment.summary, links)];
   for (const tag of comment.blockTags ?? []) {

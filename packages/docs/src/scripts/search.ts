@@ -10,26 +10,46 @@ const input = dialog?.querySelector<HTMLInputElement>("input");
 const list = dialog?.querySelector<HTMLUListElement>("[role='listbox']");
 const empty = dialog?.querySelector<HTMLElement>(".search-empty");
 let entries: Promise<Entry[]> | undefined;
-let results: Entry[] = [];
+type Result = { readonly entry: Entry; readonly snippet: string | undefined };
+const SNIPPET_BEFORE = 40;
+const SNIPPET_AFTER = 80;
+
+let results: Result[] = [];
 let active = 0;
 let filter = "";
 const filters = [...(dialog?.querySelectorAll<HTMLButtonElement>("[data-filter]") ?? [])];
 
-function score(entry: Entry, query: string): number {
+function snippet(text: string, at: number): string {
+  const start = Math.max(0, at - SNIPPET_BEFORE);
+  const end = Math.min(text.length, at + SNIPPET_AFTER);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`;
+}
+
+function score(entry: Entry, query: string): { rank: number; snippet: string | undefined } {
   const title = entry.title.toLowerCase();
   const last = title.slice(title.lastIndexOf(".") + 1);
-  if (title === query || last === query) return 0;
-  if (last.startsWith(query)) return 1;
-  if (title.startsWith(query)) return 2;
-  if (title.includes(query)) return 3;
-  if (`${entry.context} ${entry.kind}`.toLowerCase().includes(query)) return 4;
-  return Number.POSITIVE_INFINITY;
+  const words = query.split(/\s+/).filter((word) => word !== "");
+  const found = (rank: number, at?: number) => ({
+    rank,
+    snippet: at === undefined ? undefined : snippet(entry.text, at),
+  });
+  if (title === query || last === query) return found(0);
+  if (last.startsWith(query)) return found(1);
+  if (title.startsWith(query)) return found(2);
+  if (title.includes(query)) return found(3);
+  const meta = `${title} ${entry.context} ${entry.kind}`.toLowerCase();
+  if (words.every((word) => meta.includes(word))) return found(4);
+  const text = entry.text.toLowerCase();
+  if (text !== "" && words.every((word) => text.includes(word))) {
+    return found(5, text.indexOf(words[0] ?? query));
+  }
+  return found(Number.POSITIVE_INFINITY);
 }
 
 function render() {
   if (!list || !input || !empty) return;
   list.replaceChildren(
-    ...results.map((entry, index) => {
+    ...results.map(({ entry, snippet }, index) => {
       const option = document.createElement("li");
       option.id = `search-${index}`;
       option.role = "option";
@@ -44,6 +64,12 @@ function render() {
       meta.className = "search-meta";
       meta.textContent = entry.context === "" ? entry.kind : `${entry.kind} · ${entry.context}`;
       link.append(title, meta);
+      if (snippet !== undefined) {
+        const excerpt = document.createElement("span");
+        excerpt.className = "search-snippet";
+        excerpt.textContent = snippet;
+        link.append(excerpt);
+      }
       option.append(link);
       option.addEventListener("pointermove", () => select(index));
       return option;
@@ -77,13 +103,16 @@ async function search() {
     query === ""
       ? filter === ""
         ? []
-        : pool.toSorted((a, b) => a.title.localeCompare(b.title)).slice(0, LIMIT)
+        : pool
+            .toSorted((a, b) => a.title.localeCompare(b.title))
+            .slice(0, LIMIT)
+            .map((entry) => ({ entry, snippet: undefined }))
       : pool
-          .map((entry) => ({ entry, rank: score(entry, query) }))
+          .map((entry) => ({ entry, ...score(entry, query) }))
           .filter((match) => Number.isFinite(match.rank))
           .sort((a, b) => a.rank - b.rank || a.entry.title.length - b.entry.title.length)
           .slice(0, LIMIT)
-          .map((match) => match.entry);
+          .map(({ entry, snippet }) => ({ entry, snippet }));
   active = 0;
   render();
 }
@@ -129,11 +158,11 @@ input?.addEventListener("keydown", (event) => {
     const step = event.key === "ArrowDown" ? 1 : -1;
     select((active + step + results.length) % results.length);
   } else if (event.key === "Enter") {
-    const entry = results[active];
-    if (entry === undefined) return;
+    const result = results[active];
+    if (result === undefined) return;
     event.preventDefault();
     dialog?.close();
-    void navigate(entry.href);
+    void navigate(result.entry.href);
   }
 });
 

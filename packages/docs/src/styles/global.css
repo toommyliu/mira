@@ -1284,6 +1284,20 @@ kbd {
   font-size: 12px;
 }
 
+.search [role="option"] a {
+  flex-wrap: wrap;
+}
+
+.search-snippet {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .search-meta {
   flex: none;
   margin-left: auto;
