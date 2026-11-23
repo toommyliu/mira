@@ -11,7 +11,7 @@ use std::{
 use anyhow::Result;
 use gpui::{App, AppContext as _, AsyncApp, Global, SharedString, Task, actions};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle};
+use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSView};
 use objc2_foundation::{NSString, ns_string};
 use semver::Version;
 
@@ -201,6 +201,8 @@ fn alert(
 ) -> bool {
     let alert = NSAlert::new(main);
     alert.setAlertStyle(style);
+    // Any accessory view, even an empty one, keeps AppKit from centering alerts with short text.
+    alert.setAccessoryView(Some(&NSView::new(main)));
     alert.setMessageText(&NSString::from_str(message));
     if let Some(detail) = detail {
         alert.setInformativeText(&NSString::from_str(detail));
