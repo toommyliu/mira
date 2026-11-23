@@ -27,26 +27,9 @@ interface Performance {
 
 declare var performance: Performance;
 
-interface AbortEvent {
-  readonly type: "abort";
-  readonly target: AbortSignal;
-}
+type AbortEvent = import("mira").AbortEvent;
 
-interface AbortSignal {
-  readonly aborted: boolean;
-  readonly reason: unknown;
-  onabort: ((this: AbortSignal, event: AbortEvent) => void) | null;
-  addEventListener(
-    type: "abort",
-    listener: ((this: AbortSignal, event: AbortEvent) => void) | null,
-    options?: boolean | { readonly once?: boolean },
-  ): void;
-  removeEventListener(
-    type: "abort",
-    listener: ((this: AbortSignal, event: AbortEvent) => void) | null,
-  ): void;
-  throwIfAborted(): void;
-}
+type AbortSignal = import("mira").AbortSignal;
 
 declare var AbortSignal: {
   readonly prototype: AbortSignal;

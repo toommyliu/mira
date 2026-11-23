@@ -1,16 +1,28 @@
-type AbortEvent = { readonly type: "abort"; readonly target: AbortSignal };
-type Listener = (this: AbortSignal, event: AbortEvent) => void;
+export type AbortEvent = { readonly type: "abort"; readonly target: AbortSignal };
+export type AbortListener = (this: AbortSignal, event: AbortEvent) => void;
 
-const fire = Symbol("fire");
+let fire: (signal: AbortSignal, reason: unknown) => void;
 
 const abortError = (): Error =>
   Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
 
 export class AbortSignal {
-  aborted = false;
-  reason: unknown = undefined;
-  onabort: Listener | null = null;
-  #listeners = new Map<Listener, boolean>();
+  onabort: AbortListener | null = null;
+  #aborted = false;
+  #reason: unknown = undefined;
+  #listeners = new Map<AbortListener, boolean>();
+
+  static {
+    fire = (signal, reason) => signal.#fire(reason);
+  }
+
+  get aborted(): boolean {
+    return this.#aborted;
+  }
+
+  get reason(): unknown {
+    return this.#reason;
+  }
 
   static abort(reason?: unknown): AbortSignal {
     const controller = new AbortController();
@@ -20,27 +32,27 @@ export class AbortSignal {
 
   addEventListener(
     type: string,
-    listener: Listener | null,
+    listener: AbortListener | null,
     options?: boolean | { readonly once?: boolean },
   ): void {
     if (type !== "abort" || listener === null || this.#listeners.has(listener)) return;
     this.#listeners.set(listener, typeof options === "object" && options.once === true);
   }
 
-  removeEventListener(type: string, listener: Listener | null): void {
+  removeEventListener(type: string, listener: AbortListener | null): void {
     if (type === "abort" && listener !== null) this.#listeners.delete(listener);
   }
 
   throwIfAborted(): void {
-    if (this.aborted) throw this.reason;
+    if (this.#aborted) throw this.#reason;
   }
 
-  [fire](reason: unknown, report: (error: unknown) => void): void {
-    if (this.aborted) return;
-    this.aborted = true;
-    this.reason = reason === undefined ? abortError() : reason;
+  #fire(reason: unknown): void {
+    if (this.#aborted) return;
+    this.#aborted = true;
+    this.#reason = reason === undefined ? abortError() : reason;
     const event: AbortEvent = { type: "abort", target: this };
-    const call = (listener: Listener) => {
+    const call = (listener: AbortListener) => {
       try {
         listener.call(this, event);
       } catch (error) {
@@ -68,6 +80,6 @@ export class AbortController {
   readonly signal = new AbortSignal();
 
   abort(reason?: unknown): void {
-    this.signal[fire](reason, report);
+    fire(this.signal, reason);
   }
 }
