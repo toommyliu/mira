@@ -9,7 +9,10 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Global, PromptButton, PromptLevel, SharedString, Task, actions};
+use gpui::{App, AppContext as _, AsyncApp, Global, SharedString, Task, actions};
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle};
+use objc2_foundation::{NSString, ns_string};
 use semver::Version;
 
 use bundle::Staged;
@@ -87,7 +90,7 @@ pub(crate) fn init(cx: &mut App) {
         let checking = Updates::check(true, cx);
         cx.spawn(async move |cx| {
             checking.await;
-            cx.update(announce);
+            announce(cx);
         })
         .detach();
     });
@@ -118,84 +121,97 @@ pub(crate) fn start(cx: &mut App) {
     .detach();
 }
 
-fn announce(cx: &mut App) {
-    let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
-        return cx.dispatch_action(&crate::settings::OpenSettings);
+fn announce(cx: &AsyncApp) {
+    let Some(main) = MainThreadMarker::new() else {
+        return;
     };
-    let Some(state) = cx.try_global::<Updates>().cloned() else {
+    let Some(state) = cx.update(|cx| cx.try_global::<Updates>().cloned()) else {
         return;
     };
     let installed = env!("CARGO_PKG_VERSION");
-    let (level, message, detail, answers): (_, String, Option<String>, Vec<PromptButton>) =
-        match &state {
-            Updates::Current(_) => (
-                PromptLevel::Info,
-                "You’re up to date!".into(),
-                Some(format!(
-                    "Mira {installed} is currently the newest version available."
-                )),
-                vec!["OK".into()],
+    let (style, message, detail, buttons): (_, String, Option<String>, &[&str]) = match &state {
+        Updates::Current(_) => (
+            NSAlertStyle::Informational,
+            "You’re up to date!".into(),
+            Some(format!(
+                "Mira {installed} is currently the newest version available."
+            )),
+            &["OK"],
+        ),
+        Updates::Available { update, .. } => (
+            NSAlertStyle::Informational,
+            format!("Mira {} is available.", update.version),
+            Some(format!("You’re running Mira {installed}.")),
+            &["Download", "Later"],
+        ),
+        Updates::Downloading { update, .. } => (
+            NSAlertStyle::Informational,
+            format!("Mira {} is already downloading.", update.version),
+            None,
+            &["OK"],
+        ),
+        Updates::Ready { update, .. } => (
+            NSAlertStyle::Informational,
+            format!("Mira {} is ready to install.", update.version),
+            Some(
+                "Mira will restart to install it. Any running scripts will be interrupted.".into(),
             ),
-            Updates::Available { update, .. } => (
-                PromptLevel::Info,
-                format!("Mira {} is available.", update.version),
-                Some(format!("You’re running Mira {installed}.")),
-                vec!["Download".into(), PromptButton::cancel("Later")],
+            &["Restart", "Later"],
+        ),
+        Updates::Failed(error) => (
+            NSAlertStyle::Warning,
+            "Could not check for updates.".into(),
+            Some(error.to_string()),
+            &["OK"],
+        ),
+        Updates::Unavailable(reason) => (
+            NSAlertStyle::Informational,
+            "Automatic updates are not available right now.".into(),
+            Some(
+                reason
+                    .as_ref()
+                    .map_or("This is a development build.".into(), ToString::to_string),
             ),
-            Updates::Downloading { update, .. } => (
-                PromptLevel::Info,
-                format!("Mira {} is already downloading.", update.version),
-                None,
-                vec!["OK".into()],
-            ),
-            Updates::Ready { update, .. } => (
-                PromptLevel::Info,
-                format!("Mira {} is ready to install.", update.version),
-                Some(
-                    "Mira will restart to install it. Any running scripts will be interrupted."
-                        .into(),
-                ),
-                vec!["Restart".into(), PromptButton::cancel("Later")],
-            ),
-            Updates::Failed(error) => (
-                PromptLevel::Warning,
-                "Could not check for updates.".into(),
-                Some(error.to_string()),
-                vec!["OK".into()],
-            ),
-            Updates::Unavailable(reason) => (
-                PromptLevel::Info,
-                "Automatic updates are not available right now.".into(),
-                Some(
-                    reason
-                        .as_ref()
-                        .map_or("This is a development build.".into(), ToString::to_string),
-                ),
-                vec!["OK".into()],
-            ),
-            Updates::Idle => (
-                PromptLevel::Warning,
-                "Could not check for updates.".into(),
-                Some("Try again in a moment.".into()),
-                vec!["OK".into()],
-            ),
-            Updates::Checking | Updates::Restarting(_) => return,
-        };
-    let answer = window.update(cx, |_, window, cx| {
-        window.prompt(level, &message, detail.as_deref(), &answers, cx)
-    });
-    let Ok(answer) = answer else {
-        return;
+            &["OK"],
+        ),
+        Updates::Idle => (
+            NSAlertStyle::Warning,
+            "Could not check for updates.".into(),
+            Some("Try again in a moment.".into()),
+            &["OK"],
+        ),
+        Updates::Checking | Updates::Restarting(_) => return,
     };
-    cx.spawn(async move |cx| {
-        let answer = answer.await;
-        cx.update(|cx| match (answer, &state) {
-            (Ok(0), Updates::Available { .. }) => Updates::download(cx),
-            (Ok(0), Updates::Ready { .. }) => Updates::restart(cx),
-            _ => {}
-        });
-    })
-    .detach();
+    if !alert(main, style, &message, detail.as_deref(), buttons) {
+        return;
+    }
+    cx.update(|cx| match state {
+        Updates::Available { .. } => Updates::download(cx),
+        Updates::Ready { .. } => Updates::restart(cx),
+        _ => {}
+    });
+}
+
+fn alert(
+    main: MainThreadMarker,
+    style: NSAlertStyle,
+    message: &str,
+    detail: Option<&str>,
+    buttons: &[&str],
+) -> bool {
+    let alert = NSAlert::new(main);
+    alert.setAlertStyle(style);
+    alert.setMessageText(&NSString::from_str(message));
+    if let Some(detail) = detail {
+        alert.setInformativeText(&NSString::from_str(detail));
+    }
+    for (index, title) in buttons.iter().enumerate() {
+        let button = alert.addButtonWithTitle(&NSString::from_str(title));
+        if index > 0 && index == buttons.len() - 1 {
+            button.setKeyEquivalent(ns_string!("\u{1b}"));
+        }
+    }
+    alert.runModal() == NSAlertFirstButtonReturn
 }
 
 fn github(cx: &App) -> Result<GitHub> {
