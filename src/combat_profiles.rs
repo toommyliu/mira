@@ -35,7 +35,7 @@ impl Store {
             tracing::warn!(profile = %issue.name, problem = %issue.problem, "skipped a combat profile");
         }
         if !issues.is_empty() {
-            match data_file::copy_aside(&path) {
+            match data_file::copy_aside(&path).or_else(|_| data_file::move_aside(&path)) {
                 Ok(backup) => {
                     tracing::warn!(backup = %backup.display(), "kept a copy of the combat profiles that couldn't all be read");
                     if let Err(error) = data_file::write(&path, &library.to_json()) {
