@@ -337,7 +337,7 @@ mod tests {
 
         let current = super::super::CURRENT.to_string();
         for (id, version, expected) in [
-            (bundle::ID, "0.0.0", Existing::Older),
+            (bundle::ID, "0.0.0-0", Existing::Older),
             (bundle::ID, "not a version", Existing::Older),
             (
                 bundle::ID,
