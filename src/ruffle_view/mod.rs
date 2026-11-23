@@ -38,9 +38,9 @@ use std::{
 };
 
 use crate::{
-    account_settings::{self, Options},
     accounts::AccountId,
     automation::{auto_attack, auto_relogin, game_settings, settings::Automation},
+    characters::{self, Options},
     ruffle::{
         Msg, Output, Runtime,
         context_menu::MenuSelection,
@@ -159,7 +159,6 @@ pub struct RuffleView {
 
 impl RuffleView {
     pub fn new(
-        data: std::path::PathBuf,
         storage: std::path::PathBuf,
         device: reqwest::header::HeaderValue,
         armies: crate::army::Armies,
@@ -177,7 +176,7 @@ impl RuffleView {
         let span = tracing::error_span!("session", id = SESSIONS.fetch_add(1, Ordering::Relaxed));
         let session = Runtime::spawn(
             native.surface(),
-            data,
+            crate::settings::player(cx),
             storage,
             device,
             failed,
@@ -381,15 +380,27 @@ impl RuffleView {
                     }) else {
                         break;
                     };
+                    let (smooth_motion, stats) = (menu.smooth_motion, menu.stats);
                     let selection = menu::show(view, menu, extras).await;
                     menu::sync_modifiers(&input_view);
                     if cx
                         .update(|window, cx| {
-                            this.update(cx, |this, _| {
-                                if let Some(MenuSelection::Extra(extra)) = selection
-                                    && let Err(error) = this.extras.toggle(extra)
-                                {
-                                    tracing::error!(%error, "couldn't save AS3 extras");
+                            this.update(cx, |this, cx| {
+                                match selection {
+                                    Some(MenuSelection::Extra(extra)) => {
+                                        crate::settings::set_extras(this.extras.toggle(extra), cx);
+                                    }
+                                    Some(MenuSelection::SmoothMotion) => {
+                                        crate::settings::change_player(cx, |player| {
+                                            player.smooth_motion = !smooth_motion;
+                                        });
+                                    }
+                                    Some(MenuSelection::Stats) => {
+                                        crate::settings::change_player(cx, |player| {
+                                            player.performance_stats = !stats;
+                                        });
+                                    }
+                                    _ => {}
                                 }
                                 this.session.close_menu(selection);
                                 this.restore_modifiers(window);
@@ -519,7 +530,7 @@ impl RuffleView {
         if self.settings_account.as_ref() == Some(&account) {
             return;
         }
-        let settings = account_settings::get(&account, cx);
+        let settings = characters::get(&account, cx);
         settings.options.apply_to(&self.automation);
         self.automation.set_rooms(settings.scripts.rooms);
         self.settings_account = Some(account);
@@ -528,19 +539,19 @@ impl RuffleView {
 
     fn save_options(&self, edit: impl FnOnce(&mut Options), cx: &mut Context<Self>) {
         if let Some(account) = &self.settings_account {
-            account_settings::change(account, cx, |settings| edit(&mut settings.options));
+            characters::change(account, cx, |settings| edit(&mut settings.options));
         }
     }
 
     pub(super) fn change_script_options(
         &self,
-        edit: impl FnOnce(&mut account_settings::Scripts),
+        edit: impl FnOnce(&mut characters::Scripts),
         cx: &mut App,
     ) {
         if let Some(account) = &self.settings_account {
-            account_settings::change(account, cx, |settings| edit(&mut settings.scripts));
+            characters::change(account, cx, |settings| edit(&mut settings.scripts));
             self.automation
-                .set_rooms(account_settings::get(account, cx).scripts.rooms);
+                .set_rooms(characters::get(account, cx).scripts.rooms);
         }
     }
 

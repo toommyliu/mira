@@ -1,14 +1,13 @@
 use std::{
     collections::HashSet,
-    fmt, fs,
-    io::{self, Write as _},
-    os::unix::fs::OpenOptionsExt as _,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    data_file,
     domain::auth::Credentials,
     setups::{self, Member, Setup},
 };
@@ -308,16 +307,7 @@ fn write(path: &Path, accounts: &[Account], setups: &[Setup]) -> io::Result<()> 
     })
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
-    let temporary = path.with_extension("json.tmp");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    data_file::write_secret(path, &bytes)
 }
 
 #[cfg(test)]

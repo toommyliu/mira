@@ -13,9 +13,8 @@ use super::{
     script_names,
 };
 use crate::{
-    account_settings,
     accounts::AccountId,
-    packages,
+    characters, packages,
     ruffle::{Command, Msg},
     script_inputs,
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
@@ -296,7 +295,7 @@ impl RuffleView {
     fn safe_start_stop(&self, cx: &App) -> bool {
         self.settings_account
             .as_ref()
-            .map(|account| account_settings::get(account, cx).scripts)
+            .map(|account| characters::get(account, cx).scripts)
             .unwrap_or_default()
             .safe_start_stop
     }
@@ -590,11 +589,10 @@ impl RuffleView {
                 ..
             })
         );
-        let restarts = self.settings_account.as_ref().is_some_and(|account| {
-            account_settings::get(account, cx)
-                .scripts
-                .restart_after_reconnect
-        });
+        let restarts = self
+            .settings_account
+            .as_ref()
+            .is_some_and(|account| characters::get(account, cx).scripts.restart_after_reconnect);
         let Some(account) = self.linked_account().filter(|_| running && restarts) else {
             return;
         };

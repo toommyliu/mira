@@ -1,5 +1,3 @@
-use std::{fs, io, path::PathBuf};
-
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
@@ -71,7 +69,7 @@ impl Extras {
         }
     }
 
-    fn toggle(&mut self, extra: Extra) {
+    pub(crate) fn toggled(mut self, extra: Extra) -> Self {
         let enabled = match extra {
             Extra::CopyMenus => &mut self.copy_menus,
             Extra::ChatRecall => &mut self.chat_recall,
@@ -80,29 +78,17 @@ impl Extras {
             Extra::HideMusicButton => &mut self.hide_music_button,
         };
         *enabled = !*enabled;
+        self
     }
 }
 
 pub(crate) struct Store {
-    path: PathBuf,
     extras: watch::Sender<Extras>,
 }
 
 impl Store {
-    pub(crate) fn open(path: PathBuf) -> Self {
-        let extras = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                tracing::warn!(%error, path = %path.display(), "couldn't read AS3 extras");
-                Extras::default()
-            }),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Extras::default(),
-            Err(error) => {
-                tracing::warn!(%error, path = %path.display(), "couldn't read AS3 extras");
-                Extras::default()
-            }
-        };
+    pub(crate) fn new(extras: Extras) -> Self {
         Self {
-            path,
             extras: watch::Sender::new(extras),
         }
     }
@@ -115,13 +101,10 @@ impl Store {
         self.extras.subscribe()
     }
 
-    pub(crate) fn toggle(&self, extra: Extra) -> io::Result<()> {
-        self.extras.send_modify(|extras| extras.toggle(extra));
-        let temporary = self.path.with_extension("json.tmp");
-        let mut bytes = serde_json::to_vec_pretty(&self.get()).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, &self.path)
+    pub(crate) fn toggle(&self, extra: Extra) -> Extras {
+        self.extras
+            .send_modify(|extras| *extras = extras.toggled(extra));
+        self.get()
     }
 }
 
@@ -165,37 +148,18 @@ mod tests {
     use crate::bridge::{CallError, Events, Value};
     use crate::domain::testing::FakeLoader;
 
-    fn temporary_path() -> PathBuf {
-        let mut random = [0; 8];
-        getrandom::getrandom(&mut random).unwrap();
-        std::env::temp_dir().join(format!("mira-as3-{:x}.json", u64::from_ne_bytes(random)))
-    }
-
     #[test]
-    fn extras_start_off_and_each_toggle_survives_a_restart() {
-        let path = temporary_path();
-        let store = Store::open(path.clone());
+    fn extras_start_off_and_a_toggle_reaches_every_watcher() {
+        let store = Store::new(Extras::default());
         let mut running = store.watch();
         for extra in Extra::ALL {
             assert!(!store.get().enabled(extra));
         }
-
-        store.toggle(Extra::ChatRecall).unwrap();
-        assert!(running.borrow_and_update().enabled(Extra::ChatRecall));
-        let reopened = Store::open(path.clone()).get();
-        assert!(reopened.enabled(Extra::ChatRecall));
-        assert!(!reopened.enabled(Extra::CopyMenus));
-
-        store.toggle(Extra::CopyMenus).unwrap();
-        store.toggle(Extra::ChatRecall).unwrap();
-        let reopened = Store::open(path.clone()).get();
-        assert!(reopened.enabled(Extra::CopyMenus));
-        assert!(!reopened.enabled(Extra::ChatRecall));
-
-        fs::write(&path, "{ not json").unwrap();
-        assert_eq!(Store::open(path.clone()).get(), Extras::default());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
-        fs::remove_file(path).unwrap();
+        let toggled = store.toggle(Extra::ChatRecall);
+        assert!(toggled.enabled(Extra::ChatRecall));
+        assert!(!toggled.enabled(Extra::CopyMenus));
+        assert_eq!(*running.borrow_and_update(), toggled);
+        assert!(!store.toggle(Extra::ChatRecall).enabled(Extra::ChatRecall));
     }
 
     #[tokio::test]
@@ -219,12 +183,11 @@ mod tests {
                     }
                 });
                 let events = Events::default();
-                let path = temporary_path();
-                let store = Store::open(path.clone());
+                let store = Store::new(Extras::default());
                 tokio::task::spawn_local(run(loader, events.subscribe(wants), store.watch()));
                 yield_now().await;
 
-                store.toggle(Extra::ChatRecall).unwrap();
+                store.toggle(Extra::ChatRecall);
                 yield_now().await;
                 assert!(applied.borrow().is_empty());
 
@@ -242,7 +205,7 @@ mod tests {
                     ]
                 );
 
-                store.toggle(Extra::CopyMenus).unwrap();
+                store.toggle(Extra::CopyMenus);
                 yield_now().await;
                 assert_eq!(
                     *applied.borrow(),
@@ -254,7 +217,6 @@ mod tests {
                         ("extras.setHideMusicButtonEnabled", false)
                     ]
                 );
-                fs::remove_file(path).unwrap();
             })
             .await;
     }

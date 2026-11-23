@@ -34,12 +34,12 @@ use mira_ui::{
 use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
+    characters,
     file_panel::{self, Pick},
     ruffle::{Inbox, Msg, extras},
     script_inputs,
     scripting::Values,
-    settings,
-    shared_objects::SharedObjects,
+    settings, shared_objects,
     shortcuts::keys_for,
 };
 
@@ -315,7 +315,7 @@ pub(crate) fn init(
     super::script_names::init(cx);
     cx.set_global(Game {
         shared: Shared {
-            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
+            extras: Rc::new(extras::Store::new(settings::extras(cx))),
             data,
             accounts,
             device,
@@ -556,7 +556,7 @@ impl Client {
             cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
                 .detach();
             Client {
-                extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
+                extras: Rc::new(extras::Store::new(Default::default())),
                 data: folder.to_path_buf(),
                 accounts: folder.join("accounts.json"),
                 device: reqwest::header::HeaderValue::from_static("test"),
@@ -589,13 +589,14 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Entity<RuffleView>> {
-        let shared_objects = cx.global::<SharedObjects>();
+        let seed = shared_objects::seed(&self.data);
         let storage = match account.filter(|_| settings::separate_aqw_settings(cx)) {
-            Some(account) => shared_objects.account(&account.id())?,
-            None => shared_objects.shared(),
+            Some(account) => {
+                shared_objects::of_character(&seed, &characters::folder(&account.id(), cx)?)?
+            }
+            None => seed,
         };
         let view = RuffleView::new(
-            self.data.clone(),
             storage,
             self.device.clone(),
             self.armies.clone(),
