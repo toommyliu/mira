@@ -1,6 +1,6 @@
 import { createSatteriMarkdownProcessor, satteriHighlightPlugin } from "@astrojs/markdown-satteri";
 import { codeToTokens, isSupportedLanguage } from "@pierre/highlights";
-import icons from "lucide-static/icon-nodes.json";
+import { codeActions as actions, svgAttributes } from "./icons.ts";
 
 type Highlight = Parameters<typeof satteriHighlightPlugin>[0];
 type Content = Extract<Awaited<ReturnType<Highlight>>, { type: "element" }>["children"][number];
@@ -20,41 +20,32 @@ function tokens(code: string, lang: string): Content[] {
   ]);
 }
 
-export const wrapIcon = icons["text-wrap"].flatMap(([tag, attributes]) =>
-  tag === "path" && typeof attributes === "object" ? [attributes.d] : [],
-);
-
-const wrapButton: Content = {
+const codeActions: Content = {
   type: "element",
-  tagName: "button",
-  properties: {
-    className: ["icon-button", "code-wrap"],
-    type: "button",
-    dataCodeWrap: "",
-    ariaPressed: "false",
-    ariaLabel: "Wrap lines",
-  },
-  children: [
-    {
+  tagName: "div",
+  properties: { className: ["code-actions"] },
+  children: actions.map((action): Content => ({
+    type: "element",
+    tagName: "button",
+    properties: {
+      className: ["icon-button"],
+      type: "button",
+      dataCodeAction: action.kind,
+      ariaLabel: action.label,
+      ...(action.kind === "wrap" ? { ariaPressed: "false" } : {}),
+    },
+    children: action.icons.map((nodes): Content => ({
       type: "element",
       tagName: "svg",
-      properties: {
-        viewBox: "0 0 24 24",
-        fill: "none",
-        stroke: "currentColor",
-        strokeWidth: "2",
-        strokeLinecap: "round",
-        strokeLinejoin: "round",
-        ariaHidden: "true",
-      },
-      children: wrapIcon.map((d): Content => ({
+      properties: { ...svgAttributes },
+      children: nodes.map(({ tag, attributes }): Content => ({
         type: "element",
-        tagName: "path",
-        properties: { d },
+        tagName: tag,
+        properties: { ...attributes },
         children: [],
       })),
-    },
-  ],
+    })),
+  })),
 };
 
 export const highlight: Highlight = async (code, lang) => ({
@@ -70,7 +61,7 @@ export const highlight: Highlight = async (code, lang) => ({
         { type: "element", tagName: "code", properties: {}, children: tokens(code, lang) },
       ],
     },
-    wrapButton,
+    codeActions,
   ],
 });
 

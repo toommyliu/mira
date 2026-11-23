@@ -1,6 +1,6 @@
 ---
 import type { Token } from "../reference/tokens.ts";
-import WrapButton from "./WrapButton.astro";
+import CodeActions from "./CodeActions.astro";
 
 interface Props {
   tokens: readonly Token[];
@@ -23,7 +23,7 @@ const parts = tokens.map((token) => ({
   ) : (
     <div class="code-block">
       <pre class="code"><code>{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code></pre>
-      <WrapButton />
+      <CodeActions />
     </div>
   )
 }

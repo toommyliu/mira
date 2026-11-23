@@ -2,6 +2,7 @@ const root = document.documentElement;
 const modes = ["system", "light", "dark"] as const;
 type Mode = (typeof modes)[number];
 const MENU_OFFSET = 4;
+const COPIED_FOR = 1500;
 
 function isMode(value: string | undefined): value is Mode {
   return modes.some((mode) => mode === value);
@@ -27,7 +28,7 @@ function sync() {
     choice.setAttribute("aria-checked", String(choice.dataset.themeChoice === current));
   }
   const wrap = String(root.hasAttribute("data-wrap"));
-  for (const button of document.querySelectorAll("[data-code-wrap]")) {
+  for (const button of document.querySelectorAll("[data-code-action='wrap']")) {
     button.setAttribute("aria-pressed", wrap);
   }
 }
@@ -48,7 +49,19 @@ document.addEventListener("click", (event) => {
     remember("theme", chosen === "system" ? undefined : chosen);
     sync();
     choice.closest<HTMLElement>("[popover]")?.hidePopover();
-  } else if (target.closest("[data-code-wrap]")) {
+  } else if (target.closest("[data-code-action='copy']")) {
+    const button = target.closest<HTMLElement>("[data-code-action='copy']");
+    const code = button?.closest(".code-block")?.querySelector("pre")?.textContent;
+    if (button === null || code === undefined || code === null) return;
+    void navigator.clipboard.writeText(code).then(() => {
+      button.toggleAttribute("data-copied", true);
+      button.setAttribute("aria-label", "Copied");
+      window.setTimeout(() => {
+        button.removeAttribute("data-copied");
+        button.setAttribute("aria-label", "Copy code");
+      }, COPIED_FOR);
+    });
+  } else if (target.closest("[data-code-action='wrap']")) {
     const wrap = !root.hasAttribute("data-wrap");
     root.toggleAttribute("data-wrap", wrap);
     remember("code-wrap", wrap ? "on" : "off");

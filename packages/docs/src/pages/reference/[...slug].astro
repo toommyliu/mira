@@ -59,7 +59,7 @@ const headings: Heading[] = [
 <Layout title={page.title} headings={headings}>
   <p class="eyebrow">{page.binding?.kind === "named" ? `Namespace in ${page.specifier}` : "Package"}</p>
   <h1 class="code-title">{page.title}</h1>
-  {page.binding !== undefined && <Code tokens={importLine} bare />}
+  {page.binding !== undefined && <Code tokens={importLine} />}
   <Comment comment={page.comment} links={links} />
   {
     page.namespaces.length > 0 && (

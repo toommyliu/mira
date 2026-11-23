@@ -622,27 +622,41 @@ main:focus {
   margin: 0;
 }
 
-.code-wrap {
+.code-actions {
   position: absolute;
   top: 10px;
   right: 8px;
-  width: 24px;
-  height: 24px;
-  background: var(--frame);
+  display: flex;
+  gap: 4px;
   opacity: 0;
 }
 
-.code-wrap svg {
+.code-block:hover .code-actions,
+.code-actions:focus-within {
+  opacity: 1;
+}
+
+.code-actions .icon-button {
+  width: 24px;
+  height: 24px;
+  background: var(--frame);
+}
+
+.code-actions svg {
   width: 14px;
   height: 14px;
 }
 
-.code-block:hover .code-wrap,
-.code-wrap:focus-visible {
-  opacity: 1;
+[data-code-action="copy"] svg + svg,
+[data-code-action="copy"][data-copied] svg:first-child {
+  display: none;
 }
 
-:root[data-wrap] .code-wrap {
+[data-code-action="copy"][data-copied] svg + svg {
+  display: block;
+}
+
+:root[data-wrap] [data-code-action="wrap"] {
   background: var(--accent);
   color: var(--accent-foreground);
 }
@@ -653,12 +667,12 @@ main:focus {
 }
 
 @media (pointer: coarse) {
-  .code-wrap {
+  .code-actions {
     opacity: 1;
   }
 
   .code-block pre.code {
-    padding-right: 40px;
+    padding-right: 68px;
   }
 }
 
