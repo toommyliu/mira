@@ -24,8 +24,8 @@ use super::{
 use mira_ui::{
     ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
-        Align, Button, Dialog, DropdownMenu, HoverCard, Icon, Kbd, MenuItem, Placement, Side,
-        Tab as TabItem, Tabs,
+        Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, HoverCard, Icon, Kbd,
+        MenuItem, Placement, Side, Tab as TabItem, Tabs,
         button::{Size, Variant},
     },
     theme::CONTROL_SM,
@@ -34,6 +34,7 @@ use mira_ui::{
 use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
+    file_panel::{self, Pick},
     ruffle::{Inbox, Msg, extras},
     script_inputs,
     scripting::Values,
@@ -133,6 +134,7 @@ pub struct Client {
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
     closing: Option<Closing>,
+    replacing: Option<Replacing>,
     _activation: Subscription,
     _focus_lost: Subscription,
 }
@@ -141,6 +143,13 @@ struct Closing {
     open: bool,
     view: EntityId,
     title: SharedString,
+}
+
+struct Replacing {
+    open: bool,
+    view: EntityId,
+    running: Option<SharedString>,
+    queue: bool,
 }
 
 struct Status {
@@ -514,6 +523,7 @@ impl Client {
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
                 closing: None,
+                replacing: None,
                 _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                     if window.is_window_active() {
                         activated(window.window_handle().window_id(), cx);
@@ -566,6 +576,7 @@ impl Client {
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
                 closing: None,
+                replacing: None,
                 _activation: Subscription::new(|| {}),
                 _focus_lost: Subscription::new(|| {}),
             }
@@ -932,6 +943,115 @@ impl Client {
 
     fn asking(&self) -> bool {
         self.closing.as_ref().is_some_and(|closing| closing.open)
+            || self
+                .replacing
+                .as_ref()
+                .is_some_and(|replacing| replacing.open)
+    }
+
+    fn load_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking()) else {
+            return;
+        };
+        window.activate_window();
+        let tab = view.read(cx);
+        let running = tab
+            .script
+            .entry()
+            .filter(|_| tab.script.stoppable())
+            .map(|entry| super::script_names::name(entry, cx));
+        let queue = tab.queue.playing();
+        if running.is_none() && !queue {
+            return choose_script(view, false, window, cx);
+        }
+        self.replacing = Some(Replacing {
+            open: true,
+            view: view.entity_id(),
+            running,
+            queue,
+        });
+        cx.notify();
+    }
+
+    fn confirm_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(replacing) = self.replacing.as_mut().filter(|replacing| replacing.open) else {
+            return;
+        };
+        replacing.open = false;
+        let view = replacing.view;
+        cx.notify();
+        if let Some(session) = self
+            .sessions
+            .iter()
+            .find(|session| session.view.entity_id() == view)
+        {
+            choose_script(
+                session.view.clone(),
+                settings::start_replacements(cx),
+                window,
+                cx,
+            );
+        }
+    }
+
+    fn dismiss_replace(&mut self, cx: &mut Context<Self>) {
+        if let Some(replacing) = &mut self.replacing {
+            replacing.open = false;
+            cx.notify();
+        }
+    }
+
+    fn replace_dialog(&self, cx: &mut Context<Self>) -> Option<Dialog> {
+        let replacing = self.replacing.as_ref()?;
+        let dismiss = cx.weak_entity();
+        let toggled = cx.weak_entity();
+        let (title, description) = match (&replacing.running, replacing.queue) {
+            (Some(name), false) => (
+                format!("Replace {name}?"),
+                format!("{name} keeps running until you choose a file to load in its place."),
+            ),
+            (Some(name), true) => (
+                format!("Replace {name}?"),
+                format!(
+                    "{name} keeps running until you choose a file. Then it stops and the queue pauses."
+                ),
+            ),
+            (None, _) => (
+                "Pause the queue?".to_owned(),
+                "The queue pauses once you choose a file to load.".to_owned(),
+            ),
+        };
+        let start = if settings::start_replacements(cx) {
+            CheckedState::Checked
+        } else {
+            CheckedState::Unchecked
+        };
+        Some(
+            Dialog::new("replace-script", replacing.open, title)
+                .alert()
+                .description(description)
+                .footer_start_slot(
+                    Checkbox::new("replace-script-start", "Start it once it loads", start)
+                        .on_toggle(move |on, _, cx| {
+                            settings::set_start_replacements(on, cx);
+                            toggled.update(cx, |_, cx| cx.notify()).ok();
+                        }),
+                )
+                .action(
+                    Button::new("replace-script-cancel", "Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_replace(cx))),
+                )
+                .action(
+                    Button::new("replace-script-confirm", "Replace…")
+                        .variant(Variant::Danger)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.confirm_replace(window, cx)),
+                        ),
+                )
+                .on_close(move |_, cx| {
+                    dismiss.update(cx, |this, cx| this.dismiss_replace(cx)).ok();
+                }),
+        )
     }
 
     fn request_close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1016,6 +1136,13 @@ impl Client {
             .filter(|closing| closing.view == session.view.entity_id())
         {
             closing.open = false;
+        }
+        if let Some(replacing) = self
+            .replacing
+            .as_mut()
+            .filter(|replacing| replacing.view == session.view.entity_id())
+        {
+            replacing.open = false;
         }
         let account = session.view.read(cx).account_id();
         if let Some(account) = &account
@@ -1830,6 +1957,25 @@ impl Client {
             )
             .child(self.bar_start(window, cx))
             .children(self.close_dialog(cx))
+            .children(self.replace_dialog(cx))
+    }
+}
+
+fn choose_script(view: Entity<RuffleView>, start: bool, window: &Window, cx: &App) {
+    let chosen = file_panel::open(Pick::File, "Load", window, cx);
+    let view = view.downgrade();
+    cx.spawn(async move |cx| {
+        if let Some(path) = chosen.await {
+            let _ = view.update(cx, |view, cx| view.load_script(path, start, cx));
+        }
+    })
+    .detach();
+}
+
+pub(super) fn load_script(cx: &mut App) {
+    let game = live(cx).next().map(|(game, _)| game.handle);
+    if let Some(game) = game {
+        let _ = game.update(cx, |client, window, cx| client.load_script(window, cx));
     }
 }
 
@@ -2009,6 +2155,9 @@ mod tests {
         let client = cx
             .update(|cx| open(Home::Setup("Daily".into()), false, cx))
             .unwrap();
+        cx.update(|cx| cx.dispatch_action(&LoadScript));
+        cx.run_until_parked();
+        assert_eq!(cx.windows(), [client.into()], "Load script opened a window");
         cx.update(|cx| cx.dispatch_action(&OpenPackets));
         cx.run_until_parked();
         assert_eq!(cx.windows().len(), 2);
@@ -2079,6 +2228,31 @@ mod tests {
                         open: true,
                         view: cx.entity_id(),
                         title: "Close Player1?".into(),
+                    });
+                });
+                cx.new(|_| Shown(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_replace_running_script() {
+        let folder = std::env::temp_dir().join("mira-replace-script-snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in mira_ui::snapshot(
+            "client-replace-running-script",
+            gpui::size(px(720.0), px(420.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, cx| {
+                    client.replacing = Some(Replacing {
+                        open: true,
+                        view: cx.entity_id(),
+                        running: Some("hunt.ts".into()),
+                        queue: true,
                     });
                 });
                 cx.new(|_| Shown(client))

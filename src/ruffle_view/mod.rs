@@ -85,10 +85,7 @@ pub(crate) use scripts::{LoadScript, OpenScripts};
 pub(crate) use shown_tab::Target;
 
 pub(crate) fn init_tools(folder: PathBuf, types: PathBuf, cx: &mut App) {
-    let (load_folder, load_types) = (folder.clone(), types.clone());
-    on_tool::<LoadScript>(cx, move |client, cx| {
-        scripts::load(client, load_folder.clone(), load_types.clone(), cx)
-    });
+    cx.on_action(|_: &LoadScript, cx| cx.defer(scripts::load));
     on_tool::<OpenScripts>(cx, move |client, cx| {
         scripts::open(client, folder.clone(), types.clone(), Target::Selected, cx)
     });
