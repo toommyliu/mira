@@ -860,7 +860,7 @@ export const Script = {
     }).pipe(Effect.andThen(Deferred.succeed(exited, undefined)), Effect.andThen(Effect.never)),
 };
 
-export type Subscription<A> = { readonly next: Effect.Effect<A> };
+export type Subscription<A> = { readonly next: () => Effect.Effect<A> };
 
 /** An Effect, or the generator a `function*` returns. */
 export type Work<A> =
@@ -953,20 +953,26 @@ const openFeed = <I extends object, A>(
         Effect.andThen(next),
       );
     });
-    return { next };
+    return { next: () => next };
   });
 
 const skipLost = <A>({ next }: Subscription<A | Lost>): Subscription<A> => ({
-  next: Effect.gen(function* () {
-    while (true) {
-      const value = yield* next;
-      if (value !== lost) return value;
-    }
-  }),
+  next: () =>
+    Effect.gen(function* () {
+      while (true) {
+        const value = yield* next();
+        if (value !== lost) return value;
+      }
+    }),
 });
 
 const run = <A>(work: Work<A>): Effect.Effect<A, unknown> =>
   Effect.isEffect(work) ? work : drive(work);
+
+export type Body<A> = () => Work<A>;
+
+const perform = <A>(body: Body<A>): Effect.Effect<A> =>
+  Effect.orDie(Effect.suspend(() => run(body())));
 
 const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
   Effect.onExit(effect, (exit) =>
@@ -976,31 +982,31 @@ const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E
   );
 
 const listen = <A>(
-  next: Effect.Effect<A>,
+  next: () => Effect.Effect<A>,
   handler: Handler<A>,
 ): Effect.Effect<void, never, Scope.Scope> =>
   Effect.forkScoped(
     failingTheScript(
-      Effect.forever(Effect.flatMap(next, (value) => Effect.suspend(() => run(handler(value))))),
+      Effect.forever(Effect.flatMap(next(), (value) => Effect.suspend(() => run(handler(value))))),
     ),
   ).pipe(Effect.asVoid);
 
-export type ForOptions<E> = {
+export type ForOptions = {
   /** Starts after `trigger` finishes. Waits forever when omitted. */
   readonly timeout?: Duration;
   /** Runs once the subscription is open. Returning false skips the wait. */
-  readonly trigger?: Effect.Effect<boolean, E>;
+  readonly trigger?: Body<boolean>;
 };
 
-const waitFor = <A, E>(
+const waitFor = <A>(
   open: Effect.Effect<Subscription<A | Lost>, never, Scope.Scope>,
-  { timeout, trigger }: ForOptions<E>,
-): Effect.Effect<A | null, E> =>
+  { timeout, trigger }: ForOptions,
+): Effect.Effect<A | null> =>
   Effect.scoped(
     Effect.gen(function* () {
       const { next } = yield* open;
-      if (trigger !== undefined && !(yield* trigger)) return null;
-      const first = Effect.map(next, (value) => (value === lost ? null : value));
+      if (trigger !== undefined && !(yield* perform(trigger))) return null;
+      const first = Effect.map(next(), (value) => (value === lost ? null : value));
       return timeout === undefined
         ? yield* first
         : Option.getOrNull(yield* Effect.timeoutOption(first, timeout));
@@ -1199,7 +1205,7 @@ export const Events = {
    *
    * export default function* () {
    *   const messages = yield* Events.subscribe({ type: "message" });
-   *   const message = yield* messages.next;
+   *   const message = yield* messages.next();
    *   console.log(message.text);
    * }
    * ```
@@ -1235,9 +1241,9 @@ export type UntilOptions = {
   readonly timeout?: Duration;
 };
 
-const poll = <E>(condition: Effect.Effect<boolean, E>, interval: Duration) =>
+const poll = (condition: Body<boolean>, interval: Duration) =>
   Effect.gen(function* () {
-    while (!(yield* condition)) yield* Effect.sleep(interval);
+    while (!(yield* perform(condition))) yield* Effect.sleep(interval);
     return true;
   });
 
@@ -1250,22 +1256,22 @@ export const Wait = {
    * import { Player, Wait } from "mira";
    *
    * export default function* () {
-   *   if (!(yield* Wait.until(Player.isReady(), { timeout: "30 seconds" }))) return;
+   *   if (!(yield* Wait.until(Player.isReady, { timeout: "30 seconds" }))) return;
    * }
    * ```
    */
-  until: <E = never>(
-    condition: Effect.Effect<boolean, E>,
+  until: (
+    condition: Body<boolean>,
     { interval = "100 millis", timeout }: UntilOptions = {},
-  ): Effect.Effect<boolean, E> =>
+  ): Effect.Effect<boolean> =>
     timeout === undefined
       ? poll(condition, interval)
       : poll(condition, interval).pipe(Effect.timeoutOption(timeout), Effect.map(Option.isSome)),
   /** Null if `trigger` returns false, the timeout passes, or the connection drops. */
-  forPacket: <const F extends PacketFilter, E = never>(
+  forPacket: <const F extends PacketFilter>(
     filter: F,
-    options: ForOptions<E> = {},
-  ): Effect.Effect<PacketFor<F> | null, E> => waitFor(openPackets(filter), options),
+    options: ForOptions = {},
+  ): Effect.Effect<PacketFor<F> | null> => waitFor(openPackets(filter), options),
   /**
    * Null if `trigger` returns false, the timeout passes, or the connection drops.
    * A `logout` wait returns the event when the connection drops.
@@ -1280,10 +1286,10 @@ export const Wait = {
    * }
    * ```
    */
-  forEvent: <const T extends EventType, E = never>(
+  forEvent: <const T extends EventType>(
     filter: EventFilter<T>,
-    options: ForOptions<E> = {},
-  ): Effect.Effect<EventOf<T> | null, E> => waitFor(openEvents(filter), options),
+    options: ForOptions = {},
+  ): Effect.Effect<EventOf<T> | null> => waitFor(openEvents(filter), options),
 };
 
 export type Json =
@@ -1314,8 +1320,6 @@ export type ArmyUntilOptions = ArmyStepOptions & {
 };
 
 export type ArmyMapOptions = CellOptions & ArmyStepOptions;
-
-export type Body<A> = () => Work<A>;
 
 export type ArmyUntil = {
   readonly done: Body<boolean>;
@@ -1372,9 +1376,6 @@ type Gear = { readonly [Field in (typeof GEAR)[number] | "scroll"]: string | nul
 };
 
 let joined: ArmyInfo | undefined;
-
-const perform = <A>(body: Body<A>): Effect.Effect<A> =>
-  Effect.orDie(Effect.suspend(() => run(body())));
 
 function start(name: string): Effect.Effect<ArmyInfo>;
 function start(
@@ -1446,7 +1447,7 @@ const drink = (pot: string): Effect.Effect<boolean> =>
     if (!(yield* Inventory.equip(pot))) return false;
     if (!(yield* Combat.useSkill(5, { force: true, waitUntilReady: true }))) return false;
     return yield* Wait.until(
-      Effect.map(Inventory.getQuantity(pot), (left) => left < item.quantity),
+      () => Effect.map(Inventory.getQuantity(pot), (left) => left < item.quantity),
       { timeout: "5 seconds" },
     );
   });
