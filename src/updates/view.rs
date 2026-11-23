@@ -104,13 +104,11 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
         )
 }
 
-const NOTES: usize = 8;
-
 #[derive(Debug, Default, PartialEq)]
 struct Notes {
     summary: Vec<String>,
     items: Vec<(Option<String>, String)>,
-    more: usize,
+    after: Vec<String>,
 }
 
 fn parse_notes(text: &str) -> Notes {
@@ -122,13 +120,12 @@ fn parse_notes(text: &str) -> Notes {
         .filter(|line| !line.is_empty())
     {
         let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) else {
-            notes.summary.push(line.to_owned());
+            match notes.items.is_empty() {
+                true => notes.summary.push(line.to_owned()),
+                false => notes.after.push(line.to_owned()),
+            }
             continue;
         };
-        if notes.items.len() == NOTES {
-            notes.more += 1;
-            continue;
-        }
         notes.items.push(
             match item
                 .strip_prefix("**")
@@ -151,9 +148,9 @@ fn with_notes(card: HoverCard, text: &str) -> HoverCard {
     let card = notes.items.into_iter().fold(card, |card, (lead, text)| {
         card.note(lead.map(Into::into), text)
     });
-    match notes.more {
-        0 => card,
-        more => card.note(None, format!("and {more} more")),
+    match notes.after.is_empty() {
+        true => card,
+        false => card.after_notes(notes.after.join(" ")),
     }
 }
 
@@ -209,10 +206,14 @@ pub(crate) fn button(placement: Placement, cx: &App) -> Option<impl IntoElement>
                 format!("{} → {version}", env!("CARGO_PKG_VERSION")),
                 Tone::Neutral,
             );
-        match state.update().and_then(|update| update.notes.as_deref()) {
+        let Some(update) = state.update() else {
+            return card;
+        };
+        let card = match update.notes.as_deref() {
             Some(notes) => with_notes(card, notes),
             None => card,
-        }
+        };
+        card.link("Release notes", update.page.clone())
     };
     let with_error = |card: HoverCard, error: &Option<SharedString>| match error {
         Some(error) => card.row("Error", error.clone(), Tone::Attention),
@@ -355,9 +356,10 @@ mod tests {
         let mut text = String::from(
             "Faster updates.\n\n- **Sidebar.** Click to download.\n- Fixes a crash.\n",
         );
-        for index in 0..NOTES {
+        for index in 0..10 {
             text.push_str(&format!("- Extra {index}\n"));
         }
+        text.push_str("\nPlus 3 more fixes and improvements.\n");
         text.push_str("\n<details>\n<summary>Full changelog</summary>\n\n- feat: everything (abc)\n</details>\n");
         let notes = parse_notes(&text);
         assert_eq!(notes.summary, ["Faster updates."]);
@@ -368,8 +370,8 @@ mod tests {
                 (None, "Fixes a crash.".to_owned()),
             ]
         );
-        assert_eq!(notes.items.len(), NOTES);
-        assert_eq!(notes.more, 2);
+        assert_eq!(notes.items.len(), 12);
+        assert_eq!(notes.after, ["Plus 3 more fixes and improvements."]);
         assert!(notes.items.iter().all(|(_, text)| !text.contains("feat:")));
     }
 }
