@@ -779,7 +779,8 @@ code.type a:hover {
   margin-bottom: 0;
 }
 
-.fails {
+.prose .fails {
+  margin: 12px 0 0;
   color: var(--muted-foreground);
   font-size: 14px;
 }
