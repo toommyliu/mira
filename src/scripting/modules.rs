@@ -218,10 +218,11 @@ fn package_root(folder: &Path) -> std::result::Result<Option<PathBuf>, String> {
 }
 
 fn package(name: &str) -> std::result::Result<String, String> {
-    match name {
-        "mira" => return Ok(format!("{INTERNAL}mira/index.js")),
-        "mira/http" | "mira/schema" => return Ok(format!("{INTERNAL}{name}.js")),
-        _ => {}
+    if let Some((_, path)) = MIRA_MODULES
+        .iter()
+        .find(|(specifier, _)| *specifier == name)
+    {
+        return Ok(format!("{INTERNAL}{path}"));
     }
     let path = match name.strip_prefix("effect") {
         Some("") => "effect/index.js".to_owned(),
@@ -229,8 +230,13 @@ fn package(name: &str) -> std::result::Result<String, String> {
             format!("effect{module}.js")
         }
         _ => {
+            let mira = MIRA_MODULES
+                .iter()
+                .map(|(specifier, _)| *specifier)
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(format!(
-                "{name} can't be imported; scripts can import mira, mira/http, mira/schema, effect, effect/<Module> and their own files"
+                "{name} can't be imported; scripts can import {mira}, effect, effect/<Module> and their own files"
             ));
         }
     };

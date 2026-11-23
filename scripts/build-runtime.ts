@@ -197,7 +197,14 @@ async function main(): Promise<void> {
   await cp(join(effect, "LICENSE"), join(outdir, "effect", "LICENSE"));
   if (values.table !== undefined) {
     const scripts = (await filesUnder(outdir)).filter((file) => file.endsWith(".js"));
-    await writeFile(resolve(values.table), table("ASSETS", scripts, outdir));
+    const specifiers = miraModules.map(
+      (module) =>
+        `    (${JSON.stringify(module.specifier)}, ${JSON.stringify(`${module.out}.js`)}),`,
+    );
+    await writeFile(
+      resolve(values.table),
+      `${table("ASSETS", scripts, outdir)}pub(super) static MIRA_MODULES: &[(&str, &str)] = &[\n${specifiers.join("\n")}\n];\n`,
+    );
   }
   if (values.types !== undefined) {
     const types = resolve(values.types);
