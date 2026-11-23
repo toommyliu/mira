@@ -2,10 +2,11 @@
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Native from "effect/Schema";
-import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 export type Path = readonly (string | number)[];
+
+export type LiteralValue = string | number | boolean | bigint;
 
 export type Issue = { readonly path: Path; readonly message: string };
 
@@ -193,9 +194,7 @@ export const unknown = (): Schema<Native.Unknown> => plain(Native.Unknown);
  * const mode = S.literal("farm", "quest");
  * ```
  */
-export const literal = <
-  const L extends readonly [SchemaAST.LiteralValue, ...SchemaAST.LiteralValue[]],
->(
+export const literal = <const L extends readonly [LiteralValue, ...LiteralValue[]]>(
   ...values: L
 ): Schema<Native.Literals<L>> => plain(Native.Literals(values));
 
