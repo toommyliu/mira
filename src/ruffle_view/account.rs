@@ -160,7 +160,7 @@ impl RuffleView {
     fn link(&mut self, account: &Account) {
         if self.linked_account() != Some(account.id()) {
             self.span
-                .in_scope(|| tracing::info!(account = %account.username, "linked an account"));
+                .in_scope(|| tracing::trace!(account = %account.username, "linked an account"));
         }
         self.account = Some(Link::new(account));
     }
@@ -173,7 +173,7 @@ impl RuffleView {
         }
         if let Some(link) = self.account.take() {
             self.span
-                .in_scope(|| tracing::info!(account = %link.username, "unlinked the account"));
+                .in_scope(|| tracing::trace!(account = %link.username, "unlinked the account"));
             self.queue.pause();
         }
         cx.emit(Identified(player.to_owned()));
