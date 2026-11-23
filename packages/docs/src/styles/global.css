@@ -361,7 +361,7 @@ a {
 
 main {
   min-width: 0;
-  padding: var(--inset-top) var(--inset-x) 96px;
+  padding: var(--inset-top) var(--inset-x) 48px;
 }
 
 main:focus {
@@ -575,7 +575,7 @@ main:focus {
 }
 
 .prose h2 {
-  margin: 48px 0 16px;
+  margin: 40px 0 16px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
   font-size: 20px;
@@ -744,7 +744,7 @@ code.type a:hover {
 
 .entry {
   margin: 0;
-  padding: 24px 0 28px;
+  padding: 20px 0 24px;
 }
 
 .entry + .entry {
