@@ -1278,10 +1278,12 @@ fn waiting_until_a_condition_holds_checks_it_right_away_and_then_on_each_interva
 import { Wait } from "mira";
 
 export default function* () {
-  const already = yield* Wait.until(Effect.succeed(true), { interval: "1 hour" });
+  const already = yield* Wait.until(() => Effect.succeed(true), { interval: "1 hour" });
   let checks = 0;
-  const met = yield* Wait.until(Effect.sync(() => ++checks === 3), { interval: "10 millis" });
-  const timedOut = yield* Wait.until(Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
+  const met = yield* Wait.until(function* () {
+    return ++checks === 3;
+  }, { interval: "10 millis" });
+  const timedOut = yield* Wait.until(() => Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
   console.log(already, met, checks, timedOut);
 }
 "#,
@@ -1359,7 +1361,7 @@ fn waiting_for_a_packet_subscribes_before_the_trigger_and_returns_the_first_matc
 export default function* () {
   const reply = yield* Wait.forPacket(
     { from: "server", cmd: "loadShop" },
-    { trigger: Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
+    { trigger: () => Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
   );
   console.log(JSON.stringify(reply));
 }
@@ -1424,7 +1426,7 @@ export default function* () {
   const str = yield* Wait.forPacket({ from: "server", cmd: "respawnMon" });
   const dropped = yield* Wait.forPacket({ cmd: "ct" });
   const late = yield* Wait.forPacket({ cmd: "ct" }, { timeout: "30 millis" });
-  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: Effect.succeed(false) });
+  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: () => Effect.succeed(false) });
   console.log(JSON.stringify([client, str, dropped, late, skipped]));
 }
 "#,
@@ -1503,8 +1505,8 @@ import { Packets } from "mira";
 
 export default function* () {
   const subscription = yield* Packets.subscribe({ cmd: "ct" });
-  console.log((yield* Effect.timeoutOption(subscription.next, "30 millis"))._tag);
-  console.log((yield* subscription.next).cmd);
+  console.log((yield* Effect.timeoutOption(subscription.next(), "30 millis"))._tag);
+  console.log((yield* subscription.next()).cmd);
 }
 "#,
     )]);
@@ -1551,7 +1553,7 @@ fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
 export default function* () {
   const death = yield* Wait.forEvent(
     { type: "monsterDeath", monMapId: 4 },
-    { trigger: Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
+    { trigger: () => Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
   );
   console.log(JSON.stringify(death));
 }
