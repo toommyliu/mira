@@ -495,6 +495,14 @@ impl Theme {
     pub fn warning_fill(&self) -> Hsla {
         self.warning.opacity(if self.dark_mode { 0.2 } else { 0.1 })
     }
+    pub fn warning_row(&self) -> Hsla {
+        self.warning
+            .opacity(if self.dark_mode { 0.07 } else { 0.06 })
+    }
+    pub fn destructive_row(&self) -> Hsla {
+        self.destructive
+            .opacity(if self.dark_mode { 0.09 } else { 0.06 })
+    }
     pub fn invalid_halo(&self) -> Hsla {
         self.destructive
             .opacity(if self.dark_mode { 0.4 } else { 0.2 })

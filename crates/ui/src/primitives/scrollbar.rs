@@ -5,10 +5,10 @@ use std::{
 };
 
 use gpui::{
-    App, ElementId, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, RenderOnce, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div, point,
-    prelude::FluentBuilder as _, px,
+    App, Bounds, ElementId, InteractiveElement as _, IntoElement, ListOffset, ListState,
+    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, RenderOnce,
+    ScrollHandle, Size, StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div,
+    point, prelude::FluentBuilder as _, px,
 };
 
 use crate::{ActiveTheme as _, motion};
@@ -18,12 +18,25 @@ const MIN_THUMB: Pixels = px(24.0);
 const HOLD: Duration = Duration::from_millis(1000);
 const FADE: Duration = Duration::from_millis(200);
 
+#[derive(Clone, Copy)]
+struct Drag {
+    from: Pixels,
+    at: Pixels,
+    top: Pixels,
+    scrolled: f32,
+    max: f32,
+    thumb: Pixels,
+    travel: Pixels,
+}
+
 #[derive(Default)]
 struct State {
-    drag: Cell<Option<(Pixels, Pixels)>>,
+    drag: Cell<Option<Drag>>,
     hovered: Cell<bool>,
     scrolled: Cell<Option<Instant>>,
-    offset: Cell<Option<Point<Pixels>>>,
+    scrolled_to: Cell<Option<f32>>,
+    last: Cell<Option<Extent>>,
+    end: Cell<Option<(usize, Size<Pixels>, f32)>>,
     hide: Cell<Option<Task<()>>>,
 }
 
@@ -50,10 +63,126 @@ impl State {
     }
 }
 
+#[derive(Clone)]
+enum Scrolled {
+    Handle(ScrollHandle),
+    List(ListState),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Extent {
+    shown: f32,
+    max: f32,
+    scrolled: f32,
+}
+
+fn rows(list: &ListState) -> Option<Extent> {
+    let viewport = list.viewport_bounds();
+    let count = list.item_count();
+    let top = list.logical_scroll_top();
+    let mut shown = 0.0;
+    let mut into = 0.0;
+    for ix in top.item_ix..count {
+        let Some(row) = list.bounds_for_item(ix) else {
+            break;
+        };
+        if row.top() >= viewport.bottom() {
+            break;
+        }
+        let height = row.size.height.max(px(1.0));
+        if ix == top.item_ix {
+            into = (top.offset_in_item / height).clamp(0.0, 1.0);
+        }
+        let visible = row.bottom().min(viewport.bottom()) - row.top().max(viewport.top());
+        shown += (visible / height).max(0.0);
+    }
+    (shown > 0.0).then(|| Extent {
+        shown,
+        max: (count as f32 - shown).max(0.0),
+        scrolled: top.item_ix as f32 + into,
+    })
+}
+
+impl Scrolled {
+    fn bounds(&self) -> Bounds<Pixels> {
+        match self {
+            Scrolled::Handle(handle) => handle.bounds(),
+            Scrolled::List(list) => list.viewport_bounds(),
+        }
+    }
+
+    fn extent(&self, state: &State) -> Option<Extent> {
+        match self {
+            Scrolled::Handle(handle) => {
+                let max = handle.max_offset().y / px(1.0);
+                Some(Extent {
+                    shown: handle.bounds().size.height / px(1.0),
+                    max,
+                    scrolled: (-handle.offset().y / px(1.0)).clamp(0.0, max.max(0.0)),
+                })
+            }
+            Scrolled::List(list) => {
+                let count = list.item_count();
+                let viewport = list.viewport_bounds().size;
+                let measured = rows(list);
+                if let Some(rows) = measured
+                    && list.is_following_tail()
+                {
+                    state.end.set(Some((count, viewport, rows.scrolled)));
+                }
+                let mut extent = measured.or_else(|| {
+                    let shown = state.last.get()?.shown;
+                    let max = (count as f32 - shown).max(0.0);
+                    Some(Extent {
+                        shown,
+                        max,
+                        scrolled: (list.logical_scroll_top().item_ix as f32).min(max),
+                    })
+                })?;
+                if let Some((_, _, end)) = state
+                    .end
+                    .get()
+                    .filter(|&(at, size, _)| (at, size) == (count, viewport))
+                {
+                    extent.max = end;
+                }
+                Some(extent)
+            }
+        }
+    }
+
+    fn scroll_to(&self, scrolled: f32, extent: Extent) {
+        let target = scrolled.clamp(0.0, extent.max);
+        match self {
+            Scrolled::Handle(handle) => {
+                handle.set_offset(point(handle.offset().x, px(-target)));
+            }
+            Scrolled::List(list) if target >= extent.max => list.scroll_to_end(),
+            Scrolled::List(list) => {
+                let item_ix = target as usize;
+                let height = list
+                    .bounds_for_item(item_ix)
+                    .map_or(px(0.0), |row| row.size.height);
+                list.scroll_to(ListOffset {
+                    item_ix,
+                    offset_in_item: height * target.fract(),
+                });
+            }
+        }
+    }
+
+    fn following(&self) -> bool {
+        match self {
+            Scrolled::Handle(_) => false,
+            Scrolled::List(list) => list.is_following_tail(),
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct Scrollbar {
     id: ElementId,
-    handle: ScrollHandle,
+    handle: Scrolled,
     persistent: bool,
 }
 
@@ -63,7 +192,15 @@ impl Scrollbar {
     pub fn new(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
         Self {
             id: id.into(),
-            handle,
+            handle: Scrolled::Handle(handle),
+            persistent: false,
+        }
+    }
+
+    pub fn list(id: impl Into<ElementId>, list: ListState) -> Self {
+        Self {
+            id: id.into(),
+            handle: Scrolled::List(list),
             persistent: false,
         }
     }
@@ -83,6 +220,11 @@ impl RenderOnce for Scrollbar {
             .read(cx)
             .clone();
         let handle = self.handle;
+        let extent = handle.extent(&state);
+        if extent.is_some() {
+            state.last.set(extent);
+        }
+        let dragging = state.drag.get().is_some();
         let wheel = state.clone();
         let watched = handle.clone();
         let strip = div()
@@ -95,12 +237,9 @@ impl RenderOnce for Scrollbar {
             .child(
                 canvas(
                     move |_, window, _| {
-                        let now = watched.offset();
-                        if wheel
-                            .offset
-                            .replace(Some(now))
-                            .is_some_and(|was| was != now)
-                        {
+                        let now = watched.extent(&wheel).map(|extent| extent.scrolled);
+                        let was = wheel.scrolled_to.replace(now);
+                        if was.is_some() && was != now && !watched.following() {
                             wheel.scrolled.set(Some(Instant::now()));
                             window.request_animation_frame();
                         }
@@ -109,16 +248,52 @@ impl RenderOnce for Scrollbar {
                 )
                 .absolute()
                 .inset_0(),
-            );
-        let viewport = handle.bounds().size.height;
-        let max = handle.max_offset().y;
+            )
+            .when(dragging, |strip| {
+                let follow = state.clone();
+                let release = state.clone();
+                let dragged = handle.clone();
+                strip.child(
+                    canvas(
+                        |_, _, _| (),
+                        move |_, _, window, _| {
+                            window.on_mouse_event(move |event: &MouseMoveEvent, _, window, _| {
+                                let (Some(mut drag), Some(extent)) =
+                                    (follow.drag.get(), follow.last.get())
+                                else {
+                                    return;
+                                };
+                                drag.at = event.position.y;
+                                follow.drag.set(Some(drag));
+                                let moved = (event.position.y - drag.from) / px(1.0);
+                                let per_pixel = drag.max / (drag.travel / px(1.0));
+                                let bounds = Extent {
+                                    max: drag.max,
+                                    ..extent
+                                };
+                                dragged.scroll_to(drag.scrolled + moved * per_pixel, bounds);
+                                window.refresh();
+                            });
+                            window.on_mouse_event(move |_: &MouseUpEvent, _, window, _| {
+                                release.drag.set(None);
+                                release.reveal(window);
+                            });
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            });
+        let height = handle.bounds().size.height;
         let strip = strip.when(self.persistent, |strip| {
             let measured = handle.clone();
+            let last = state.clone();
+            let max = extent.map(|extent| extent.max);
             strip.child(
                 canvas(
                     move |_, window, _| {
-                        let now = (measured.bounds().size.height, measured.max_offset().y);
-                        if now != (viewport, max) {
+                        let now = measured.extent(&last).map(|extent| extent.max);
+                        if (measured.bounds().size.height, now) != (height, max) {
                             window.request_animation_frame();
                         }
                     },
@@ -127,10 +302,15 @@ impl RenderOnce for Scrollbar {
                 .absolute(),
             )
         });
-        if max <= px(0.0) || viewport <= px(0.0) {
+        let Some(extent) = extent.filter(|extent| extent.max > 0.0 && height > px(0.0)) else {
             state.hovered.set(false);
             return strip;
-        }
+        };
+        let hover = state.clone();
+        let strip = strip.on_hover(move |hovered, window, _| {
+            hover.hovered.set(*hovered);
+            hover.reveal(window);
+        });
         let now = Instant::now();
         let opacity = if self.persistent {
             1.0
@@ -152,33 +332,31 @@ impl RenderOnce for Scrollbar {
             });
             state.hide.set(Some(task));
         }
-        let track = viewport - INSET * 2.0;
-        let thumb = (track * (viewport / (viewport + max))).max(MIN_THUMB);
-        let travel = track - thumb;
-        let scrolled = (-handle.offset().y).clamp(px(0.0), max);
-        let top = INSET + travel * (scrolled / max);
-        let dragging = state.drag.get().is_some();
+        let (thumb, travel, max) = match state.drag.get() {
+            Some(drag) => (drag.thumb, drag.travel, drag.max),
+            None => {
+                let track = height - INSET * 2.0;
+                let thumb = (track * (extent.shown / (extent.shown + extent.max))).max(MIN_THUMB);
+                (thumb, track - thumb, extent.max)
+            }
+        };
+        let top = match state.drag.get() {
+            Some(drag) => (drag.top + drag.at - drag.from).clamp(INSET, INSET + travel),
+            None => INSET + travel * (extent.scrolled.clamp(0.0, max) / max),
+        };
         let theme = cx.theme().clone();
         let page = handle.clone();
         let grab = state.clone();
-        let grab_handle = handle.clone();
-        let hover = state.clone();
         strip
             .opacity(opacity)
-            .on_hover(move |hovered, window, _| {
-                hover.hovered.set(*hovered);
-                hover.reveal(window);
-            })
             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                let mut offset = page.offset();
                 let local = event.position.y - page.bounds().top();
-                offset.y = if local < top {
-                    offset.y + viewport
+                let target = if local < top {
+                    extent.scrolled - extent.shown
                 } else {
-                    offset.y - viewport
-                }
-                .clamp(-max, px(0.0));
-                page.set_offset(offset);
+                    extent.scrolled + extent.shown
+                };
+                page.scroll_to(target, extent);
                 window.refresh();
                 cx.stop_propagation();
             })
@@ -195,44 +373,21 @@ impl RenderOnce for Scrollbar {
                     .bg(if dragging { theme.ring } else { theme.border })
                     .hover(|style| style.bg(theme.ring))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                        grab.drag
-                            .set(Some((event.position.y, grab_handle.offset().y)));
+                        if travel > px(0.0) {
+                            grab.drag.set(Some(Drag {
+                                from: event.position.y,
+                                at: event.position.y,
+                                top,
+                                scrolled: extent.scrolled,
+                                max,
+                                thumb,
+                                travel,
+                            }));
+                        }
                         window.refresh();
                         cx.stop_propagation();
                     }),
             )
-            .when(dragging, |bar| {
-                bar.child(
-                    canvas(
-                        |_, _, _| (),
-                        move |_, _, window, _| {
-                            let follow = state.clone();
-                            let handle = handle.clone();
-                            window.on_mouse_event(move |event: &MouseMoveEvent, _, window, _| {
-                                let Some((start, offset)) = follow.drag.get() else {
-                                    return;
-                                };
-                                if travel <= px(0.0) {
-                                    return;
-                                }
-                                let moved = (event.position.y - start) * (max / travel);
-                                handle.set_offset(point(
-                                    handle.offset().x,
-                                    (offset - moved).clamp(-max, px(0.0)),
-                                ));
-                                window.refresh();
-                            });
-                            let release = state.clone();
-                            window.on_mouse_event(move |_: &MouseUpEvent, _, window, _| {
-                                release.drag.set(None);
-                                release.reveal(window);
-                            });
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-            })
     }
 }
 
