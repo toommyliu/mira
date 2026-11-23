@@ -18,5 +18,14 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 ditto "$app" "$stage/Mira.app"
 ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -volname Mira -srcfolder "$stage" -format UDZO "$out/Mira.dmg"
+attempt=1
+until hdiutil create -quiet -volname Mira -srcfolder "$stage" -format UDZO "$out/Mira.dmg"; do
+    rm -f "$out/Mira.dmg"
+    if [ "$attempt" -eq 5 ]; then
+        exit 1
+    fi
+    echo "hdiutil failed on attempt $attempt, retrying" >&2
+    attempt=$((attempt + 1))
+    sleep $((attempt * 5))
+done
 echo "Packaged Mira $version in $out"
