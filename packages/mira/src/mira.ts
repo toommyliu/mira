@@ -1239,7 +1239,7 @@ export type ArmyTurns = {
   readonly turn: Body<boolean>;
 };
 
-export type Rotation = { readonly stop: Effect.Effect<void> };
+export type Rotation = { readonly stop: () => Effect.Effect<void> };
 
 export type LoopTauntTarget = {
   readonly target: MonsterQuery;
@@ -1378,7 +1378,7 @@ const equipSet = (name: string, { timeout }: ArmyStepOptions = {}): Effect.Effec
 
 const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<Rotation> =>
   Effect.gen(function* () {
-    if (!(yield* army<boolean>("rotate", { label, players }))) return { stop: Effect.void };
+    if (!(yield* army<boolean>("rotate", { label, players }))) return { stop: () => Effect.void };
     const taking = Effect.gen(function* () {
       let acted: boolean | null = null;
       while (true) {
@@ -1389,7 +1389,7 @@ const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<R
     const fiber = yield* Effect.forkDetach(
       failingTheScript(Effect.ensuring(taking, army<null>("leave", { label }))),
     );
-    return { stop: Fiber.interrupt(fiber) };
+    return { stop: () => Fiber.interrupt(fiber) };
   });
 
 type TauntTurn = { readonly lease: number; readonly assignment: number };
@@ -1429,7 +1429,7 @@ const loopTaunt = (
     const fiber = yield* Effect.forkDetach(
       failingTheScript(Effect.ensuring(taunting, army<null>("tauntLeave"))),
     );
-    return { stop: Fiber.interrupt(fiber) };
+    return { stop: () => Fiber.interrupt(fiber) };
   });
 
 export const Army = {
