@@ -1395,3 +1395,31 @@ kbd {
 .menu [aria-checked="true"] .menu-check {
   visibility: visible;
 }
+
+.not-found {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.not-found a,
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font: 500 13px/20px var(--font-sans);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.not-found a:hover,
+.text-button:hover {
+  background: color-mix(in oklch, var(--secondary) 95%, var(--foreground));
+}
