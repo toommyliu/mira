@@ -2079,7 +2079,7 @@ mod tests {
                 glance: Some(Glance { label: label.into(), tone }),
                 details: Details {
                     server: Some("Swordhaven (EU)".into()),
-                    script: Some("/Users/player/Documents/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
+                    script: Some("/Users/player/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
                     error: Some("Couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into()),
                 },
                 hint,

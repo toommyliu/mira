@@ -450,7 +450,7 @@ fn snapshot_dialog() {
                     0 => ListItem::header("Mine"),
                     1 => ListItem::new("daily.ts").end_slot("2m ago"),
                     2 => ListItem::new("army.ts")
-                        .description("~/Documents/Mira/scripts")
+                        .description("~/Mira/scripts")
                         .end_slot("1h ago"),
                     3 => ListItem::header("aqw-community"),
                     _ => ListItem::new("hunt.ts")
@@ -586,7 +586,7 @@ fn snapshot_menu() {
                             vec![
                                 MenuItem::header("Recent"),
                                 MenuItem::action("daily.ts", |_, _| {})
-                                    .description("~/Documents/Mira/scripts/ultras")
+                                    .description("~/Mira/scripts/ultras")
                                     .dismiss("Remove from recent", |_, _| {}),
                                 MenuItem::separator(),
                                 MenuItem::action("Choose a file…", |_, _| {}),
@@ -832,7 +832,7 @@ fn snapshot_sources_short_window() {
                             "bosses",
                             "merge",
                         ]
-                        .map(|name| folder(&format!("~/Documents/Mira/{name}"))),
+                        .map(|name| folder(&format!("~/Mira/{name}"))),
                     );
                     items.push(MenuItem::action("Add folder…", |_, _| {}));
                     items.push(MenuItem::separator());
@@ -1659,7 +1659,7 @@ fn list_keeps_its_inset_when_the_keyboard_reaches_the_last_row() {
 
     fn rows(index: usize) -> ListItem {
         ListItem::new("army.ts")
-            .description("~/Documents/Mira/scripts")
+            .description("~/Mira/scripts")
             .start_slot((index + 1).to_string())
     }
 
