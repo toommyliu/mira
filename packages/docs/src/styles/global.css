@@ -213,11 +213,22 @@ a {
   overflow-y: auto;
   overscroll-behavior-y: none;
   scroll-padding-top: calc(var(--subbar, 0px) + 16px);
+}
+
+.frame,
+.drawer,
+.card-body,
+.page-contents-panel,
+.search [role="listbox"] {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.frame:hover {
+.frame:hover,
+.drawer:hover,
+.card-body:hover,
+.page-contents-panel:hover,
+.search [role="listbox"]:hover {
   scrollbar-color: var(--ring) transparent;
 }
 
@@ -315,12 +326,24 @@ a {
   margin-top: 8px;
 }
 
-.nav .namespace {
+.nav .group > span {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--sidebar-foreground);
+}
+
+.nav .group ul {
+  margin-top: 1px;
+}
+
+.nav .nested {
   position: relative;
   padding-left: 23px;
 }
 
-.nav .namespace::before {
+.nav .nested::before {
   content: "";
   position: absolute;
   top: -1px;
@@ -330,21 +353,21 @@ a {
   background: var(--sidebar-border);
 }
 
-.nav .namespace:has(a[aria-current="page"])::before {
+.nav .nested:has(a[aria-current="page"])::before {
   top: 0;
   background: var(--foreground);
 }
 
-.nav .namespace a {
+.nav .nested a {
   color: var(--muted-foreground);
 }
 
-.nav .namespace a:hover {
+.nav .nested a:hover {
   background: none;
   color: var(--foreground);
 }
 
-.nav .namespace a[aria-current="page"] {
+.nav .nested a[aria-current="page"] {
   background: none;
   color: var(--foreground);
 }
@@ -613,6 +636,38 @@ main:focus {
   background: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.85em;
+}
+
+.prose table {
+  width: 100%;
+  margin: 0 0 16px;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.prose th,
+.prose td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.prose th:first-child,
+.prose td:first-child {
+  padding-left: 0;
+}
+
+.prose th:last-child,
+.prose td:last-child {
+  padding-right: 0;
 }
 
 .code-block {
@@ -1094,8 +1149,6 @@ code.type {
   overflow: auto;
   overscroll-behavior-y: contain;
   padding: 10px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
 }
 
 .card-name {
@@ -1513,4 +1566,145 @@ kbd {
 .not-found a:hover,
 .text-button:hover {
   background: color-mix(in oklch, var(--secondary) 95%, var(--foreground));
+}
+
+.frame.bare {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.landing {
+  max-width: 1040px;
+  margin-inline: auto;
+}
+
+.landing-top {
+  padding-block: 24px 16px;
+}
+
+.landing h1 {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 12px;
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 48px;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.landing-intro {
+  max-width: 480px;
+  margin: 0 0 24px;
+  color: var(--muted-foreground);
+  font-size: 17px;
+  line-height: 28px;
+}
+
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.landing-download,
+.landing-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.landing-download svg,
+.landing-secondary svg {
+  width: 16px;
+  height: 16px;
+}
+
+.landing-download {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.landing-download:hover {
+  background: color-mix(in oklch, var(--primary) 90%, var(--background));
+}
+
+.landing-secondary {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.landing-secondary:hover {
+  background: color-mix(in oklch, var(--secondary) 95%, var(--foreground));
+}
+
+.landing-note {
+  margin: 16px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.landing-section {
+  margin-top: 56px;
+}
+
+.landing h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.landing-faq details {
+  border-bottom: 1px solid var(--border);
+}
+
+.landing-faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.landing-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.landing-faq summary svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+
+.landing-faq details[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.landing-faq p {
+  max-width: 640px;
+  margin: 0 0 16px;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 840px) {
+  .bar:not(:has(.menu-button)) .site {
+    display: flex;
+  }
+
+  .landing h1 {
+    font-size: 32px;
+    line-height: 40px;
+  }
 }

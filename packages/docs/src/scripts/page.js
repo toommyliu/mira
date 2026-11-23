@@ -74,19 +74,41 @@ function setup() {
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let current = -1;
   let frame = 0;
+  const linked = () =>
+    typeof history.state?.scroll === "number"
+      ? -1
+      : links.findIndex((link) => link.hash === location.hash);
+  let chosen = linked();
+  /** @type {number | null} */
+  let landed = null;
 
   function locate() {
     const view = scroller();
-    const line = viewTop() + Number.parseFloat(getComputedStyle(view).scrollPaddingTop) + 8;
-    let found = -1;
-    for (const [index, section] of sections.entries()) {
-      if (section === null) continue;
-      if (section.getBoundingClientRect().top > line) break;
-      found = index;
+    if (chosen !== -1) {
+      landed ??= view.scrollTop;
+      if (Math.abs(view.scrollTop - landed) <= 2) return chosen;
+      chosen = -1;
     }
-    if (view.scrollTop + view.clientHeight < view.scrollHeight - 2) return found;
-    const target = links.findIndex((link) => link.hash === location.hash);
-    return target !== -1 && target >= found ? target : links.length - 1;
+    const max = view.scrollHeight - view.clientHeight;
+    const inset = Number.parseFloat(getComputedStyle(view).scrollPaddingTop) + 8;
+    const line = viewTop() + inset;
+    const marks = sections.flatMap((section, index) =>
+      section === null
+        ? []
+        : [{ index, at: view.scrollTop + section.getBoundingClientRect().top - line }],
+    );
+    const last = marks.at(-1);
+    if (last !== undefined && last.at > max) {
+      const from = Math.max(0, max - (view.clientHeight - inset));
+      const scale = (max - from) / (last.at - from);
+      for (const mark of marks) if (mark.at > from) mark.at = from + (mark.at - from) * scale;
+    }
+    let found = -1;
+    for (const mark of marks) {
+      if (mark.at > view.scrollTop + 1) break;
+      found = mark.index;
+    }
+    return found;
   }
 
   function expand() {
@@ -172,7 +194,28 @@ function setup() {
     };
     main.addEventListener("scroll", onScroll, { passive: true, signal });
     window.addEventListener("scroll", onScroll, { passive: true, signal });
-    window.addEventListener("popstate", onScroll, { signal });
+    window.addEventListener(
+      "popstate",
+      () => {
+        chosen = linked();
+        landed = null;
+        onScroll();
+      },
+      { signal },
+    );
+    for (const list of lists) {
+      for (const [index, link] of list.entries()) {
+        link.addEventListener(
+          "click",
+          () => {
+            chosen = index;
+            landed = null;
+            onScroll();
+          },
+          { signal },
+        );
+      }
+    }
     update();
     expand();
     cue();

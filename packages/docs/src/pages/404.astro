@@ -1,12 +1,15 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { home } from "../nav.ts";
+
+const docsHome = await home("docs");
 ---
 
 <Layout title="Page not found" description="This page doesn't exist.">
   <h1>Page not found</h1>
   <p>There's no page at this address.</p>
   <ul class="not-found">
-    <li><a href="/">Mira scripting</a></li>
+    <li><a href={docsHome}>Docs</a></li>
     <li><a href="/reference/">API reference</a></li>
     <li><button type="button" class="text-button" data-open-search>Search the docs</button></li>
   </ul>

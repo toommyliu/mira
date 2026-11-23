@@ -20,7 +20,7 @@ export type Entry = {
 export const GET: APIRoute = async () => {
   const entries: Entry[] = [];
   for (const doc of await getCollection("docs")) {
-    const href = doc.id === "index" ? "/" : `/${doc.id}/`;
+    const href = `/${doc.id}/`;
     entries.push({
       title: doc.data.title,
       kind: "page",

@@ -19,7 +19,8 @@ export const GET: APIRoute = async ({ site }) => {
     "# Mira",
     "> Mira is an automation client for AdventureQuest Worlds on Apple silicon Macs. These docs cover writing Mira scripts in TypeScript and the full scripting API.",
     "Each link below is the Markdown version of a page. Drop `.md` for the HTML page.",
-    section("Start", "Docs"),
+    section("App", "App"),
+    section("Scripting", "Scripting"),
     section("Reference", "API reference"),
   ].join("\n\n");
   return new Response(`${body}\n`, { headers: { "content-type": "text/plain; charset=utf-8" } });

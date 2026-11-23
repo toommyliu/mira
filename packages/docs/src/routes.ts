@@ -5,7 +5,8 @@ import type { Page } from "./reference/model.ts";
 import { load } from "./reference/project.ts";
 
 export type Route = {
-  readonly section: "Start" | "Reference";
+  readonly section: "App" | "Scripting" | "Reference";
+  readonly group: string | null;
   readonly kind: "page" | "package" | "namespace";
   readonly title: string;
   readonly href: string;
@@ -27,8 +28,13 @@ export function plainText(markdown: string): string {
     .trim();
 }
 
+function groupTitle(folder: string): string {
+  const words = folder.replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function markdownPath(href: string): string {
-  return href === "/" ? "/index.md" : `${href.replace(/\/$/, "")}.md`;
+  return `${href.replace(/\/$/, "")}.md`;
 }
 
 function listed(names: readonly string[]): string {
@@ -56,9 +62,11 @@ export async function routes(): Promise<readonly Route[]> {
   const { pages } = await load();
   return [
     ...docs.map((entry): Route => {
-      const href = entry.id === "index" ? "/" : `/${entry.id}/`;
+      const href = `/${entry.id}/`;
+      const folder = entry.id.split("/").slice(2, -1).at(-1);
       return {
-        section: "Start",
+        section: entry.id.startsWith("docs/scripting/") ? "Scripting" : "App",
+        group: folder === undefined ? null : groupTitle(folder),
         kind: "page",
         title: entry.data.title,
         href,
@@ -72,6 +80,7 @@ export async function routes(): Promise<readonly Route[]> {
       const href = page.slug === "" ? "/reference/" : `/reference/${page.slug}/`;
       return {
         section: "Reference",
+        group: null,
         kind: page.binding?.kind === "named" ? "namespace" : "package",
         title: page.title,
         href,

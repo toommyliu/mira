@@ -8,7 +8,7 @@ import { Check, ChevronDown, ChevronUp, Menu, Monitor, Moon, Search, Sun } from 
 import icon from "../../../../assets/icon.png";
 import ContentsList from "../components/ContentsList.astro";
 import Nav from "../components/Nav.astro";
-import { navigation } from "../nav.ts";
+import { area, home, navigation } from "../nav.ts";
 import { repositoryUrl } from "../repository.ts";
 import { routes } from "../routes.ts";
 import page from "../scripts/page.js?raw";
@@ -19,19 +19,23 @@ interface Props {
   title: string;
   description?: string | undefined;
   headings?: readonly Heading[];
+  bare?: boolean;
 }
 
-const sections = await navigation();
 const current = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`;
+const currentArea = area(current);
+const sections = currentArea === null ? [] : await navigation(currentArea);
+const docsHome = await home("docs");
 const route = (await routes()).find((candidate) => candidate.href === current);
 const {
   title,
   description = route?.description ??
     "Mira is an automation client for AdventureQuest Worlds on Apple silicon Macs.",
   headings = [],
+  bare = false,
 } = Astro.props;
 const site = Astro.site;
-const pageTitle = `${title} · Mira`;
+const pageTitle = current === "/" ? title : `${title} · Mira`;
 const contents = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 ---
 
@@ -82,16 +86,20 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
   <body>
     <a class="skip" href="#content">Skip to content</a>
     <header class="bar">
-      <button class="icon-button menu-button" type="button" aria-label="Open navigation" data-open-nav>
-        <Fragment set:html={Menu} />
-      </button>
+      {
+        currentArea !== null && (
+          <button class="icon-button menu-button" type="button" aria-label="Open navigation" data-open-nav>
+            <Fragment set:html={Menu} />
+          </button>
+        )
+      }
       <a class="brand" href="/">
         <img src={icon.src} alt="" width="20" height="20" />
         <span>Mira</span>
       </a>
       <nav class="site" aria-label="Site">
-        <a href="/" aria-current={current.startsWith("/reference/") ? undefined : "true"}>Docs</a>
-        <a href="/reference/" aria-current={current.startsWith("/reference/") ? "true" : undefined}>
+        <a href={docsHome} aria-current={currentArea === "docs" ? "true" : undefined}>Docs</a>
+        <a href="/reference/" aria-current={currentArea === "reference" ? "true" : undefined}>
           Reference
         </a>
       </nav>
@@ -138,10 +146,14 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
         </div>
       </div>
     </header>
-    <div class="frame" tabindex="-1">
-      <aside class="sidebar" transition:persist="sidebar">
-        <Nav sections={sections} current={current} />
-      </aside>
+    <div class={currentArea === null ? "frame bare" : "frame"} tabindex="-1">
+      {
+        currentArea !== null && (
+          <aside class="sidebar" transition:persist={`sidebar-${currentArea}`}>
+            <Nav sections={sections} current={current} />
+          </aside>
+        )
+      }
       <main id="content" tabindex="-1">
         {
           contents.length > 0 && (
@@ -157,9 +169,15 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
             </details>
           )
         }
-        <article class="prose">
-          <slot />
-        </article>
+        {
+          bare ? (
+            <slot />
+          ) : (
+            <article class="prose">
+              <slot />
+            </article>
+          )
+        }
       </main>
       {
         contents.length > 0 && (
@@ -207,9 +225,13 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
       <ul id="search-results" role="listbox" aria-label="Results"></ul>
       <p class="search-empty" hidden>No results</p>
     </dialog>
-    <dialog class="drawer" aria-label="Navigation">
-      <Nav sections={sections} current={current} />
-    </dialog>
+    {
+      currentArea !== null && (
+        <dialog class="drawer" aria-label="Navigation">
+          <Nav sections={sections} current={current} />
+        </dialog>
+      )
+    }
     <script is:inline set:html={page} />
     <script>
       import "../scripts/chrome.ts";
