@@ -81,6 +81,26 @@ test("the body is the condensed notes, then the full changelog in a disclosure",
   );
 });
 
+test("the body counts the fixes the highlights leave out", () => {
+  const fixes = (subjects: readonly string[]) =>
+    subjects.map((subject, index) => ({ sha: `${index}`.padStart(8, "0"), subject, body: "" }));
+  const note = "- **Sidebar updates.** Click to download.\n";
+  const changes = fixes([
+    "fix: one",
+    "fix(ui): two",
+    "perf: three",
+    "fix!: four",
+    "feat: five",
+    "docs: six",
+  ]);
+  assert.match(
+    releaseBody(note, changes),
+    /^- \*\*Sidebar.*\n\nPlus 3 more fixes and improvements\.\n\n<details>/,
+  );
+  assert.match(releaseBody(note, changes.slice(0, 2)), /\n\nPlus 1 more fix or improvement\.\n\n/);
+  assert.doesNotMatch(releaseBody(note, changes.slice(4)), /Plus/);
+});
+
 test("notes are a few short highlights and leave the changelog to the script", () => {
   const note = "- **Sidebar updates.** Click to download.";
   assert.throws(() => checkNotes(""));

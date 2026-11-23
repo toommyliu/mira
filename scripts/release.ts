@@ -103,11 +103,17 @@ export function checkNotes(notes: string): string {
 }
 
 export function releaseBody(notes: string, changes: readonly Change[]): string {
+  const highlights = checkNotes(notes);
+  const fixes = changes.filter((change) => /^(fix|perf)(\(.+\))?!?: /.test(change.subject));
+  const more = fixes.length - highlights.split("\n").length;
   const log = changes.map((change) => `- ${change.subject} (${change.sha.slice(0, 8)})`);
   const count = `${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
   return [
-    checkNotes(notes),
+    highlights,
     "",
+    ...(more > 0
+      ? [`Plus ${more} more ${more === 1 ? "fix or improvement" : "fixes and improvements"}.`, ""]
+      : []),
     "<details>",
     `<summary>Full changelog (${count})</summary>`,
     "",
