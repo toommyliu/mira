@@ -242,16 +242,15 @@ use super::placement::{Align, Placement, Side};
 
 pub(crate) fn attach(
     placement: Placement,
+    anchor: Bounds<Pixels>,
     state: &Entity<MenuState>,
     on_outside: PressHandler,
     window: &mut Window,
     cx: &App,
     panel: impl FnOnce(&mut Window) -> AnyElement,
 ) -> Div {
-    let menu = state.read(cx);
-    let trigger = menu.trigger_bounds.get();
-    let measured = menu.panel_size.clone();
-    let (positioner, _) = placement.resolve(trigger, measured.get(), window.viewport_size());
+    let measured = state.read(cx).panel_size.clone();
+    let (positioner, _) = placement.resolve(anchor, measured.get(), window.viewport_size());
     let measure = canvas(
         move |area, window, _| {
             if measured.replace(area.size) != area.size {
@@ -1751,23 +1750,31 @@ impl RenderOnce for DropdownMenu {
             let (width, max_height) = (self.width, self.max_height);
             let beside = self.beside;
             let on_outside = dismiss(&state);
+            let anchor = state.read(cx).trigger_bounds();
             trigger = trigger.attach(
-                attach(self.placement, &state, on_outside, window, cx, |window| {
-                    let panel = popup(&id, label, items, max_height, &state, window, cx);
-                    match width {
-                        Some(width) => div().w(width).child(panel).into_any_element(),
-                        None if beside => {
-                            let leave = state.clone();
-                            div()
-                                .relative()
-                                .min_w(px(128.0))
-                                .child(panel)
-                                .child(
-                                    canvas(
-                                        |bounds, _, _| bounds,
-                                        move |_, bounds, window, _| {
-                                            let leave = leave.clone();
-                                            window.on_mouse_event(
+                attach(
+                    self.placement,
+                    anchor,
+                    &state,
+                    on_outside,
+                    window,
+                    cx,
+                    |window| {
+                        let panel = popup(&id, label, items, max_height, &state, window, cx);
+                        match width {
+                            Some(width) => div().w(width).child(panel).into_any_element(),
+                            None if beside => {
+                                let leave = state.clone();
+                                div()
+                                    .relative()
+                                    .min_w(px(128.0))
+                                    .child(panel)
+                                    .child(
+                                        canvas(
+                                            |bounds, _, _| bounds,
+                                            move |_, bounds, window, _| {
+                                                let leave = leave.clone();
+                                                window.on_mouse_event(
                                                     move |event: &gpui::MouseMoveEvent,
                                                           phase,
                                                           window,
@@ -1795,19 +1802,20 @@ impl RenderOnce for DropdownMenu {
                                                         }
                                                     },
                                                 );
-                                        },
+                                            },
+                                        )
+                                        .absolute()
+                                        .inset_0(),
                                     )
-                                    .absolute()
-                                    .inset_0(),
-                                )
-                                .into_any_element()
+                                    .into_any_element()
+                            }
+                            None => div()
+                                .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
+                                .child(panel)
+                                .into_any_element(),
                         }
-                        None => div()
-                            .min_w(state.read(cx).trigger_bounds().size.width.max(px(128.0)))
-                            .child(panel)
-                            .into_any_element(),
-                    }
-                })
+                    },
+                )
                 .into_any_element(),
             );
         }

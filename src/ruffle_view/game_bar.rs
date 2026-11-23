@@ -894,7 +894,8 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             Button::icon("script-menu", Icon::ChevronDown, "Script options")
                 .variant(Variant::Ghost)
                 .size(Size::Small)
-                .joined(Joined::Previous),
+                .joined(Joined::Previous)
+                .hide_tooltip(),
             move |_, cx| script_menu(has_inputs, cx),
         )
         .child(super::client::drag_area().flex_1())

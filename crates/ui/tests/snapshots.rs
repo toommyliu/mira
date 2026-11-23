@@ -955,6 +955,41 @@ fn snapshot_menubar() {
 }
 
 #[test]
+fn snapshot_menubar_split_button() {
+    scene("menubar-split-button", 560.0, 200.0, |_, cx| {
+        let theme = cx.theme().clone();
+        let trigger = |id: &'static str, title: &'static str| {
+            Button::new(id, title)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+        };
+        Menubar::new("bar", "Game")
+            .h(px(38.0))
+            .gap(px(2.0))
+            .px(px(6.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(trigger("attack", "Auto attack"))
+            .button(trigger("script", "Start hunt.ts").joined(Joined::Next))
+            .menu(
+                Button::icon("script-menu", Icon::ChevronDown, "Script options")
+                    .size(Size::Small)
+                    .joined(Joined::Previous),
+                |_, _| {
+                    vec![
+                        MenuItem::action("Load script…", |_, _| {}),
+                        MenuItem::action("Edit inputs…", |_, _| {}),
+                    ]
+                },
+            )
+            .child(div().flex_1())
+            .child(trigger("bank", "Bank"))
+            .default_open(1)
+            .into_any_element()
+    });
+}
+
+#[test]
 fn snapshot_popover() {
     fn options(open: bool) -> gpui::AnyElement {
         div()
