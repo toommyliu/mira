@@ -288,6 +288,246 @@ fn right_clicking_an_open_dropdown_trigger_leaves_one_menu_open(cx: &mut TestApp
     assert!(cx.debug_bounds("dropdown").is_none());
 }
 
+struct Tabs {
+    disabled: bool,
+}
+
+impl Render for Tabs {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().p(gpui::px(40.0)).child(
+            div().debug_selector(|| "tabs-trigger".into()).child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .disabled(self.disabled)
+                    .items(|_, _| {
+                        vec![
+                            MenuItem::action("Artix", |_, _| {})
+                                .start_slot(div().debug_selector(|| "tab".into())),
+                        ]
+                    }),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn disabling_a_trigger_closes_its_open_menu(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+    cx.update(mira_ui::init);
+    let (tabs, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        Tabs { disabled: false }
+    });
+    cx.run_until_parked();
+    let trigger = cx.debug_bounds("tabs-trigger").unwrap().center();
+    cx.simulate_click(trigger, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("tab").is_some());
+    let set = |disabled, cx: &mut VisualTestContext| {
+        tabs.update(cx, |tabs, cx| {
+            tabs.disabled = disabled;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    };
+    set(true, cx);
+    assert!(cx.debug_bounds("tab").is_none());
+    set(false, cx);
+    assert!(cx.debug_bounds("tab").is_none());
+}
+
+struct LongTabs {
+    focus: FocusHandle,
+}
+
+impl Render for LongTabs {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(|_, _| {
+                        let mut items: Vec<MenuItem> = (0..30usize)
+                            .map(|index| MenuItem::action(format!("Tab {index}"), |_, _| {}))
+                            .collect();
+                        items.push(MenuItem::separator().pinned());
+                        items.push(
+                            MenuItem::action("New tab", |_, _| {})
+                                .start_slot(div().debug_selector(|| "new-tab".into()))
+                                .pinned(),
+                        );
+                        items
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn pinned_rows_at_the_end_stay_below_a_list_that_scrolls(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        LongTabs { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(240.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let new_tab = cx.debug_bounds("new-tab").unwrap();
+    assert!(
+        new_tab.top() >= px(0.0) && new_tab.bottom() <= px(240.0),
+        "{new_tab:?}"
+    );
+}
+
+struct CheckedFarAway {
+    focus: FocusHandle,
+}
+
+impl Render for CheckedFarAway {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(|_, _| {
+                        (0..30usize)
+                            .map(|index| {
+                                let item = MenuItem::action(format!("Tab {index}"), |_, _| {})
+                                    .checked(index == 25);
+                                if index == 25 {
+                                    item.start_slot(div().debug_selector(|| "current".into()))
+                                } else {
+                                    item
+                                }
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn an_arrow_scrolls_back_to_the_checked_row(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        CheckedFarAway { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(240.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let current = cx.debug_bounds("current").unwrap();
+    assert!(current.top() > px(240.0), "{current:?}");
+    let arrow = cx.debug_bounds("scroll-to-checked").unwrap();
+    cx.simulate_click(arrow.center(), Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let current = cx.debug_bounds("current").unwrap();
+    assert!(current.bottom() <= px(240.0), "{current:?}");
+    assert!(cx.debug_bounds("scroll-to-checked").is_none());
+}
+
+struct Closable {
+    focus: FocusHandle,
+    elsewhere: FocusHandle,
+    closed: Rc<Cell<usize>>,
+}
+
+impl Render for Closable {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (elsewhere, closed) = (self.elsewhere.clone(), self.closed.clone());
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(div().track_focus(&self.elsewhere))
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(move |_, _| {
+                        (0..3usize)
+                            .map(|index| {
+                                let (elsewhere, closed) = (elsewhere.clone(), closed.clone());
+                                MenuItem::action(format!("Tab {index}"), |_, _| {}).dismiss(
+                                    "Close tab",
+                                    move |window, cx| {
+                                        closed.set(closed.get() + 1);
+                                        window.focus(&elsewhere, cx);
+                                    },
+                                )
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+fn closable(cx: &mut TestAppContext) -> (Entity<Closable>, &mut VisualTestContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Closable {
+            focus,
+            elsewhere: cx.focus_handle(),
+            closed: Rc::default(),
+        }
+    });
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    assert!(cx.debug_bounds("menu-panel").is_some());
+    (view, cx)
+}
+
+#[gpui::test]
+fn a_dismiss_that_moves_focus_keeps_the_keyboard_in_the_menu(cx: &mut TestAppContext) {
+    let (view, cx) = closable(cx);
+    for key in ["delete", "delete"] {
+        press(cx, key);
+    }
+    assert_eq!(view.read_with(cx, |view, _| view.closed.get()), 2);
+    assert!(cx.debug_bounds("menu-panel").is_some());
+    press(cx, "escape");
+    assert!(cx.debug_bounds("menu-panel").is_none());
+    let elsewhere = view.read_with(cx, |view, _| view.elsewhere.clone());
+    assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+}
+
+#[gpui::test]
+fn a_dropdown_closes_when_focus_leaves_it(cx: &mut TestAppContext) {
+    let (view, cx) = closable(cx);
+    let elsewhere = view.read_with(cx, |view, _| view.elsewhere.clone());
+    cx.update(|window, cx| window.focus(&elsewhere, cx));
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("menu-panel").is_none());
+    assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+}
+
 struct ProfileRow {
     focus: FocusHandle,
     picked: Rc<Cell<Option<&'static str>>>,

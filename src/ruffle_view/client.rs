@@ -24,8 +24,8 @@ use super::{
 use mira_ui::{
     ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
-        Align, Button, Dialog, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem,
-        Tabs,
+        Align, Button, Dialog, DropdownMenu, HoverCard, Icon, Kbd, MenuItem, Placement, Side,
+        Tab as TabItem, Tabs,
         button::{Size, Variant},
     },
     theme::CONTROL_SM,
@@ -39,6 +39,7 @@ use crate::{
     scripting::Values,
     settings,
     shared_objects::SharedObjects,
+    shortcuts::keys_for,
 };
 
 actions!(
@@ -63,6 +64,7 @@ pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 const STATUS_LINGER: Duration = Duration::from_millis(1500);
 const STATUS_PADDING: Pixels = px(16.0);
+const TAB_MENU_WIDTH: Pixels = px(304.0);
 
 fn fully_visible(
     viewport: (f32, f32),
@@ -132,6 +134,7 @@ pub struct Client {
     ended: HashMap<AccountId, ScriptState>,
     closing: Option<Closing>,
     _activation: Subscription,
+    _focus_lost: Subscription,
 }
 
 struct Closing {
@@ -518,6 +521,15 @@ impl Client {
                         this.hide_shortcut_hints(cx);
                     }
                 }),
+                _focus_lost: cx.on_focus_lost(window, |this: &mut Self, window, cx| {
+                    match window
+                        .focus_lost_restore_target(cx)
+                        .filter(|target| *target != this.focus)
+                    {
+                        Some(target) => window.focus(&target, cx),
+                        None => this.focus_active(window, cx),
+                    }
+                }),
             }
         });
         if blank_tab {
@@ -555,6 +567,7 @@ impl Client {
                 ended: HashMap::new(),
                 closing: None,
                 _activation: Subscription::new(|| {}),
+                _focus_lost: Subscription::new(|| {}),
             }
         })
     }
@@ -588,7 +601,7 @@ impl Client {
                 (window_size.height - cx.theme().layout.chrome).max(px(1.0)),
             ),
         );
-        let inset = bar_inset(window, left);
+        let inset = bar_inset(window, self.sidebar, cx.theme());
         view.update(cx, |view, _| {
             view.bar_inset = inset;
             view.layout(player, window)
@@ -1057,14 +1070,18 @@ impl Client {
                 .view
                 .update(cx, |view, cx| view.present(tiled, active, window, cx));
         }
+        if !self.sessions.is_empty() {
+            reveal_tab(&self.tab_scroll, self.active, self.sessions.len());
+        }
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.sessions.get(self.active) {
-            Some(session) => {
-                reveal_tab(&self.tab_scroll, self.active, self.sessions.len());
-                window.focus(&session.view.focus_handle(cx), cx)
-            }
+            Some(session) => window.focus(&session.view.focus_handle(cx), cx),
             None => window.focus(&self.focus, cx),
         }
-        cx.notify();
     }
 
     fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -1323,7 +1340,7 @@ impl Client {
             )
     }
 
-    fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn bar_start(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let layout = cx.theme().layout;
         let label = match self.sidebar {
             Sidebar::Hidden => "Show sidebar",
@@ -1341,13 +1358,48 @@ impl Client {
         if dot.is_some() {
             toggle = toggle.tooltip("Show sidebar · an update is available");
         }
-        div()
+        h_flex()
             .absolute()
             .left(traffic_lights_inset(window))
             .top((cx.theme().layout.chrome - layout.control_sm) / 2.0)
+            .gap(layout.space(0.5))
             .occlude()
-            .child(toggle)
-            .children(dot)
+            .child(div().relative().child(toggle).children(dot))
+            .when(self.sidebar == Sidebar::Hidden, |row| {
+                row.child(self.tab_menu(cx))
+            })
+    }
+
+    fn tab_menu(&self, cx: &mut Context<Self>) -> DropdownMenu {
+        let client = cx.weak_entity();
+        DropdownMenu::new("tab-menu")
+            .trigger(bar_icon_button(
+                "tab-menu",
+                Icon::GalleryVerticalEnd,
+                "Tabs",
+            ))
+            .disabled(self.asking())
+            .width(TAB_MENU_WIDTH)
+            .items(move |_, cx| {
+                let Some(this) = client.upgrade() else {
+                    return Vec::new();
+                };
+                let this = this.read(cx);
+                let shortcuts = this.shortcut_tabs();
+                let tabs = this
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, session)| MenuTab {
+                        title: session.title(cx),
+                        glance: session.view.read(cx).glance(cx).map(|glance| glance.label),
+                        active: index == this.active,
+                        shortcut: shortcut_for(&shortcuts, index)
+                            .and_then(|number| keys_for(&SelectSession(number - 1), cx)),
+                    })
+                    .collect();
+                tab_items(&client, tabs, this.layout, cx)
+            })
     }
 
     fn toggle_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1460,6 +1512,79 @@ impl Client {
     }
 }
 
+struct MenuTab {
+    title: SharedString,
+    glance: Option<SharedString>,
+    active: bool,
+    shortcut: Option<SharedString>,
+}
+
+fn tab_items(
+    client: &WeakEntity<Client>,
+    tabs: Vec<MenuTab>,
+    layout: Layout,
+    cx: &App,
+) -> Vec<MenuItem> {
+    let shortcut = |item: MenuItem, action: &dyn gpui::Action| match keys_for(action, cx) {
+        Some(keys) => item.shortcut(keys),
+        None => item,
+    };
+    let mut items: Vec<MenuItem> = tabs
+        .into_iter()
+        .enumerate()
+        .map(|(index, tab)| {
+            let select = on_client(client, move |client, window, cx| {
+                client.select(index, window, cx)
+            });
+            let close = on_client(client, move |client, window, cx| {
+                client.request_close(index, window, cx)
+            });
+            let mut item = MenuItem::action(tab.title, select)
+                .checked(tab.active)
+                .dismiss("Close tab", close);
+            if let Some(glance) = tab.glance {
+                item = item.description(glance);
+            }
+            if let Some(keys) = tab.shortcut {
+                item = item.shortcut(keys);
+            }
+            item
+        })
+        .collect();
+    if !items.is_empty() {
+        items.push(MenuItem::separator().pinned());
+    }
+    let new_tab = on_client(client, |client, window, cx| {
+        if let Err(error) = client.open_session(None, window, cx) {
+            tracing::error!(%error, "couldn't open a session");
+        }
+    });
+    items.push(shortcut(
+        MenuItem::action("New tab", new_tab).pinned(),
+        &NewSession,
+    ));
+    let grid = match layout {
+        Layout::Single => "Grid view",
+        Layout::Grid => "Single view",
+    };
+    let toggle_grid = on_client(client, Client::toggle_grid);
+    items.push(shortcut(
+        MenuItem::action(grid, toggle_grid).pinned(),
+        &ToggleGrid,
+    ));
+    items
+}
+
+fn on_client(
+    client: &WeakEntity<Client>,
+    f: impl Fn(&mut Client, &mut Window, &mut Context<Client>) + 'static,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let client = client.clone();
+    move |window, cx| {
+        client.update(cx, |client, cx| f(client, window, cx)).ok();
+    }
+}
+
 fn tab_title(
     theme: &Theme,
     label: &SharedString,
@@ -1526,8 +1651,12 @@ fn traffic_lights_inset(window: &Window) -> Pixels {
     }
 }
 
-fn bar_inset(window: &Window, sidebar_width: Pixels) -> Pixels {
-    (traffic_lights_inset(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
+fn bar_inset(window: &Window, sidebar: Sidebar, theme: &Theme) -> Pixels {
+    let lights = traffic_lights_inset(window);
+    match sidebar {
+        Sidebar::Hidden => lights + CONTROL_SM * 2.0 + theme.layout.space(0.5),
+        Sidebar::Full => (lights + CONTROL_SM - theme.layout.sidebar).max(BAR_PADDING),
+    }
 }
 
 pub(crate) fn drag_area() -> gpui::Div {
@@ -1588,7 +1717,7 @@ pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
 
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = bar_inset(window, self.sidebar.width(cx.theme()));
+        let inset = bar_inset(window, self.sidebar, cx.theme());
         for session in &self.sessions {
             if session.view.read(cx).bar_inset != inset {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
@@ -1699,7 +1828,7 @@ impl Client {
                     .child(body)
                     .children(self.status(window, cx)),
             )
-            .child(self.sidebar_toggle(window, cx))
+            .child(self.bar_start(window, cx))
             .children(self.close_dialog(cx))
     }
 }
@@ -1800,6 +1929,49 @@ mod tests {
         assert!(!cx.windows().contains(&window.into()));
         assert!(cx.update(|cx| clients(cx).is_empty()));
         assert!(cx.update(|cx| finished_at(&account, &entry, cx)).is_some());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
+    fn the_sidebar_shortcut_works_after_it_hides_the_open_tab_menu(cx: &mut gpui::TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("mira-tab-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            bind_keys(cx);
+            crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+            crate::shortcuts::apply(cx);
+            crate::settings::set_sidebar(false, cx);
+            init(
+                folder.clone(),
+                folder.join("accounts.json"),
+                reqwest::header::HeaderValue::from_static("test"),
+                Armies::new(folder.join("armies")),
+                cx,
+            );
+        });
+        let window = cx
+            .update(|cx| open(Home::Setup("Daily".into()), false, cx))
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let trigger = point(
+            TRAFFIC_LIGHTS_WIDTH + CONTROL_SM * 1.5 + px(2.0),
+            cx.update(|_, cx| cx.theme().layout.chrome) / 2.0,
+        );
+        cx.simulate_click(trigger, Modifiers::none());
+        assert!(cx.debug_bounds("menu-panel").is_some());
+        let sidebar = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |client, _| client.sidebar == Sidebar::Full)
+                .unwrap()
+        };
+        for open in [true, false] {
+            cx.simulate_keystrokes("ctrl-cmd-s");
+            cx.run_until_parked();
+            assert_eq!(sidebar(cx), open);
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
 
@@ -2251,6 +2423,147 @@ mod tests {
                 assert_ne!(image.get_pixel(w / 2, h / 32).0, player, "game bar");
             },
         );
+    }
+
+    struct CollapsedBar(Entity<Client>);
+
+    impl Render for CollapsedBar {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let (inset, start) = self.0.update(cx, |client, cx| {
+                let inset = bar_inset(window, client.sidebar, cx.theme());
+                (inset, client.bar_start(window, cx))
+            });
+            div()
+                .window_text(cx.theme())
+                .relative()
+                .size_full()
+                .bg(gpui::black())
+                .child(super::super::game_bar::preview(inset, cx))
+                .child(start)
+        }
+    }
+
+    #[test]
+    fn snapshot_collapsed_bar() {
+        let folder = crate::storyboard::scratch("client-collapsed-bar");
+        for path in mira_ui::snapshot(
+            "client-collapsed-bar",
+            gpui::size(px(720.0), px(80.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                cx.new(|_| CollapsedBar(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    struct TabMenu {
+        extra: usize,
+        active: usize,
+    }
+
+    impl Render for TabMenu {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let menu = DropdownMenu::new("tab-menu")
+                .trigger(bar_icon_button(
+                    "tab-menu",
+                    Icon::GalleryVerticalEnd,
+                    "Tabs",
+                ))
+                .width(TAB_MENU_WIDTH)
+                .default_open(true)
+                .items({
+                    let (extra, active) = (self.extra, self.active);
+                    move |_, cx| {
+                        let tab = |title: &str, glance: Option<&str>, number: usize| MenuTab {
+                            title: title.to_owned().into(),
+                            glance: glance.map(|glance| glance.to_owned().into()),
+                            active: number == active,
+                            shortcut: keys_for(&SelectSession(number - 1), cx),
+                        };
+                        let mut tabs = vec![
+                            tab("Artix", Some("Running hunt.ts"), 1),
+                            tab("Zorbak", Some("Logging in, attempt 2 of 3"), 2),
+                            tab("Warlic", None, 3),
+                        ];
+                        tabs.extend((4..4 + extra).map(|number| {
+                            tab(&format!("Farmer{number}"), Some("Running daily.ts"), number)
+                        }));
+                        tab_items(&WeakEntity::new_invalid(), tabs, Layout::Single, cx)
+                    }
+                });
+            div()
+                .window_text(&theme)
+                .size_full()
+                .bg(theme.background)
+                .child(
+                    window_bar(window, cx)
+                        .gap(theme.layout.space(0.5))
+                        .child(bar_icon_button(
+                            "sidebar-toggle",
+                            Icon::Sidebar,
+                            "Show sidebar",
+                        ))
+                        .child(menu),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_tab_menu() {
+        let folder = crate::storyboard::scratch("client-tab-menu");
+        mira_ui::snapshot_with(
+            "client-tab-menu",
+            gpui::size(px(480.0), px(260.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                bind_keys(cx);
+                crate::shortcuts::apply(cx);
+                cx.new(|_| TabMenu {
+                    extra: 0,
+                    active: 1,
+                })
+            },
+            |cx, owner| {
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(160.0 + nudge), px(104.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_long_tab_menu() {
+        let folder = crate::storyboard::scratch("client-tab-menu-long");
+        for path in mira_ui::snapshot(
+            "client-tab-menu-long",
+            gpui::size(px(480.0), px(400.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                bind_keys(cx);
+                crate::shortcuts::apply(cx);
+                cx.new(|_| TabMenu {
+                    extra: 9,
+                    active: 11,
+                })
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
     }
 
     #[test]

@@ -904,6 +904,21 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
     }
 }
 
+#[cfg(test)]
+pub(super) fn preview(inset: Pixels, cx: &App) -> Menubar {
+    let bar = Bar {
+        inset,
+        live: true,
+        relogin: false,
+        login_captured: true,
+        relogin_detail: None,
+        attack: false,
+        script: ScriptControl::Start(Some("hunt.ts".into())),
+        toggle_panel: None,
+    };
+    menubar(bar, WeakEntity::new_invalid(), cx)
+}
+
 fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button {
     let (verb, name) = match &script {
         ScriptControl::Start(name) => ("Start", name.as_ref()),
