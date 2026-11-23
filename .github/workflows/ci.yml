@@ -63,4 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: |
+          touch "$RUNNER_TEMP/mira"
+          scripts/bundle-app "$RUNNER_TEMP/mira" "$RUNNER_TEMP/Mira.app" 0.0.0
       - run: cargo test --locked --workspace
