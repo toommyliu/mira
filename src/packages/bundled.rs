@@ -13,7 +13,7 @@ use super::{
     store::{Receipt, Store},
 };
 
-const REPOSITORY: u64 = 1_448_817_579;
+const REPOSITORY: u64 = 1_467_257_118;
 const OWNER: &str = "toommyliu";
 const REPO: &str = "mira";
 const BRANCH: &str = "main";
