@@ -1722,7 +1722,7 @@ impl ScriptsWindow {
             },
         );
         if let Some(edited) = checked {
-            self.store_entry(&key, edited, cx);
+            self.store(&key, edited, cx);
         }
     }
 
@@ -1750,14 +1750,20 @@ impl ScriptsWindow {
             input.update(cx, |input, cx| input.set_invalid(invalid, cx));
         }
         let edited = values(definition, drafts);
-        self.store_entry(key, edited, cx);
+        self.store(key, edited, cx);
         cx.notify();
     }
 
-    fn store_entry(&mut self, key: &FormKey, edited: Option<Values>, cx: &mut Context<Self>) {
-        if let FormKey::Entry(id) = key {
-            let id = *id;
-            self.edit_queue(cx, |queue| queue.set_values(id, edited));
+    fn store(&mut self, key: &FormKey, edited: Option<Values>, cx: &mut Context<Self>) {
+        match (key, edited) {
+            (FormKey::Entry(id), edited) => {
+                let id = *id;
+                self.edit_queue(cx, |queue| queue.set_values(id, edited));
+            }
+            (FormKey::Script(path), Some(edited)) if !script_inputs::unreadable(cx) => {
+                script_inputs::save(path, edited, cx);
+            }
+            (FormKey::Script(_), _) => {}
         }
     }
 
@@ -1798,31 +1804,47 @@ impl ScriptsWindow {
             }
         }
         let edited = values(definition, drafts);
-        self.store_entry(key, edited, cx);
+        self.store(key, edited, cx);
         cx.notify();
     }
 
-    fn launch_values(&self, path: &Path, cx: &App) -> Option<(Option<&Definition>, Values)> {
+    fn start_fresh(&mut self, cx: &mut Context<Self>) {
+        script_inputs::start_fresh(cx);
+        if !script_inputs::unreadable(cx) {
+            for (key, form) in &self.forms {
+                if let (
+                    FormKey::Script(path),
+                    FormState::Fields {
+                        definition, drafts, ..
+                    },
+                ) = (key, &form.state)
+                    && let Some(values) = values(definition, drafts)
+                {
+                    script_inputs::save(path, values, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn launch_values(&self, path: &Path, cx: &App) -> Option<Values> {
         match &self.forms.get(&FormKey::Script(path.to_owned()))?.state {
             FormState::Broken { .. } => None,
-            FormState::Plain => Some((None, Values::new())),
+            FormState::Plain => Some(Values::new()),
             FormState::Fields {
                 definition, drafts, ..
             } => {
                 if script_inputs::unreadable(cx) {
                     return None;
                 }
-                Some((Some(definition), values(definition, drafts)?))
+                values(definition, drafts)
             }
         }
     }
 
-    fn launch(&mut self, cx: &mut Context<Self>) -> Option<(PathBuf, Values)> {
+    fn launch(&self, cx: &App) -> Option<(PathBuf, Values)> {
         let entry = self.target(cx)?;
-        let (definition, values) = self.launch_values(&entry.path, cx)?;
-        if definition.is_some() {
-            script_inputs::save(&entry.path, values.clone(), cx);
-        }
+        let values = self.launch_values(&entry.path, cx)?;
         Some((entry.path, values))
     }
 
@@ -1954,8 +1976,7 @@ impl ScriptsWindow {
                 Button::new("inputs-start-fresh", "Start fresh")
                     .size(Size::Small)
                     .on_click(move |_, _, cx| {
-                        script_inputs::start_fresh(cx);
-                        let _ = this.update(cx, |_, cx| cx.notify());
+                        let _ = this.update(cx, |this, cx| this.start_fresh(cx));
                     }),
             )
         });
@@ -4633,6 +4654,167 @@ Cells visited: Enter, r1, r2, r3, r4.";
             Page::Library(None)
         );
         assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn runs_started_outside_the_window_get_the_inputs_it_shows(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-edits-{:x}", u64::from_ne_bytes(random)));
+        let script = temp.join("scripts/wheel.ts");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(
+            &script,
+            r#"export const inputs = {
+                bankRewards: { type: "boolean", label: "Bank rewards", default: true },
+                spins: { type: "number", label: "Spins", integer: true, min: 1, default: 1 },
+            };"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.join("inputs.json"),
+            serde_json::to_vec(&serde_json::json!({
+                fs::canonicalize(&script).unwrap().to_str().unwrap(): { "bankRewards": true, "spins": 1 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let key = FormKey::Script(script.clone());
+        let spins = scripts.read_with(cx, |scripts, _| {
+            let Some(Form {
+                state: FormState::Fields { texts, .. },
+                ..
+            }) = scripts.forms.get(&key)
+            else {
+                panic!("the inputs are loaded");
+            };
+            texts[1].clone().expect("a text field")
+        });
+        let run_values = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| script_inputs::values(&script, cx).unwrap())
+        };
+        let expected = |banks: bool, spins: u64| {
+            serde_json::json!({ "bankRewards": banks, "spins": spins })
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+
+        assert_eq!(run_values(cx), expected(true, 1));
+
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_draft(&key, 0, Draft::Toggle(false), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(run_values(cx), expected(false, 1));
+
+        spins.update(cx, |input, cx| input.set_text("", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            run_values(cx),
+            expected(false, 1),
+            "an input shown as invalid is never handed to a run"
+        );
+
+        spins.update(cx, |input, cx| input.set_text("3", cx));
+        cx.run_until_parked();
+        assert_eq!(run_values(cx), expected(false, 3));
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn starting_fresh_saves_inputs_edited_while_they_were_unreadable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-fresh-{:x}", u64::from_ne_bytes(random)));
+        let wheel = temp.join("scripts/wheel.ts");
+        fs::create_dir_all(wheel.parent().unwrap()).unwrap();
+        fs::write(
+            &wheel,
+            r#"export const inputs = {
+                bankRewards: { type: "boolean", label: "Bank rewards", default: true },
+            };"#,
+        )
+        .unwrap();
+        let hunt = temp.join("scripts/hunt.ts");
+        fs::write(
+            &hunt,
+            r#"export const inputs = { kills: { type: "number", label: "Kills", default: 5 } };"#,
+        )
+        .unwrap();
+        fs::write(temp.join("inputs.json"), "{ \"oops\": ").unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let select = |script: &Path, cx: &mut gpui::VisualTestContext| {
+            scripts.update(cx, |scripts, cx| {
+                scripts.selected = scripts
+                    .rows(cx)
+                    .iter()
+                    .position(|row| matches!(row, Row::Script(entry) if entry.path == script))
+                    .unwrap();
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        select(&wheel, cx);
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_draft(&FormKey::Script(wheel.clone()), 0, Draft::Toggle(false), cx)
+        });
+        select(&hunt, cx);
+
+        scripts.update(cx, |scripts, cx| scripts.start_fresh(cx));
+        let saved = |script: &Path, cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| script_inputs::values(script, cx).unwrap())
+        };
+        assert_eq!(
+            saved(&wheel, cx),
+            serde_json::json!({ "bankRewards": false })
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(
+            saved(&hunt, cx),
+            serde_json::json!({ "kills": 5 })
+                .as_object()
+                .unwrap()
+                .clone()
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 

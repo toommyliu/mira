@@ -46,8 +46,12 @@ impl Store {
         let Some(saved) = &self.saved else {
             return Err(io::Error::other("saved script inputs couldn't be read"));
         };
+        let script = canonical(script);
+        if saved.get(&script) == Some(&values) {
+            return Ok(());
+        }
         let mut next = saved.clone();
-        next.insert(canonical(script), values);
+        next.insert(script, values);
         if let Some(folder) = self.path.parent() {
             fs::create_dir_all(folder)?;
         }
