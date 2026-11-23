@@ -798,13 +798,14 @@ impl ScriptsWindow {
         let types = self.types.clone();
         let scanned = cx.background_spawn(async move {
             let library = scan_all(&built_in, &added, &packages);
-            let packages = library
+            let roots = library
                 .sources
                 .iter()
                 .filter(|source| matches!(source.kind, SourceKind::Package { .. }))
                 .map(|source| &source.root);
-            let folders = iter::once(&built_in).chain(&added).chain(packages);
+            let folders = iter::once(&built_in).chain(&added).chain(roots);
             scripting::link_types(folders.map(PathBuf::as_path), &types);
+            scripting::link_packages(&types, &packages);
             library
         });
         self.scanning = Some(cx.spawn(async move |this, cx| {

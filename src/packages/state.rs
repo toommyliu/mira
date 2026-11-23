@@ -1,4 +1,9 @@
-use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
@@ -120,6 +125,10 @@ impl Packages {
             status: HashMap::new(),
             queued_check: None,
         }
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        self.store.root()
     }
 
     pub(crate) fn activity(&self) -> Option<&Activity> {
