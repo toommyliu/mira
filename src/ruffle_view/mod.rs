@@ -7,6 +7,7 @@ mod game_bar;
 mod input;
 mod launches;
 mod loader_grabber;
+mod log_page;
 mod manager;
 mod menu;
 mod package_dialogs;
@@ -19,6 +20,7 @@ mod queue;
 mod script;
 mod script_dialog;
 mod script_form;
+mod script_log;
 mod script_names;
 mod scripts;
 mod shown_tab;
@@ -148,6 +150,7 @@ pub struct RuffleView {
     bar: game_bar::BarState,
     bar_inset: Pixels,
     script: script::Script,
+    script_log: Entity<script_log::ScriptLog>,
     queue: queue::Queue,
     account: Option<account::Link>,
     status: Option<crate::automation::sign_in::Status>,
@@ -471,6 +474,7 @@ impl RuffleView {
                 bar: game_bar::BarState::new(window, cx),
                 bar_inset: Pixels::ZERO,
                 script: script::Script::default(),
+                script_log: cx.new(script_log::ScriptLog::new),
                 queue: queue::Queue::default(),
                 account: None,
                 status: None,
