@@ -1,5 +1,5 @@
 ---
-import type { Token } from "../reference/tokens.ts";
+import { lines, type Token } from "../reference/tokens.ts";
 import CodeActions from "./CodeActions.astro";
 
 interface Props {
@@ -9,21 +9,23 @@ interface Props {
 }
 
 const { tokens, inline = false, bare = false } = Astro.props;
-const parts = tokens.map((token) => ({
-  ...token,
-  className: token.kind === undefined ? undefined : `t-${token.kind}`,
-}));
+const classOf = (token: Token) => (token.kind === undefined ? undefined : `t-${token.kind}`);
+const rows = lines(tokens);
 ---
 
 {
   inline ? (
-    <code class="type">{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code>
-  ) : bare ? (
-    <pre class="code"><code>{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code></pre>
+    <code class="type">{tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}</code>
   ) : (
-    <div class="code-block">
-      <pre class="code"><code>{parts.map((part) => (part.href ? <a class={part.className} href={part.href} data-card={part.target}>{part.text}</a> : <span class={part.className}>{part.text}</span>))}</code></pre>
-      <CodeActions />
-    </div>
+    <Fragment>
+      {bare ? (
+        <pre class="code"><code>{rows.map((row, index) => <span class="line" style={`--indent: ${row.indent}`}>{row.tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}{index < rows.length - 1 ? "\n" : ""}</span>)}</code></pre>
+      ) : (
+        <div class="code-block">
+          <pre class="code"><code>{rows.map((row, index) => <span class="line" style={`--indent: ${row.indent}`}>{row.tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}{index < rows.length - 1 ? "\n" : ""}</span>)}</code></pre>
+          <CodeActions />
+        </div>
+      )}
+    </Fragment>
   )
 }

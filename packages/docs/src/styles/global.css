@@ -666,6 +666,13 @@ main:focus {
   overflow-wrap: anywhere;
 }
 
+:root[data-wrap] pre.code .line,
+.hover-card.wrap pre.code .line {
+  display: block;
+  padding-left: calc((var(--indent, 0) + 2) * 1ch);
+  text-indent: calc((var(--indent, 0) + 2) * -1ch);
+}
+
 @media (pointer: coarse) {
   .code-actions {
     opacity: 1;
@@ -1369,6 +1376,12 @@ kbd {
 
 .hover-card:not(.wrap) pre.code {
   white-space: pre;
+}
+
+.hover-card:not(.wrap) pre.code .line {
+  display: inline;
+  padding-left: 0;
+  text-indent: 0;
 }
 
 .menu {

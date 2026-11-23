@@ -358,3 +358,19 @@ export function previewTokens(declaration: Declaration, links: Links): Token[] {
     ...braces(entries),
   ];
 }
+
+export type Line = { readonly indent: number; readonly tokens: readonly Token[] };
+
+export function lines(tokens: readonly Token[]): Line[] {
+  const rows: Token[][] = [[]];
+  for (const token of tokens) {
+    for (const [index, part] of token.text.split("\n").entries()) {
+      if (index > 0) rows.push([]);
+      if (part !== "") rows[rows.length - 1]?.push({ ...token, text: part });
+    }
+  }
+  return rows.map((row) => ({
+    indent: /^ */.exec(row.map((token) => token.text).join(""))?.[0].length ?? 0,
+    tokens: row,
+  }));
+}

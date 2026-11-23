@@ -7,17 +7,35 @@ type Content = Extract<Awaited<ReturnType<Highlight>>, { type: "element" }>["chi
 
 const palette = { name: "mira", appearance: "light", style: {}, cssVariables: true } as const;
 
+function line(children: Content[], text: string, last: boolean): Content {
+  return {
+    type: "element",
+    tagName: "span",
+    properties: { className: ["line"], style: `--indent: ${/^ */.exec(text)?.[0].length ?? 0}` },
+    children: last ? children : [...children, { type: "text", value: "\n" }],
+  };
+}
+
 function tokens(code: string, lang: string): Content[] {
-  if (!isSupportedLanguage(lang)) return [{ type: "text", value: code }];
-  return codeToTokens(code, { lang, theme: palette }).tokens.flatMap((line, index) => [
-    ...(index === 0 ? [] : [{ type: "text", value: "\n" } as const]),
-    ...line.map((token): Content => ({
-      type: "element",
-      tagName: "span",
-      properties: token.color === undefined ? {} : { style: `color:${token.color}` },
-      children: [{ type: "text", value: token.content }],
-    })),
-  ]);
+  if (!isSupportedLanguage(lang)) {
+    const rows = code.split("\n");
+    return rows.map((row, index) =>
+      line([{ type: "text", value: row }], row, index === rows.length - 1),
+    );
+  }
+  const rows = codeToTokens(code, { lang, theme: palette }).tokens;
+  return rows.map((row, index) =>
+    line(
+      row.map((token): Content => ({
+        type: "element",
+        tagName: "span",
+        properties: token.color === undefined ? {} : { style: `color:${token.color}` },
+        children: [{ type: "text", value: token.content }],
+      })),
+      row.map((token) => token.content).join(""),
+      index === rows.length - 1,
+    ),
+  );
 }
 
 const codeActions: Content = {
