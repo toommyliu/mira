@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task};
 
@@ -16,7 +19,7 @@ use crate::{
     packages,
     ruffle::{Command, Msg},
     script_inputs,
-    scripting::{Launch, Level, Limit, Limits, Outcome, Run},
+    scripting::{Declared, Launch, Level, Limit, Limits, Outcome, Run},
 };
 
 pub(super) struct CloseTab;
@@ -36,6 +39,7 @@ pub(super) struct Script {
     next: Option<Next>,
     inputs: Option<Inputs>,
     checking: Option<Task<()>>,
+    plain: Option<PathBuf>,
 }
 
 struct Inputs {
@@ -162,6 +166,25 @@ impl Script {
             .as_ref()
             .map(|next| &next.launch.entry)
             .or_else(|| self.entry())
+    }
+
+    pub(super) fn has_inputs(&self) -> bool {
+        self.upcoming()
+            .is_some_and(|entry| self.plain.as_ref() != Some(entry))
+    }
+
+    fn read(&mut self, entry: &Path, read: &Read) -> bool {
+        let plain = matches!(
+            read,
+            Ok(Declared {
+                inputs: Ok(None),
+                ..
+            })
+        )
+        .then(|| entry.to_path_buf());
+        let changed = self.plain != plain;
+        self.plain = plain;
+        changed
     }
 
     pub(super) fn inputs(&self) -> Option<Entity<InputsDialog>> {
@@ -309,8 +332,12 @@ impl RuffleView {
                 if this.script.upcoming() != Some(&entry) {
                     return;
                 }
+                if this.script.read(&entry, &read) {
+                    this.changed(cx);
+                }
                 let saved = script_inputs::saved(&entry, cx);
-                let ask = purpose == Purpose::Edit || preflight(&read, &saved) == Preflight::Ask;
+                let ask = (purpose == Purpose::Edit && this.script.has_inputs())
+                    || preflight(&read, &saved) == Preflight::Ask;
                 match purpose {
                     Purpose::Start if this.script.running() => {}
                     Purpose::Start if !ask => this.start_loaded_script(cx),
@@ -788,6 +815,33 @@ mod tests {
             "Stop during the handoff keeps the file idle"
         );
         assert_eq!(stopped.entry(), Some(&PathBuf::from("farm.ts")));
+    }
+
+    #[test]
+    fn a_file_without_inputs_has_none_to_edit_until_another_loads() {
+        let launch = |entry: &str| Launch {
+            entry: PathBuf::from(entry),
+            inputs: Supplied::Values(Default::default()),
+        };
+        let declares = |inputs| {
+            Ok(Declared {
+                meta: Default::default(),
+                inputs,
+            })
+        };
+
+        let mut script = Script::default();
+        assert!(!script.has_inputs(), "nothing is loaded");
+        script.load(launch("farm.ts"), false);
+        script.take_next();
+        assert!(script.has_inputs(), "the file hasn't been read yet");
+        script.read(Path::new("farm.ts"), &declares(Ok(None)));
+        assert!(!script.has_inputs());
+
+        script.load(launch("hunt.ts"), false);
+        assert!(script.has_inputs());
+        script.read(Path::new("hunt.ts"), &declares(Err("bad".into())));
+        assert!(script.has_inputs(), "invalid inputs still show their error");
     }
 
     #[gpui::test]

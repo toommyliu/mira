@@ -399,7 +399,7 @@ struct Relogin {
 pub(super) fn on_actions<E: gpui::InteractiveElement>(
     element: E,
     view: Entity<RuffleView>,
-    loaded: bool,
+    has_inputs: bool,
     client: WeakEntity<super::Client>,
 ) -> E {
     let on = |f: fn(&mut RuffleView, &mut Context<RuffleView>)| {
@@ -416,7 +416,7 @@ pub(super) fn on_actions<E: gpui::InteractiveElement>(
         on(|view, cx| view.toggle_rendering(RenderingMode::InterfaceOnly, cx)),
     );
     let edit = on(RuffleView::edit_inputs);
-    let element = if loaded {
+    let element = if has_inputs {
         element.on_action(move |_: &EditScriptInputs, _, cx| edit(cx))
     } else {
         element
@@ -804,6 +804,7 @@ struct Bar {
     relogin_detail: Option<Detail>,
     attack: bool,
     script: ScriptControl,
+    has_inputs: bool,
     toggle_panel: Option<&'static str>,
 }
 
@@ -824,13 +825,14 @@ pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl I
         relogin_detail: relogin_value(view),
         attack: view.automation.auto_attack().enabled,
         script,
+        has_inputs: view.script.has_inputs(),
         toggle_panel: view.bar.toggle_panel.take(),
     };
     menubar(bar, cx.weak_entity(), cx)
 }
 
 fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
-    let loaded = !matches!(bar.script, ScriptControl::Start(None));
+    let has_inputs = bar.has_inputs;
     let theme = cx.theme();
     let layout = theme.layout;
     let menubar = Menubar::new(("game-bar", this.entity_id()), "Game")
@@ -893,7 +895,7 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
                 .variant(Variant::Ghost)
                 .size(Size::Small)
                 .joined(Joined::Previous),
-            move |_, cx| script_menu(loaded, cx),
+            move |_, cx| script_menu(has_inputs, cx),
         )
         .child(super::client::drag_area().flex_1())
         .popover(
@@ -933,6 +935,7 @@ pub(super) fn preview(inset: Pixels, cx: &App) -> Menubar {
         relogin_detail: None,
         attack: false,
         script: ScriptControl::Start(Some("hunt.ts".into())),
+        has_inputs: true,
         toggle_panel: None,
     };
     menubar(bar, WeakEntity::new_invalid(), cx)
@@ -953,7 +956,7 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
         .on_click(move |_, _, cx| update(&this, cx, RuffleView::toggle_script))
 }
 
-fn script_menu(loaded: bool, cx: &App) -> Vec<MenuItem> {
+fn script_menu(has_inputs: bool, cx: &App) -> Vec<MenuItem> {
     let load = MenuItem::action("Load script…", |window, cx| {
         window.dispatch_action(Box::new(super::LoadScript), cx)
     });
@@ -966,7 +969,7 @@ fn script_menu(loaded: bool, cx: &App) -> Vec<MenuItem> {
         MenuItem::action("Edit inputs…", |window, cx| {
             window.dispatch_action(Box::new(EditScriptInputs), cx)
         })
-        .disabled(!loaded),
+        .disabled(!has_inputs),
     ]
 }
 
@@ -2402,6 +2405,7 @@ mod tests {
                             relogin_detail,
                             attack,
                             script,
+                            has_inputs: true,
                             toggle_panel: None,
                         };
                         let now = Instant::now();

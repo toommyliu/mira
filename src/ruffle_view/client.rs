@@ -1927,8 +1927,8 @@ impl Client {
                     .get(self.active)
                     .map(|session| session.view.clone()),
                 |root, view| {
-                    let loaded = view.read(cx).script.entry().is_some();
-                    super::game_bar::on_actions(root, view, loaded, cx.weak_entity())
+                    let has_inputs = view.read(cx).script.has_inputs();
+                    super::game_bar::on_actions(root, view, has_inputs, cx.weak_entity())
                 },
             )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
