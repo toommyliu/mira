@@ -25,6 +25,37 @@ function snippet(text: string, at: number): string {
   return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`;
 }
 
+function edits(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let before: number[] = [];
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(
+        (previous[j] ?? 0) + 1,
+        (row[j - 1] ?? 0) + 1,
+        (previous[j - 1] ?? 0) + cost,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        value = Math.min(value, (before[j - 2] ?? 0) + 1);
+      }
+      row.push(value);
+      best = Math.min(best, value);
+    }
+    if (best > limit) return limit + 1;
+    before = previous;
+    previous = row;
+  }
+  return previous[b.length] ?? limit + 1;
+}
+
+function typoLimit(word: string): number {
+  return word.length >= 6 ? 2 : word.length >= 3 ? 1 : 0;
+}
+
 function score(entry: Entry, query: string): { rank: number; snippet: string | undefined } {
   const title = entry.title.toLowerCase();
   const last = title.slice(title.lastIndexOf(".") + 1);
@@ -42,6 +73,15 @@ function score(entry: Entry, query: string): { rank: number; snippet: string | u
   const text = entry.text.toLowerCase();
   if (text !== "" && words.every((word) => text.includes(word))) {
     return found(5, text.indexOf(words[0] ?? query));
+  }
+  const typed = query.slice(query.lastIndexOf(".") + 1);
+  const limit = typoLimit(typed);
+  if (words.length === 1 && limit > 0) {
+    const distance = Math.min(
+      edits(typed, last, limit),
+      edits(typed, last.slice(0, typed.length), limit),
+    );
+    if (distance <= limit) return found(6 + distance);
   }
   return found(Number.POSITIVE_INFINITY);
 }
