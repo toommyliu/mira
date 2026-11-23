@@ -14,17 +14,16 @@ rm -rf "$out"
 mkdir -p "$out"
 codesign --force --deep --sign - "$app"
 ditto -c -k --keepParent "$app" "$out/Mira.zip"
-stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
-ditto "$app" "$stage/Mira.app"
-ln -s /Applications "$stage/Applications"
+art=$(mktemp -d)
+trap 'rm -rf "$art"' EXIT
+swift scripts/dmg-background.swift "$art"
 attempt=1
-until hdiutil create -quiet -volname Mira -srcfolder "$stage" -format UDZO "$out/Mira.dmg"; do
+until uvx dmgbuild==1.6.7 -s scripts/dmg-settings.py -D app="$app" -D background="$art/background.png" Mira "$out/Mira.dmg"; do
     rm -f "$out/Mira.dmg"
     if [ "$attempt" -eq 5 ]; then
         exit 1
     fi
-    echo "hdiutil failed on attempt $attempt, retrying" >&2
+    echo "dmgbuild failed on attempt $attempt, retrying" >&2
     attempt=$((attempt + 1))
     sleep $((attempt * 5))
 done
