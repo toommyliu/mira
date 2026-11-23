@@ -775,15 +775,22 @@ mod tests {
         let fight = json!({ "type": "json", "dataObj": { "cmd": "ct", "anims": [
             { "fx": "m", "animStr": "ChargeA", "msg": "You shall listen.", "cInf": "m:1", "tInf": "m:1", "strFrame": "Boss" },
             { "animStr": "Attack1", "cInf": "p:28552", "tInf": "m:1", "strFrame": "Boss" },
+            { "fx": "p", "animStr": "Apocalypse", "msg": ["Swordhaven falls", " and so do you."], "cInf": "m:2", "tInf": "p:28552", "strFrame": "r3" },
         ] } });
         let line = json!({ "type": "json", "dataObj": { "cmd": "umsg", "s": "We move closer to wiping the slate clean." } });
         assert!(wanted(Kind::Message, fight.clone()) && wanted(Kind::Message, line.clone()));
         assert_eq!(
             read(Kind::Message, fight),
-            [GameEvent::Message {
-                text: "You shall listen.".into(),
-                mon_map_id: Some(1)
-            }]
+            [
+                GameEvent::Message {
+                    text: "You shall listen.".into(),
+                    mon_map_id: Some(1)
+                },
+                GameEvent::Message {
+                    text: "Swordhaven falls, and so do you.".into(),
+                    mon_map_id: Some(2)
+                }
+            ]
         );
         assert_eq!(
             read(Kind::Message, line),
