@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Global, PromptLevel, SharedString, Task, actions};
+use gpui::{App, AppContext as _, Global, PromptButton, PromptLevel, SharedString, Task, actions};
 use semver::Version;
 
 use bundle::Staged;
@@ -126,72 +126,83 @@ fn announce(cx: &mut App) {
         return;
     };
     let installed = env!("CARGO_PKG_VERSION");
-    let (level, message, detail, answers): (_, String, Option<String>, &[&str]) = match &state {
-        Updates::Current(_) => (
-            PromptLevel::Info,
-            "You’re up to date!".into(),
-            Some(format!(
-                "Mira {installed} is currently the newest version available."
-            )),
-            &["OK"],
-        ),
-        Updates::Available { update, .. } => (
-            PromptLevel::Info,
-            format!("Mira {} is available.", update.version),
-            Some(format!("You’re running Mira {installed}.")),
-            &["Download", "Later"],
-        ),
-        Updates::Downloading { update, .. } => (
-            PromptLevel::Info,
-            format!("Mira {} is already downloading.", update.version),
-            None,
-            &["OK"],
-        ),
-        Updates::Ready { update, .. } => (
-            PromptLevel::Info,
-            format!("Mira {} is ready to install.", update.version),
-            Some(
-                "Mira will restart to install it. Any running scripts will be interrupted.".into(),
+    let (level, message, detail, answers): (_, String, Option<String>, Vec<PromptButton>) =
+        match &state {
+            Updates::Current(_) => (
+                PromptLevel::Info,
+                "You’re up to date!".into(),
+                Some(format!(
+                    "Mira {installed} is currently the newest version available."
+                )),
+                vec!["OK".into()],
             ),
-            &["Restart", "Later"],
-        ),
-        Updates::Failed(error) => (
-            PromptLevel::Warning,
-            "Could not check for updates.".into(),
-            Some(error.to_string()),
-            &["OK"],
-        ),
-        Updates::Unavailable(reason) => (
-            PromptLevel::Info,
-            "Automatic updates are not available right now.".into(),
-            Some(
-                reason
-                    .as_ref()
-                    .map_or("This is a development build.".into(), ToString::to_string),
+            Updates::Available { update, .. } => (
+                PromptLevel::Info,
+                format!("Mira {} is available.", update.version),
+                Some(format!("You’re running Mira {installed}.")),
+                vec![
+                    "Download".into(),
+                    "Release Notes".into(),
+                    PromptButton::cancel("Later"),
+                ],
             ),
-            &["OK"],
-        ),
-        Updates::Idle => (
-            PromptLevel::Warning,
-            "Could not check for updates.".into(),
-            Some("Try again in a moment.".into()),
-            &["OK"],
-        ),
-        Updates::Checking | Updates::Restarting(_) => return,
-    };
+            Updates::Downloading { update, .. } => (
+                PromptLevel::Info,
+                format!("Mira {} is already downloading.", update.version),
+                None,
+                vec!["OK".into()],
+            ),
+            Updates::Ready { update, .. } => (
+                PromptLevel::Info,
+                format!("Mira {} is ready to install.", update.version),
+                Some(
+                    "Mira will restart to install it. Any running scripts will be interrupted."
+                        .into(),
+                ),
+                vec![
+                    "Restart".into(),
+                    "Release Notes".into(),
+                    PromptButton::cancel("Later"),
+                ],
+            ),
+            Updates::Failed(error) => (
+                PromptLevel::Warning,
+                "Could not check for updates.".into(),
+                Some(error.to_string()),
+                vec!["OK".into()],
+            ),
+            Updates::Unavailable(reason) => (
+                PromptLevel::Info,
+                "Automatic updates are not available right now.".into(),
+                Some(
+                    reason
+                        .as_ref()
+                        .map_or("This is a development build.".into(), ToString::to_string),
+                ),
+                vec!["OK".into()],
+            ),
+            Updates::Idle => (
+                PromptLevel::Warning,
+                "Could not check for updates.".into(),
+                Some("Try again in a moment.".into()),
+                vec!["OK".into()],
+            ),
+            Updates::Checking | Updates::Restarting(_) => return,
+        };
     let answer = window.update(cx, |_, window, cx| {
-        window.prompt(level, &message, detail.as_deref(), answers, cx)
+        window.prompt(level, &message, detail.as_deref(), &answers, cx)
     });
     let Ok(answer) = answer else {
         return;
     };
     cx.spawn(async move |cx| {
-        if answer.await != Ok(0) {
-            return;
-        }
-        cx.update(|cx| match state {
-            Updates::Available { .. } => Updates::download(cx),
-            Updates::Ready { .. } => Updates::restart(cx),
+        let answer = answer.await;
+        cx.update(|cx| match (answer, &state) {
+            (Ok(0), Updates::Available { .. }) => Updates::download(cx),
+            (Ok(0), Updates::Ready { .. }) => Updates::restart(cx),
+            (Ok(1), Updates::Available { update, .. } | Updates::Ready { update, .. }) => {
+                cx.open_url(&update.page)
+            }
             _ => {}
         });
     })

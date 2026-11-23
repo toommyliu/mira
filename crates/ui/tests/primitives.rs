@@ -2165,6 +2165,7 @@ fn a_resting_invalid_field_leaves_the_reveal_to_the_focused_control(cx: &mut Tes
 struct CardOverPane {
     pane: gpui::ScrollHandle,
     hovered: Rc<Cell<bool>>,
+    focus: FocusHandle,
 }
 
 impl Render for CardOverPane {
@@ -2175,11 +2176,14 @@ impl Render for CardOverPane {
         div()
             .size_full()
             .flex()
+            .track_focus(&self.focus)
+            .key_context(mira_ui::FOCUS_SCOPE)
             .child(
                 div().flex_none().w(px(100.0)).h(px(30.0)).flex().child(
                     HoverCard::new("card", "Card")
                         .placement(Placement::new(Side::Right, Align::Start))
                         .row("Error", "Stopped", mira_ui::Tone::Danger)
+                        .link("Details", "https://example.com")
                         .child(div().size_full()),
                 ),
             )
@@ -2208,9 +2212,15 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
     let hovered = Rc::new(Cell::new(false));
     let (_, cx) = cx.add_window_view({
         let (pane, hovered) = (pane.clone(), hovered.clone());
-        move |window, _| {
+        move |window, cx| {
+            let focus = cx.focus_handle();
             window.activate_window();
-            CardOverPane { pane, hovered }
+            window.focus(&focus, cx);
+            CardOverPane {
+                pane,
+                hovered,
+                focus,
+            }
         }
     });
     cx.run_until_parked();
@@ -2225,6 +2235,15 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
         .expect("resting opens the card");
     hovered.set(false);
 
+    cx.simulate_mouse_move(point(px(102.0), px(15.0)), None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("card-card").is_some(),
+        "crossing the gap from the trigger keeps the card open"
+    );
+
     cx.simulate_mouse_move(card.center(), None, Modifiers::none());
     cx.run_until_parked();
     cx.simulate_event(ScrollEvent {
@@ -2237,6 +2256,26 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
     assert!(
         cx.debug_bounds("card-card").is_some(),
         "the card stays open while pointed at"
+    );
+    let root = cx.update(|window, cx| window.focused(cx));
+    press(cx, "tab");
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        root,
+        "Tab moved focus into the card"
+    );
+    let link = cx
+        .debug_bounds("hover-card-link")
+        .expect("the card shows its link");
+    cx.simulate_click(
+        point(link.left() + px(16.0), link.center().y),
+        Modifiers::none(),
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com"));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        root,
+        "clicking the link moved focus into the card"
     );
     assert_eq!(
         pane.offset().y,
