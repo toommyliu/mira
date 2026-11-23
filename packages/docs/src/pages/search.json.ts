@@ -3,6 +3,7 @@ import { getCollection, render } from "astro:content";
 
 import { commentText } from "../reference/comment.ts";
 import { load } from "../reference/project.ts";
+import { plainText } from "../routes.ts";
 
 export type Group = "namespace" | "function" | "type" | "doc";
 
@@ -16,15 +17,6 @@ export type Entry = {
   readonly text: string;
 };
 
-function plain(markdown: string): string {
-  return markdown
-    .replace(/^```.*$/gm, " ")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[`*_#>|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export const GET: APIRoute = async () => {
   const entries: Entry[] = [];
   for (const doc of await getCollection("docs")) {
@@ -36,7 +28,7 @@ export const GET: APIRoute = async () => {
       href,
       context: "",
       code: false,
-      text: plain(doc.body ?? ""),
+      text: plainText(doc.body ?? ""),
     });
     const { headings } = await render(doc);
     for (const heading of headings.filter((heading) => heading.depth <= 3)) {

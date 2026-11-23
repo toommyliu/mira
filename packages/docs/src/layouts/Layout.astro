@@ -10,6 +10,7 @@ import ContentsList from "../components/ContentsList.astro";
 import Nav from "../components/Nav.astro";
 import { navigation } from "../nav.ts";
 import { repositoryUrl } from "../repository.ts";
+import { routes } from "../routes.ts";
 import page from "../scripts/page.js?raw";
 
 export type Heading = { readonly depth: number; readonly slug: string; readonly text: string };
@@ -20,13 +21,17 @@ interface Props {
   headings?: readonly Heading[];
 }
 
-const {
-  title,
-  description = "Mira is an automation client for AdventureQuest Worlds on macOS.",
-  headings = [],
-} = Astro.props;
 const sections = await navigation();
 const current = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`;
+const route = (await routes()).find((candidate) => candidate.href === current);
+const {
+  title,
+  description = route?.description ??
+    "Mira is an automation client for AdventureQuest Worlds on Apple silicon Macs.",
+  headings = [],
+} = Astro.props;
+const site = Astro.site;
+const pageTitle = `${title} · Mira`;
 const contents = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 ---
 
@@ -35,8 +40,25 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{`${title} · Mira`}</title>
+    <title>{pageTitle}</title>
     <meta name="description" content={description} />
+    {route !== undefined && <link rel="alternate" type="text/markdown" href={route.markdown} />}
+    <link rel="sitemap" href="/sitemap.xml" />
+    {
+      site !== undefined && route !== undefined && (
+        <link rel="canonical" href={new URL(route.href, site).href} />
+      )
+    }
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Mira" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    {site !== undefined && <meta property="og:image" content={new URL("/og.png", site).href} />}
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Mira, an automation client for AdventureQuest Worlds on Apple silicon Macs" />
+    {site !== undefined && route !== undefined && <meta property="og:url" content={new URL(route.href, site).href} />}
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" type="image/png" href={icon.src} />
     <script is:inline>
       document.documentElement.dataset.js = "";
