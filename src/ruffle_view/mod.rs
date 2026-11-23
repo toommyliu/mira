@@ -5,6 +5,7 @@ mod environment;
 mod form;
 mod game_bar;
 mod input;
+mod inputs_form;
 mod launches;
 mod loader_grabber;
 mod manager;

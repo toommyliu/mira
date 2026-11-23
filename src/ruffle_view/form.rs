@@ -20,6 +20,15 @@ pub(super) fn note(text: impl Into<SharedString>, enabled: bool, theme: &Theme) 
         .child(text.into())
 }
 
+pub(super) fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
+    let typography = theme.typography;
+    div()
+        .text_size(typography.body)
+        .line_height(typography.body_line)
+        .text_color(theme.muted_foreground)
+        .child(text.into())
+}
+
 pub(super) fn section(
     title: &'static str,
     subtitle: &'static str,
