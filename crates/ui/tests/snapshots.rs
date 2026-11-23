@@ -1,6 +1,6 @@
 use gpui::{
     AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, point, px, size,
+    Styled as _, Window, div, point, px, relative, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Tone,
@@ -490,6 +490,29 @@ fn snapshot_dialog_small_window() {
             )
             .action(Button::new("cancel", "Cancel"))
             .action(Button::new("add", "Add 3 boosts").variant(Variant::Primary))
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_dialog_relative_max_height() {
+    scene("dialog-relative-max-height", 560.0, 640.0, |_, _| {
+        Dialog::new("inputs", true, "hunt.ts")
+            .max_height(relative(0.6))
+            .body(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .children((0..24usize).map(|index| {
+                        Checkbox::new(
+                            ("input", index),
+                            format!("Input {}", index + 1),
+                            CheckedState::Unchecked,
+                        )
+                    })),
+            )
+            .action(Button::new("done", "Done").variant(Variant::Primary))
             .into_any_element()
     });
 }

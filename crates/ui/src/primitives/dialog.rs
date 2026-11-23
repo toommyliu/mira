@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, DefiniteLength, ElementId, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
+    Role, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    anchored, deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{Button, Icon, Scrollbar, button::Size};
@@ -45,7 +45,7 @@ pub struct Dialog {
     alert: bool,
     title: SharedString,
     width: Option<Pixels>,
-    max_height: Option<Pixels>,
+    max_height: Option<DefiniteLength>,
     description: Option<SharedString>,
     header_end: Option<AnyElement>,
     body: Vec<AnyElement>,
@@ -84,8 +84,8 @@ impl Dialog {
         self
     }
 
-    pub fn max_height(mut self, height: Pixels) -> Self {
-        self.max_height = Some(height);
+    pub fn max_height(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.max_height = Some(height.into());
         self
     }
 
@@ -260,12 +260,14 @@ impl RenderOnce for Dialog {
                                     }
                                 }))
                                 .max_w(viewport.width - inset * 2.0)
-                                .max_h(
-                                    self.max_height
-                                        .map_or(viewport.height - inset * 2.0, |height| {
-                                            height.min(viewport.height - inset * 2.0)
-                                        }),
-                                )
+                                .max_h(self.max_height.map_or(
+                                    viewport.height - inset * 2.0,
+                                    |height| {
+                                        height
+                                            .to_pixels(viewport.height.into(), window.rem_size())
+                                            .min(viewport.height - inset * 2.0)
+                                    },
+                                ))
                                 .p(inset)
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.popover)
