@@ -140,11 +140,7 @@ fn announce(cx: &mut App) {
                 PromptLevel::Info,
                 format!("Mira {} is available.", update.version),
                 Some(format!("You’re running Mira {installed}.")),
-                vec![
-                    "Download".into(),
-                    "Release Notes".into(),
-                    PromptButton::cancel("Later"),
-                ],
+                vec!["Download".into(), PromptButton::cancel("Later")],
             ),
             Updates::Downloading { update, .. } => (
                 PromptLevel::Info,
@@ -159,11 +155,7 @@ fn announce(cx: &mut App) {
                     "Mira will restart to install it. Any running scripts will be interrupted."
                         .into(),
                 ),
-                vec![
-                    "Restart".into(),
-                    "Release Notes".into(),
-                    PromptButton::cancel("Later"),
-                ],
+                vec!["Restart".into(), PromptButton::cancel("Later")],
             ),
             Updates::Failed(error) => (
                 PromptLevel::Warning,
@@ -200,9 +192,6 @@ fn announce(cx: &mut App) {
         cx.update(|cx| match (answer, &state) {
             (Ok(0), Updates::Available { .. }) => Updates::download(cx),
             (Ok(0), Updates::Ready { .. }) => Updates::restart(cx),
-            (Ok(1), Updates::Available { update, .. } | Updates::Ready { update, .. }) => {
-                cx.open_url(&update.page)
-            }
             _ => {}
         });
     })
