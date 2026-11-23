@@ -1063,6 +1063,19 @@ export const Packets = {
     filter: F = {} as F,
   ): Effect.Effect<Subscription<PacketFor<F>>, never, Scope.Scope> =>
     Effect.map(openPackets(filter), skipLost),
+  /**
+   * @example
+   * ```ts
+   * import { Combat, Packets } from "mira";
+   *
+   * export default function* () {
+   *   yield* Packets.on({ from: "server" }, function* (packet) {
+   *     console.log(packet.cmd);
+   *   });
+   *   while (true) yield* Combat.kill("*");
+   * }
+   * ```
+   */
   on: <const F extends PacketFilter>(
     filter: F,
     handler: Handler<PacketFor<F>>,
@@ -1179,10 +1192,35 @@ const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
   );
 
 export const Events = {
+  /**
+   * @example
+   * ```ts
+   * import { Events } from "mira";
+   *
+   * export default function* () {
+   *   const messages = yield* Events.subscribe({ type: "message" });
+   *   const message = yield* messages.next;
+   *   console.log(message.text);
+   * }
+   * ```
+   */
   subscribe: <const T extends EventType>(
     filter: EventFilter<T>,
   ): Effect.Effect<Subscription<EventOf<T>>, never, Scope.Scope> =>
     Effect.map(openEvents(filter), skipLost),
+  /**
+   * @example
+   * ```ts
+   * import { Combat, Events } from "mira";
+   *
+   * export default function* () {
+   *   yield* Events.on({ type: "itemDrop" }, function* (drop) {
+   *     console.log(`dropped ${drop.quantity} ${drop.name}`);
+   *   });
+   *   while (true) yield* Combat.kill("*");
+   * }
+   * ```
+   */
   on: <const T extends EventType>(
     filter: EventFilter<T>,
     handler: Handler<EventOf<T>>,
@@ -1204,7 +1242,18 @@ const poll = <E>(condition: Effect.Effect<boolean, E>, interval: Duration) =>
   });
 
 export const Wait = {
-  /** Checks right away, then every `interval`. False if `timeout` passes first. */
+  /**
+   * Checks right away, then every `interval`. False if `timeout` passes first.
+   *
+   * @example
+   * ```ts
+   * import { Player, Wait } from "mira";
+   *
+   * export default function* () {
+   *   if (!(yield* Wait.until(Player.isReady(), { timeout: "30 seconds" }))) return;
+   * }
+   * ```
+   */
   until: <E = never>(
     condition: Effect.Effect<boolean, E>,
     { interval = "100 millis", timeout }: UntilOptions = {},
@@ -1220,6 +1269,16 @@ export const Wait = {
   /**
    * Null if `trigger` returns false, the timeout passes, or the connection drops.
    * A `logout` wait returns the event when the connection drops.
+   *
+   * @example
+   * ```ts
+   * import { Wait } from "mira";
+   *
+   * export default function* () {
+   *   const death = yield* Wait.forEvent({ type: "monsterDeath" }, { timeout: "1 minute" });
+   *   if (death === null) return;
+   * }
+   * ```
    */
   forEvent: <const T extends EventType, E = never>(
     filter: EventFilter<T>,
