@@ -42,11 +42,11 @@ fn main() -> anyhow::Result<()> {
         .join("Mira");
     std::fs::create_dir_all(&data)?;
     let device = net::device_id(&data.join("device-id"))?;
-    let documents = dirs::document_dir()
-        .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
+    let files = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("No home directory"))?
         .join("Mira");
-    let armies = army::Armies::new(documents.join("armies"));
-    let scripts = documents.join("scripts");
+    let armies = army::Armies::new(files.join("armies"));
+    let scripts = files.join("scripts");
     let types = data.join("types");
     let app = mira_platform::application();
     app.on_reopen(ruffle_view::open_launch_window);
@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                     account_settings::init(data.join("account-settings"), cx);
                     combat_profiles::init(data.join("combat-profiles.json"), cx);
                     script_inputs::init(data.join("script-inputs.json"), cx);
-                    packages::init(documents.join("packages"), data.join("github-token"), cx);
+                    packages::init(files.join("packages"), data.join("github-token"), cx);
                     packages::start(cx);
                     updates::start(cx);
                     let installed = types.clone();

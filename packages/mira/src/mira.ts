@@ -1427,7 +1427,7 @@ const loopTaunt = (
   });
 
 export const Army = {
-  /** Reads `~/Documents/Mira/armies/<name>.yaml` and waits until every player in it has started. */
+  /** Reads `~/Mira/armies/<name>.yaml` and waits until every player in it has started. */
   start,
   sync,
   /** Values come back in player order. */

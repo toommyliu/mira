@@ -4209,7 +4209,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
                 .children(self.statuses.iter().map(|(text, activity, stoppable)| {
                     let failure = text.strip_prefix("hunt failed: ").map(|message| Failure {
                         title: "hunt failed".into(),
-                        script: "~/Documents/Mira/scripts/hunt.ts".into(),
+                        script: "~/Mira/scripts/hunt.ts".into(),
                         message: message.to_owned().into(),
                     });
                     shown_tab::header(
