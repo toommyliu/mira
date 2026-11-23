@@ -47,8 +47,8 @@ use super::{
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    account_settings::{self, Scripts as ScriptOptions},
     accounts::AccountId,
+    characters::{self, Scripts as ScriptOptions},
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     script_inputs,
@@ -789,7 +789,7 @@ impl ScriptsWindow {
 
     fn options(&self, cx: &App) -> Option<ScriptOptions> {
         let account = self.account(cx)?;
-        Some(account_settings::get(&account, cx).scripts)
+        Some(characters::get(&account, cx).scripts)
     }
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
