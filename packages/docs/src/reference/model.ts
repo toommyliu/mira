@@ -12,10 +12,13 @@ export type Signature = {
     | { readonly kind: "returns"; readonly type: TypeNode };
 };
 
+export type Source = { readonly file: string; readonly line: number };
+
 export type Member = {
   readonly anchor: string;
   readonly path: string;
   readonly comment: Comment | undefined;
+  readonly source: Source | undefined;
   readonly body:
     | { readonly kind: "call"; readonly signatures: readonly Signature[] }
     | { readonly kind: "value"; readonly type: TypeNode; readonly optional: boolean };
@@ -26,6 +29,7 @@ export type Declaration = {
   readonly name: string;
   readonly keyword: "type" | "interface" | "class";
   readonly comment: Comment | undefined;
+  readonly source: Source | undefined;
   readonly typeParameters: readonly J.TypeParameterReflection[];
   readonly body:
     | { readonly kind: "alias"; readonly type: TypeNode }
@@ -118,6 +122,11 @@ function callSignatures(
   return undefined;
 }
 
+function sourceOf(reflection: J.DeclarationReflection): Source | undefined {
+  const [first] = reflection.sources ?? [];
+  return first === undefined ? undefined : { file: first.fileName, line: first.line };
+}
+
 function members(children: readonly J.DeclarationReflection[], prefix: string): Member[] {
   return children
     .filter((child) => !child.flags.isExternal && child.kind !== ReflectionKind.Constructor)
@@ -130,6 +139,7 @@ function members(children: readonly J.DeclarationReflection[], prefix: string): 
             anchor,
             path: anchor,
             comment: child.comment ?? signatures[0]?.comment,
+            source: sourceOf(child),
             body: { kind: "call", signatures: signatures.map(signature) },
           },
         ];
@@ -142,6 +152,7 @@ function members(children: readonly J.DeclarationReflection[], prefix: string): 
           anchor,
           path: anchor,
           comment: child.comment,
+          source: sourceOf(child),
           body: {
             kind: "value",
             type: child.type ?? { type: "intrinsic", name: "unknown" },
@@ -165,6 +176,7 @@ function declaration(child: J.DeclarationReflection): Declaration {
     name: child.name,
     keyword,
     comment: child.comment,
+    source: sourceOf(child),
     typeParameters: child.typeParameters ?? [],
     body:
       child.type === undefined

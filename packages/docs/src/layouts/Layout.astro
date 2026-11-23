@@ -9,6 +9,7 @@ import icon from "../../../../assets/icon.png";
 import ContentsList from "../components/ContentsList.astro";
 import Nav from "../components/Nav.astro";
 import { navigation } from "../nav.ts";
+import { repositoryUrl } from "../repository.ts";
 import page from "../scripts/page.js?raw";
 
 export type Heading = { readonly depth: number; readonly slug: string; readonly text: string };
@@ -78,7 +79,7 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
           <span class="search-label">Search</span>
           <kbd>⌘K</kbd>
         </button>
-        <a class="icon-button" href="https://github.com/toommyliu/mira" aria-label="GitHub repository">
+        <a class="icon-button" href={repositoryUrl} aria-label="GitHub repository">
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path
               fill="currentColor"
