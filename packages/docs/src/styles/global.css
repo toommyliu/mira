@@ -500,6 +500,7 @@ main:focus {
 .contents-list a {
   display: block;
   padding: 3px 0 3px 12px;
+  border-radius: 0;
   overflow: hidden;
   color: var(--muted-foreground);
   text-decoration: none;
