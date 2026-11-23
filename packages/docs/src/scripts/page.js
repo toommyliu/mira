@@ -77,7 +77,6 @@ function setup() {
 
   function locate() {
     const view = scroller();
-    if (view.scrollTop + view.clientHeight >= view.scrollHeight - 2) return links.length - 1;
     const line = viewTop() + Number.parseFloat(getComputedStyle(view).scrollPaddingTop) + 8;
     let found = -1;
     for (const [index, section] of sections.entries()) {
@@ -85,7 +84,9 @@ function setup() {
       if (section.getBoundingClientRect().top > line) break;
       found = index;
     }
-    return found;
+    if (view.scrollTop + view.clientHeight < view.scrollHeight - 2) return found;
+    const target = links.findIndex((link) => link.hash === location.hash);
+    return target !== -1 && target >= found ? target : links.length - 1;
   }
 
   function expand() {
@@ -171,6 +172,7 @@ function setup() {
     };
     main.addEventListener("scroll", onScroll, { passive: true, signal });
     window.addEventListener("scroll", onScroll, { passive: true, signal });
+    window.addEventListener("popstate", onScroll, { signal });
     update();
     expand();
     cue();
