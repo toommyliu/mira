@@ -3933,3 +3933,574 @@ fn a_scrolling_tab_list_scrolls_inside_a_short_sidebar(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert!(scroll.offset().y < px(0.0), "{:?}", scroll.offset());
 }
+
+struct Trace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for Trace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(format!("line {ix}").into()),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn picking_a_row_on_screen_keeps_the_log_following(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    let size = cx.update(|window, _| window.viewport_size());
+    state.reset((size.height / px(20.0)) as usize + 1);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let middle = point(size.width / 2.0, size.height / 2.0);
+    assert!(cx.debug_bounds("log-jump").is_none());
+
+    cx.simulate_mouse_down(middle, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(middle, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert!(state.selection().is_some());
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "right-clicking a row on screen offered Jump to latest"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_click(point(middle.x, middle.y + px(40.0)), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "clicking a row on screen offered Jump to latest"
+    );
+
+    cx.simulate_event(ScrollEvent {
+        position: middle,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(200.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("log-jump").is_some(),
+        "scrolling up didn't offer Jump to latest"
+    );
+}
+
+#[gpui::test]
+fn a_log_shows_its_scrollbar_only_when_the_reader_scrolls(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(200);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    for _ in 0..5 {
+        let len = state.len();
+        state.splice(len..len, 20);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    assert!(
+        cx.debug_bounds("scrollbar-thumb").is_none(),
+        "new rows arriving showed the scrollbar"
+    );
+
+    let size = cx.update(|window, _| window.viewport_size());
+    cx.simulate_event(ScrollEvent {
+        position: point(size.width / 2.0, size.height / 2.0),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(200.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("scrollbar-thumb").is_some(),
+        "scrolling didn't show the scrollbar"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_long_log_s_scrollbar_leaves_the_thumb_where_it_was_dropped(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("resting on the edge shows the scrollbar");
+
+    let target = size.height / 2.0;
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(point(edge, target), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(point(edge, target), MouseButton::Left, Modifiers::none());
+    for _ in 0..4 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    let dropped = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown while the pointer rests on it");
+    assert!(
+        (dropped.center().y - target).abs() < px(8.0),
+        "the thumb moved from {target:?} to {:?} after the drag",
+        dropped.center().y
+    );
+}
+
+struct UnevenTrace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for UnevenTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(if ix % 7 == 0 {
+                    format!("Run {ix} failed\nboom\n  at a\n  at b\n  at c\n  at d\n  at e").into()
+                } else {
+                    format!("line {ix}").into()
+                }),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn dragging_through_rows_of_uneven_height_moves_the_thumb_with_the_pointer(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| UnevenTrace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("resting on the edge shows the scrollbar");
+
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    for step in 1..=12 {
+        let pointer = grab.y - size.height * (step as f32 / 16.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the pointer is at {pointer:?} but the thumb is at {:?}",
+            moved.center().y
+        );
+    }
+    cx.simulate_mouse_up(
+        point(edge, grab.y - size.height * 0.75),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+}
+
+#[gpui::test]
+fn dragging_past_the_bottom_and_back_keeps_the_thumb_on_the_pointer_and_lets_go_on_release(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| UnevenTrace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    let frame = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+    };
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    frame(cx);
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    let drag_to = |cx: &mut VisualTestContext, from: gpui::Pixels, to: gpui::Pixels| {
+        let steps = 12;
+        for step in 1..=steps {
+            let y = from + (to - from) * (step as f32 / steps as f32);
+            cx.simulate_mouse_move(point(edge, y), MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+        }
+    };
+    drag_to(cx, thumb.center().y, size.height / 3.0);
+    drag_to(cx, size.height / 3.0, size.height + px(40.0));
+    drag_to(cx, size.height + px(40.0), size.height / 2.0);
+    let pointer = size.height / 2.0;
+    frame(cx);
+    let middle = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown");
+    assert!(
+        (middle.center().y - pointer).abs() < px(12.0),
+        "after reaching the end the thumb stayed at {:?} instead of following the pointer back",
+        middle.center().y
+    );
+
+    cx.simulate_mouse_up(point(edge, pointer), MouseButton::Left, Modifiers::none());
+    frame(cx);
+    cx.simulate_mouse_move(point(edge, size.height / 4.0), None, Modifiers::none());
+    frame(cx);
+    let released = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown");
+    assert!(
+        (released.center().y - middle.center().y).abs() < px(1.0),
+        "the thumb kept following the pointer after release"
+    );
+}
+
+struct TallTrace {
+    state: mira_ui::components::LogState,
+    tall: fn(usize) -> bool,
+}
+
+impl Render for TallTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        let tall = self.tall;
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            move |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(if tall(ix) {
+                    (0..80)
+                        .map(|line| format!("  at frame {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .into()
+                } else {
+                    format!("line {ix}").into()
+                }),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn clicking_a_stack_taller_than_the_pane_keeps_the_log_where_it_is(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(40);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix == 39,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    cx.simulate_click(
+        point(size.width / 2.0, size.height / 2.0),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(state.selection(), Some(39..40));
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "clicking the stack scrolled away from the newest row"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_short_log_of_tall_rows_keeps_the_thumb_on_the_pointer(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(24);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix % 6 == 3,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = grab.y - thumb.size.height / 2.0;
+    for step in 1..=10 {
+        let pointer = grab.y - travel * (step as f32 / 10.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the pointer is at {pointer:?} but the thumb is at {:?}",
+            moved.center().y
+        );
+    }
+}
+
+struct SectionedTrace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for SectionedTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(
+            LogView::new("trace", "Trace", self.state.clone(), |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(format!("line {ix}").into()),
+                repeats: 1,
+                opens_section: ix % 25 == 0,
+            })
+            .section_of(|ix| Some(ix / 25 * 25)),
+        )
+    }
+}
+
+#[gpui::test]
+fn the_pinned_header_settles_on_the_next_frame_as_rows_arrive(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| SectionedTrace { state }
+    });
+    cx.run_until_parked();
+    for _ in 0..60 {
+        let len = state.len();
+        state.splice(len..len, 1);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        let settled = cx.debug_bounds("log-pinned");
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert_eq!(
+            settled,
+            cx.debug_bounds("log-pinned"),
+            "the pinned header was stale after {} rows",
+            state.len()
+        );
+    }
+}
+
+#[gpui::test]
+fn dragging_through_short_rows_between_tall_ones_never_jumps_to_the_end(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix < 2 || ix >= 58,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    for _ in 0..4 {
+        cx.simulate_event(ScrollEvent {
+            position: point(size.width / 2.0, size.height / 2.0),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = size.height - thumb.size.height - grab.y;
+    for step in 1..=6 {
+        let pointer = grab.y + travel * (step as f32 / 12.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            !state.following(),
+            "step {step}: the list jumped to the end with the thumb halfway down"
+        );
+    }
+}
+
+#[gpui::test]
+fn dragging_halfway_down_a_log_with_a_short_tail_stays_halfway(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix < 2,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    for _ in 0..4 {
+        cx.simulate_event(ScrollEvent {
+            position: point(size.width / 2.0, size.height / 2.0),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = size.height - thumb.size.height - grab.y;
+    for step in 1..=5 {
+        let pointer = grab.y + travel * (step as f32 / 10.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the thumb is at {:?}, not under the pointer at {pointer:?}",
+            moved.center().y
+        );
+        assert!(
+            !state.following(),
+            "step {step}: the list reached the bottom with the thumb {}% down",
+            step * 10
+        );
+    }
+}
+
+#[gpui::test]
+fn resizing_a_paused_log_keeps_its_scrollbar_from_jumping_to_the_end(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px, size};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    let full = cx.update(|window, _| window.viewport_size());
+    let scroll = |cx: &mut VisualTestContext, by: gpui::Pixels| {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(100.0), px(100.0)),
+            delta: ScrollDelta::Pixels(point(px(0.0), by)),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    scroll(cx, px(100_000.0));
+    cx.simulate_resize(size(full.width, px(320.0)));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    scroll(cx, px(-400.0));
+    assert!(!state.following());
+
+    let edge = full.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, px(160.0)), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    let up = point(edge, thumb.center().y - px(5.0));
+    cx.simulate_mouse_move(up, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(up, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        !state.following(),
+        "dragging the thumb up jumped the log to its newest row"
+    );
+}

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, Div, ElementId, FontWeight, HighlightStyle, Hsla, InteractiveElement as _,
     IntoElement, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, Stateful,
@@ -20,13 +22,20 @@ enum Value {
     Path(SharedString),
 }
 
+type Action = Rc<dyn Fn(&mut Window, &mut App)>;
+
+enum Link {
+    Url(SharedString),
+    Action(Action),
+}
+
 pub(super) struct Card {
     title: SharedString,
     rows: Vec<(SharedString, Value)>,
     body: Option<SharedString>,
     notes: Vec<(Option<SharedString>, SharedString)>,
     after: Option<SharedString>,
-    link: Option<(SharedString, SharedString)>,
+    link: Option<(SharedString, Link)>,
     scroll: ScrollHandle,
 }
 
@@ -100,7 +109,16 @@ impl HoverCard {
     }
 
     pub fn link(mut self, label: impl Into<SharedString>, url: impl Into<SharedString>) -> Self {
-        self.card.link = Some((label.into(), url.into()));
+        self.card.link = Some((label.into(), Link::Url(url.into())));
+        self
+    }
+
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.card.link = Some((label.into(), Link::Action(Rc::new(f))));
         self
     }
 
@@ -286,23 +304,26 @@ pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::
                 )
             },
         )
-        .when_some(card.link, |popup, (label, url)| {
+        .when_some(card.link, |popup, (label, link)| {
+            let button = Button::new("hover-card-link", label)
+                .variant(Variant::Ghost)
+                .size(Size::XSmall)
+                .unfocusable();
+            let button = match link {
+                Link::Url(url) => button
+                    .end_slot(
+                        icon(Icon::ArrowUpRight, theme.muted_foreground)
+                            .size(Size::XSmall.icon_size()),
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                Link::Action(action) => button.on_click(move |_, window, cx| action(window, cx)),
+            };
             popup.child(
                 div()
                     .debug_selector(|| "hover-card-link".into())
                     .flex()
                     .ml(-layout.space(2.0))
-                    .child(
-                        Button::new("hover-card-link", label)
-                            .variant(Variant::Ghost)
-                            .size(Size::XSmall)
-                            .unfocusable()
-                            .end_slot(
-                                icon(Icon::ArrowUpRight, theme.muted_foreground)
-                                    .size(Size::XSmall.icon_size()),
-                            )
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
-                    ),
+                    .child(button),
             )
         })
 }
