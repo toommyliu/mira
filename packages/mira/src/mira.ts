@@ -13,6 +13,8 @@ import { inputs } from "./inputs.ts";
 import { exited, exiting, failed, stopping } from "./run.ts";
 import { ask, call } from "./call.ts";
 
+export type { AbortEvent, AbortListener, AbortSignal } from "./abort.ts";
+
 declare const console: { readonly warn: (message: string) => void };
 
 const army = <A>(op: string, args: object = {}): Effect.Effect<A> =>
@@ -311,7 +313,7 @@ export type SkillOptions = {
 };
 /** A number is points, and a string like `"60%"` is a percent of the maximum. */
 export type Amount = number | `${number}%`;
-type Bound<T> =
+export type Bound<T> =
   | { readonly atMost: T; readonly atLeast?: never }
   | { readonly atLeast: T; readonly atMost?: never };
 export type Condition =
@@ -756,8 +758,8 @@ export const Settings = {
 
 export type ExitOptions = { readonly logout?: boolean; readonly closeTab?: boolean };
 
-type InputCommon = { readonly label: string; readonly description?: string };
-type InputOptions = readonly [string, ...string[]];
+export type InputCommon = { readonly label: string; readonly description?: string };
+export type InputOptions = readonly [string, ...string[]];
 
 export type Input =
   | (InputCommon & {
@@ -790,7 +792,7 @@ export type Inputs = { readonly [key: string]: Input };
 
 export type Meta = { readonly name?: string; readonly description?: string };
 
-type InputValue<F> = F extends { readonly type: "number" }
+export type InputValue<F> = F extends { readonly type: "number" }
   ? number
   : F extends { readonly type: "boolean" }
     ? boolean
@@ -847,7 +849,7 @@ export type Subscription<A> = { readonly next: Effect.Effect<A> };
 
 /** A generator function or a function returning an Effect, like the default export. */
 export type Handler<A> = (value: A) => Effect.Effect<unknown, unknown> | HandlerGenerator;
-type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
+export type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
 
 export type ClientPacket = {
   readonly from: "client";
@@ -1263,11 +1265,6 @@ export type LoopTauntTarget = {
  */
 export type LoopTauntPlan = readonly (readonly LoopTauntTarget[])[];
 
-type ArmyStart = {
-  (name: string): Effect.Effect<ArmyInfo>;
-  (name: string, options: { readonly timeout: Duration.Input }): Effect.Effect<ArmyInfo | null>;
-};
-
 // The game can leave the consumable slot broken after a class change. Equipping safeClass and
 // safePot first, then safePot again after class, is a workaround meant to restore it.
 const GEAR = [
@@ -1291,13 +1288,22 @@ let joined: ArmyInfo | undefined;
 const perform = <A>(body: Body<A>): Effect.Effect<A> =>
   Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));
 
-const start = ((name: string, { timeout }: { readonly timeout?: Duration.Input } = {}) =>
-  army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
+function start(name: string): Effect.Effect<ArmyInfo>;
+function start(
+  name: string,
+  options: { readonly timeout: Duration.Input },
+): Effect.Effect<ArmyInfo | null>;
+function start(
+  name: string,
+  { timeout }: { readonly timeout?: Duration.Input } = {},
+): Effect.Effect<ArmyInfo | null> {
+  return army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
     Effect.map((info) => {
       if (info !== null) joined = info;
       return info;
     }),
-  )) as ArmyStart;
+  );
+}
 
 const sync = (label: string, { timeout }: ArmyStepOptions = {}): Effect.Effect<void> =>
   Effect.asVoid(army<null>("sync", { label, timeoutMs: millis(timeout) }));
