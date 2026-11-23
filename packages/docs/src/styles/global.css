@@ -503,10 +503,6 @@ main:focus {
   box-shadow: inset 1px 0 0 var(--border);
 }
 
-:root[data-js] .contents .depth-3:not([data-open]) {
-  display: none;
-}
-
 .contents .depth-2 {
   position: sticky;
   top: calc(var(--before) * var(--contents-row));

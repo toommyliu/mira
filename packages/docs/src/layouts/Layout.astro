@@ -185,7 +185,7 @@ const contents = headings.filter((heading) => heading.depth === 2 || heading.dep
             <h2 id="contents-title">On this page</h2>
             <div class="contents-body">
               <div class="contents-scroll">
-                <ContentsList headings={contents} collapsible />
+                <ContentsList headings={contents} sticky />
               </div>
               <div class="contents-fade" data-edge="top" aria-hidden="true"></div>
               <div class="contents-fade" data-edge="bottom" aria-hidden="true"></div>

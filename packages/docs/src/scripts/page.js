@@ -111,14 +111,6 @@ function setup() {
     return found;
   }
 
-  function expand() {
-    const entries = rows.filter((row) => row.classList.contains("depth-3"));
-    for (const row of entries) row.setAttribute("data-open", "");
-    if (column === null || column.scrollHeight <= column.clientHeight) return;
-    const group = rows[Math.max(current, 0)]?.dataset.group;
-    for (const row of entries) row.toggleAttribute("data-open", row.dataset.group === group);
-  }
-
   /** @param {HTMLElement} row */
   function centered(row) {
     if (column === null) return 0;
@@ -170,7 +162,6 @@ function setup() {
     const found = locate();
     if (found === current) return;
     current = found;
-    expand();
     for (const list of lists) {
       for (const [index, link] of list.entries()) {
         if (index === current) link.setAttribute("aria-current", "location");
@@ -217,16 +208,12 @@ function setup() {
       }
     }
     update();
-    expand();
     cue();
   }
 
   if (column !== null) {
     column.addEventListener("scroll", cue, { passive: true, signal });
-    const resize = new ResizeObserver(() => {
-      expand();
-      cue();
-    });
+    const resize = new ResizeObserver(cue);
     resize.observe(column);
     signal.addEventListener("abort", () => resize.disconnect());
     jump?.addEventListener("click", () => {
