@@ -8,6 +8,7 @@ use super::{
 use crate::{
     account_settings,
     accounts::AccountId,
+    packages,
     ruffle::{Command, Msg},
     scripting::{Launch, Level, Limit, Limits, Outcome, Run},
 };
@@ -250,9 +251,11 @@ impl RuffleView {
         let path = launch.entry.clone();
         let (finished, outcome) = async_channel::bounded(1);
         let (asks, asked) = async_channel::unbounded();
+        let installed = packages::packages(cx).read(cx).root().to_owned();
         let started = self.span.in_scope(|| {
             Run::start(
                 launch.clone(),
+                installed,
                 Limits::default(),
                 Box::new(|level, message| match level {
                     Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
