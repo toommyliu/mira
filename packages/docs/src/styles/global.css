@@ -862,6 +862,28 @@ code.type {
   font-size: 14px;
 }
 
+.prose .variant-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  align-items: baseline;
+  margin: 6px 0 0;
+}
+
+.variant-fields > div {
+  display: contents;
+}
+
+.variant-fields dt > code {
+  font: 13px/20px var(--font-mono);
+}
+
+.variant-fields dd {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
 .namespaces {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -917,10 +939,10 @@ code.type {
 
   .page-contents summary {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 8px;
     height: var(--subbar);
-    padding: 0 var(--inset-x);
+    padding: calc((var(--subbar) - 20px) / 2) var(--inset-x);
     color: var(--muted-foreground);
     font-weight: 500;
     list-style: none;
@@ -952,6 +974,7 @@ code.type {
 
   .page-contents summary svg {
     flex: none;
+    align-self: center;
     margin-left: auto;
   }
 

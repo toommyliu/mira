@@ -50,6 +50,36 @@ const body = declaration.body;
     )
   }
   {
+    body.kind === "variants" && (
+      <div class="shape" role="group" aria-label={`Variants of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Variants</p>
+        {body.variants.map((variant) => {
+          const described = variant.properties.filter((property) => property.comment !== undefined);
+          return (
+            <div class="shape-row" id={variant.anchor}>
+              <Code tokens={typeTokens(variant.type, links)} bare />
+              <Comment comment={variant.comment} links={links} />
+              {described.length > 0 && (
+                <dl class="variant-fields">
+                  {described.map((property) => (
+                    <div>
+                      <dt>
+                        <code>{property.path}</code>
+                      </dt>
+                      <dd>
+                        <Comment comment={property.comment} links={links} />
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    )
+  }
+  {
     body.kind === "shape" && body.methods.length > 0 && (
       <div class="shape" role="group" aria-label={`Methods of ${declaration.name}`}>
         <p class="shape-title" aria-hidden="true">Methods</p>

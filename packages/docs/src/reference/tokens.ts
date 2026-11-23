@@ -334,7 +334,7 @@ export function declarationTokens(declaration: Declaration, links: Links): Token
 }
 
 export function previewTokens(declaration: Declaration, links: Links): Token[] {
-  if (declaration.body.kind === "alias") return declarationTokens(declaration, links);
+  if (declaration.body.kind !== "shape") return declarationTokens(declaration, links);
   const entries = [...declaration.body.properties, ...declaration.body.methods].flatMap(
     (member): Token[][] =>
       member.body.kind === "value"

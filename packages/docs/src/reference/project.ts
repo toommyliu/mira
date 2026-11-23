@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
-import { Application, type JSONOutput, normalizePath } from "typedoc";
+import { Application, Converter, type JSONOutput, normalizePath } from "typedoc";
+import ts from "typescript";
 
 import { modules } from "../../../mira/src/modules.ts";
 import { type Reference, reference } from "./model.ts";
@@ -17,6 +18,15 @@ export async function convert(
     excludeInternal: true,
     sort: ["source-order"],
     logLevel: "Warn",
+  });
+  // TypeDoc converts a constraint from the checker's type, which drops aliases such as GameEvent["type"].
+  app.converter.on(Converter.EVENT_CREATE_TYPE_PARAMETER, (context, parameter) => {
+    const constraint = context
+      .getSymbolFromReflection(parameter)
+      ?.declarations?.find(ts.isTypeParameterDeclaration)?.constraint;
+    if (constraint !== undefined) {
+      parameter.type = context.converter.convertType(context.withScope(parameter), constraint);
+    }
   });
   const project = await app.convert();
   if (project === undefined) throw new Error(`TypeDoc could not convert ${entryPoints.join(", ")}`);

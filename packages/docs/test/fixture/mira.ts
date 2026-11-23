@@ -8,10 +8,22 @@ export type Aura = { readonly name: string };
 export type Target = { readonly name: string; readonly auras: readonly Aura[] };
 export type KillOptions = { readonly retries?: number };
 export type KillError = { readonly reason: "fled" | "timeout" };
+/** @group World */
+export type Signal =
+  /** A door opened. */
+  | {
+      readonly type: "open";
+      /** Which door. */
+      readonly door: string;
+    }
+  | { readonly type: "close" };
+/** @group World */
+export type SignalType = Signal["type"];
 
 export const Combat = {
   getTarget: () => run<Target | null>(),
   kill: (query: Query, { retries }: KillOptions = {}) => run<boolean, KillError>(retries === 0),
+  waitFor: (type: SignalType) => run<Signal>(type),
 };
 
 export const World = {
@@ -19,4 +31,5 @@ export const World = {
   cells: {
     list: () => run<readonly string[]>(),
   },
+  on: <const T extends SignalType>(type: T) => run<Extract<Signal, { readonly type: T }>>(type),
 };

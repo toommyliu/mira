@@ -77,6 +77,18 @@ export const GET: APIRoute = async () => {
         code: true,
         text: commentText(type.comment),
       });
+      if (type.body.kind !== "variants") continue;
+      for (const variant of type.body.variants) {
+        entries.push({
+          title: variant.name,
+          kind: "variant",
+          group: "type",
+          href: `${href}#${variant.anchor}`,
+          context: type.name,
+          code: true,
+          text: commentText(variant.comment),
+        });
+      }
     }
   }
   return new Response(JSON.stringify(entries), {

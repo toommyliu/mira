@@ -21,6 +21,14 @@ export type Member = {
     | { readonly kind: "value"; readonly type: TypeNode; readonly optional: boolean };
 };
 
+export type Variant = {
+  readonly anchor: string;
+  readonly name: string;
+  readonly comment: Comment | undefined;
+  readonly type: J.ReflectionType;
+  readonly properties: readonly Member[];
+};
+
 export type Declaration = {
   readonly anchor: string;
   readonly name: string;
@@ -29,6 +37,11 @@ export type Declaration = {
   readonly typeParameters: readonly J.TypeParameterReflection[];
   readonly body:
     | { readonly kind: "alias"; readonly type: TypeNode }
+    | {
+        readonly kind: "variants";
+        readonly type: J.UnionType;
+        readonly variants: readonly Variant[];
+      }
     | {
         readonly kind: "shape";
         readonly properties: readonly Member[];
@@ -152,6 +165,45 @@ function members(children: readonly J.DeclarationReflection[], prefix: string): 
     });
 }
 
+function tagged(objects: readonly J.ReflectionType[], key: string) {
+  const pairs = objects.flatMap((object) => {
+    const field = object.declaration.children?.find((child) => child.name === key);
+    return field?.type?.type === "literal" && typeof field.type.value === "string"
+      ? [{ object, name: field.type.value }]
+      : [];
+  });
+  const distinct = new Set(pairs.map((pair) => pair.name)).size === objects.length;
+  return pairs.length === objects.length && distinct ? pairs : undefined;
+}
+
+function aliasBody(type: TypeNode, owner: string): Declaration["body"] {
+  if (type.type !== "union") return { kind: "alias", type };
+  const objects = type.types.filter((member) => member.type === "reflection");
+  if (objects.length !== type.types.length) return { kind: "alias", type };
+  for (const { name: key } of objects[0]?.declaration.children ?? []) {
+    const pairs = tagged(objects, key);
+    if (pairs === undefined) continue;
+    return {
+      kind: "variants",
+      type,
+      variants: pairs.map(({ object, name }, index) => {
+        const summary = type.elementSummaries?.[index] ?? [];
+        return {
+          anchor: `${owner}.${name}`,
+          name,
+          comment: summary.length === 0 ? undefined : { summary },
+          type: object,
+          properties: members(
+            (object.declaration.children ?? []).filter((child) => child.name !== key),
+            "",
+          ),
+        };
+      }),
+    };
+  }
+  return { kind: "alias", type };
+}
+
 function declaration(child: J.DeclarationReflection): Declaration {
   const keyword =
     child.kind === ReflectionKind.Class
@@ -173,7 +225,7 @@ function declaration(child: J.DeclarationReflection): Declaration {
             properties: shape.filter((member) => member.body.kind === "value"),
             methods: shape.filter((member) => member.body.kind === "call"),
           }
-        : { kind: "alias", type: child.type },
+        : aliasBody(child.type, child.name),
   };
 }
 
@@ -212,6 +264,18 @@ function owners(
   for (const [id, names] of users) {
     const [only, ...rest] = names;
     if (only !== undefined && rest.length === 0) owned.set(id, only);
+  }
+  for (const type of types) {
+    const group = type.comment?.blockTags?.find((tag) => tag.tag === "@group");
+    if (group === undefined) continue;
+    const title = group.content
+      .map((part) => part.text)
+      .join("")
+      .trim();
+    if (!namespaces.some((namespace) => namespace.name === title)) {
+      throw new Error(`${type.name} is in @group ${title}, which names no namespace`);
+    }
+    owned.set(type.id, title);
   }
   return owned;
 }

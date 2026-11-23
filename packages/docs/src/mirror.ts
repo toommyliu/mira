@@ -36,19 +36,33 @@ function member(entry: Member, owner: string | undefined, links: ReadonlyMap<num
   return [`### ${entry.path}`, fence(code), ...comment(entry.comment, links), ...errors];
 }
 
+function fields(properties: readonly Member[], links: ReadonlyMap<number, string>): string[] {
+  const described = properties.flatMap((property) => {
+    const markdown = comment(property.comment, links);
+    return markdown.length === 0 ? [] : [`- \`${property.path}\`: ${markdown.join(" ")}`];
+  });
+  return described.length === 0 ? [] : [described.join("\n")];
+}
+
 function declaration(entry: Declaration, links: ReadonlyMap<number, string>) {
-  const fields =
-    entry.body.kind === "shape"
-      ? entry.body.properties.flatMap((property) => {
-          const described = comment(property.comment, links);
-          return described.length === 0 ? [] : [`- \`${property.path}\`: ${described.join(" ")}`];
-        })
-      : [];
+  const head = [`### ${entry.name}`];
+  if (entry.body.kind === "variants") {
+    return [
+      ...head,
+      ...comment(entry.comment, links),
+      ...entry.body.variants.flatMap((variant) => [
+        `#### ${variant.name}`,
+        fence(text(typeTokens(variant.type, links))),
+        ...comment(variant.comment, links),
+        ...fields(variant.properties, links),
+      ]),
+    ];
+  }
   return [
-    `### ${entry.name}`,
+    ...head,
     fence(text(previewTokens(entry, links))),
     ...comment(entry.comment, links),
-    ...(fields.length === 0 ? [] : [fields.join("\n")]),
+    ...(entry.body.kind === "shape" ? fields(entry.body.properties, links) : []),
   ];
 }
 

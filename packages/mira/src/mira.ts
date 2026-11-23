@@ -1075,8 +1075,11 @@ export type GameEvent =
       readonly self: boolean;
       readonly afk: boolean;
     }
+/** @group Events */
   /** `""` is the map's default zone. */
+  /** A monster in your room died. */
   | { readonly type: "zone"; readonly zone: string }
+  /** An item landed in your drops, waiting to be accepted. */
   | { readonly type: "mapJoined"; readonly map: string }
   /** A player jumped to a cell. Walking within a cell doesn't count. */
   | {
@@ -1093,17 +1096,19 @@ export type GameEvent =
   | { readonly type: "logout" }
   /** `"dead"` is a death. `"idle"` is a respawn or leaving combat. */
   | {
+  /** You joined a map. */
       readonly type: "playerState";
       readonly username: string;
       readonly self: boolean;
       readonly state: State;
     }
   | { readonly type: "monsterRespawn"; readonly monMapId: number }
-  /** `targetId` is a monster's `monMapId` or a player's `userId`. */
+  /** An aura landed on a monster or player. */
   | {
       readonly type: "auraAdded";
       readonly name: string;
       readonly targetType: "monster" | "player";
+  /** A player left the room. */
       readonly targetId: number;
       readonly self: boolean;
       /** Seconds. */
@@ -1114,24 +1119,32 @@ export type GameEvent =
       readonly type: "auraRemoved";
       readonly name: string;
       readonly targetType: "monster" | "player";
+  /** A monster in your room respawned. */
       readonly targetId: number;
       readonly self: boolean;
     }
   /** A line a monster says, or a message the server shows you. */
   | { readonly type: "message"; readonly text: string; readonly monMapId: number | null }
   /** An item went straight into your inventory, such as a quest reward or a temporary item. */
+      /** A monster's `monMapId` or a player's `userId`. */
   | {
       readonly type: "itemAdded";
       readonly itemId: number;
       readonly name: string;
       readonly quantity: number;
       readonly temp: boolean;
+  /** An aura ended on a monster or player. */
     }
   /** The server accepted a turn-in, whether from a script or the game's quest window. */
   | { readonly type: "questCompleted"; readonly questId: number; readonly name: string };
 export type EventType = GameEvent["type"];
+      /** A monster's `monMapId` or a player's `userId`. */
 export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
-/** `type` picks the event. Other fields must match exactly. */
+/**
+ * `type` picks the event. Other fields must match exactly.
+ *
+ * @group Events
+ */
 export type EventFilter<T extends EventType> = { readonly type: T } & Partial<
   Omit<EventOf<T>, "type">
 >;
@@ -1145,7 +1158,9 @@ const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
       )
         ? (event as EventOf<T>)
         : undefined,
+/** @group Events */
   );
+/** @group Events */
 
 export const Events = {
   subscribe: <const T extends EventType>(
