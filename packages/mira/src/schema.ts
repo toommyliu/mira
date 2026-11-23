@@ -62,20 +62,21 @@ export interface ArraySchema<E extends Native.Top> extends Methods<
   max(length: number, message?: string): ArraySchema<E>;
 }
 
-type AnySchema = { readonly schema: Native.Top };
+export type AnySchema = { readonly schema: Native.Top };
 
-type Value = {
+/** Any schema except one made by `optional()` or `default()`, which can only be an object field. */
+export type Value = {
   readonly schema: Native.Top & {
     readonly "~type.optionality": "required";
     readonly "~encoded.optionality": "required";
   };
 };
 
-type Fields<F extends Readonly<Record<string, AnySchema>>> = {
+export type Fields<F extends Readonly<Record<string, AnySchema>>> = {
   readonly [K in keyof F]: F[K]["schema"];
 };
 
-type Members<M extends readonly Value[]> = { readonly [K in keyof M]: M[K]["schema"] };
+export type Members<M extends readonly Value[]> = { readonly [K in keyof M]: M[K]["schema"] };
 
 /**
  * The type a schema parses to.
