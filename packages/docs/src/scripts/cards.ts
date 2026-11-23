@@ -7,6 +7,7 @@ const MARGIN = 8;
 
 const card = document.createElement("div");
 card.className = "hover-card";
+card.setAttribute("role", "group");
 card.hidden = true;
 document.body.append(card);
 
@@ -14,6 +15,7 @@ let anchor: HTMLElement | undefined;
 let openTimer: number | undefined;
 let leaveTimer: number | undefined;
 let closedAt = Number.NEGATIVE_INFINITY;
+let dismissed: HTMLElement | undefined;
 
 function wrapping(): boolean {
   try {
@@ -44,6 +46,7 @@ function open(link: HTMLElement, entrance: boolean) {
   window.clearTimeout(leaveTimer);
   anchor = link;
   card.replaceChildren(content.content.cloneNode(true));
+  card.setAttribute("aria-label", `Definition of ${link.textContent ?? "type"}`);
   applyWrap(wrapping());
   card.hidden = false;
   card.classList.remove("entering");
@@ -103,6 +106,11 @@ document.addEventListener("pointerout", (event) => {
 
 document.addEventListener("focusin", (event) => {
   const link = trigger(event.target);
+  if (link === anchor && !card.hidden) return;
+  if (link !== null && link === dismissed) {
+    dismissed = undefined;
+    return;
+  }
   if (link?.matches(":focus-visible")) open(link, false);
   else if (!element(event.target)?.closest(".hover-card")) close();
 });
@@ -120,8 +128,47 @@ document.addEventListener("pointerdown", (event) => {
   if (!element(event.target)?.closest(".hover-card")) close();
 });
 
+const FOCUSABLE =
+  "a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex='-1'])";
+
+function controls(): HTMLElement[] {
+  return [...card.querySelectorAll<HTMLElement>(FOCUSABLE)];
+}
+
+function after(link: HTMLElement): HTMLElement | undefined {
+  const all = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (candidate) => !card.contains(candidate) && candidate.getClientRects().length > 0,
+  );
+  return all[all.indexOf(link) + 1];
+}
+
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") close();
+  const focused = document.activeElement;
+  const inside = focused instanceof HTMLElement && card.contains(focused);
+  if (event.key === "Escape") {
+    const link = anchor;
+    close();
+    if (inside && link !== undefined) {
+      dismissed = link;
+      link.focus();
+    }
+    return;
+  }
+  if (event.key !== "Tab" || card.hidden || anchor === undefined) return;
+  const items = controls();
+  const first = items[0];
+  if (focused === anchor && !event.shiftKey && first !== undefined) {
+    event.preventDefault();
+    first.focus();
+  } else if (inside && event.shiftKey && focused === first) {
+    event.preventDefault();
+    anchor.focus();
+  } else if (inside && !event.shiftKey && focused === items.at(-1)) {
+    event.preventDefault();
+    const next = after(anchor);
+    close();
+    next?.focus();
+  }
 });
 
 document.addEventListener(
