@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    ops::Range,
     rc::Rc,
     time::Instant,
 };
@@ -31,6 +32,7 @@ pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
 pub(crate) const SELECT_MAX_HEIGHT: Pixels = px(288.0);
 pub(crate) const PANEL_INSET: Pixels = px(4.0);
+const DISMISS_SIZE: Pixels = px(18.0);
 pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -314,6 +316,7 @@ pub(crate) struct MenuState {
     started: bool,
     pub(crate) opened_from_keyboard: bool,
     _activation: Subscription,
+    focus_out: Option<Subscription>,
 }
 
 impl MenuState {
@@ -352,6 +355,7 @@ impl MenuState {
             started: false,
             opened_from_keyboard: false,
             _activation: activation,
+            focus_out: None,
         }
     }
 
@@ -660,7 +664,7 @@ fn key_down(
         "escape" => back_to_row(state, window, cx),
         "backspace" | "delete" => {
             if let Some(dismiss) = highlighted.and_then(|index| metas[index].dismiss.clone()) {
-                dismiss(window, cx);
+                run_dismiss(&dismiss, state, window, cx);
             }
         }
         "enter" | "space" if activates => {
@@ -703,6 +707,19 @@ fn key_down(
     cx.stop_propagation();
 }
 
+fn run_dismiss(dismiss: &Handler, state: &Entity<MenuState>, window: &mut Window, cx: &mut App) {
+    dismiss(window, cx);
+    let menu = state.read(cx);
+    if !menu.open {
+        return;
+    }
+    let focus = menu.focus.clone();
+    if let Some(moved) = window.focused(cx).filter(|focused| *focused != focus) {
+        state.update(cx, |menu, _| menu.return_focus = Some(moved));
+        window.focus(&focus, cx);
+    }
+}
+
 fn back_to_row(state: &Entity<MenuState>, window: &mut Window, cx: &mut App) {
     match state.read(cx).row.clone() {
         Some(row) => {
@@ -716,13 +733,16 @@ fn back_to_row(state: &Entity<MenuState>, window: &mut Window, cx: &mut App) {
 fn reveal_highlighted(
     menu: &MenuState,
     highlighted: Option<usize>,
-    pinned: usize,
+    scrolled: Range<usize>,
     window: &mut Window,
 ) {
     if !menu.reveal.get() {
         return;
     }
-    let Some(index) = highlighted.and_then(|index| index.checked_sub(pinned)) else {
+    let Some(index) = highlighted
+        .filter(|index| scrolled.contains(index))
+        .map(|index| index - scrolled.start)
+    else {
         menu.reveal.set(false);
         return;
     };
@@ -745,6 +765,34 @@ fn current(metas: &[Meta], menu: &MenuState) -> (Option<usize>, Option<(usize, O
             _ => None,
         });
     (highlighted, submenu)
+}
+
+fn scrolled(items: &[MenuItem]) -> Range<usize> {
+    let start = items.iter().take_while(|item| item.pinned).count();
+    let end = items.len()
+        - items[start..]
+            .iter()
+            .rev()
+            .take_while(|item| item.pinned)
+            .count();
+    start..end
+}
+
+fn checked(items: &[MenuItem], scrolled: &Range<usize>) -> Option<(usize, SharedString)> {
+    let mut checked = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.checked == Some(true) && item.mark != Mark::Switch);
+    let (index, item) = checked.next().filter(|_| checked.next().is_none())?;
+    scrolled
+        .contains(&index)
+        .then(|| (index - scrolled.start, item.label.clone()))
+}
+
+fn split(mut rows: Vec<AnyElement>, scrolled: &Range<usize>) -> [Vec<AnyElement>; 3] {
+    let after = rows.split_off(scrolled.end);
+    let middle = rows.split_off(scrolled.start);
+    [rows, middle, after]
 }
 
 pub(crate) fn first_navigable(items: &[MenuItem], from_end: bool) -> Option<usize> {
@@ -814,6 +862,7 @@ fn rows(
         .iter()
         .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
     let checks_lead = gutter && items.iter().any(|item| item.shortcut.is_some());
+    let dismissible = items.iter().any(|item| item.dismiss.is_some());
     let lead = checks_lead || items.iter().any(|item| item.current.is_some());
     let lead_slot = layout.space(3.5);
     let count = metas.iter().filter(|meta| meta.navigable).count();
@@ -982,7 +1031,11 @@ fn rows(
                         .when(mark == Mark::Switch, |row| {
                             row.child(switch_mark(checked == Some(true), theme))
                         })
+                        .when(dismiss.is_none() && dismissible, |row| {
+                            row.child(div().flex_none().w(DISMISS_SIZE))
+                        })
                         .when_some(dismiss, |row, (label, dismiss)| {
+                            let state = state.clone();
                             row.child(
                                 div()
                                     .id(("dismiss", index))
@@ -990,7 +1043,7 @@ fn rows(
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .size(px(18.0))
+                                    .size(DISMISS_SIZE)
                                     .rounded(theme.radius.control)
                                     .when(lit, |button| {
                                         button
@@ -1004,7 +1057,7 @@ fn rows(
                                             })
                                             .on_click(move |_, window, cx| {
                                                 cx.stop_propagation();
-                                                dismiss(window, cx);
+                                                run_dismiss(&dismiss, &state, window, cx);
                                             })
                                             .child(
                                                 super::icon(Icon::X, theme.muted_foreground)
@@ -1072,17 +1125,20 @@ impl RenderOnce for OpenSubmenu {
         let index = self.index;
         let max_height = MENU_MAX_HEIGHT.min(window.viewport_size().height - WINDOW_MARGIN * 2.0);
         let scroll = self.state.read(cx).submenu_scroll.clone();
-        let count = self.items.iter().take_while(|item| item.pinned).count();
-        let mut pinned = rows(
-            self.items,
-            &self.metas,
-            ((self.highlighted, None), None),
-            Some(self.index),
-            PopupKind::Menu,
-            &self.state,
-            cx,
+        let scrolled = scrolled(&self.items);
+        let checked = checked(&self.items, &scrolled);
+        let [before, rest, after] = split(
+            rows(
+                self.items,
+                &self.metas,
+                ((self.highlighted, None), None),
+                Some(self.index),
+                PopupKind::Menu,
+                &self.state,
+                cx,
+            ),
+            &scrolled,
         );
-        let rest = pinned.split_off(count);
         let panel = panel_shell(("submenu-panel", index), None, theme)
             .max_h(max_height)
             .role(Role::Menu)
@@ -1099,14 +1155,17 @@ impl RenderOnce for OpenSubmenu {
                 .absolute()
                 .inset_0(),
             )
-            .children(pinned)
+            .children(before)
             .child(scrolling(
                 ElementId::from(("submenu-rest", index)),
                 max_height,
                 false,
                 rest,
                 &scroll,
-            ));
+                checked,
+                theme,
+            ))
+            .children(after);
         let panel = div()
             .relative()
             .child(panel)
@@ -1198,18 +1257,21 @@ pub(super) fn popup_panel(
     let next_state = state.clone();
     let prev_state = state.clone();
     let rest_scroll = menu.rest_scroll.clone();
-    let count = items.iter().take_while(|item| item.pinned).count();
-    reveal_highlighted(menu, highlighted, count, window);
-    let mut pinned = rows(
-        items,
-        &metas,
-        ((highlighted, submenu), submenu_row),
-        None,
-        kind,
-        state,
-        cx,
+    let scrolled = scrolled(&items);
+    let checked = checked(&items, &scrolled);
+    reveal_highlighted(menu, highlighted, scrolled.clone(), window);
+    let [before, rest, after] = split(
+        rows(
+            items,
+            &metas,
+            ((highlighted, submenu), submenu_row),
+            None,
+            kind,
+            state,
+            cx,
+        ),
+        &scrolled,
     );
-    let rest = pinned.split_off(count);
     panel_shell((id.clone(), "panel"), None, theme)
         .debug_selector(|| "menu-panel".into())
         .max_h(max_height)
@@ -1230,14 +1292,17 @@ pub(super) fn popup_panel(
             close(&prev_state, true, window, cx);
             cx.propagate();
         })
-        .children(pinned)
+        .children(before)
         .child(scrolling(
             ElementId::from((id.clone(), "rest")),
             max_height,
             false,
             rest,
             &rest_scroll,
+            checked,
+            theme,
         ))
+        .children(after)
 }
 
 pub(crate) fn popup(
@@ -1254,14 +1319,86 @@ pub(crate) fn popup(
         .into_any_element()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Away {
+    Above,
+    Below,
+}
+
+fn away(handle: &ScrollHandle, index: usize) -> Option<Away> {
+    let viewport = handle.bounds();
+    let row = handle.bounds_for_item(index)?;
+    let offset = handle.offset().y;
+    if row.bottom() + offset <= viewport.top() {
+        Some(Away::Above)
+    } else if row.top() + offset >= viewport.bottom() {
+        Some(Away::Below)
+    } else {
+        None
+    }
+}
+
+fn scroll_to_checked(
+    id: ElementId,
+    away: Away,
+    label: SharedString,
+    index: usize,
+    handle: &ScrollHandle,
+    theme: &Theme,
+) -> Div {
+    let handle = handle.clone();
+    let glyph = match away {
+        Away::Above => Icon::ArrowUp,
+        Away::Below => Icon::ArrowDown,
+    };
+    let button = div()
+        .id(id)
+        .debug_selector(|| "scroll-to-checked".into())
+        .role(Role::Button)
+        .aria_label(SharedString::from(format!("Scroll to {label}")))
+        .block_mouse_except_scroll()
+        .pointer_cursor(theme)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(theme.layout.space(6.0))
+        .rounded_full()
+        .bg(theme.popover)
+        .shadow(theme.popup_shadow())
+        .child(theme.surface_ring(theme.layout.space(3.0)))
+        .hover(|button| button.bg(theme.accent))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            handle.scroll_to_item(index);
+            window.refresh();
+        })
+        .child(small_icon(glyph, theme.popover_foreground));
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .map(|edge| match away {
+            Away::Above => edge.top(PANEL_INSET),
+            Away::Below => edge.bottom(PANEL_INSET),
+        })
+        .flex()
+        .justify_center()
+        .child(button)
+}
+
 fn scrolling(
     id: ElementId,
     height: Pixels,
     fixed: bool,
     rows: Vec<AnyElement>,
     handle: &ScrollHandle,
+    checked: Option<(usize, SharedString)>,
+    theme: &Theme,
 ) -> Div {
     let overflows = handle.max_offset().y > Pixels::ZERO;
+    let index = checked.as_ref().map(|(index, _)| *index);
+    let shown = index.and_then(|index| away(handle, index));
     let measured = handle.clone();
     div()
         .relative()
@@ -1289,7 +1426,9 @@ fn scrolling(
         .child(
             canvas(
                 move |_, window, _| {
-                    if (measured.max_offset().y > Pixels::ZERO) != overflows {
+                    if (measured.max_offset().y > Pixels::ZERO) != overflows
+                        || index.and_then(|index| away(&measured, index)) != shown
+                    {
                         window.request_animation_frame();
                     }
                 },
@@ -1298,6 +1437,16 @@ fn scrolling(
             .absolute()
             .size_0(),
         )
+        .children(shown.zip(checked).map(|(away, (index, label))| {
+            scroll_to_checked(
+                (id.clone(), "checked").into(),
+                away,
+                label,
+                index,
+                handle,
+                theme,
+            )
+        }))
         .child(Scrollbar::new((id, "scrollbar"), handle.clone()).persistent())
 }
 
@@ -1341,18 +1490,21 @@ impl RenderOnce for MenuList {
         let keys_state = state.clone();
         let keys_metas = metas.clone();
         let leave_state = state.clone();
-        let count = self.items.iter().take_while(|item| item.pinned).count();
-        reveal_highlighted(state.read(cx), highlighted, count, window);
-        let mut pinned = rows(
-            self.items,
-            &metas,
-            ((highlighted, None), None),
-            None,
-            PopupKind::Menu,
-            &state,
-            cx,
+        let scrolled = scrolled(&self.items);
+        let checked = checked(&self.items, &scrolled);
+        reveal_highlighted(state.read(cx), highlighted, scrolled.clone(), window);
+        let [before, rest, after] = split(
+            rows(
+                self.items,
+                &metas,
+                ((highlighted, None), None),
+                None,
+                PopupKind::Menu,
+                &state,
+                cx,
+            ),
+            &scrolled,
         );
-        let rest = pinned.split_off(count);
         div()
             .id(self.id.clone())
             .role(Role::Menu)
@@ -1379,14 +1531,17 @@ impl RenderOnce for MenuList {
             .text_size(typography.body)
             .line_height(typography.body_line)
             .text_color(theme.foreground)
-            .children(pinned)
+            .children(before)
             .child(scrolling(
                 ElementId::from((self.id, "rest")),
                 self.height,
                 true,
                 rest,
                 &rest_scroll,
+                checked,
+                &theme,
             ))
+            .children(after)
     }
 }
 
@@ -1551,12 +1706,28 @@ impl RenderOnce for DropdownMenu {
             .state
             .clone()
             .unwrap_or_else(|| state(&self.id, self.default_open, window, cx));
-        let is_open = state.read(cx).open;
+        if state.read(cx).focus_out.is_none() {
+            state.update(cx, |menu, cx| {
+                let focus = menu.focus.clone();
+                menu.focus_out = Some(cx.on_focus_out(&focus, window, |menu, _, _, cx| {
+                    if menu.open {
+                        menu.open = false;
+                        menu.submenu = None;
+                        menu.return_focus = None;
+                        cx.notify();
+                    }
+                }));
+            });
+        }
         let trigger = self
             .trigger
             .unwrap_or_else(|| Button::new((self.id.clone(), "trigger"), "Menu"));
         let label = trigger.label().clone();
         let disabled = trigger.is_disabled();
+        if disabled && state.read(cx).open {
+            close(&state, true, window, cx);
+        }
+        let is_open = state.read(cx).open;
         let (press, keys) = trigger_handlers(&state, Some(self.items.clone()), None, self.beside);
         let trigger = if self.beside {
             let row = match state.read(cx).row.clone() {
