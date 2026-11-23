@@ -1,6 +1,5 @@
 ---
 import type { Member } from "../reference/model.ts";
-import { sourceUrl } from "../repository.ts";
 import { signatureTokens, typeTokens, valueTokens } from "../reference/tokens.ts";
 import Code from "./Code.astro";
 import Comment from "./Comment.astro";
@@ -28,13 +27,6 @@ const errors =
   <h3>
     <a href={`#${member.anchor}`}>{member.path}</a>
     <span class="kind">{body.kind === "call" ? "function" : "property"}</span>
-    {
-      member.source !== undefined && (
-        <a class="source" href={sourceUrl(member.source)} aria-label={`Source of ${path} on GitHub`}>
-          Source
-        </a>
-      )
-    }
   </h3>
   {
     body.kind === "call" ? (

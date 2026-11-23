@@ -1,6 +1,5 @@
 ---
 import type { Declaration } from "../reference/model.ts";
-import { sourceUrl } from "../repository.ts";
 import { declarationTokens, signatureTokens, typeTokens } from "../reference/tokens.ts";
 import Code from "./Code.astro";
 import Comment from "./Comment.astro";
@@ -18,17 +17,6 @@ const body = declaration.body;
   <h3>
     <a href={`#${declaration.anchor}`}>{declaration.name}</a>
     <span class="kind">{declaration.keyword}</span>
-    {
-      declaration.source !== undefined && (
-        <a
-          class="source"
-          href={sourceUrl(declaration.source)}
-          aria-label={`Source of ${declaration.name} on GitHub`}
-        >
-          Source
-        </a>
-      )
-    }
   </h3>
   {
     (body.kind === "alias" || declaration.typeParameters.length > 0) && (
