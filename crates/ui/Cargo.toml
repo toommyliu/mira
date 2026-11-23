@@ -3,6 +3,7 @@ name = "mira-ui"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "MIT"
 
 [features]
 test-support = ["dep:gpui_apple", "dep:mira-platform", "gpui/test-support"]
