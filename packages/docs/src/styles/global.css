@@ -605,7 +605,7 @@ main:focus {
   text-decoration-color: currentColor;
 }
 
-.prose :not(pre, .field dt) > code:not(.type) {
+.prose :not(pre, .shape-row dt) > code:not(.type) {
   padding: 1px 5px;
   border-radius: var(--radius-tag);
   background: var(--muted);
@@ -796,44 +796,68 @@ code.type {
   font: 13px/20px var(--font-mono);
 }
 
-.fields {
-  display: grid;
+.shape {
   margin: 12px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+
+.prose .shape-title {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--frame);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.shape dl {
+  margin: 0;
+}
+
+.shape-row {
+  padding: 10px 12px;
+}
+
+.shape-row + .shape-row {
   border-top: 1px solid var(--border);
 }
 
-.field {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.field:last-child {
-  border-bottom: 0;
-}
-
-.field dt {
+.shape-row dt {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
   align-items: baseline;
 }
 
-.field dt > code:first-child {
+.shape-row dt > code:first-child {
   font: 500 13px/20px var(--font-mono);
 }
 
-.field dd {
+.shape-row dd {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 14px;
 }
 
-.field dd:empty {
+.shape-row dd:empty {
   display: none;
 }
 
-.method {
-  margin-top: 16px;
+.shape-row > pre.code {
+  margin: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.shape-row > pre.code + .comment {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 14px;
 }
 
 .namespaces {

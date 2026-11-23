@@ -26,36 +26,43 @@ const body = declaration.body;
   <Comment comment={declaration.comment} links={links} />
   {
     body.kind === "shape" && body.properties.length > 0 && (
-      <dl class="fields">
-        {body.properties.map((property) =>
-          property.body.kind === "value" ? (
-            <div class="field" id={`${declaration.anchor}.${property.anchor}`}>
-              <dt>
-                <code>
-                  {property.path}
-                  {property.body.optional ? "?" : ""}
-                </code>
-                <Code inline tokens={typeTokens(property.body.type, links)} />
-              </dt>
-              <dd>
-                <Comment comment={property.comment} links={links} />
-              </dd>
-            </div>
-          ) : null,
-        )}
-      </dl>
+      <div class="shape" role="group" aria-label={`Fields of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Fields</p>
+        <dl>
+          {body.properties.map((property) =>
+            property.body.kind === "value" ? (
+              <div class="shape-row" id={`${declaration.anchor}.${property.anchor}`}>
+                <dt>
+                  <code>
+                    {property.path}
+                    {property.body.optional ? "?" : ""}
+                  </code>
+                  <Code inline tokens={typeTokens(property.body.type, links)} />
+                </dt>
+                <dd>
+                  <Comment comment={property.comment} links={links} />
+                </dd>
+              </div>
+            ) : null,
+          )}
+        </dl>
+      </div>
     )
   }
   {
-    body.kind === "shape" &&
-      body.methods.map((method) => (
-        <div class="method" id={`${declaration.anchor}.${method.anchor}`}>
-          {method.body.kind === "call" &&
-            method.body.signatures.map((signature) => (
-              <Code tokens={signatureTokens(method.path, signature, links)} />
-            ))}
-          <Comment comment={method.comment} links={links} />
-        </div>
-      ))
+    body.kind === "shape" && body.methods.length > 0 && (
+      <div class="shape" role="group" aria-label={`Methods of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Methods</p>
+        {body.methods.map((method) => (
+          <div class="shape-row" id={`${declaration.anchor}.${method.anchor}`}>
+            {method.body.kind === "call" &&
+              method.body.signatures.map((signature) => (
+                <Code tokens={signatureTokens(method.path, signature, links)} bare />
+              ))}
+            <Comment comment={method.comment} links={links} />
+          </div>
+        ))}
+      </div>
+    )
   }
 </section>
