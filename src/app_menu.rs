@@ -90,7 +90,7 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Client", game::OpenClient),
             MenuItem::action("Manager", game::OpenManager),
-            MenuItem::action("Combat Profiles", game::OpenCombatProfiles),
+            MenuItem::action("Combat profiles", game::OpenCombatProfiles),
             MenuItem::separator(),
             MenuItem::action("Scripts", game::OpenScripts),
             MenuItem::action("Environment", game::OpenEnvironment),

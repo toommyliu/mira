@@ -120,7 +120,12 @@ fn start_with(
         folder.0.join("packages"),
         limits,
         Box::new(move |level, message| {
-            let prefix = if level == Level::Error { "error: " } else { "" };
+            let prefix = match level {
+                Level::Debug => "debug: ",
+                Level::Info => "",
+                Level::Warn => "warn: ",
+                Level::Error => "error: ",
+            };
             sink.lock().unwrap().push(format!("{prefix}{message}"));
         }),
         player,
@@ -284,6 +289,42 @@ fn plain_javascript_modules_run_as_written() {
     ]);
     assert_eq!(finished.outcome, Outcome::Completed);
     assert_eq!(finished.logs, ["42"]);
+}
+
+#[test]
+fn effect_logs_reach_the_log_at_the_same_levels_as_console_calls() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+
+export default function* () {
+  console.log("plain");
+  console.debug("details");
+  console.warn("careful");
+  yield* Effect.log("from effect");
+  yield* Effect.logDebug("effect details");
+  yield* Effect.logWarning("effect careful", 42);
+  yield* Effect.logError("effect broke");
+  yield* Effect.logTrace("effect trace");
+  yield* Effect.log("annotated").pipe(Effect.annotateLogs({ cell: "Enter" }));
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            "plain",
+            "debug: details",
+            "warn: careful",
+            "from effect",
+            "debug: effect details",
+            "warn: effect careful 42",
+            "error: effect broke",
+            "debug: effect trace",
+            r#"annotated {"cell":"Enter"}"#,
+        ]
+    );
 }
 
 #[test]
@@ -1446,7 +1487,7 @@ export default function* () {
     assert_eq!(
         finished.logs,
         [
-            "A subscription fell behind and dropped what it was holding.",
+            "warn: A subscription fell behind and dropped what it was holding.",
             "ct",
             "ct"
         ]
@@ -3220,7 +3261,7 @@ export default function* () {
     { timeout: "5 seconds" },
   );
   yield* Army.sync("done");
-  yield* taunt.stop;
+  yield* taunt.stop();
   console.log("done");
 }
 "#,
@@ -3536,7 +3577,7 @@ export default function* () {
     },
   });
   yield* Script.sleep("50 millis");
-  yield* rotation.stop;
+  yield* rotation.stop();
   console.log(turns);
 }
 "#,

@@ -8,6 +8,7 @@ mod army;
 mod automation;
 mod beep;
 mod bridge;
+mod clock;
 mod combat_profiles;
 mod domain;
 mod file_panel;
