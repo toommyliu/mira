@@ -45,6 +45,7 @@ pub struct Dialog {
     alert: bool,
     title: SharedString,
     width: Option<Pixels>,
+    max_height: Option<Pixels>,
     description: Option<SharedString>,
     header_end: Option<AnyElement>,
     body: Vec<AnyElement>,
@@ -62,6 +63,7 @@ impl Dialog {
             alert: false,
             title: title.into(),
             width: None,
+            max_height: None,
             description: None,
             header_end: None,
             body: Vec::new(),
@@ -79,6 +81,11 @@ impl Dialog {
 
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    pub fn max_height(mut self, height: Pixels) -> Self {
+        self.max_height = Some(height);
         self
     }
 
@@ -253,7 +260,12 @@ impl RenderOnce for Dialog {
                                     }
                                 }))
                                 .max_w(viewport.width - inset * 2.0)
-                                .max_h(viewport.height - inset * 2.0)
+                                .max_h(
+                                    self.max_height
+                                        .map_or(viewport.height - inset * 2.0, |height| {
+                                            height.min(viewport.height - inset * 2.0)
+                                        }),
+                                )
                                 .p(inset)
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.popover)
@@ -332,10 +344,13 @@ impl RenderOnce for Dialog {
                                                     .track_scroll(&scroll)
                                                     .children(self.body),
                                             )
-                                            .child(Scrollbar::new(
-                                                (self.id.clone(), "scrollbar"),
-                                                scroll,
-                                            )),
+                                            .child(
+                                                Scrollbar::new(
+                                                    (self.id.clone(), "scrollbar"),
+                                                    scroll,
+                                                )
+                                                .persistent(),
+                                            ),
                                     )
                                 })
                                 .when(

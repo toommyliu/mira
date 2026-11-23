@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     ActiveTheme as _, h_flex,
@@ -19,6 +19,8 @@ use crate::{
     script_inputs,
     scripting::{Declared, Supplied},
 };
+
+const MAX_HEIGHT: Pixels = px(480.0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Purpose {
@@ -201,6 +203,7 @@ impl Render for InputsDialog {
             title,
         )
         .when_some(self.description(), Dialog::description)
+        .max_height(MAX_HEIGHT)
         .scroll(self.scroll.clone());
         let dialog = body.into_iter().fold(dialog, Dialog::body);
         div().child(
