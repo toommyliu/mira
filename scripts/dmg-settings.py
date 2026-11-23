@@ -7,6 +7,8 @@ format = "UDZO"
 files = [app]
 symlinks = {"Applications": "/Applications"}
 icon = os.path.join(app, "Contents/Resources/Mira.icns")
+if not os.path.exists(icon):
+    icon = None
 background = defines["background"]
 
 window_rect = ((200, 200), (640, 400 + title_bar))
