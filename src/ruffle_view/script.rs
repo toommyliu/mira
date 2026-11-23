@@ -145,6 +145,12 @@ impl Script {
         self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
 
+    fn start_launch(&self, cx: &App) -> Option<Launch> {
+        let entry = self.entry()?.clone();
+        let inputs = script_inputs::saved(&entry, cx);
+        Some(Launch { entry, inputs })
+    }
+
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
             Phase::Finished(outcome) => failure(outcome),
@@ -243,8 +249,8 @@ impl RuffleView {
     }
 
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
-        if let Some(loaded) = &self.script.loaded {
-            self.start_script(loaded.launch.clone(), cx);
+        if let Some(launch) = self.script.start_launch(cx) {
+            self.start_script(launch, cx);
         }
     }
 
@@ -684,5 +690,51 @@ mod tests {
             "Stop during the handoff keeps the file idle"
         );
         assert_eq!(stopped.entry(), Some(&PathBuf::from("farm.ts")));
+    }
+
+    #[gpui::test]
+    fn start_runs_the_inputs_saved_since_the_file_was_loaded(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let folder = std::env::temp_dir().join(format!(
+            "mira-start-inputs-{:x}",
+            u64::from_ne_bytes(random)
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let hunt = folder.join("hunt.ts");
+        std::fs::write(&hunt, "").unwrap();
+        let values = |kills: u64| {
+            serde_json::json!({ "kills": kills })
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        cx.update(|cx| {
+            script_inputs::init(folder.join("inputs.json"), cx);
+            script_inputs::save(&hunt, values(10), cx);
+            let mut script = Script::default();
+            script.load(
+                Launch {
+                    entry: hunt.clone(),
+                    inputs: script_inputs::saved(&hunt, cx),
+                },
+                false,
+            );
+            script.take_next();
+
+            script_inputs::save(&hunt, values(50), cx);
+            assert_eq!(
+                script.start_launch(cx).map(|launch| launch.inputs),
+                Some(Supplied::Values(values(50)))
+            );
+
+            script.end(Outcome::Completed, false);
+            script_inputs::save(&hunt, values(3), cx);
+            assert_eq!(
+                script.start_launch(cx).map(|launch| launch.inputs),
+                Some(Supplied::Values(values(3)))
+            );
+        });
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }
