@@ -7,7 +7,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "test": "node --test test/*.test.ts",
-    "typecheck": "astro sync && tsc --noEmit && typedoc --emit none",
+    "typecheck": "astro sync && tsc --noEmit",
     "lint": "oxlint .",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check ."

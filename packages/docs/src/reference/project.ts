@@ -20,6 +20,12 @@ export async function convert(
   });
   const project = await app.convert();
   if (project === undefined) throw new Error(`TypeDoc could not convert ${entryPoints.join(", ")}`);
+  app.validate(project);
+  if (app.logger.hasErrors() || app.logger.hasWarnings()) {
+    throw new Error(
+      `TypeDoc reported problems in ${entryPoints.join(", ")}; see its warnings above`,
+    );
+  }
   return app.serializer.projectToObject(project, normalizePath(process.cwd()));
 }
 
