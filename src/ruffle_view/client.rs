@@ -1926,7 +1926,10 @@ impl Client {
                 self.sessions
                     .get(self.active)
                     .map(|session| session.view.clone()),
-                |root, view| super::game_bar::on_actions(root, view, cx.weak_entity()),
+                |root, view| {
+                    let loaded = view.read(cx).script.entry().is_some();
+                    super::game_bar::on_actions(root, view, loaded, cx.weak_entity())
+                },
             )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {

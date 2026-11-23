@@ -285,6 +285,15 @@ impl RuffleView {
         self.changed(cx);
     }
 
+    pub(super) fn edit_inputs(&mut self, cx: &mut Context<Self>) {
+        if self.script.asking_inputs(cx) {
+            return;
+        }
+        if let Some(entry) = self.script.upcoming().cloned() {
+            self.check_inputs(entry, Purpose::Edit, cx);
+        }
+    }
+
     pub(super) fn request_start(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.script.entry().filter(|_| !self.script.running()) {
             self.check_inputs(entry.clone(), Purpose::Start, cx);

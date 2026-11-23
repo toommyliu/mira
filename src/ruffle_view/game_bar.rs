@@ -16,7 +16,7 @@ use mira_ui::{
     primitives::{
         Button, Dot, DropdownMenu, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric,
         PopoverClose, Scrollbar, Spinner, Switch,
-        button::{Size, Variant},
+        button::{Joined, Size, Variant},
         divider, icon,
     },
     theme::DISABLED_OPACITY,
@@ -45,6 +45,7 @@ actions!(
     mira,
     [
         ToggleScript,
+        EditScriptInputs,
         ToggleAutoAttack,
         OpenBank,
         OpenJump,
@@ -398,6 +399,7 @@ struct Relogin {
 pub(super) fn on_actions<E: gpui::InteractiveElement>(
     element: E,
     view: Entity<RuffleView>,
+    loaded: bool,
     client: WeakEntity<super::Client>,
 ) -> E {
     let on = |f: fn(&mut RuffleView, &mut Context<RuffleView>)| {
@@ -413,6 +415,12 @@ pub(super) fn on_actions<E: gpui::InteractiveElement>(
         on(|view, cx| view.toggle_rendering(RenderingMode::Minimal, cx)),
         on(|view, cx| view.toggle_rendering(RenderingMode::InterfaceOnly, cx)),
     );
+    let edit = on(RuffleView::edit_inputs);
+    let element = if loaded {
+        element.on_action(move |_: &EditScriptInputs, _, cx| edit(cx))
+    } else {
+        element
+    };
     element
         .on_action(move |_: &ToggleScript, _, cx| script(cx))
         .on_action(move |_: &ToggleAutoAttack, _, cx| attack(cx))
@@ -441,6 +449,9 @@ impl RuffleView {
     }
 
     fn toggle_script(&mut self, cx: &mut Context<Self>) {
+        if self.script.asking_inputs(cx) {
+            return;
+        }
         if self.script.stoppable() {
             self.stop_script(cx);
         } else {
@@ -819,6 +830,7 @@ pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl I
 }
 
 fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
+    let loaded = !matches!(bar.script, ScriptControl::Start(None));
     let theme = cx.theme();
     let layout = theme.layout;
     let menubar = Menubar::new(("game-bar", this.entity_id()), "Game")
@@ -875,7 +887,14 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             },
         )
         .child(super::client::bar_separator(cx))
-        .button(script_button(bar.script, this.clone()))
+        .button(script_button(bar.script, this.clone()).joined(Joined::Next))
+        .menu(
+            Button::icon("script-menu", Icon::ChevronDown, "Script options")
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .joined(Joined::Previous),
+            move |_, cx| script_menu(loaded, cx),
+        )
         .child(super::client::drag_area().flex_1())
         .popover(
             trigger("jump", "Jump", None, None, cx).disabled(!bar.live),
@@ -932,6 +951,23 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
         .child(verb)
         .tooltip(label)
         .on_click(move |_, _, cx| update(&this, cx, RuffleView::toggle_script))
+}
+
+fn script_menu(loaded: bool, cx: &App) -> Vec<MenuItem> {
+    let load = MenuItem::action("Load script…", |window, cx| {
+        window.dispatch_action(Box::new(super::LoadScript), cx)
+    });
+    let load = match shortcuts::keys_for(&super::LoadScript, cx) {
+        Some(keys) => load.shortcut(keys),
+        None => load,
+    };
+    vec![
+        load,
+        MenuItem::action("Edit inputs…", |window, cx| {
+            window.dispatch_action(Box::new(EditScriptInputs), cx)
+        })
+        .disabled(!loaded),
+    ]
 }
 
 fn windows_menu(cx: &App) -> Vec<MenuItem> {
