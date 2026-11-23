@@ -8,15 +8,11 @@ import { parseArgs, promisify } from "node:util";
 
 import { build } from "esbuild";
 
+import { modules as miraModules } from "../packages/mira/src/modules.ts";
+
 const root = fileURLToPath(new URL("../", import.meta.url));
 const runtime = join(root, "packages", "mira");
 const effect = join(runtime, "node_modules", "effect");
-
-const miraModules = [
-  { specifier: "mira", source: "mira", out: "mira/index" },
-  { specifier: "mira/http", source: "http", out: "mira/http" },
-  { specifier: "mira/schema", source: "schema", out: "mira/schema" },
-] as const;
 
 async function effectModules(): Promise<string[]> {
   const files = await readdir(join(effect, "dist"));
