@@ -8,11 +8,14 @@ use std::{
 use anyhow::{Context as _, Result};
 use gpui::AsyncApp;
 use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle};
-use objc2_foundation::{NSFileManager, NSString, NSURL, ns_string};
+use objc2_app_kit::NSAlertStyle;
+use objc2_foundation::{NSFileManager, NSURL};
 use semver::Version;
 
-use super::bundle::{self, Staged};
+use super::{
+    alert,
+    bundle::{self, Staged},
+};
 
 const SYSTEM: &str = "/Applications";
 
@@ -150,28 +153,6 @@ fn folder(user: Option<&Path>) -> PathBuf {
         Some(user) if !bundle::writable(Path::new(SYSTEM)) => user.to_owned(),
         _ => PathBuf::from(SYSTEM),
     }
-}
-
-fn alert(
-    main: MainThreadMarker,
-    style: NSAlertStyle,
-    message: &str,
-    detail: Option<&str>,
-    buttons: &[&str],
-) -> bool {
-    let alert = NSAlert::new(main);
-    alert.setAlertStyle(style);
-    alert.setMessageText(&NSString::from_str(message));
-    if let Some(detail) = detail {
-        alert.setInformativeText(&NSString::from_str(detail));
-    }
-    for (index, title) in buttons.iter().enumerate() {
-        let button = alert.addButtonWithTitle(&NSString::from_str(title));
-        if index > 0 && index == buttons.len() - 1 {
-            button.setKeyEquivalent(ns_string!("\u{1b}"));
-        }
-    }
-    alert.runModal() == NSAlertFirstButtonReturn
 }
 
 fn place(app: &Path, target: &Path) -> Result<()> {
