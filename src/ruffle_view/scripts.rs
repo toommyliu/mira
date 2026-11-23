@@ -561,7 +561,7 @@ pub(super) struct ScriptsWindow {
     package_dialogs: Entity<PackageDialogs>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
-    _subscriptions: [Subscription; 8],
+    _subscriptions: [Subscription; 9],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -574,6 +574,7 @@ struct Form {
     generation: u64,
     meta: Meta,
     state: FormState,
+    saved: Option<Values>,
 }
 
 enum FormState {
@@ -655,6 +656,7 @@ impl ScriptsWindow {
                 }
             }),
             cx.observe_global::<script_names::Names>(|_, cx| cx.notify()),
+            cx.observe_global::<script_inputs::Store>(Self::sync_saved),
         ];
         let mut scripts = Self {
             client,
@@ -1657,6 +1659,13 @@ impl ScriptsWindow {
             form.meta = meta;
             return;
         }
+        let saved = match &key {
+            FormKey::Script(path) => match script_inputs::saved(path, cx) {
+                Supplied::Values(values) => Some(values),
+                Supplied::StoreUnreadable => None,
+            },
+            FormKey::Entry(_) => None,
+        };
         let state = match read {
             Err((title, message)) => FormState::Broken {
                 title,
@@ -1664,14 +1673,11 @@ impl ScriptsWindow {
             },
             Ok(None) => FormState::Plain,
             Ok(Some(definition)) => {
-                let saved = match &key {
-                    FormKey::Script(path) => match script_inputs::saved(path, cx) {
-                        Supplied::Values(values) => values,
-                        Supplied::StoreUnreadable => Values::new(),
-                    },
+                let shown = match &key {
+                    FormKey::Script(_) => saved.clone().unwrap_or_default(),
                     FormKey::Entry(id) => self.entry_values(*id, cx).unwrap_or_default(),
                 };
-                let drafts = drafts(&definition, &saved);
+                let drafts = drafts(&definition, &shown);
                 let mut texts = Vec::new();
                 let mut changes = Vec::new();
                 for (index, (field, draft)) in definition.fields().iter().zip(&drafts).enumerate() {
@@ -1723,6 +1729,7 @@ impl ScriptsWindow {
                 generation,
                 meta,
                 state,
+                saved,
             },
         );
         if let Some(edited) = checked {
@@ -1748,6 +1755,9 @@ impl ScriptsWindow {
         else {
             return;
         };
+        if matches!(draft, Draft::Text(_)) && slot.draft == draft {
+            return;
+        }
         *slot = FieldDraft { draft, stale: None };
         if let Some(Some(input)) = texts.get(index) {
             let invalid = error(field, slot).is_some();
@@ -1792,41 +1802,58 @@ impl ScriptsWindow {
         else {
             return;
         };
-        for ((field, draft), input) in definition.fields().iter().zip(drafts.iter_mut()).zip(texts)
-        {
+        for (field, draft) in definition.fields().iter().zip(drafts.iter_mut()) {
             *draft = FieldDraft {
                 draft: starting(field),
                 stale: None,
             };
-            if let (Some(input), Draft::Text(text)) = (input, &draft.draft) {
-                let invalid = error(field, draft).is_some();
-                let text = text.clone();
-                input.update(cx, |input, cx| {
-                    input.set_text(text, cx);
-                    input.set_invalid(invalid, cx);
-                });
-            }
         }
+        show_drafts(definition, drafts, texts, cx);
         let edited = values(definition, drafts);
         self.store(key, edited, cx);
         cx.notify();
     }
 
-    fn start_fresh(&mut self, cx: &mut Context<Self>) {
-        script_inputs::start_fresh(cx);
-        if !script_inputs::unreadable(cx) {
-            for (key, form) in &self.forms {
-                if let (
-                    FormKey::Script(path),
-                    FormState::Fields {
-                        definition, drafts, ..
-                    },
-                ) = (key, &form.state)
-                    && let Some(values) = values(definition, drafts)
-                {
-                    script_inputs::save(path, values, cx);
-                }
+    fn sync_saved(&mut self, cx: &mut Context<Self>) {
+        let mut recovered = Vec::new();
+        for (key, form) in &mut self.forms {
+            let (
+                FormKey::Script(path),
+                FormState::Fields {
+                    definition,
+                    drafts: shown,
+                    texts,
+                    ..
+                },
+            ) = (key, &mut form.state)
+            else {
+                continue;
+            };
+            let saved = match script_inputs::saved(path, cx) {
+                Supplied::Values(values) => Some(values),
+                Supplied::StoreUnreadable => None,
+            };
+            if saved == form.saved {
+                continue;
             }
+            let readable_before = std::mem::replace(&mut form.saved, saved.clone()).is_some();
+            let Some(saved) = saved else {
+                continue;
+            };
+            let own = values(definition, shown);
+            if !readable_before {
+                recovered.extend(own.map(|own| (path.clone(), own)));
+                continue;
+            }
+            let fresh = drafts(definition, &saved);
+            if own.as_ref() == Some(&saved) || fresh == *shown {
+                continue;
+            }
+            *shown = fresh;
+            show_drafts(definition, shown, texts, cx);
+        }
+        for (path, values) in recovered {
+            script_inputs::save(&path, values, cx);
         }
         cx.notify();
     }
@@ -1969,7 +1996,6 @@ impl ScriptsWindow {
         let saved = matches!(key, FormKey::Script(_));
         let (unreadable, stale) = leading(saved, drafts, cx);
         let unreadable = unreadable.then(|| {
-            let this = this.clone();
             Alert::new(
                 "inputs-unreadable",
                 Tone::Warning,
@@ -1979,9 +2005,7 @@ impl ScriptsWindow {
             .action(
                 Button::new("inputs-start-fresh", "Start fresh")
                     .size(Size::Small)
-                    .on_click(move |_, _, cx| {
-                        let _ = this.update(cx, |this, cx| this.start_fresh(cx));
-                    }),
+                    .on_click(|_, _, cx| script_inputs::start_fresh(cx)),
             )
         });
         let stale = stale.then(|| {
@@ -2938,6 +2962,26 @@ struct Detail {
     heading: AnyElement,
     body: Vec<AnyElement>,
     bar: Option<AnyElement>,
+}
+
+fn show_drafts(
+    definition: &Definition,
+    drafts: &[FieldDraft],
+    texts: &[Option<Entity<Input>>],
+    cx: &mut App,
+) {
+    for ((field, draft), input) in definition.fields().iter().zip(drafts).zip(texts) {
+        if let (Some(input), Draft::Text(text)) = (input, &draft.draft) {
+            let invalid = error(field, draft).is_some();
+            let text = text.clone();
+            input.update(cx, |input, cx| {
+                if input.text() != text.as_ref() {
+                    input.set_text(text, cx);
+                }
+                input.set_invalid(invalid, cx);
+            });
+        }
+    }
 }
 
 fn errored_fields(definition: &Definition, drafts: &[FieldDraft]) -> Vec<usize> {
@@ -4662,7 +4706,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
     }
 
     #[gpui::test]
-    fn runs_started_outside_the_window_get_the_inputs_it_shows(cx: &mut gpui::TestAppContext) {
+    fn the_window_and_saved_inputs_stay_in_step(cx: &mut gpui::TestAppContext) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let temp =
@@ -4741,6 +4785,38 @@ Cells visited: Enter, r1, r2, r3, r4.";
         spins.update(cx, |input, cx| input.set_text("3", cx));
         cx.run_until_parked();
         assert_eq!(run_values(cx), expected(false, 3));
+
+        cx.update(|_, cx| script_inputs::save(&script, expected(true, 7), cx));
+        cx.run_until_parked();
+        let shown = |cx: &mut gpui::VisualTestContext| {
+            let spins = spins.read_with(cx, |input, _| input.text().to_owned());
+            let banks = scripts.read_with(cx, |scripts, _| match scripts.forms.get(&key) {
+                Some(Form {
+                    state: FormState::Fields { drafts, .. },
+                    ..
+                }) => drafts[0].draft.clone(),
+                _ => panic!("the inputs are loaded"),
+            });
+            (banks, spins)
+        };
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), "7".to_owned()),
+            "inputs saved from elsewhere show in the window"
+        );
+        assert_eq!(run_values(cx), expected(true, 7));
+
+        spins.update(cx, |input, cx| input.set_text("", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            script_inputs::save(&temp.join("scripts/other.ts"), expected(false, 1), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), String::new()),
+            "saving another script leaves a half-typed value alone"
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -4801,7 +4877,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
         });
         select(&hunt, cx);
 
-        scripts.update(cx, |scripts, cx| scripts.start_fresh(cx));
+        cx.update(|_, cx| script_inputs::start_fresh(cx));
         let saved = |script: &Path, cx: &mut gpui::VisualTestContext| {
             cx.update(|_, cx| script_inputs::values(script, cx).unwrap())
         };
