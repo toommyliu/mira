@@ -38,7 +38,7 @@ export default function* () {
 
   const death = yield* Wait.forEvent(
     { type: "monsterDeath" },
-    { trigger: Combat.attack("*"), timeout: "60 seconds" },
+    { trigger: () => Combat.attack("*"), timeout: "60 seconds" },
   );
   console.log(death === null ? "nothing died in time" : `monster ${death.monMapId} died`);
   yield* Effect.sleep("10 seconds");
