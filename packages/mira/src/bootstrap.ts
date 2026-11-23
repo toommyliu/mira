@@ -3,6 +3,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
+import type * as LogLevel from "effect/LogLevel";
+import * as References from "effect/References";
 
 import { call } from "./call.ts";
 import { drive, type Yielded } from "./drive.ts";
@@ -14,7 +17,33 @@ type Settle = {
   (outcome: "failed", message: string, stack?: string): void;
 };
 
+type ConsoleLevel = "debug" | "info" | "warn" | "error";
+
+declare const console: Record<ConsoleLevel, (...values: unknown[]) => void>;
+
 const GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
+
+const consoleLevel = (level: LogLevel.LogLevel): ConsoleLevel => {
+  switch (level) {
+    case "Fatal":
+    case "Error":
+      return "error";
+    case "Warn":
+      return "warn";
+    case "Info":
+      return "info";
+    default:
+      return "debug";
+  }
+};
+
+const logger = Logger.make<unknown, void>(({ logLevel, message, cause, fiber }) => {
+  const parts = Array.isArray(message) ? [...message] : [message];
+  if (cause.reasons.length > 0) parts.push(Cause.pretty(cause));
+  const annotations = fiber.getRef(References.CurrentLogAnnotations);
+  if (Object.keys(annotations).length > 0) parts.push(annotations);
+  console[consoleLevel(logLevel)](...parts);
+});
 
 const program = (exported: unknown): Effect.Effect<unknown, unknown> | undefined => {
   if (Effect.isEffect(exported)) return exported as Effect.Effect<unknown, unknown>;
@@ -33,6 +62,9 @@ export function start(exported: unknown, settle: Settle): () => void {
   }
   const ended = Effect.scoped(
     Effect.raceFirst(root, Effect.raceFirst(Deferred.await(failed), Deferred.await(exited))),
+  ).pipe(
+    Effect.provideService(References.CurrentLoggers, new Set([logger])),
+    Effect.provideService(References.MinimumLogLevel, "Trace"),
   );
   const fiber = Effect.runFork(
     Effect.uninterruptibleMask((restore) =>
