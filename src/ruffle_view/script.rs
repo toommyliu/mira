@@ -3,7 +3,12 @@ use std::{path::PathBuf, time::Instant};
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task};
 
 use super::{
-    RuffleView, ScriptPhase, ScriptState, queue::Queue, script_dialog::ScriptDialogs, script_names,
+    RuffleView, ScriptPhase, ScriptState,
+    inputs_dialog::{InputsDialog, InputsEvent, Preflight, Purpose, preflight},
+    inputs_form::{self, Read},
+    queue::Queue,
+    script_dialog::ScriptDialogs,
+    script_names,
 };
 use crate::{
     account_settings,
@@ -29,6 +34,13 @@ pub(super) struct Script {
     leaving: Option<Task<()>>,
     restart: Option<Restart>,
     next: Option<Next>,
+    inputs: Option<Inputs>,
+    checking: Option<Task<()>>,
+}
+
+struct Inputs {
+    view: Entity<InputsDialog>,
+    _events: Subscription,
 }
 
 struct Next {
@@ -145,6 +157,23 @@ impl Script {
         self.loaded.as_ref().map(|loaded| &loaded.launch.entry)
     }
 
+    fn upcoming(&self) -> Option<&PathBuf> {
+        self.next
+            .as_ref()
+            .map(|next| &next.launch.entry)
+            .or_else(|| self.entry())
+    }
+
+    pub(super) fn inputs(&self) -> Option<Entity<InputsDialog>> {
+        Some(self.inputs.as_ref()?.view.clone())
+    }
+
+    pub(super) fn asking_inputs(&self, cx: &App) -> bool {
+        self.inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.view.read(cx).open())
+    }
+
     fn start_launch(&self, cx: &App) -> Option<Launch> {
         let entry = self.entry()?.clone();
         let inputs = script_inputs::saved(&entry, cx);
@@ -241,10 +270,69 @@ impl RuffleView {
     pub(super) fn load_script(&mut self, entry: PathBuf, start: bool, cx: &mut Context<Self>) {
         let inputs = script_inputs::saved(&entry, cx);
         self.stop_script(cx);
-        self.script.load(Launch { entry, inputs }, start);
+        self.script.load(
+            Launch {
+                entry: entry.clone(),
+                inputs,
+            },
+            start,
+        );
         if self.script.take_next() {
-            self.start_loaded_script(cx);
+            self.request_start(cx);
+        } else {
+            self.check_inputs(entry, Purpose::Fill, cx);
         }
+        self.changed(cx);
+    }
+
+    pub(super) fn request_start(&mut self, cx: &mut Context<Self>) {
+        if let Some(entry) = self.script.entry().filter(|_| !self.script.running()) {
+            self.check_inputs(entry.clone(), Purpose::Start, cx);
+        }
+    }
+
+    fn check_inputs(&mut self, entry: PathBuf, purpose: Purpose, cx: &mut Context<Self>) {
+        let read = inputs_form::read(entry.clone(), cx);
+        self.script.checking = Some(cx.spawn(async move |this, cx| {
+            let read = read.await;
+            let _ = this.update(cx, |this, cx| {
+                this.script.checking = None;
+                if this.script.upcoming() != Some(&entry) {
+                    return;
+                }
+                let saved = script_inputs::saved(&entry, cx);
+                let ask = purpose == Purpose::Edit || preflight(&read, &saved) == Preflight::Ask;
+                match purpose {
+                    Purpose::Start if this.script.running() => {}
+                    Purpose::Start if !ask => this.start_loaded_script(cx),
+                    _ if ask => this.ask_inputs(entry, read, purpose, cx),
+                    _ => {}
+                }
+            });
+        }));
+    }
+
+    fn ask_inputs(&mut self, entry: PathBuf, read: Read, purpose: Purpose, cx: &mut Context<Self>) {
+        if let Some(inputs) = &self.script.inputs {
+            let view = inputs.view.clone();
+            let shown = view.read_with(cx, |view, _| view.open() && *view.script() == entry);
+            if shown {
+                if purpose == Purpose::Start {
+                    view.update(cx, |view, cx| view.ask_to_start(cx));
+                }
+                return;
+            }
+        }
+        let running = self.script.running();
+        let view = cx.new(|cx| InputsDialog::new(entry, read, purpose, running, cx));
+        let events = cx.subscribe(&view, |this, _, event: &InputsEvent, cx| match event {
+            InputsEvent::Start => this.start_loaded_script(cx),
+            InputsEvent::Closed => this.changed(cx),
+        });
+        self.script.inputs = Some(Inputs {
+            view,
+            _events: events,
+        });
         self.changed(cx);
     }
 
@@ -461,7 +549,7 @@ impl RuffleView {
             self.resume_script(cx);
             self.run_next(ran, cx);
             if start {
-                self.start_loaded_script(cx);
+                self.request_start(cx);
             } else if ran
                 && !logout
                 && self.online()
@@ -492,6 +580,7 @@ impl RuffleView {
     }
 
     pub(super) fn stop_script(&mut self, cx: &mut Context<Self>) {
+        self.script.checking = None;
         self.script.hold_next();
         self.queue.pause();
         self.skip_script(cx);

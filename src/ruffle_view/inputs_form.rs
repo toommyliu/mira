@@ -1,14 +1,16 @@
 use std::{fs, path::PathBuf, rc::Rc};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FontWeight, IntoElement,
-    ParentElement as _, SharedString, Styled as _, Subscription, Task, prelude::FluentBuilder as _,
-    px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     Theme, Tone, h_flex,
     primitives::{
-        Alert, Button, Checkbox, CheckedState, Input, InputEvent, Select, Switch, button::Size,
+        Alert, Button, Checkbox, CheckedState, Icon, Input, InputEvent, Select, Switch,
+        button::{Size, Variant},
     },
     v_flex,
 };
@@ -67,6 +69,10 @@ pub(super) struct Edited(pub(super) Option<Values>);
 
 impl EventEmitter<Edited> for InputsForm {}
 
+pub(super) struct Submitted;
+
+impl EventEmitter<Submitted> for InputsForm {}
+
 impl InputsForm {
     pub(super) fn saved(script: PathBuf, read: Read, cx: &mut Context<Self>) -> Self {
         let saved = saved_values(&script, cx);
@@ -116,11 +122,12 @@ impl InputsForm {
                     });
                     changes.push(cx.subscribe(
                         &input,
-                        move |this, input, event: &InputEvent, cx| {
-                            if matches!(event, InputEvent::Changed) {
+                        move |this, input, event: &InputEvent, cx| match event {
+                            InputEvent::Changed => {
                                 let text = input.read(cx).text().to_owned().into();
                                 this.set_draft(index, Draft::Text(text), cx);
                             }
+                            InputEvent::Submitted => cx.emit(Submitted),
                         },
                     ));
                     texts.push(Some(input));
@@ -183,6 +190,25 @@ impl InputsForm {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    pub(super) fn step(
+        &self,
+        cursor: Option<usize>,
+        by: isize,
+        cx: &App,
+    ) -> Option<(usize, usize)> {
+        let errored = self.errored(cx);
+        let count = errored.len() as isize;
+        if count == 0 {
+            return None;
+        }
+        let next = match cursor {
+            Some(at) => (at as isize + by).rem_euclid(count),
+            None if by > 0 => 0,
+            None => count - 1,
+        } as usize;
+        Some((next, errored[next]))
     }
 
     pub(super) fn item_of(&self, field: usize, cx: &App) -> usize {
@@ -445,25 +471,20 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                             }))
                             .into_any_element()
                     }
-                    (kind, _, Some(input)) => gpui::div()
+                    (kind, _, Some(input)) => div()
                         .when(matches!(kind, Kind::Number { .. }), |slot| {
                             slot.flex_none().w(px(80.0))
                         })
                         .child(input.clone())
                         .into_any_element(),
-                    _ => gpui::div().into_any_element(),
+                    _ => div().into_any_element(),
                 };
                 let control = match field.kind {
                     Kind::Boolean { .. } => control,
                     Kind::Number { .. } => h_flex()
                         .justify_between()
                         .gap(layout.space(2.0))
-                        .child(
-                            gpui::div()
-                                .min_w_0()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(label),
-                        )
+                        .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(label))
                         .child(control)
                         .into_any_element(),
                     _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
@@ -487,4 +508,61 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
         .chain(stale.map(IntoElement::into_any_element))
         .chain(fields.map(IntoElement::into_any_element))
         .collect()
+}
+
+pub(super) fn error_steps(
+    errors: usize,
+    theme: &Theme,
+    step: impl Fn(&isize, &mut Window, &mut App) + 'static,
+) -> [AnyElement; 3] {
+    let label: SharedString = match errors {
+        1 => "1 error".into(),
+        count => format!("{count} errors").into(),
+    };
+    let step = Rc::new(step);
+    let button = |id: &'static str, glyph: Icon, name: &'static str, by: isize| {
+        let step = step.clone();
+        Button::icon(id, glyph, name)
+            .variant(Variant::Ghost)
+            .size(Size::Small)
+            .hide_tooltip()
+            .on_click(move |_, window, cx| step(&by, window, cx))
+            .into_any_element()
+    };
+    [
+        div()
+            .pr(theme.space(1.0))
+            .child(status_text("input-errors", label))
+            .into_any_element(),
+        button("previous-error", Icon::ChevronUp, "Previous error", -1),
+        button("next-error", Icon::ChevronDown, "Next error", 1),
+    ]
+}
+
+pub(super) fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
+    let Some(item) = scroll.bounds_for_item(index) else {
+        return;
+    };
+    let viewport = scroll.bounds();
+    let mut offset = scroll.offset();
+    let top = item.top() + offset.y;
+    let bottom = item.bottom() + offset.y;
+    if top < viewport.top() + above {
+        offset.y += viewport.top() + above - top;
+    } else if bottom > viewport.bottom() - below {
+        offset.y -= bottom - (viewport.bottom() - below);
+    } else {
+        return;
+    }
+    offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
+    scroll.set_offset(offset);
+}
+
+pub(super) fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
+    let text = text.into();
+    div()
+        .id(id)
+        .role(gpui::Role::Status)
+        .aria_label(text.clone())
+        .child(text)
 }

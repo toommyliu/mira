@@ -37,7 +37,7 @@ use super::{
     account::file_name,
     client::{CloseSession, drag_area},
     form::{muted, note, row, row_label},
-    inputs_form::{self, Edited, FormState, InputsForm, Read},
+    inputs_form::{self, Edited, FormState, InputsForm, Read, reveal_item},
     package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
     script::failure,
@@ -1778,17 +1778,9 @@ impl ScriptsWindow {
             return;
         };
         let form = form.read(cx);
-        let errored = form.errored(cx);
-        let count = errored.len() as isize;
-        if count == 0 {
+        let Some((next, field)) = form.step(self.error_cursor, by, cx) else {
             return;
-        }
-        let next = match self.error_cursor {
-            Some(at) => (at as isize + by).rem_euclid(count),
-            None if by > 0 => 0,
-            None => count - 1,
-        } as usize;
-        let field = errored[next];
+        };
         let item = form.item_of(field, cx);
         let input = form.text(field);
         self.error_cursor = Some(next);
@@ -1806,36 +1798,13 @@ impl ScriptsWindow {
     }
 
     fn error_bar(&self, theme: &Theme, errors: usize, cx: &mut Context<Self>) -> AnyElement {
-        let label: SharedString = match errors {
-            1 => "1 error".into(),
-            count => format!("{count} errors").into(),
-        };
-        let step = |id: &'static str, glyph: Icon, name: &'static str, by: isize| {
-            Button::icon(id, glyph, name)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .hide_tooltip()
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.jump_to_error(by, window, cx)),
-                )
-        };
+        let step = cx.listener(|this, by: &isize, window, cx| this.jump_to_error(*by, window, cx));
         theme
             .floating_bar()
             .id("error-bar")
             .role(gpui::Role::Toolbar)
             .aria_label("Input errors")
-            .child(
-                div()
-                    .pr(theme.space(1.0))
-                    .child(status_text("input-errors", label)),
-            )
-            .child(step(
-                "previous-error",
-                Icon::ChevronUp,
-                "Previous error",
-                -1,
-            ))
-            .child(step("next-error", Icon::ChevronDown, "Next error", 1))
+            .children(inputs_form::error_steps(errors, theme, step))
             .into_any_element()
     }
 
@@ -2588,34 +2557,6 @@ struct Detail {
 
 fn error_bar_clearance(theme: &Theme) -> Pixels {
     theme.space(17.0)
-}
-
-fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
-    let Some(item) = scroll.bounds_for_item(index) else {
-        return;
-    };
-    let viewport = scroll.bounds();
-    let mut offset = scroll.offset();
-    let top = item.top() + offset.y;
-    let bottom = item.bottom() + offset.y;
-    if top < viewport.top() + above {
-        offset.y += viewport.top() + above - top;
-    } else if bottom > viewport.bottom() - below {
-        offset.y -= bottom - (viewport.bottom() - below);
-    } else {
-        return;
-    }
-    offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
-    scroll.set_offset(offset);
-}
-
-fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
-    let text = text.into();
-    div()
-        .id(id)
-        .role(gpui::Role::Status)
-        .aria_label(text.clone())
-        .child(text)
 }
 
 fn heading(

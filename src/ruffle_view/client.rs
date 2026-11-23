@@ -941,16 +941,19 @@ impl Client {
         }
     }
 
-    fn asking(&self) -> bool {
+    fn asking(&self, cx: &App) -> bool {
         self.closing.as_ref().is_some_and(|closing| closing.open)
             || self
                 .replacing
                 .as_ref()
                 .is_some_and(|replacing| replacing.open)
+            || self
+                .active_view(cx)
+                .is_some_and(|(view, _)| view.read(cx).script.asking_inputs(cx))
     }
 
     fn load_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking()) else {
+        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking(cx)) else {
             return;
         };
         window.activate_window();
@@ -1055,7 +1058,7 @@ impl Client {
     }
 
     fn request_close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.get(index).filter(|_| !self.asking()) else {
+        let Some(session) = self.sessions.get(index).filter(|_| !self.asking(cx)) else {
             return;
         };
         let running = session
@@ -1169,7 +1172,7 @@ impl Client {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.sessions.len() && !self.asking() {
+        if index < self.sessions.len() && !self.asking(cx) {
             self.active = index;
             self.show(window, cx);
         }
@@ -1505,7 +1508,7 @@ impl Client {
                 Icon::GalleryVerticalEnd,
                 "Tabs",
             ))
-            .disabled(self.asking())
+            .disabled(self.asking(cx))
             .width(TAB_MENU_WIDTH)
             .items(move |_, cx| {
                 let Some(this) = client.upgrade() else {

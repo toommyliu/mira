@@ -444,7 +444,7 @@ impl RuffleView {
         if self.script.stoppable() {
             self.stop_script(cx);
         } else {
-            self.start_loaded_script(cx);
+            self.request_start(cx);
         }
     }
 

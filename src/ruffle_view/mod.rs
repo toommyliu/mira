@@ -5,6 +5,7 @@ mod environment;
 mod form;
 mod game_bar;
 mod input;
+mod inputs_dialog;
 mod inputs_form;
 mod launches;
 mod loader_grabber;
@@ -851,6 +852,10 @@ impl Render for RuffleView {
             .size_full()
             .when(!self.tiled, |root| root.child(self.bar(cx)))
             .child(player)
+            .when_some(
+                self.script.inputs().filter(|_| self.selected),
+                |root, inputs| root.child(inputs),
+            )
             .when_some(
                 self.script.dialogs().filter(|_| self.selected),
                 |root, dialogs| root.child(dialogs),

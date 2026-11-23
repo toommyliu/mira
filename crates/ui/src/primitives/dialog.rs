@@ -51,6 +51,7 @@ pub struct Dialog {
     footer_start: Option<AnyElement>,
     actions: Vec<AnyElement>,
     on_close: Option<CloseHandler>,
+    scroll: Option<ScrollHandle>,
 }
 
 impl Dialog {
@@ -67,6 +68,7 @@ impl Dialog {
             footer_start: None,
             actions: Vec::new(),
             on_close: None,
+            scroll: None,
         }
     }
 
@@ -109,6 +111,11 @@ impl Dialog {
         self.on_close = Some(Rc::new(f));
         self
     }
+
+    pub fn scroll(mut self, handle: ScrollHandle) -> Self {
+        self.scroll = Some(handle);
+        self
+    }
 }
 
 impl RenderOnce for Dialog {
@@ -128,6 +135,7 @@ impl RenderOnce for Dialog {
                 state.scroll.clone(),
             )
         };
+        let scroll = self.scroll.clone().unwrap_or(scroll);
         if self.open != was_open {
             let opening = self.open;
             let return_focus = opening.then(|| window.focused(cx)).flatten();
