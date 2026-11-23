@@ -20,7 +20,16 @@ use tracing_subscriber::{
     util::SubscriberInitExt as _,
 };
 
-const FILE_FILTER: &str = "info,mira=debug";
+const FILE_FILTER: &str = if cfg!(debug_assertions) {
+    "warn,mira=debug,avm_trace=info"
+} else {
+    "warn,mira=debug"
+};
+const CONSOLE_FILTER: &str = if cfg!(debug_assertions) {
+    "info"
+} else {
+    "info,avm_trace=off"
+};
 const LOG_FILE: &str = "~/Library/Logs/Mira/mira.log";
 
 pub(crate) struct Logging(Vec<Arc<Mutex<Output>>>);
@@ -28,7 +37,7 @@ pub(crate) struct Logging(Vec<Arc<Mutex<Output>>>);
 pub(crate) fn init() -> Logging {
     let console = output(Box::new(io::stdout()));
     let console_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(CONSOLE_FILTER));
     let (opened, file) = match log_file() {
         Ok(file) => (Ok(()), Some(output(Box::new(file)))),
         Err(error) => (Err(error), None),
@@ -247,6 +256,32 @@ mod tests {
         let text = text(&file);
         assert!(text.contains("INFO session{id=3}: "), "{text}");
         assert!(!text.contains('\x1b'), "{text:?}");
+    }
+
+    #[test]
+    fn game_traces_are_logged_only_in_debug_builds() {
+        let (console, console_sink) = shared();
+        let (file, file_sink) = shared();
+        let subscriber = subscriber(
+            console_sink,
+            EnvFilter::new(CONSOLE_FILTER),
+            Some(file_sink),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "avm_trace", "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%");
+            tracing::info!(target: "ruffle_core::context", "Loaded SWF version 43");
+            tracing::debug!(target: "mira::bridge", "unhandled loader call");
+        });
+        let (console, file) = (text(&console), text(&file));
+        let packet = "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%";
+        assert_eq!(
+            console.contains(packet),
+            cfg!(debug_assertions),
+            "{console}"
+        );
+        assert_eq!(file.contains(packet), cfg!(debug_assertions), "{file}");
+        assert!(file.contains("unhandled loader call"), "{file}");
+        assert!(!file.contains("Loaded SWF"), "{file}");
     }
 
     #[test]
