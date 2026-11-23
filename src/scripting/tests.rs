@@ -3868,3 +3868,69 @@ export default function* () {
     assert!(finished.elapsed < Duration::from_secs(3));
     assert!(shown.lock().unwrap().len() <= 1);
 }
+
+fn read_tree(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    into: &str,
+    files: &mut Vec<(String, String)>,
+) {
+    for item in fs::read_dir(dir).unwrap() {
+        let path = item.unwrap().path();
+        if path.is_dir() {
+            read_tree(root, &path, into, files);
+        } else {
+            let relative = path.strip_prefix(root).unwrap().to_str().unwrap();
+            files.push((
+                format!("{into}/{relative}"),
+                fs::read_to_string(&path).unwrap(),
+            ));
+        }
+    }
+}
+
+#[test]
+fn vendored_scripts_load_and_stop_at_the_ready_check_while_logged_out() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("script-packages");
+    let mut files = Vec::new();
+    read_tree(&root, &root, "packages", &mut files);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let scripts: Vec<&str> = files
+        .iter()
+        .map(|(path, _)| *path)
+        .filter(|path| path.split('/').nth(2) == Some("scripts") && super::runnable(path))
+        .collect();
+    assert!(!scripts.is_empty());
+    for (path, text) in &files {
+        if path.ends_with("/package.json") {
+            crate::packages::Manifest::parse(text.as_bytes()).unwrap();
+        }
+    }
+    let folder = Folder::new(&files);
+    for script in scripts {
+        let player = FakePlayer::default();
+        let finished = start(
+            &folder,
+            script,
+            Limits::default(),
+            player.answering(|request, _| match request {
+                Request::Player(P::Ready) => Some(Ok(json!(false))),
+                _ => Some(Ok(json!(null))),
+            }),
+        )
+        .finish();
+        assert_eq!(finished.outcome, Outcome::Completed, "{script}");
+        let calls: Vec<Request> = player
+            .seen()
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Call(_, request) => Some(request),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, [Request::Player(P::Ready)], "{script}");
+    }
+}
