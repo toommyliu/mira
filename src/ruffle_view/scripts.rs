@@ -519,14 +519,17 @@ pub(crate) fn open(
     }
 }
 
-pub(crate) fn load(client: Entity<Client>, folder: PathBuf, types: PathBuf, cx: &mut App) {
-    open(client, folder, types, Target::Selected, cx);
-    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0) {
-        let _ = handle.update(cx, |scripts, window, cx| {
-            if scripts.shown.is_some() && !scripts.running(cx) {
-                scripts.choose_file(window, cx);
-            }
-        });
+pub(super) fn load(cx: &mut App) {
+    let scripts = cx.try_global::<Open>().map(|open| open.0);
+    match scripts.filter(|scripts| cx.active_window() == Some((*scripts).into())) {
+        Some(scripts) => {
+            let _ = scripts.update(cx, |scripts, window, cx| {
+                if scripts.shown.is_some() && !scripts.running(cx) {
+                    scripts.choose_file(window, cx);
+                }
+            });
+        }
+        None => super::client::load_script(cx),
     }
 }
 
