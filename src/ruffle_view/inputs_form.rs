@@ -53,7 +53,7 @@ pub(super) enum FormState {
         definition: Definition,
         drafts: Vec<FieldDraft>,
         texts: Vec<Option<Entity<Input>>>,
-        selects: Vec<Option<FocusHandle>>,
+        picks: Vec<Option<FocusHandle>>,
         _changes: Vec<Subscription>,
     },
 }
@@ -106,11 +106,15 @@ impl InputsForm {
             Ok(Some(definition)) => {
                 let drafts = drafts(&definition, shown);
                 let mut texts = Vec::new();
-                let selects = definition
+                let picks = definition
                     .fields()
                     .iter()
                     .map(|field| {
-                        matches!(field.kind, Kind::Select { .. }).then(|| cx.focus_handle())
+                        matches!(
+                            field.kind,
+                            Kind::Boolean { .. } | Kind::Select { .. } | Kind::MultiSelect { .. }
+                        )
+                        .then(|| cx.focus_handle())
                     })
                     .collect();
                 let mut changes = Vec::new();
@@ -144,7 +148,7 @@ impl InputsForm {
                     definition,
                     drafts,
                     texts,
-                    selects,
+                    picks,
                     _changes: changes,
                 }
             }
@@ -230,7 +234,7 @@ impl InputsForm {
             return Some(input.focus_handle(cx));
         }
         match &self.state {
-            FormState::Fields { selects, .. } => selects.get(field).cloned().flatten(),
+            FormState::Fields { picks, .. } => picks.get(field).cloned().flatten(),
             FormState::Broken { .. } | FormState::Plain => None,
         }
     }
@@ -380,7 +384,7 @@ fn show_drafts(
 pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Vec<AnyElement> {
     let layout = theme.layout;
     let inputs = form.read(cx);
-    let (definition, drafts, texts, selects) = match &inputs.state {
+    let (definition, drafts, texts, picks) = match &inputs.state {
         FormState::Broken { title, message } => {
             return vec![
                 Alert::new("script-broken", Tone::Danger, *title)
@@ -395,9 +399,9 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
             definition,
             drafts,
             texts,
-            selects,
+            picks,
             ..
-        } => (definition, drafts, texts, selects),
+        } => (definition, drafts, texts, picks),
     };
     let this = form.downgrade();
     let saved = inputs.script.is_some();
@@ -459,6 +463,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                     (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
                         Switch::new(("input", index), label.clone(), *on)
                             .trailing()
+                            .when_some(picks[index].clone(), Switch::focus)
                             .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx))
                             .into_any_element()
                     }
@@ -470,7 +475,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                     )
                     .placeholder("Choose…")
                     .full_width()
-                    .when_some(selects[index].clone(), Select::focus)
+                    .when_some(picks[index].clone(), Select::focus)
                     .invalid(error(field, draft).is_some())
                     .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
                     .into_any_element(),
@@ -490,6 +495,10 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                                     SharedString::from(format!("input-{index}-{option}")),
                                     name.clone(),
                                     state,
+                                )
+                                .when_some(
+                                    picks[index].as_ref().filter(|_| option == 0).cloned(),
+                                    Checkbox::focus,
                                 )
                                 .on_toggle(move |on, _, cx| {
                                     let mut chosen = chosen.clone();

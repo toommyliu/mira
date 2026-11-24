@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, MouseButton,
+    AnyElement, App, ElementId, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _,
 };
@@ -15,12 +15,13 @@ pub(crate) fn labelled(
     label: SharedString,
     description: Option<SharedString>,
     disabled: bool,
+    focus: Option<FocusHandle>,
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Stateful<gpui::Div>, bool) {
     let layout = cx.theme().layout;
     let typography = cx.theme().typography;
-    let focus = nav::focus_handle((id.clone(), "focus"), window, cx);
+    let focus = focus.unwrap_or_else(|| nav::focus_handle((id.clone(), "focus"), window, cx));
     let ring = !disabled && nav::keyboard_focused(&focus, window, cx);
     let theme = cx.theme();
     let row = div()

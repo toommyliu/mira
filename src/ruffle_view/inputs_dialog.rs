@@ -541,6 +541,48 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_switch_and_choices_to_fix_take_focus(cx: &mut TestAppContext) {
+        let folder = scratch("toggles");
+        let source = r#"export const inputs = {
+            monster: { type: "string", label: "Monster", default: "Frogzard" },
+            loot: { type: "boolean", label: "Loot", default: true },
+            buy: { type: "select", label: "Buy", options: ["Sword", "Helm"], multiple: true, default: ["Helm"] },
+        };"#;
+        let script = folder.join("hunt.ts");
+        fs::write(&script, source).unwrap();
+        let key = fs::canonicalize(&script).unwrap();
+        let saved = json!({ key.to_str().unwrap(): { "loot": "yes", "buy": ["Axe"] } });
+        fs::write(folder.join("inputs.json"), saved.to_string()).unwrap();
+        let (cx, host, script) = host(cx, &folder, source, Purpose::Edit);
+        let focused_field = |field: usize, cx: &mut VisualTestContext| {
+            let handle = form(&host, cx)
+                .read_with(cx, |form, cx| form.focus_handle(field, cx))
+                .expect("the field takes focus");
+            cx.update(|window, _| handle.is_focused(window))
+        };
+        let errored =
+            |cx: &mut VisualTestContext| form(&host, cx).read_with(cx, |form, cx| form.errored(cx));
+        assert_eq!(errored(cx), vec![1, 2]);
+        assert!(focused_field(1, cx), "the switch to fix takes focus");
+
+        press(cx, "space");
+        assert_eq!(errored(cx), vec![2]);
+        host.update(cx, |host, cx| {
+            host.dialog.update(cx, |dialog, cx| dialog.step(1, cx))
+        });
+        cx.run_until_parked();
+        assert!(focused_field(2, cx), "stepping focuses the first choice");
+
+        press(cx, "space");
+        assert_eq!(errored(cx), Vec::<usize>::new());
+        assert_eq!(
+            cx.update(|_, cx| script_inputs::values(&script, cx).unwrap()),
+            values(json!({ "monster": "Frogzard", "loot": false, "buy": ["Sword", "Helm"] }))
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
     fn a_field_taller_than_the_dialog_opens_at_its_input(cx: &mut TestAppContext) {
         let folder = scratch("tall");
         let description = "Long. ".repeat(400);

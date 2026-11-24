@@ -1,9 +1,10 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Toggled, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Pixels, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Toggled, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::label::{ToggleHandler, caption, labelled};
@@ -25,6 +26,7 @@ pub struct Switch {
     trailing: bool,
     end: Option<AnyElement>,
     disabled: bool,
+    focus: Option<FocusHandle>,
     on_toggle: Option<ToggleHandler>,
 }
 
@@ -40,6 +42,7 @@ impl Switch {
             trailing: false,
             end: None,
             disabled: false,
+            focus: None,
             on_toggle: None,
         }
     }
@@ -74,6 +77,11 @@ impl Switch {
         self
     }
 
+    pub fn focus(mut self, focus: FocusHandle) -> Self {
+        self.focus = Some(focus);
+        self
+    }
+
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self
@@ -95,6 +103,7 @@ impl RenderOnce for Switch {
             self.label.clone(),
             self.description.clone(),
             self.disabled,
+            self.focus,
             window,
             cx,
         );
