@@ -1,7 +1,7 @@
 use mira_ui::StyledExt as _;
 use std::{
     collections::{HashMap, HashSet},
-    fs, io, iter,
+    fs, io, iter, mem,
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
@@ -48,8 +48,7 @@ use super::{
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    accounts::AccountId,
-    characters::{self, Scripts as ScriptOptions},
+    automation::scripts::Settings as ScriptOptions,
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     scripting::{self, Declared, Launch, Outcome, Supplied, Values},
@@ -545,6 +544,7 @@ pub(super) struct ScriptsWindow {
     scanning: Option<Task<()>>,
     search: Entity<Input>,
     room: Entity<Input>,
+    shown_rooms: Option<Rooms>,
     selected: usize,
     page: Page,
     queued: usize,
@@ -655,6 +655,7 @@ impl ScriptsWindow {
             scanning: None,
             search,
             room,
+            shown_rooms: None,
             selected: 0,
             page: Page::Library(None),
             queued: 0,
@@ -699,9 +700,12 @@ impl ScriptsWindow {
     }
 
     fn switched(&mut self, cx: &mut Context<Self>) {
-        self._view_changes = self
-            .view()
-            .map(|view| cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()));
+        self._view_changes = self.view().map(|view| {
+            cx.subscribe(&view, |this, _, _: &Changed, cx| {
+                this.follow_saved_room(cx);
+                cx.notify();
+            })
+        });
         let log = self.view().map(|view| view.read(cx).script_log.clone());
         self.log.update(cx, |page, cx| page.show(log, cx));
         self.queued = 0;
@@ -717,10 +721,6 @@ impl ScriptsWindow {
     fn running(&self, cx: &App) -> bool {
         self.view()
             .is_some_and(|view| view.read(cx).script.stoppable())
-    }
-
-    fn account(&self, cx: &App) -> Option<AccountId> {
-        self.view()?.read(cx).settings_account.clone()
     }
 
     fn run_status(&self, cx: &App) -> Option<RunStatus> {
@@ -762,8 +762,24 @@ impl ScriptsWindow {
         self.change_options(cx, |options| options.rooms = rooms);
     }
 
+    fn follow_saved_room(&mut self, cx: &mut Context<Self>) {
+        let rooms = self.options(cx).map(|options| options.rooms);
+        if mem::replace(&mut self.shown_rooms, rooms) == rooms {
+            return;
+        }
+        if let Some(Rooms::Private { room }) = rooms
+            && PrivateRoom::parse(self.room.read(cx).text()) != room
+        {
+            self.room.update(cx, |input, cx| {
+                input.set_text(room_text(Rooms::Private { room }), cx);
+                input.set_invalid(false, cx);
+            });
+        }
+    }
+
     fn show_saved_room(&mut self, cx: &mut Context<Self>) {
-        let text = room_text(self.options(cx).unwrap_or_default().rooms);
+        self.shown_rooms = self.options(cx).map(|options| options.rooms);
+        let text = room_text(self.shown_rooms.unwrap_or_default());
         self.room.update(cx, |input, cx| {
             input.set_text(text, cx);
             input.set_invalid(false, cx);
@@ -772,13 +788,16 @@ impl ScriptsWindow {
     }
 
     fn options(&self, cx: &App) -> Option<ScriptOptions> {
-        let account = self.account(cx)?;
-        Some(characters::get(&account, cx).scripts)
+        let view = self.view()?;
+        let view = view.read(cx);
+        view.settings_account
+            .is_some()
+            .then(|| view.automation.scripts())
     }
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
         if let Some(view) = self.view() {
-            view.update(cx, |view, cx| view.change_script_options(edit, cx));
+            view.read(cx).change_script_options(edit);
         }
         cx.notify();
     }

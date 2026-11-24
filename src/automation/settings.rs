@@ -1,8 +1,6 @@
 use tokio::sync::watch;
 
-use crate::domain::rooms::Rooms;
-
-use super::{auto_attack, auto_relogin, boosts, drops, game_settings, quests, spammer};
+use super::{auto_attack, auto_relogin, boosts, drops, game_settings, quests, scripts, spammer};
 
 #[derive(Clone, Default)]
 pub(crate) struct Automation {
@@ -17,7 +15,7 @@ pub(crate) struct Automation {
     capture: watch::Sender<bool>,
     spammer: watch::Sender<spammer::Settings>,
     spammer_status: watch::Sender<spammer::Status>,
-    rooms: watch::Sender<Rooms>,
+    scripts: watch::Sender<scripts::Settings>,
 }
 
 impl Automation {
@@ -124,12 +122,19 @@ impl Automation {
         update(&self.boosts, change)
     }
 
-    pub(crate) fn rooms(&self) -> Rooms {
-        *self.rooms.borrow()
+    pub(crate) fn scripts(&self) -> scripts::Settings {
+        *self.scripts.borrow()
     }
 
-    pub(crate) fn set_rooms(&self, rooms: Rooms) {
-        update(&self.rooms, |current| *current = rooms);
+    pub(crate) fn watch_scripts(&self) -> watch::Receiver<scripts::Settings> {
+        self.scripts.subscribe()
+    }
+
+    pub(crate) fn update_scripts(
+        &self,
+        change: impl FnOnce(&mut scripts::Settings),
+    ) -> scripts::Settings {
+        update(&self.scripts, change)
     }
 
     pub(crate) fn capturing(&self) -> bool {

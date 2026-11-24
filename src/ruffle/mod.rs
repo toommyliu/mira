@@ -747,7 +747,7 @@ async fn run_command(
             tokio::select! {
                 biased;
                 () = moved.closed() => {}
-                result = retreat::retreat(&bridge, &subscribe, automation.rooms()) => {
+                result = retreat::retreat(&bridge, &subscribe, automation.scripts().rooms) => {
                     let _ = moved.try_send(result);
                 }
             }
