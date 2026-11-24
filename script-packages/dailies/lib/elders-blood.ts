@@ -65,7 +65,7 @@ export function* eldersBlood(): Generator<
   if (owned === null) {
     const drop = yield* Wait.forEvent(
       { type: "itemDrop", itemId: ELDERS_BLOOD.itemId },
-      { trigger: Quests.complete(QUEST), timeout: "5 seconds" },
+      { trigger: () => Quests.complete(QUEST), timeout: "5 seconds" },
     );
     if (drop === null) {
       throw new Error(`Couldn't complete quest ${QUEST}.`);

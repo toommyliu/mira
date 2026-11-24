@@ -44,7 +44,7 @@ function* spin(
 
   const wheel = yield* Wait.forPacket(
     { from: "server", cmd: "Wheel" },
-    { trigger: Quests.complete(quest), timeout: "5 seconds" },
+    { trigger: () => Quests.complete(quest), timeout: "5 seconds" },
   );
   if (wheel === null) throw new Error(`The wheel didn't spin for quest ${quest}.`);
   const won = wheel.format === "json" ? rewardNames(wheel.data) : [];
