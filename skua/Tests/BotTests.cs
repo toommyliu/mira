@@ -56,6 +56,20 @@ public class BotTests
     }
 
     [Fact]
+    public void Going_to_a_player_uses_the_games_goto_without_leaving_combat()
+    {
+        var game = new Offline();
+        var bot = game.Bot();
+
+        bot.Player.Goto("Artix");
+
+        Assert.Equal(["""["world.goto","Artix"]"""], game.Calls
+            .Where(call => (string?)call["function"] == "flash.callGameFunction")
+            .Select(call => call["args"]!.ToJsonString()));
+        Assert.DoesNotContain(game.Calls, call => (string?)call["domain"] == "player" || (string?)call["domain"] == "combat");
+    }
+
+    [Fact]
     public void A_jump_waits_the_action_delay_after_it_is_sent()
     {
         var clock = new System.Diagnostics.Stopwatch();

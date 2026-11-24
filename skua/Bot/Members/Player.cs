@@ -61,7 +61,7 @@ public sealed class Player(Game game, Paths paths, IFlashUtil flash, Func<IScrip
         set => paths.Set("world.WALKSPEED", value);
     }
 
-    public void Goto(string name) => game.Request("player", "goToPlayer", new { username = name });
+    public void Goto(string name) => paths.Call("world.goto", name);
 
     public void SetSpawnPoint(string cell, string pad) => game.Request("world", "setSpawnPoint", new { cell, pad });
 
