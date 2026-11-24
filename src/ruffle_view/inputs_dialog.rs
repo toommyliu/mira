@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
@@ -182,16 +182,25 @@ impl Render for InputsDialog {
             });
         }
         let theme = cx.theme().clone();
-        if let Some(field) = self.reveal {
-            if self.scroll.bounds_for_item(0).is_some() {
-                let item = self.form.read(cx).item_of(field, cx);
-                let margin = theme.space(1.0);
-                reveal_item(&self.scroll, item, margin, margin);
-                self.reveal = None;
-            } else {
-                window.request_animation_frame();
-            }
-        }
+        let body = inputs_form::elements(&self.form, &theme, cx);
+        let reveal = self.reveal.map(|field| {
+            let item = self.form.read(cx).item_of(field, cx);
+            let margin = theme.space(1.0);
+            let scroll = self.scroll.clone();
+            let this = cx.weak_entity();
+            canvas(
+                move |_, window, cx| {
+                    if reveal_item(&scroll, item, margin, margin) {
+                        window.request_animation_frame();
+                    } else {
+                        let _ = this.update(cx, |dialog, _| dialog.reveal = None);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_0()
+        });
         let errors = self.form.read(cx).errored(cx).len();
         let title: SharedString = script_names::name(&self.script, cx);
         let start = self.purpose == Purpose::Start;
@@ -205,7 +214,6 @@ impl Render for InputsDialog {
                 .gap(theme.space(0.5))
                 .children(inputs_form::error_steps(errors, &theme, step))
         });
-        let body = inputs_form::elements(&self.form, &theme, cx);
         let dialog = Dialog::new(
             SharedString::from(format!("script-inputs-{}", cx.entity_id())),
             self.open,
@@ -214,7 +222,10 @@ impl Render for InputsDialog {
         .when_some(self.description(), Dialog::description)
         .max_height((window.viewport_size().height * 0.6).min(px(480.0)))
         .scroll(self.scroll.clone());
-        let dialog = body.into_iter().fold(dialog, Dialog::body);
+        let dialog = body
+            .into_iter()
+            .chain(reveal.map(IntoElement::into_any_element))
+            .fold(dialog, Dialog::body);
         div().child(
             dialog
                 .when_some(steps, Dialog::footer_start_slot)
@@ -553,6 +564,77 @@ mod tests {
         assert!(
             row.top() + offset.y >= viewport.top(),
             "the input at the top of {row:?} shows in {viewport:?} at {offset:?}"
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
+    fn opening_reaches_the_field_to_fix_when_a_warning_appears_first(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let folder = scratch("reveal-shift");
+        fs::write(folder.join("inputs.json"), "{}").unwrap();
+        let numbers = |prefix: &str| {
+            (0..12)
+                .map(|index| {
+                    format!(
+                        "{prefix}{index}: {{ type: \"number\", label: \"{prefix}{index}\", default: 1 }},"
+                    )
+                })
+                .collect::<String>()
+        };
+        let source = format!(
+            "export const inputs = {{ {} last: {{ type: \"string\", label: \"Last\", required: true }}, {} }};",
+            numbers("n"),
+            numbers("t"),
+        );
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (cx, host, _) = host(cx, &folder, &source, Purpose::Edit);
+        let settle = |cx: &mut VisualTestContext| {
+            for _ in 0..8 {
+                if cx.update(|window, cx| window.simulate_next_frame(cx)) == 0 {
+                    return;
+                }
+                cx.run_until_parked();
+            }
+            panic!("the dialog kept asking for frames");
+        };
+        settle(cx);
+        let laid_out = |item: usize, cx: &mut VisualTestContext| {
+            host.read_with(cx, |host, cx| {
+                let scroll = &host.dialog.read(cx).scroll;
+                (
+                    scroll.bounds(),
+                    scroll.bounds_for_item(item).unwrap(),
+                    scroll.offset().y,
+                )
+            })
+        };
+        let (viewport, last, _) = laid_out(12, cx);
+        let (_, next, _) = laid_out(13, cx);
+        let offset = viewport.bottom() - px(60.0) - last.bottom();
+        assert!(
+            next.bottom() + offset <= viewport.bottom() - px(8.0),
+            "the row after Last shows before the warning"
+        );
+        host.update(cx, |host, cx| {
+            host.dialog.update(cx, |dialog, _| {
+                dialog.scroll.set_offset(gpui::point(px(0.0), offset));
+                dialog.reveal = Some(12);
+            })
+        });
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        cx.update(|_, cx| {
+            script_inputs::save(&folder.join("other.ts"), values(json!({ "kills": 1 })), cx)
+        });
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        cx.run_until_parked();
+        settle(cx);
+
+        let (viewport, last, offset) = laid_out(13, cx);
+        assert!(
+            last.top() + offset >= viewport.top() && last.bottom() + offset <= viewport.bottom(),
+            "Last, below the new warning, shows: {last:?} in {viewport:?} at {offset:?}"
         );
         fs::remove_dir_all(folder).unwrap();
     }

@@ -567,23 +567,28 @@ pub(super) fn error_steps(
     ]
 }
 
-pub(super) fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
+pub(super) fn reveal_item(
+    scroll: &ScrollHandle,
+    index: usize,
+    above: Pixels,
+    below: Pixels,
+) -> bool {
     let Some(item) = scroll.bounds_for_item(index) else {
-        return;
+        return false;
     };
     let viewport = scroll.bounds();
-    let mut offset = scroll.offset();
+    let shown = scroll.offset();
+    let mut offset = shown;
     let top = item.top() + offset.y;
     let bottom = item.bottom() + offset.y;
     if top < viewport.top() + above {
         offset.y += viewport.top() + above - top;
     } else if bottom > viewport.bottom() - below {
         offset.y -= (bottom - (viewport.bottom() - below)).min(top - (viewport.top() + above));
-    } else {
-        return;
     }
     offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
     scroll.set_offset(offset);
+    offset != shown
 }
 
 pub(super) fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
