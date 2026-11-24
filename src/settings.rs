@@ -34,7 +34,7 @@ mod previews;
 use crate::{
     data_file, packages,
     ruffle::extras::Extras,
-    ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
+    ruffle_view::{CloseSession, bar_title, drag_area, refocus_root_when_lost, window_bar},
     shortcuts::{self, Category, Overrides, Shortcut, Taken},
 };
 
@@ -767,7 +767,9 @@ fn open(cx: &mut App) {
             settings.load_fonts(cx);
             settings
         });
-        window.focus(&view.read(cx).focus.clone(), cx);
+        let root = view.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&view, root, window, cx);
         view
     }) {
         Ok(window) => cx.set_global(Open(window)),

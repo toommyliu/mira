@@ -1831,6 +1831,18 @@ pub(crate) fn bar(cx: &App) -> gpui::Div {
         .border_color(theme.border)
 }
 
+pub(crate) fn refocus_root_when_lost<V: 'static>(
+    view: &Entity<V>,
+    root: FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    view.update(cx, |_, cx| {
+        cx.on_focus_lost(window, move |_, window, cx| window.focus(&root, cx))
+            .detach();
+    });
+}
+
 pub(crate) fn window_bar(window: &Window, cx: &App) -> gpui::Div {
     bar(cx).child(drag_area().flex_none().w(traffic_lights_inset(window)))
 }
