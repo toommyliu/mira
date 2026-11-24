@@ -137,6 +137,20 @@ public class BotTests
     }
 
     [Fact]
+    public void A_loaded_quest_is_found_by_its_id()
+    {
+        var bot = Offline.Bot(new()
+        {
+            ["flash.getGameObject:world.questTree.2566"] = """{"QuestID":2566,"sName":"Elders' Blood"}""",
+        });
+
+        Assert.True(bot.Quests.TryGetQuest(2566, out var quest));
+        Assert.Equal("Elders' Blood", quest?.Name);
+        Assert.False(bot.Quests.TryGetQuest(2567, out _));
+        Assert.Equal(2566, bot.Quests.EnsureLoad(2566)?.ID);
+    }
+
+    [Fact]
     public void Drop_options_decide_what_mira_accepts_and_rejects()
     {
         var config = new JsonObject

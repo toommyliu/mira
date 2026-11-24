@@ -7,9 +7,15 @@ namespace Mira.Skua.Bot.Members;
 
 public sealed class Inventory(Game game, IFlashUtil flash, Paths paths, Func<IScriptInterface> bot) : IScriptInventory
 {
+    private readonly ItemList items = new(flash, "world.myAvatar.items");
+
     private IScriptInventory Self => this;
 
-    public List<InventoryItem> Items => paths.Get<List<InventoryItem>>("world.myAvatar.items", []);
+    public List<InventoryItem> Items => items.All;
+    public InventoryItem? GetItem(string name) => items.Get(name);
+    public InventoryItem? GetItem(int id) => items.Get(id);
+    public bool Contains(string name, int quantity = 1) => items.Contains(name, quantity);
+    public bool Contains(int id, int quantity = 1) => items.Contains(id, quantity);
     public int Slots => paths.Get<int>("world.myAvatar.objData.iBagSlots");
 
     public int UsedSlots => flash.Call<int>("inventoryBagUsedSlots");

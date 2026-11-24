@@ -155,6 +155,8 @@ pub(crate) const EXPORTS: &[&str] = &[
     "skua.connectToServer",
     "skua.disableDeathAd",
     "skua.disableFX",
+    "skua.findItemsById",
+    "skua.findItemsByName",
     "skua.gender",
     "skua.GetAuraRuleStacks",
     "skua.GetAuraSnapshots",
@@ -1437,6 +1439,32 @@ pub(crate) mod skua {
         let call_args = vec![Value::Bool(enabled)];
         let reply = loader.call("skua.disableFX", call_args)?;
         Ok(decode("skua.disableFX", reply)?)
+    }
+
+    pub(crate) fn find_items_by_id(
+        loader: &impl Loader,
+        path: &str,
+        item_id: i32,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::String(path.to_owned()),
+            Value::Number(f64::from(item_id)),
+        ];
+        let reply = loader.call("skua.findItemsById", call_args)?;
+        Ok(decode("skua.findItemsById", reply)?)
+    }
+
+    pub(crate) fn find_items_by_name(
+        loader: &impl Loader,
+        path: &str,
+        name: &str,
+    ) -> Result<Option<String>, CallError> {
+        let call_args = vec![
+            Value::String(path.to_owned()),
+            Value::String(name.to_owned()),
+        ];
+        let reply = loader.call("skua.findItemsByName", call_args)?;
+        Ok(decode("skua.findItemsByName", reply)?)
     }
 
     pub(crate) fn gender(loader: &impl Loader) -> Result<Option<String>, CallError> {

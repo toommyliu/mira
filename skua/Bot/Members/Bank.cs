@@ -6,9 +6,15 @@ namespace Mira.Skua.Bot.Members;
 
 public sealed class Bank(Game game, IFlashUtil flash, Paths paths, Func<IScriptInterface> bot) : IScriptBank
 {
+    private readonly ItemList items = new(flash, "world.bankinfo.items");
+
     private IScriptBank Self => this;
 
-    public List<InventoryItem> Items => paths.Get<List<InventoryItem>>("world.bankinfo.items", []);
+    public List<InventoryItem> Items => items.All;
+    public InventoryItem? GetItem(string name) => items.Get(name);
+    public InventoryItem? GetItem(int id) => items.Get(id);
+    public bool Contains(string name, int quantity = 1) => items.Contains(name, quantity);
+    public bool Contains(int id, int quantity = 1) => items.Contains(id, quantity);
     public int Slots => paths.Get<int>("world.myAvatar.objData.iBankSlots");
     public int UsedSlots => paths.Get<int>("world.myAvatar.iBankCount");
 
