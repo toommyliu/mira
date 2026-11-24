@@ -14,6 +14,7 @@ use crate::{
 pub(crate) struct Store {
     path: PathBuf,
     saved: Option<BTreeMap<PathBuf, Values>>,
+    unsaved: bool,
 }
 
 impl Global for Store {}
@@ -26,7 +27,11 @@ impl Store {
             })
             .ok()
             .map(Option::unwrap_or_default);
-        Self { path, saved }
+        Self {
+            path,
+            saved,
+            unsaved: false,
+        }
     }
 
     fn saved(&self, script: &Path) -> Supplied {
@@ -39,18 +44,21 @@ impl Store {
     }
 
     fn save(&mut self, script: &Path, values: Values) -> io::Result<()> {
-        let Some(saved) = &self.saved else {
+        let Some(saved) = &mut self.saved else {
             return Err(io::Error::other("saved script inputs couldn't be read"));
         };
         let script = canonical(script);
-        if saved.get(&script) == Some(&values) {
+        if !self.unsaved && saved.get(&script) == Some(&values) {
             return Ok(());
         }
-        let mut next = saved.clone();
-        next.insert(script, values);
-        data_file::write_json(&self.path, &next)?;
-        self.saved = Some(next);
-        Ok(())
+        saved.insert(script, values);
+        let written = data_file::write_json(&self.path, saved);
+        self.unsaved = written.is_err();
+        written
+    }
+
+    fn unsaved(&self) -> bool {
+        self.unsaved
     }
 
     fn start_fresh(&mut self) -> io::Result<()> {
@@ -96,6 +104,10 @@ pub(crate) fn values(script: &Path, cx: &App) -> anyhow::Result<Values> {
 
 pub(crate) fn unreadable(cx: &App) -> bool {
     cx.global::<Store>().saved.is_none()
+}
+
+pub(crate) fn unsaved(cx: &App) -> bool {
+    cx.global::<Store>().unsaved()
 }
 
 pub(crate) fn save(script: &Path, values: Values, cx: &mut App) {
@@ -163,6 +175,47 @@ mod tests {
         assert_eq!(
             reopened.saved(&folder.join("other.ts")),
             Supplied::Values(Values::new())
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn inputs_that_fail_to_save_apply_until_the_next_save_writes_them() {
+        let folder = scratch();
+        let path = folder.join("script-inputs.json");
+        let hunt = folder.join("hunt.ts");
+        let daily = folder.join("daily.ts");
+        fs::write(&hunt, "").unwrap();
+        fs::write(&daily, "").unwrap();
+        let mut store = Store::open(path.clone());
+        store.save(&hunt, values(json!({ "kills": 1 }))).unwrap();
+        let writable = fs::metadata(&folder).unwrap().permissions();
+        let mut locked = writable.clone();
+        locked.set_readonly(true);
+        fs::set_permissions(&folder, locked).unwrap();
+
+        assert!(store.save(&daily, values(json!({ "day": "All" }))).is_err());
+        assert!(store.unsaved());
+        assert_eq!(
+            store.saved(&daily),
+            Supplied::Values(values(json!({ "day": "All" })))
+        );
+        assert_eq!(
+            Store::open(path.clone()).saved(&daily),
+            Supplied::Values(Values::new())
+        );
+
+        fs::set_permissions(&folder, writable).unwrap();
+        store.save(&daily, values(json!({ "day": "All" }))).unwrap();
+        assert!(!store.unsaved());
+        let reopened = Store::open(path);
+        assert_eq!(
+            reopened.saved(&daily),
+            Supplied::Values(values(json!({ "day": "All" })))
+        );
+        assert_eq!(
+            reopened.saved(&hunt),
+            Supplied::Values(values(json!({ "kills": 1 })))
         );
         fs::remove_dir_all(folder).unwrap();
     }

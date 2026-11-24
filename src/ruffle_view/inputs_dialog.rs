@@ -578,10 +578,11 @@ mod tests {
             host.read_with(cx, |host, _| host.started.borrow().clone()),
             Some(values(json!({ "kills": 5, "monster": "Frogzard" })))
         );
+        assert!(cx.update(|_, cx| script_inputs::unsaved(cx)));
         assert_eq!(
             cx.update(|_, cx| script_inputs::values(&script, cx).unwrap()),
-            Values::new(),
-            "the save failed"
+            values(json!({ "kills": 5, "monster": "Frogzard" })),
+            "inputs that failed to save still apply"
         );
         fs::remove_dir_all(folder).unwrap();
     }
@@ -634,22 +635,58 @@ mod tests {
             move |window, cx| {
                 script_inputs::init(inputs.clone(), cx);
                 let script = script.clone();
-                cx.new(|cx| {
-                    let focus = cx.focus_handle();
-                    window.focus(&focus, cx);
-                    let read = read(&script);
-                    let dialog = cx.new(|cx| InputsDialog::new(script, read, purpose, running, cx));
-                    let subscription = cx.subscribe(&dialog, |_, _, _: &InputsEvent, _| {});
-                    Host {
-                        focus,
-                        dialog,
-                        events: Rc::default(),
-                        started: Rc::default(),
-                        _events: subscription,
-                    }
-                })
+                cx.new(|cx| shown(script, purpose, running, window, cx))
             },
         );
+        for path in paths {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    fn shown(
+        script: PathBuf,
+        purpose: Purpose,
+        running: bool,
+        window: &mut Window,
+        cx: &mut Context<Host>,
+    ) -> Host {
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        let read = read(&script);
+        let dialog = cx.new(|cx| InputsDialog::new(script, read, purpose, running, cx));
+        let subscription = cx.subscribe(&dialog, |_, _, _: &InputsEvent, _| {});
+        Host {
+            focus,
+            dialog,
+            events: Rc::default(),
+            started: Rc::default(),
+            _events: subscription,
+        }
+    }
+
+    #[test]
+    fn snapshot_script_inputs_dialog_unsaved() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let folder = scratch("unsaved");
+        let script = folder.join("hunt.ts");
+        fs::write(&script, HUNT).unwrap();
+        fs::write(folder.join("inputs.json"), "{}").unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        let inputs = folder.join("inputs.json");
+        let paths = mira_ui::snapshot(
+            "script-inputs-unsaved",
+            gpui::size(px(960.0), px(588.0)),
+            move |window, cx| {
+                script_inputs::init(inputs.clone(), cx);
+                let edited = values(json!({ "kills": 7, "monster": "Frogzard" }));
+                script_inputs::save(&script, edited, cx);
+                let script = script.clone();
+                cx.new(|cx| shown(script, Purpose::Edit, false, window, cx))
+            },
+        );
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
         for path in paths {
             assert!(path.exists(), "{} was not written", path.display());
         }

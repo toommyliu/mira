@@ -283,12 +283,12 @@ impl InputsForm {
         let Some(script) = &self.script else {
             return;
         };
+        cx.notify();
         let saved = saved_values(script, cx);
         if saved == self.saved {
             return;
         }
         let readable_before = std::mem::replace(&mut self.saved, saved.clone()).is_some();
-        cx.notify();
         let (
             Some(saved),
             FormState::Fields {
@@ -325,7 +325,9 @@ impl InputsForm {
             FormState::Fields { drafts, .. } => drafts.iter().any(|draft| draft.stale.is_some()),
             FormState::Broken { .. } | FormState::Plain => false,
         };
-        (self.unreadable(cx), stale)
+        let store =
+            self.script.is_some() && (script_inputs::unreadable(cx) || script_inputs::unsaved(cx));
+        (store, stale)
     }
 }
 
@@ -379,19 +381,24 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
     };
     let this = form.downgrade();
     let saved = inputs.script.is_some();
-    let (unreadable, stale) = inputs.leading(cx);
-    let unreadable = unreadable.then(|| {
-        Alert::new(
-            "inputs-unreadable",
-            Tone::Warning,
-            "Saved inputs couldn't be read",
-        )
-        .body("Start fresh to back up the file and use each script's defaults.")
-        .action(
-            Button::new("inputs-start-fresh", "Start fresh")
-                .size(Size::Small)
-                .on_click(|_, _, cx| script_inputs::start_fresh(cx)),
-        )
+    let (store, stale) = inputs.leading(cx);
+    let store = store.then(|| {
+        if script_inputs::unreadable(cx) {
+            Alert::new(
+                "inputs-unreadable",
+                Tone::Warning,
+                "Saved inputs couldn't be read",
+            )
+            .body("Start fresh to back up the file and use each script's defaults.")
+            .action(
+                Button::new("inputs-start-fresh", "Start fresh")
+                    .size(Size::Small)
+                    .on_click(|_, _, cx| script_inputs::start_fresh(cx)),
+            )
+        } else {
+            Alert::new("inputs-unsaved", Tone::Warning, "Inputs couldn't be saved")
+                .body("They apply until Mira quits. Your next change tries saving them again.")
+        }
     });
     let stale = stale.then(|| {
         let this = this.clone();
@@ -502,7 +509,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                         (None, None) => column,
                     })
             });
-    unreadable
+    store
         .map(IntoElement::into_any_element)
         .into_iter()
         .chain(stale.map(IntoElement::into_any_element))
