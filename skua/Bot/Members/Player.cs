@@ -1,3 +1,4 @@
+using Mira.Skua.Protocol;
 using Skua.Core.Interfaces;
 using Skua.Core.Models.Items;
 using Skua.Core.Models.Monsters;
@@ -22,7 +23,25 @@ public sealed class Player(Game game, Paths paths, IFlashUtil flash, Func<IScrip
     public string Cell => paths.Get("world.strFrame", string.Empty);
     public string Pad => paths.Get("world.strPad", string.Empty);
     public string ServerIP => paths.Static("serverIP", string.Empty);
-    public int State => paths.Get("world.myAvatar.dataLeaf.intState", 0, "world.myAvatar");
+    public int State
+    {
+        get
+        {
+            try
+            {
+                return game.Request("player", "state")?.GetValue<string>() switch
+                {
+                    "idle" => 1,
+                    "combat" => 2,
+                    _ => 0,
+                };
+            }
+            catch (MiraException)
+            {
+                return 0;
+            }
+        }
+    }
     public bool LoggedIn => flash.Call<bool>("isLoggedIn");
     public bool Playing => LoggedIn && Self.Alive;
     public string Username => paths.Static<string>("loginInfo.strUsername", null!);
