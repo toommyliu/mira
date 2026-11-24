@@ -470,7 +470,6 @@ fn free_daily_boost_runs_through_the_real_worker() {
         "flash.getGameObject:world.myAvatar.items.length": "3",
         "flash.getGameObject:world.mapLoadInProgress": "false",
         "flash.callGameFunction0:world.myAvatar.pMC.artLoaded": "true",
-        "flash.getGameObject:world.myAvatar.dataLeaf.intState": "1",
         "flash.getGameObject:world.myAvatar.dataLeaf.intHP": "2500",
         "flash.getGameObject:world.strMapName": "\"battleon\"",
         "flash.getGameObject:world.myAvatar.items": "[]",
@@ -504,6 +503,7 @@ fn free_daily_boost_runs_through_the_real_worker() {
                     json!({ "items": [], "lagged": false })
                 }
                 calls::Request::Auth(_) => json!(true),
+                calls::Request::Player(crate::scripting::player::Request::State) => json!("idle"),
                 _ => Json::Null,
             };
             call.reply.send(Ok(answer));

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Mira.Skua.Protocol;
 using Skua.Core.Models.Items;
 
 namespace Mira.Skua.Tests;
@@ -148,6 +149,18 @@ public class BotTests
         Assert.Equal("Elders' Blood", quest?.Name);
         Assert.False(bot.Quests.TryGetQuest(2567, out _));
         Assert.Equal(2566, bot.Quests.EnsureLoad(2566)?.ID);
+    }
+
+    [Fact]
+    public void The_player_state_is_skuas_number_for_miras_state()
+    {
+        int State(JsonNode? state) => Offline.Bot(new() { ["player.state"] = state }).Player.State;
+
+        Assert.Equal(1, State("idle"));
+        Assert.Equal(2, State("combat"));
+        Assert.Equal(0, State("dead"));
+        Assert.Equal(0, State(null));
+        Assert.Equal(0, new Offline((_, _) => throw new MiraException("The game isn't loaded.")).Bot().Player.State);
     }
 
     [Fact]

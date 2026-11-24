@@ -19,11 +19,10 @@ sealed class Fight
     public JsonNode? Answer(string key, JsonObject request) => key switch
     {
         "skua.isLoggedIn:" => true,
-        "flash.isNull:world.myAvatar" => false,
         "flash.getGameObject:world.myAvatar.items.length" => "3",
         "flash.getGameObject:world.mapLoadInProgress" => "false",
         "flash.callGameFunction0:world.myAvatar.pMC.artLoaded" => "true",
-        "flash.getGameObject:world.myAvatar.dataLeaf.intState" => "1",
+        "player.state" => "idle",
         "skua.getTargetMonster:" => TargetAlive ? Frogzard : "null",
         "flash.getGameObject:world.actions.active" when Interlocked.Decrement(ref SkillListFailures) >= 0 => throw new InvalidOperationException("Mira refused the read."),
         "skua.availableMonsters:" => $"[{Frogzard}]",
