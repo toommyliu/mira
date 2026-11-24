@@ -1,4 +1,5 @@
 mod compile;
+mod usage;
 mod worker;
 
 use std::{
@@ -16,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
 pub(crate) use compile::{Compiled, Described, Halt, compile, describe};
+use usage::Usage;
 pub(crate) use worker::Inbound;
 use worker::{Ended, Worker};
 
@@ -356,6 +358,21 @@ impl Session {
                 "Couldn't start the script in the Skua runner: {error}."
             ));
         }
+        let mut usage = Usage::new(Instant::now());
+        let outcome = self.relay(clock, commands, &mut usage);
+        if let Some(report) = usage.report(Instant::now()) {
+            tracing::debug!("{report}");
+        }
+        outcome
+    }
+
+    fn relay(
+        &self,
+        clock: &Clock,
+        commands: &mpsc::Receiver<Command>,
+        usage: &mut Usage,
+    ) -> Outcome {
+        let run = self.link.run;
         let mut stopping: Option<Instant> = None;
         let stop = |stopping: &mut Option<Instant>| {
             if stopping.is_none() {
@@ -382,9 +399,9 @@ impl Session {
             match received {
                 Ok(Command::Stop) if clock.stopped_now() => break,
                 Ok(Command::Stop) => stop(&mut stopping),
-                Ok(Command::Reply { id, reply }) => self.reply(id, reply),
+                Ok(Command::Reply { id, reply }) => self.reply(id, reply, usage),
                 Ok(Command::Skua(Event::Frame(frame))) => {
-                    if let Some(outcome) = self.handle(frame) {
+                    if let Some(outcome) = self.handle(frame, usage) {
                         self.worker.leave(run);
                         return outcome;
                     }
@@ -392,24 +409,32 @@ impl Session {
                 Ok(Command::Skua(Event::Lost(message))) => return failed(message),
                 Err(_) => break,
             }
+            if let Some(report) = usage.due(Instant::now()) {
+                tracing::debug!("{report}");
+            }
         }
         let since = stopping.unwrap_or_else(Instant::now);
         self.worker.abandon(run, since + self.grace);
         Outcome::Stopped
     }
 
-    fn handle(&self, frame: Inbound) -> Option<Outcome> {
+    fn handle(&self, frame: Inbound, usage: &mut Usage) -> Option<Outcome> {
         let run = self.link.run;
         match frame {
-            Inbound::Call { id, request, .. } => match asked(request) {
-                Ok(request) => (self.link.player)(ToPlayer::Call(Call {
-                    run,
-                    id: CallId(id),
-                    request,
-                    reply: Replier::new(CallId(id), self.link.commands.clone()),
-                })),
-                Err(error) => self.refuse(id, &format!("Mira can't serve that request: {error}")),
-            },
+            Inbound::Call { id, request, .. } => {
+                usage.asked(id, &request);
+                match asked(request) {
+                    Ok(request) => (self.link.player)(ToPlayer::Call(Call {
+                        run,
+                        id: CallId(id),
+                        request,
+                        reply: Replier::new(CallId(id), self.link.commands.clone()),
+                    })),
+                    Err(error) => {
+                        self.refuse(id, &format!("Mira can't serve that request: {error}"))
+                    }
+                }
+            }
             Inbound::Ask { id, request, .. } => {
                 match serde_json::from_value::<dialog::Request>(request) {
                     Ok(request) => (self.link.dialogs)(ToDialogs::Open(Dialog::new(
@@ -440,7 +465,7 @@ impl Session {
         None
     }
 
-    fn reply(&self, id: CallId, reply: Reply) {
+    fn reply(&self, id: CallId, reply: Reply, usage: &mut Usage) {
         let run = self.link.run.0;
         let sent = self.worker.send(&match reply {
             Ok(value) => json!({ "type": "reply", "run": run, "id": id.0, "ok": value }),
@@ -448,6 +473,7 @@ impl Session {
                 json!({ "type": "reply", "run": run, "id": id.0, "error": error.to_string() })
             }
         });
+        usage.answered(id.0, *sent.as_ref().unwrap_or(&0));
         if sent.is_err_and(|error| error.kind() == io::ErrorKind::InvalidInput) {
             self.refuse(id.0, "Mira's answer was larger than 16 MiB.");
         }

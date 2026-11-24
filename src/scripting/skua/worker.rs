@@ -306,7 +306,7 @@ impl Worker {
         true
     }
 
-    pub(super) fn send(&self, frame: &Json) -> io::Result<()> {
+    pub(super) fn send(&self, frame: &Json) -> io::Result<usize> {
         let mut writer = lock(&self.writer);
         let written = write(&mut *writer, frame);
         if let Err(error) = &written
@@ -502,14 +502,15 @@ pub(super) fn read(stream: &mut impl Read) -> io::Result<Option<Json>> {
         .map_err(io::Error::other)
 }
 
-pub(super) fn write(stream: &mut impl Write, frame: &Json) -> io::Result<()> {
+pub(super) fn write(stream: &mut impl Write, frame: &Json) -> io::Result<usize> {
     let body = serde_json::to_vec(frame)?;
     let length = u32::try_from(body.len())
         .ok()
         .filter(|length| *length as usize <= MAX_FRAME)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a frame over 16 MiB"))?;
     stream.write_all(&length.to_be_bytes())?;
-    stream.write_all(&body)
+    stream.write_all(&body)?;
+    Ok(body.len())
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
