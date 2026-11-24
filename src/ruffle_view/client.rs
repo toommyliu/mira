@@ -1900,6 +1900,9 @@ impl Client {
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
+                if this.asking(cx) {
+                    return;
+                }
                 if let Err(error) = this.open_session(None, window, cx) {
                     tracing::error!(%error, "couldn't open a session");
                 }
