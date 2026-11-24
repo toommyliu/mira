@@ -1787,7 +1787,7 @@ impl ScriptsWindow {
         let Some((next, field)) = form.step(self.error_cursor, by, cx) else {
             return;
         };
-        let item = form.item_of(field, cx);
+        let item = usize::from(form.meta.description.is_some()) + form.item_of(field, cx);
         let input = form.text(field);
         self.error_cursor = Some(next);
         let theme = cx.theme();
@@ -4646,7 +4646,14 @@ Cells visited: Enter, r1, r2, r3, r4.";
         let temp = std::env::temp_dir().join(format!("mira-fix-{:x}", u64::from_ne_bytes(random)));
         let script = temp.join("scripts/inputs.ts");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
-        fs::write(&script, include_str!("../../examples/inputs.ts")).unwrap();
+        fs::write(
+            &script,
+            format!(
+                "{}\nexport const meta = {{ description: \"Every kind of input.\" }};\n",
+                include_str!("../../examples/inputs.ts")
+            ),
+        )
+        .unwrap();
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
@@ -4686,8 +4693,20 @@ Cells visited: Enter, r1, r2, r3, r4.";
         jump(1, cx);
         assert!(focused(&offset, cx), "the first input to fix is Offset");
         jump(1, cx);
-        let scrolled = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
-        assert!(scrolled < px(0.0), "stepping to Room scrolls it into view");
+        let (viewport, room, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
+            let scroll = &scripts.detail_scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(9).unwrap(),
+                scroll.offset().y,
+                error_bar_clearance(cx.theme()),
+            )
+        });
+        assert!(
+            room.top() + scrolled >= viewport.top()
+                && room.bottom() + scrolled <= viewport.bottom() - clearance,
+            "stepping to Room, below the description, scrolls it into view: {room:?} in {viewport:?} at {scrolled:?}"
+        );
         jump(1, cx);
         assert!(
             focused(&offset, cx),
