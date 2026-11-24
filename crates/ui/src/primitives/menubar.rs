@@ -343,6 +343,7 @@ fn render_entry(
         Rc::new(
             move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
                 let from_end = match event.keystroke.key.as_str() {
+                    "enter" | "space" if event.is_held => return,
                     "down" | "enter" | "space" => false,
                     "up" => true,
                     _ => return,
