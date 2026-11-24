@@ -1,4 +1,8 @@
-/** @module mira/http */
+/**
+ * Send HTTP requests from your scripts.
+ *
+ * @module mira/http
+ */
 import * as Data from "effect/Data";
 import * as Durations from "effect/Duration";
 import * as Effect from "effect/Effect";

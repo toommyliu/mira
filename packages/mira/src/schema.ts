@@ -1,4 +1,8 @@
-/** @module mira/schema */
+/**
+ * Check that data matches the shape your script expects.
+ *
+ * @module mira/schema
+ */
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Native from "effect/Schema";

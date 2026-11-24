@@ -1,4 +1,8 @@
-/** @module mira */
+/**
+ * Automate AdventureQuest Worlds with TypeScript.
+ *
+ * @module mira
+ */
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Durations from "effect/Duration";
@@ -120,6 +124,7 @@ export type ConnectResult =
       readonly message: string;
     };
 
+/** Manage your login and server connection. */
 export const Auth = {
   isLoggedIn: () => auth<boolean>("loggedIn"),
   getUsername: () => auth<string | null>("username"),
@@ -146,6 +151,7 @@ export type AutoReloginSettings = {
   readonly backoffCapSeconds: number;
 };
 
+/** Set up automatic login after a disconnect. */
 export const AutoRelogin = {
   get: () => autoRelogin<AutoReloginSettings>("get"),
   /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
@@ -184,6 +190,7 @@ export type Aura = {
   readonly expiresAt: number | null;
 };
 
+/** Check your character's status and move around the game. */
 export const Player = {
   isReady: () => player<boolean>("ready"),
   getMap: () => player<string | null>("map"),
@@ -270,6 +277,7 @@ export type Drop = {
 };
 export type MonsterOptions = { readonly cell?: string };
 
+/** Inspect the current room and its monsters. */
 export const World = {
   getAreaId: () => world<number>("areaId"),
   getRoomNumber: () => world<number | null>("roomNumber"),
@@ -387,11 +395,13 @@ export type HuntOptions = {
   readonly preferMostMatches?: boolean;
 };
 
+/** Look up players in your room. */
 export const Players = {
   getAll: () => players<readonly RoomPlayer[]>("all"),
   get: (username: string) => players<RoomPlayer | null>("get", { username }),
 };
 
+/** Fight monsters and automate skill use. */
 export const Combat = {
   getTarget: () => combat<Target | null>("target"),
   hasTarget: () => combat<boolean>("hasTarget"),
@@ -477,6 +487,7 @@ export type EnhancementSelector = { readonly enhancement: string; readonly speci
 export type EnhancementSlot = "weapon" | "class" | "helm" | "cape";
 export type EquipEnhancementSelector = EnhancementSelector & { readonly slot?: EnhancementSlot };
 
+/** Manage the items your character carries. */
 export const Inventory = {
   getItems: () => inventory<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => inventory<Item | null>("item", { query }),
@@ -501,6 +512,7 @@ export const Inventory = {
   use: (query: ItemQuery) => inventory<boolean>("use", { query }),
 };
 
+/** Check which temporary items you have. */
 export const TempInventory = {
   getItems: () => tempInventory<readonly TempItem[]>("items"),
   getItem: (query: ItemQuery) => tempInventory<TempItem | null>("item", { query }),
@@ -515,6 +527,7 @@ const moveEach = (op: "deposit" | "withdraw", queries: readonly ItemQuery[]) =>
     return index === 0 ? moved : Effect.andThen(Effect.sleep("150 millis"), moved);
   });
 
+/** Move items in and out of your bank. */
 export const Bank = {
   /** Reads load the bank on first use too. Returns false if it doesn't load. */
   load: () => bank<boolean>("load"),
@@ -538,6 +551,7 @@ export const Bank = {
     bank<boolean>("swap", { inventoryQuery, bankQuery }),
 };
 
+/** Check your housing inventory. */
 export const House = {
   getItems: () => house<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => house<Item | null>("item", { query }),
@@ -587,6 +601,7 @@ export type QuestConfig = {
   readonly acceptRequirements: boolean;
 };
 
+/** Manage quests and automate turn-ins. */
 export const Quests = {
   load: (questId: number, options: QuestLoadOptions = {}) =>
     quests<boolean>("load", { questId, ...options }),
@@ -639,8 +654,9 @@ export type DropConfig = {
   readonly rejectOthers: boolean;
 };
 
-/** Items waiting in the drop list, with `quantity` as the amount waiting. */
+/** Accept or reject item drops. */
 export const Drops = {
+  /** Each item's `quantity` is the amount waiting in the drop list. */
   getItems: () => drops<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => drops<Item | null>("item", { query }),
   contains: (query: ItemQuery, quantity?: number) =>
@@ -691,6 +707,7 @@ export type Shop = {
 };
 export type QuantityOptions = { readonly quantity?: number };
 
+/** Buy, sell, and enhance items. */
 export const Shops = {
   load: (shopId: number) => shops<boolean>("load", { shopId }),
   getCurrent: () => shops<Shop | null>("current"),
@@ -765,6 +782,7 @@ export type SettingsPatch = Partial<Omit<GameSettings, "frameRate">> & {
   readonly frameRate?: number;
 };
 
+/** Read and change client settings. */
 export const Settings = {
   get: () => settings<GameSettings>("get"),
   /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
@@ -835,6 +853,7 @@ export type PromptOptions = DialogOptions & {
   readonly placeholder?: string;
 };
 
+/** Read inputs and control the current script run. */
 export const Script = {
   /** Waits until the user dismisses it. Interrupting the effect closes the dialog. */
   alert: (message: string, { title }: DialogOptions = {}) =>
@@ -1064,6 +1083,7 @@ const openPackets = <F extends PacketFilter>(filter: F) => {
   );
 };
 
+/** Read and send raw game packets. */
 export const Packets = {
   subscribe: <const F extends PacketFilter>(
     filter: F = {} as F,
@@ -1197,6 +1217,7 @@ const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
         : undefined,
   );
 
+/** React to game events as they happen. */
 export const Events = {
   /**
    * @example
@@ -1247,6 +1268,7 @@ const poll = (condition: Body<boolean>, interval: Duration) =>
     return true;
   });
 
+/** Wait for a condition, event, or packet. */
 export const Wait = {
   /**
    * Checks right away, then every `interval`. False if `timeout` passes first.
@@ -1521,6 +1543,7 @@ const loopTaunt = (
     return { stop: () => Fiber.interrupt(fiber) };
   });
 
+/** Coordinate multiple accounts running the same script. */
 export const Army = {
   /** Reads `~/Mira/armies/<name>.yaml` and waits until every player in it has started. */
   start,
