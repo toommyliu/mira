@@ -39,7 +39,8 @@ pub(super) struct Script {
     next: Option<Next>,
     inputs: Option<Inputs>,
     checking: Option<Task<()>>,
-    plain: Option<PathBuf>,
+    declares: Option<(PathBuf, bool)>,
+    reads: u64,
 }
 
 struct Inputs {
@@ -169,22 +170,28 @@ impl Script {
     }
 
     pub(super) fn has_inputs(&self) -> bool {
-        self.upcoming()
-            .is_some_and(|entry| self.plain.as_ref() != Some(entry))
+        let Some(entry) = self.upcoming() else {
+            return false;
+        };
+        match &self.declares {
+            Some((read, declares)) if read == entry => *declares,
+            _ => true,
+        }
     }
 
-    fn read(&mut self, entry: &Path, read: &Read) -> bool {
-        let plain = matches!(
-            read,
-            Ok(Declared {
-                inputs: Ok(None),
-                ..
-            })
-        )
-        .then(|| entry.to_path_buf());
-        let changed = self.plain != plain;
-        self.plain = plain;
-        changed
+    fn next_read(&mut self) -> u64 {
+        self.reads += 1;
+        self.reads
+    }
+
+    fn read(&mut self, entry: &Path, read: &Read, issued: u64) -> bool {
+        if issued != self.reads {
+            return false;
+        }
+        let declares = declares_inputs(read);
+        let before = self.has_inputs();
+        self.declares = Some((entry.to_path_buf(), declares));
+        self.has_inputs() != before
     }
 
     pub(super) fn inputs(&self) -> Option<Entity<InputsDialog>> {
@@ -280,6 +287,16 @@ impl Script {
     }
 }
 
+fn declares_inputs(read: &Read) -> bool {
+    !matches!(
+        read,
+        Ok(Declared {
+            inputs: Ok(None),
+            ..
+        })
+    )
+}
+
 pub(super) fn failure(outcome: &Outcome) -> Option<String> {
     match outcome {
         Outcome::Failed { message, .. } => Some(message.clone()),
@@ -324,6 +341,7 @@ impl RuffleView {
     }
 
     fn check_inputs(&mut self, entry: PathBuf, purpose: Purpose, cx: &mut Context<Self>) {
+        let issued = self.script.next_read();
         let read = inputs_form::read(entry.clone(), cx);
         self.script.checking = Some(cx.spawn(async move |this, cx| {
             let read = read.await;
@@ -332,11 +350,11 @@ impl RuffleView {
                 if this.script.upcoming() != Some(&entry) {
                     return;
                 }
-                if this.script.read(&entry, &read) {
+                if this.script.read(&entry, &read, issued) {
                     this.changed(cx);
                 }
                 let saved = script_inputs::saved(&entry, cx);
-                let ask = (purpose == Purpose::Edit && this.script.has_inputs())
+                let ask = (purpose == Purpose::Edit && declares_inputs(&read))
                     || preflight(&read, &saved) == Preflight::Ask;
                 match purpose {
                     Purpose::Start if this.script.running() => {}
@@ -361,8 +379,11 @@ impl RuffleView {
         }
         let running = self.script.running();
         let view = cx.new(|cx| InputsDialog::new(entry, read, purpose, running, cx));
-        let events = cx.subscribe(&view, |this, _, event: &InputsEvent, cx| match event {
-            InputsEvent::Start => this.start_loaded_script(cx),
+        let events = cx.subscribe(&view, |this, view, event: &InputsEvent, cx| match event {
+            InputsEvent::Start if this.script.entry() == Some(view.read(cx).script()) => {
+                this.start_loaded_script(cx)
+            }
+            InputsEvent::Start => {}
             InputsEvent::Closed => this.changed(cx),
         });
         self.script.inputs = Some(Inputs {
@@ -370,6 +391,21 @@ impl RuffleView {
             _events: events,
         });
         self.changed(cx);
+    }
+
+    fn probe_inputs(&mut self, entry: PathBuf, cx: &mut Context<Self>) {
+        let issued = self.script.next_read();
+        let read = inputs_form::read(entry.clone(), cx);
+        cx.spawn(async move |this, cx| {
+            let read = read.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.script.upcoming() == Some(&entry) && this.script.read(&entry, &read, issued)
+                {
+                    this.changed(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
@@ -386,6 +422,7 @@ impl RuffleView {
         if self.script.running() {
             return;
         }
+        self.probe_inputs(launch.entry.clone(), cx);
         self.script.leaving = None;
         self.script.restart = None;
         let character = self.character().map(AccountId::of);
@@ -835,12 +872,30 @@ mod tests {
         script.load(launch("farm.ts"), false);
         script.take_next();
         assert!(script.has_inputs(), "the file hasn't been read yet");
-        script.read(Path::new("farm.ts"), &declares(Ok(None)));
+        let issued = script.next_read();
+        script.read(Path::new("farm.ts"), &declares(Ok(None)), issued);
         assert!(!script.has_inputs());
+
+        let stale = script.next_read();
+        let issued = script.next_read();
+        script.read(
+            Path::new("farm.ts"),
+            &Ok(crate::scripting::extract(
+                "farm.ts",
+                Path::new("farm.ts"),
+                r#"export const inputs = { kills: { type: "number", label: "Kills" } };"#,
+            )
+            .unwrap()),
+            issued,
+        );
+        assert!(script.has_inputs(), "inputs added to the file show up");
+        script.read(Path::new("farm.ts"), &declares(Ok(None)), stale);
+        assert!(script.has_inputs(), "an older read doesn't win");
 
         script.load(launch("hunt.ts"), false);
         assert!(script.has_inputs());
-        script.read(Path::new("hunt.ts"), &declares(Err("bad".into())));
+        let issued = script.next_read();
+        script.read(Path::new("hunt.ts"), &declares(Err("bad".into())), issued);
         assert!(script.has_inputs(), "invalid inputs still show their error");
     }
 
