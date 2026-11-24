@@ -1,6 +1,6 @@
 use gpui::{
     AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, point, px, size,
+    Styled as _, Window, div, point, px, relative, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Tone,
@@ -450,7 +450,7 @@ fn snapshot_dialog() {
                     0 => ListItem::header("Mine"),
                     1 => ListItem::new("daily.ts").end_slot("2m ago"),
                     2 => ListItem::new("army.ts")
-                        .description("~/Documents/Mira/scripts")
+                        .description("~/Mira/scripts")
                         .end_slot("1h ago"),
                     3 => ListItem::header("aqw-community"),
                     _ => ListItem::new("hunt.ts")
@@ -490,6 +490,29 @@ fn snapshot_dialog_small_window() {
             )
             .action(Button::new("cancel", "Cancel"))
             .action(Button::new("add", "Add 3 boosts").variant(Variant::Primary))
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_dialog_relative_max_height() {
+    scene("dialog-relative-max-height", 560.0, 640.0, |_, _| {
+        Dialog::new("inputs", true, "hunt.ts")
+            .max_height(relative(0.6))
+            .body(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .children((0..24usize).map(|index| {
+                        Checkbox::new(
+                            ("input", index),
+                            format!("Input {}", index + 1),
+                            CheckedState::Unchecked,
+                        )
+                    })),
+            )
+            .action(Button::new("done", "Done").variant(Variant::Primary))
             .into_any_element()
     });
 }
@@ -586,7 +609,7 @@ fn snapshot_menu() {
                             vec![
                                 MenuItem::header("Recent"),
                                 MenuItem::action("daily.ts", |_, _| {})
-                                    .description("~/Documents/Mira/scripts/ultras")
+                                    .description("~/Mira/scripts/ultras")
                                     .dismiss("Remove from recent", |_, _| {}),
                                 MenuItem::separator(),
                                 MenuItem::action("Choose a file…", |_, _| {}),
@@ -832,7 +855,7 @@ fn snapshot_sources_short_window() {
                             "bosses",
                             "merge",
                         ]
-                        .map(|name| folder(&format!("~/Documents/Mira/{name}"))),
+                        .map(|name| folder(&format!("~/Mira/{name}"))),
                     );
                     items.push(MenuItem::action("Add folder…", |_, _| {}));
                     items.push(MenuItem::separator());
@@ -927,6 +950,41 @@ fn snapshot_menubar() {
             )
             .child(trigger("bank", "Bank"))
             .default_open(2)
+            .into_any_element()
+    });
+}
+
+#[test]
+fn snapshot_menubar_split_button() {
+    scene("menubar-split-button", 560.0, 200.0, |_, cx| {
+        let theme = cx.theme().clone();
+        let trigger = |id: &'static str, title: &'static str| {
+            Button::new(id, title)
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+        };
+        Menubar::new("bar", "Game")
+            .h(px(38.0))
+            .gap(px(2.0))
+            .px(px(6.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(trigger("attack", "Auto attack"))
+            .button(trigger("script", "Start hunt.ts").joined(Joined::Next))
+            .menu(
+                Button::icon("script-menu", Icon::ChevronDown, "Script options")
+                    .size(Size::Small)
+                    .joined(Joined::Previous),
+                |_, _| {
+                    vec![
+                        MenuItem::action("Load script…", |_, _| {}),
+                        MenuItem::action("Edit inputs…", |_, _| {}),
+                    ]
+                },
+            )
+            .child(div().flex_1())
+            .child(trigger("bank", "Bank"))
+            .default_open(1)
             .into_any_element()
     });
 }
@@ -1659,7 +1717,7 @@ fn list_keeps_its_inset_when_the_keyboard_reaches_the_last_row() {
 
     fn rows(index: usize) -> ListItem {
         ListItem::new("army.ts")
-            .description("~/Documents/Mira/scripts")
+            .description("~/Mira/scripts")
             .start_slot((index + 1).to_string())
     }
 

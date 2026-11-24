@@ -14,6 +14,7 @@ impl AssetSource for Assets {
             "icons/arrow-left.svg" => include_str!("../assets/icons/lucide/arrow-left.svg"),
             "icons/arrow-right.svg" => include_str!("../assets/icons/lucide/arrow-right.svg"),
             "icons/arrow-up.svg" => include_str!("../assets/icons/lucide/arrow-up.svg"),
+            "icons/arrow-up-right.svg" => include_str!("../assets/icons/lucide/arrow-up-right.svg"),
             "icons/bell.svg" => include_str!("../assets/icons/lucide/bell.svg"),
             "icons/bell-ring.svg" => include_str!("../assets/icons/lucide/bell-ring.svg"),
             "icons/check.svg" => include_str!("../assets/icons/lucide/check.svg"),
@@ -49,6 +50,9 @@ impl AssetSource for Assets {
             "icons/x.svg" => include_str!("../assets/icons/lucide/x.svg"),
             "icons/circle-dot.svg" => include_str!("../assets/icons/lucide/circle-dot.svg"),
             "icons/file-plus-2.svg" => include_str!("../assets/icons/lucide/file-plus-2.svg"),
+            "icons/gallery-vertical-end.svg" => {
+                include_str!("../assets/icons/lucide/gallery-vertical-end.svg")
+            }
             "icons/pencil.svg" => include_str!("../assets/icons/lucide/pencil.svg"),
             "icons/loader-circle.svg" => include_str!("../assets/icons/lucide/loader-circle.svg"),
             "icons/circle.svg" => include_str!("../assets/icons/lucide/circle.svg"),

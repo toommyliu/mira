@@ -29,6 +29,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Theme::for_window(cx.window_appearance()));
     nav::track_input(cx);
     primitives::input::bind_keys(cx);
+    components::log_view_keys(cx);
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, Some(FOCUS_SCOPE)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(FOCUS_SCOPE)),

@@ -11,8 +11,6 @@ export default defineConfig({
       plugins: [
         starlightLinksValidator(),
         starlightTypeDoc({
-          entryPoints: ["../mira/src/mira.ts", "../mira/src/http.ts", "../mira/src/schema.ts"],
-          tsconfig: "../mira/tsconfig.json",
           typeDoc: { name: "API reference", disableSources: true, entryFileName: "index" },
           sidebar: { label: "API reference", collapsed: true },
         }),

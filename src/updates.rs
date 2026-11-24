@@ -9,7 +9,10 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Global, PromptLevel, SharedString, Task, actions};
+use gpui::{App, AppContext as _, AsyncApp, Global, SharedString, Task, actions};
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSView};
+use objc2_foundation::{NSString, ns_string};
 use semver::Version;
 
 use bundle::Staged;
@@ -21,7 +24,7 @@ use crate::packages::github::{API, GitHub};
 
 actions!(mira, [CheckForUpdates]);
 
-const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+pub(crate) const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 const SPIN: Duration = Duration::from_secs(1);
 const COOLDOWN: Duration = Duration::from_secs(30);
 static CURRENT: LazyLock<Version> =
@@ -82,10 +85,12 @@ impl InFlight {
 
 pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
+        crate::packages::packages(cx)
+            .update(cx, |packages, cx| packages.check_when_idle(false, cx));
         let checking = Updates::check(true, cx);
         cx.spawn(async move |cx| {
             checking.await;
-            cx.update(announce);
+            announce(cx);
         })
         .detach();
     });
@@ -116,17 +121,17 @@ pub(crate) fn start(cx: &mut App) {
     .detach();
 }
 
-fn announce(cx: &mut App) {
-    let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
-        return cx.dispatch_action(&crate::settings::OpenSettings);
+fn announce(cx: &AsyncApp) {
+    let Some(main) = MainThreadMarker::new() else {
+        return;
     };
-    let Some(state) = cx.try_global::<Updates>().cloned() else {
+    let Some(state) = cx.update(|cx| cx.try_global::<Updates>().cloned()) else {
         return;
     };
     let installed = env!("CARGO_PKG_VERSION");
-    let (level, message, detail, answers): (_, String, Option<String>, &[&str]) = match &state {
+    let (style, message, detail, buttons): (_, String, Option<String>, &[&str]) = match &state {
         Updates::Current(_) => (
-            PromptLevel::Info,
+            NSAlertStyle::Informational,
             "You’re up to date!".into(),
             Some(format!(
                 "Mira {installed} is currently the newest version available."
@@ -134,19 +139,19 @@ fn announce(cx: &mut App) {
             &["OK"],
         ),
         Updates::Available { update, .. } => (
-            PromptLevel::Info,
+            NSAlertStyle::Informational,
             format!("Mira {} is available.", update.version),
             Some(format!("You’re running Mira {installed}.")),
             &["Download", "Later"],
         ),
         Updates::Downloading { update, .. } => (
-            PromptLevel::Info,
+            NSAlertStyle::Informational,
             format!("Mira {} is already downloading.", update.version),
             None,
             &["OK"],
         ),
         Updates::Ready { update, .. } => (
-            PromptLevel::Info,
+            NSAlertStyle::Informational,
             format!("Mira {} is ready to install.", update.version),
             Some(
                 "Mira will restart to install it. Any running scripts will be interrupted.".into(),
@@ -154,13 +159,13 @@ fn announce(cx: &mut App) {
             &["Restart", "Later"],
         ),
         Updates::Failed(error) => (
-            PromptLevel::Warning,
+            NSAlertStyle::Warning,
             "Could not check for updates.".into(),
             Some(error.to_string()),
             &["OK"],
         ),
         Updates::Unavailable(reason) => (
-            PromptLevel::Info,
+            NSAlertStyle::Informational,
             "Automatic updates are not available right now.".into(),
             Some(
                 reason
@@ -170,30 +175,45 @@ fn announce(cx: &mut App) {
             &["OK"],
         ),
         Updates::Idle => (
-            PromptLevel::Warning,
+            NSAlertStyle::Warning,
             "Could not check for updates.".into(),
             Some("Try again in a moment.".into()),
             &["OK"],
         ),
         Updates::Checking | Updates::Restarting(_) => return,
     };
-    let answer = window.update(cx, |_, window, cx| {
-        window.prompt(level, &message, detail.as_deref(), answers, cx)
-    });
-    let Ok(answer) = answer else {
+    if !alert(main, style, &message, detail.as_deref(), buttons) {
         return;
-    };
-    cx.spawn(async move |cx| {
-        if answer.await != Ok(0) {
-            return;
+    }
+    cx.update(|cx| match state {
+        Updates::Available { .. } => Updates::download(cx),
+        Updates::Ready { .. } => Updates::restart(cx),
+        _ => {}
+    });
+}
+
+fn alert(
+    main: MainThreadMarker,
+    style: NSAlertStyle,
+    message: &str,
+    detail: Option<&str>,
+    buttons: &[&str],
+) -> bool {
+    let alert = NSAlert::new(main);
+    alert.setAlertStyle(style);
+    // Any accessory view, even an empty one, keeps AppKit from centering alerts with short text.
+    alert.setAccessoryView(Some(&NSView::new(main)));
+    alert.setMessageText(&NSString::from_str(message));
+    if let Some(detail) = detail {
+        alert.setInformativeText(&NSString::from_str(detail));
+    }
+    for (index, title) in buttons.iter().enumerate() {
+        let button = alert.addButtonWithTitle(&NSString::from_str(title));
+        if index > 0 && index == buttons.len() - 1 {
+            button.setKeyEquivalent(ns_string!("\u{1b}"));
         }
-        cx.update(|cx| match state {
-            Updates::Available { .. } => Updates::download(cx),
-            Updates::Ready { .. } => Updates::restart(cx),
-            _ => {}
-        });
-    })
-    .detach();
+    }
+    alert.runModal() == NSAlertFirstButtonReturn
 }
 
 fn github(cx: &App) -> Result<GitHub> {

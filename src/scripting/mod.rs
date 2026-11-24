@@ -40,6 +40,6 @@ pub(crate) use skua::{
     Described as SkuaDescribed, Halt as SkuaHalt, Setup as SkuaSetup, describe as describe_skua,
     init as init_skua, is_entry as is_skua,
 };
-pub(crate) use typings::{install_types, link_types};
+pub(crate) use typings::{install_types, link_packages, link_types};
 #[cfg(test)]
 mod tests;

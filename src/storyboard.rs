@@ -20,7 +20,7 @@ pub(crate) struct Board {
 }
 
 fn boards() -> Vec<Board> {
-    Vec::new()
+    vec![crate::ruffle_view::scripts_board()]
 }
 
 pub(crate) fn scratch(story: &str) -> PathBuf {

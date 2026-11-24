@@ -199,7 +199,7 @@ impl ExternalInterfaceProvider for Bridge {
     }
 
     fn on_callback_available(&self, name: &str) {
-        tracing::debug!(callback = name, "loader callback registered");
+        tracing::trace!(callback = name, "loader callback registered");
     }
 
     fn get_id(&self) -> Option<String> {

@@ -288,6 +288,246 @@ fn right_clicking_an_open_dropdown_trigger_leaves_one_menu_open(cx: &mut TestApp
     assert!(cx.debug_bounds("dropdown").is_none());
 }
 
+struct Tabs {
+    disabled: bool,
+}
+
+impl Render for Tabs {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().p(gpui::px(40.0)).child(
+            div().debug_selector(|| "tabs-trigger".into()).child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .disabled(self.disabled)
+                    .items(|_, _| {
+                        vec![
+                            MenuItem::action("Artix", |_, _| {})
+                                .start_slot(div().debug_selector(|| "tab".into())),
+                        ]
+                    }),
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn disabling_a_trigger_closes_its_open_menu(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+    cx.update(mira_ui::init);
+    let (tabs, cx) = cx.add_window_view(|window, _| {
+        window.activate_window();
+        Tabs { disabled: false }
+    });
+    cx.run_until_parked();
+    let trigger = cx.debug_bounds("tabs-trigger").unwrap().center();
+    cx.simulate_click(trigger, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("tab").is_some());
+    let set = |disabled, cx: &mut VisualTestContext| {
+        tabs.update(cx, |tabs, cx| {
+            tabs.disabled = disabled;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    };
+    set(true, cx);
+    assert!(cx.debug_bounds("tab").is_none());
+    set(false, cx);
+    assert!(cx.debug_bounds("tab").is_none());
+}
+
+struct LongTabs {
+    focus: FocusHandle,
+}
+
+impl Render for LongTabs {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(|_, _| {
+                        let mut items: Vec<MenuItem> = (0..30usize)
+                            .map(|index| MenuItem::action(format!("Tab {index}"), |_, _| {}))
+                            .collect();
+                        items.push(MenuItem::separator().pinned());
+                        items.push(
+                            MenuItem::action("New tab", |_, _| {})
+                                .start_slot(div().debug_selector(|| "new-tab".into()))
+                                .pinned(),
+                        );
+                        items
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn pinned_rows_at_the_end_stay_below_a_list_that_scrolls(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        LongTabs { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(240.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let new_tab = cx.debug_bounds("new-tab").unwrap();
+    assert!(
+        new_tab.top() >= px(0.0) && new_tab.bottom() <= px(240.0),
+        "{new_tab:?}"
+    );
+}
+
+struct CheckedFarAway {
+    focus: FocusHandle,
+}
+
+impl Render for CheckedFarAway {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(|_, _| {
+                        (0..30usize)
+                            .map(|index| {
+                                let item = MenuItem::action(format!("Tab {index}"), |_, _| {})
+                                    .checked(index == 25);
+                                if index == 25 {
+                                    item.start_slot(div().debug_selector(|| "current".into()))
+                                } else {
+                                    item
+                                }
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn an_arrow_scrolls_back_to_the_checked_row(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, px, size};
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        CheckedFarAway { focus }
+    });
+    cx.simulate_resize(size(px(600.0), px(240.0)));
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let current = cx.debug_bounds("current").unwrap();
+    assert!(current.top() > px(240.0), "{current:?}");
+    let arrow = cx.debug_bounds("scroll-to-checked").unwrap();
+    cx.simulate_click(arrow.center(), Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let current = cx.debug_bounds("current").unwrap();
+    assert!(current.bottom() <= px(240.0), "{current:?}");
+    assert!(cx.debug_bounds("scroll-to-checked").is_none());
+}
+
+struct Closable {
+    focus: FocusHandle,
+    elsewhere: FocusHandle,
+    closed: Rc<Cell<usize>>,
+}
+
+impl Render for Closable {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (elsewhere, closed) = (self.elsewhere.clone(), self.closed.clone());
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(div().track_focus(&self.elsewhere))
+            .child(
+                DropdownMenu::new("tabs")
+                    .trigger(Button::new("tabs", "Tabs"))
+                    .items(move |_, _| {
+                        (0..3usize)
+                            .map(|index| {
+                                let (elsewhere, closed) = (elsewhere.clone(), closed.clone());
+                                MenuItem::action(format!("Tab {index}"), |_, _| {}).dismiss(
+                                    "Close tab",
+                                    move |window, cx| {
+                                        closed.set(closed.get() + 1);
+                                        window.focus(&elsewhere, cx);
+                                    },
+                                )
+                            })
+                            .collect()
+                    }),
+            )
+    }
+}
+
+fn closable(cx: &mut TestAppContext) -> (Entity<Closable>, &mut VisualTestContext) {
+    cx.update(mira_ui::init);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Closable {
+            focus,
+            elsewhere: cx.focus_handle(),
+            closed: Rc::default(),
+        }
+    });
+    cx.run_until_parked();
+    for key in ["tab", "enter"] {
+        press(cx, key);
+    }
+    assert!(cx.debug_bounds("menu-panel").is_some());
+    (view, cx)
+}
+
+#[gpui::test]
+fn a_dismiss_that_moves_focus_keeps_the_keyboard_in_the_menu(cx: &mut TestAppContext) {
+    let (view, cx) = closable(cx);
+    for key in ["delete", "delete"] {
+        press(cx, key);
+    }
+    assert_eq!(view.read_with(cx, |view, _| view.closed.get()), 2);
+    assert!(cx.debug_bounds("menu-panel").is_some());
+    press(cx, "escape");
+    assert!(cx.debug_bounds("menu-panel").is_none());
+    let elsewhere = view.read_with(cx, |view, _| view.elsewhere.clone());
+    assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+}
+
+#[gpui::test]
+fn a_dropdown_closes_when_focus_leaves_it(cx: &mut TestAppContext) {
+    let (view, cx) = closable(cx);
+    let elsewhere = view.read_with(cx, |view, _| view.elsewhere.clone());
+    cx.update(|window, cx| window.focus(&elsewhere, cx));
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("menu-panel").is_none());
+    assert!(cx.update(|window, _| elsewhere.is_focused(window)));
+}
+
 struct ProfileRow {
     focus: FocusHandle,
     picked: Rc<Cell<Option<&'static str>>>,
@@ -2165,6 +2405,7 @@ fn a_resting_invalid_field_leaves_the_reveal_to_the_focused_control(cx: &mut Tes
 struct CardOverPane {
     pane: gpui::ScrollHandle,
     hovered: Rc<Cell<bool>>,
+    focus: FocusHandle,
 }
 
 impl Render for CardOverPane {
@@ -2175,11 +2416,14 @@ impl Render for CardOverPane {
         div()
             .size_full()
             .flex()
+            .track_focus(&self.focus)
+            .key_context(mira_ui::FOCUS_SCOPE)
             .child(
                 div().flex_none().w(px(100.0)).h(px(30.0)).flex().child(
                     HoverCard::new("card", "Card")
                         .placement(Placement::new(Side::Right, Align::Start))
                         .row("Error", "Stopped", mira_ui::Tone::Danger)
+                        .link("Details", "https://example.com")
                         .child(div().size_full()),
                 ),
             )
@@ -2208,9 +2452,15 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
     let hovered = Rc::new(Cell::new(false));
     let (_, cx) = cx.add_window_view({
         let (pane, hovered) = (pane.clone(), hovered.clone());
-        move |window, _| {
+        move |window, cx| {
+            let focus = cx.focus_handle();
             window.activate_window();
-            CardOverPane { pane, hovered }
+            window.focus(&focus, cx);
+            CardOverPane {
+                pane,
+                hovered,
+                focus,
+            }
         }
     });
     cx.run_until_parked();
@@ -2225,6 +2475,15 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
         .expect("resting opens the card");
     hovered.set(false);
 
+    cx.simulate_mouse_move(point(px(102.0), px(15.0)), None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("card-card").is_some(),
+        "crossing the gap from the trigger keeps the card open"
+    );
+
     cx.simulate_mouse_move(card.center(), None, Modifiers::none());
     cx.run_until_parked();
     cx.simulate_event(ScrollEvent {
@@ -2237,6 +2496,26 @@ fn an_open_hover_card_keeps_the_pointer_and_wheel_from_what_lies_beneath(cx: &mu
     assert!(
         cx.debug_bounds("card-card").is_some(),
         "the card stays open while pointed at"
+    );
+    let root = cx.update(|window, cx| window.focused(cx));
+    press(cx, "tab");
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        root,
+        "Tab moved focus into the card"
+    );
+    let link = cx
+        .debug_bounds("hover-card-link")
+        .expect("the card shows its link");
+    cx.simulate_click(
+        point(link.left() + px(16.0), link.center().y),
+        Modifiers::none(),
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com"));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        root,
+        "clicking the link moved focus into the card"
     );
     assert_eq!(
         pane.offset().y,
@@ -2622,6 +2901,15 @@ impl Bar<'_> {
         }
     }
 
+    fn hold(&mut self, key: &'static str) {
+        self.cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: Keystroke::parse(key).unwrap(),
+            is_held: true,
+            prefer_character_input: false,
+        });
+        self.cx.run_until_parked();
+    }
+
     fn chosen(&self) -> Vec<&'static str> {
         self.view
             .read_with(self.cx, |view, _| view.chosen.borrow().clone())
@@ -2685,6 +2973,23 @@ fn menubar_moves_between_entries_with_left_and_right(cx: &mut TestAppContext) {
     bar.click(Bar::FILE);
     bar.keys("right right enter");
     assert_eq!(bar.chosen(), ["undo", "new", "new"]);
+}
+
+#[gpui::test]
+fn menubar_ignores_a_return_held_from_before(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.keys("tab");
+    bar.hold("enter");
+    bar.hold("enter");
+    assert_eq!(bar.chosen(), Vec::<&str>::new());
+    bar.keys("enter");
+    assert_eq!(
+        bar.chosen(),
+        Vec::<&str>::new(),
+        "a fresh Return only opens File"
+    );
+    bar.keys("enter");
+    assert_eq!(bar.chosen(), ["new"]);
 }
 
 #[gpui::test]
@@ -2875,6 +3180,68 @@ fn an_open_popover_closes_when_its_window_stops_being_active(cx: &mut TestAppCon
     assert!(
         cx.debug_bounds("popover-panel").is_none(),
         "a popover left open behind another window would still react to the pointer"
+    );
+}
+
+struct PopoverInPane {
+    pane: gpui::ScrollHandle,
+}
+
+impl Render for PopoverInPane {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().pt(gpui::px(200.0)).child(
+            div()
+                .id("pane")
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(&self.pane)
+                .child(
+                    mira_ui::primitives::Popover::new("options")
+                        .trigger(Button::new("options", "Options"))
+                        .default_open(true),
+                )
+                .child(div().h(gpui::px(4000.0))),
+        )
+    }
+}
+
+#[gpui::test]
+fn an_open_popover_closes_once_its_trigger_scrolls_out_of_view(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let pane = gpui::ScrollHandle::new();
+    let (_, cx) = cx.add_window_view({
+        let pane = pane.clone();
+        move |window, _| {
+            window.activate_window();
+            PopoverInPane { pane }
+        }
+    });
+    cx.run_until_parked();
+    let wheel = |cx: &mut VisualTestContext, dy: f32| {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(600.0), px(600.0)),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(dy))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    };
+    let opened = cx.debug_bounds("popover-panel").expect("opens by default");
+
+    wheel(cx, -10.0);
+    assert_eq!(pane.offset().y, px(-10.0));
+    let moved = cx
+        .debug_bounds("popover-panel")
+        .expect("a partly visible trigger keeps its popover");
+    assert_eq!(moved.top(), opened.top() - px(10.0));
+
+    wheel(cx, -40.0);
+    assert_eq!(pane.offset().y, px(-50.0));
+    assert!(
+        cx.debug_bounds("popover-panel").is_none(),
+        "a popover whose trigger scrolled away stays pinned to the window edge over other controls"
     );
 }
 
@@ -3643,4 +4010,624 @@ fn clicking_a_trailing_switch_label_toggles_it(cx: &mut TestAppContext) {
     cx.simulate_click(point(px(20.0), px(14.0)), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(toggled.get(), Some(true));
+}
+
+struct ManyTabs {
+    scroll: gpui::ScrollHandle,
+}
+
+impl Render for ManyTabs {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::{
+            ActiveTheme as _,
+            primitives::{Tab, Tabs},
+        };
+        cx.theme()
+            .sidebar_pane()
+            .h_full()
+            .child(div().flex_none().h(gpui::px(40.0)))
+            .child(
+                Tabs::new("sessions", "Tabs", 30, |index| {
+                    Tab::new(format!("Player{index}"))
+                })
+                .vertical()
+                .track_scroll(&self.scroll)
+                .on_reorder(|_, _, _, _| {}),
+            )
+            .child(div().flex_1())
+    }
+}
+
+#[gpui::test]
+fn a_scrolling_tab_list_scrolls_inside_a_short_sidebar(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, ScrollDelta, ScrollEvent, TouchPhase, point, px, size};
+    cx.update(mira_ui::init);
+    let scroll = gpui::ScrollHandle::new();
+    let (_, cx) = cx.add_window_view(|_, _| ManyTabs {
+        scroll: scroll.clone(),
+    });
+    cx.simulate_resize(size(px(240.0), px(300.0)));
+    cx.run_until_parked();
+    let list = scroll.bounds();
+    assert!(list.bottom() <= px(300.0), "{list:?}");
+    cx.simulate_event(ScrollEvent {
+        position: list.origin + point(px(40.0), px(40.0)),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+        source: Default::default(),
+    });
+    cx.run_until_parked();
+    assert!(scroll.offset().y < px(0.0), "{:?}", scroll.offset());
+}
+
+struct Trace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for Trace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(format!("line {ix}").into()),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn picking_a_row_on_screen_keeps_the_log_following(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    let size = cx.update(|window, _| window.viewport_size());
+    state.reset((size.height / px(20.0)) as usize + 1);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let middle = point(size.width / 2.0, size.height / 2.0);
+    assert!(cx.debug_bounds("log-jump").is_none());
+
+    cx.simulate_mouse_down(middle, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(middle, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert!(state.selection().is_some());
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "right-clicking a row on screen offered Jump to latest"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_click(point(middle.x, middle.y + px(40.0)), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "clicking a row on screen offered Jump to latest"
+    );
+
+    cx.simulate_event(ScrollEvent {
+        position: middle,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(200.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("log-jump").is_some(),
+        "scrolling up didn't offer Jump to latest"
+    );
+}
+
+#[gpui::test]
+fn a_log_shows_its_scrollbar_only_when_the_reader_scrolls(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(200);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    for _ in 0..5 {
+        let len = state.len();
+        state.splice(len..len, 20);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    assert!(
+        cx.debug_bounds("scrollbar-thumb").is_none(),
+        "new rows arriving showed the scrollbar"
+    );
+
+    let size = cx.update(|window, _| window.viewport_size());
+    cx.simulate_event(ScrollEvent {
+        position: point(size.width / 2.0, size.height / 2.0),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(200.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("scrollbar-thumb").is_some(),
+        "scrolling didn't show the scrollbar"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_long_log_s_scrollbar_leaves_the_thumb_where_it_was_dropped(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("resting on the edge shows the scrollbar");
+
+    let target = size.height / 2.0;
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(point(edge, target), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(point(edge, target), MouseButton::Left, Modifiers::none());
+    for _ in 0..4 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    let dropped = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown while the pointer rests on it");
+    assert!(
+        (dropped.center().y - target).abs() < px(8.0),
+        "the thumb moved from {target:?} to {:?} after the drag",
+        dropped.center().y
+    );
+}
+
+struct UnevenTrace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for UnevenTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(if ix % 7 == 0 {
+                    format!("Run {ix} failed\nboom\n  at a\n  at b\n  at c\n  at d\n  at e").into()
+                } else {
+                    format!("line {ix}").into()
+                }),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn dragging_through_rows_of_uneven_height_moves_the_thumb_with_the_pointer(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| UnevenTrace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("resting on the edge shows the scrollbar");
+
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    for step in 1..=12 {
+        let pointer = grab.y - size.height * (step as f32 / 16.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the pointer is at {pointer:?} but the thumb is at {:?}",
+            moved.center().y
+        );
+    }
+    cx.simulate_mouse_up(
+        point(edge, grab.y - size.height * 0.75),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+}
+
+#[gpui::test]
+fn dragging_past_the_bottom_and_back_keeps_the_thumb_on_the_pointer_and_lets_go_on_release(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(5000);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| UnevenTrace { state }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    let frame = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+    };
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    frame(cx);
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    let drag_to = |cx: &mut VisualTestContext, from: gpui::Pixels, to: gpui::Pixels| {
+        let steps = 12;
+        for step in 1..=steps {
+            let y = from + (to - from) * (step as f32 / steps as f32);
+            cx.simulate_mouse_move(point(edge, y), MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+        }
+    };
+    drag_to(cx, thumb.center().y, size.height / 3.0);
+    drag_to(cx, size.height / 3.0, size.height + px(40.0));
+    drag_to(cx, size.height + px(40.0), size.height / 2.0);
+    let pointer = size.height / 2.0;
+    frame(cx);
+    let middle = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown");
+    assert!(
+        (middle.center().y - pointer).abs() < px(12.0),
+        "after reaching the end the thumb stayed at {:?} instead of following the pointer back",
+        middle.center().y
+    );
+
+    cx.simulate_mouse_up(point(edge, pointer), MouseButton::Left, Modifiers::none());
+    frame(cx);
+    cx.simulate_mouse_move(point(edge, size.height / 4.0), None, Modifiers::none());
+    frame(cx);
+    let released = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the thumb stays shown");
+    assert!(
+        (released.center().y - middle.center().y).abs() < px(1.0),
+        "the thumb kept following the pointer after release"
+    );
+}
+
+struct TallTrace {
+    state: mira_ui::components::LogState,
+    tall: fn(usize) -> bool,
+}
+
+impl Render for TallTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        let tall = self.tall;
+        div().size_full().flex().child(LogView::new(
+            "trace",
+            "Trace",
+            self.state.clone(),
+            move |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(if tall(ix) {
+                    (0..80)
+                        .map(|line| format!("  at frame {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .into()
+                } else {
+                    format!("line {ix}").into()
+                }),
+                repeats: 1,
+                opens_section: false,
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn clicking_a_stack_taller_than_the_pane_keeps_the_log_where_it_is(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(40);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix == 39,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    cx.simulate_click(
+        point(size.width / 2.0, size.height / 2.0),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(state.selection(), Some(39..40));
+    assert!(
+        cx.debug_bounds("log-jump").is_none(),
+        "clicking the stack scrolled away from the newest row"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_short_log_of_tall_rows_keeps_the_thumb_on_the_pointer(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(24);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix % 6 == 3,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = grab.y - thumb.size.height / 2.0;
+    for step in 1..=10 {
+        let pointer = grab.y - travel * (step as f32 / 10.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the pointer is at {pointer:?} but the thumb is at {:?}",
+            moved.center().y
+        );
+    }
+}
+
+struct SectionedTrace {
+    state: mira_ui::components::LogState,
+}
+
+impl Render for SectionedTrace {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::components::{LogBody, LogLevel, LogRow, LogView};
+        div().size_full().flex().child(
+            LogView::new("trace", "Trace", self.state.clone(), |ix, _| LogRow {
+                time: "12:00:00.000".into(),
+                level: LogLevel::Info,
+                body: LogBody::Text(format!("line {ix}").into()),
+                repeats: 1,
+                opens_section: ix % 25 == 0,
+            })
+            .section_of(|ix| Some(ix / 25 * 25)),
+        )
+    }
+}
+
+#[gpui::test]
+fn the_pinned_header_settles_on_the_next_frame_as_rows_arrive(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| SectionedTrace { state }
+    });
+    cx.run_until_parked();
+    for _ in 0..60 {
+        let len = state.len();
+        state.splice(len..len, 1);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        let settled = cx.debug_bounds("log-pinned");
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert_eq!(
+            settled,
+            cx.debug_bounds("log-pinned"),
+            "the pinned header was stale after {} rows",
+            state.len()
+        );
+    }
+}
+
+#[gpui::test]
+fn dragging_through_short_rows_between_tall_ones_never_jumps_to_the_end(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix < 2 || ix >= 58,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    for _ in 0..4 {
+        cx.simulate_event(ScrollEvent {
+            position: point(size.width / 2.0, size.height / 2.0),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = size.height - thumb.size.height - grab.y;
+    for step in 1..=6 {
+        let pointer = grab.y + travel * (step as f32 / 12.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            !state.following(),
+            "step {step}: the list jumped to the end with the thumb halfway down"
+        );
+    }
+}
+
+#[gpui::test]
+fn dragging_halfway_down_a_log_with_a_short_tail_stays_halfway(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| TallTrace {
+            state,
+            tall: |ix| ix < 2,
+        }
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let edge = size.width - px(3.0);
+    for _ in 0..4 {
+        cx.simulate_event(ScrollEvent {
+            position: point(size.width / 2.0, size.height / 2.0),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_move(point(edge, size.height / 2.0), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    let grab = thumb.center();
+    cx.simulate_mouse_down(grab, MouseButton::Left, Modifiers::none());
+    let travel = size.height - thumb.size.height - grab.y;
+    for step in 1..=5 {
+        let pointer = grab.y + travel * (step as f32 / 10.0);
+        cx.simulate_mouse_move(point(edge, pointer), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let moved = cx
+            .debug_bounds("scrollbar-thumb")
+            .expect("the thumb stays shown");
+        assert!(
+            (moved.center().y - pointer).abs() < px(12.0),
+            "step {step}: the thumb is at {:?}, not under the pointer at {pointer:?}",
+            moved.center().y
+        );
+        assert!(
+            !state.following(),
+            "step {step}: the list reached the bottom with the thumb {}% down",
+            step * 10
+        );
+    }
+}
+
+#[gpui::test]
+fn resizing_a_paused_log_keeps_its_scrollbar_from_jumping_to_the_end(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, ScrollDelta, ScrollEvent, point, px, size};
+    cx.update(mira_ui::init);
+    let state = mira_ui::components::LogState::default();
+    state.reset(60);
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Trace { state }
+    });
+    cx.run_until_parked();
+    let full = cx.update(|window, _| window.viewport_size());
+    let scroll = |cx: &mut VisualTestContext, by: gpui::Pixels| {
+        cx.simulate_event(ScrollEvent {
+            position: point(px(100.0), px(100.0)),
+            delta: ScrollDelta::Pixels(point(px(0.0), by)),
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    scroll(cx, px(100_000.0));
+    cx.simulate_resize(size(full.width, px(320.0)));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    scroll(cx, px(-400.0));
+    assert!(!state.following());
+
+    let edge = full.width - px(3.0);
+    cx.simulate_mouse_move(point(edge, px(160.0)), None, Modifiers::none());
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let thumb = cx
+        .debug_bounds("scrollbar-thumb")
+        .expect("the scrollbar shows");
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+    let up = point(edge, thumb.center().y - px(5.0));
+    cx.simulate_mouse_move(up, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(up, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        !state.following(),
+        "dragging the thumb up jumped the log to its newest row"
+    );
 }

@@ -70,7 +70,7 @@ test("the body is the condensed notes, then the full changelog in a disclosure",
       "- **Updates in the sidebar.** Click to download.",
       "",
       "<details>",
-      "<summary>Full changelog</summary>",
+      "<summary>Full changelog (2 changes)</summary>",
       "",
       "- feat: show updates in the sidebar (a1b2c3d4)",
       "- fix: stop the spinner outgrowing its icon (00112233)",
@@ -81,11 +81,37 @@ test("the body is the condensed notes, then the full changelog in a disclosure",
   );
 });
 
-test("notes are bullets and leave the changelog to the script", () => {
+test("the body counts the fixes the highlights leave out", () => {
+  const fixes = (subjects: readonly string[]) =>
+    subjects.map((subject, index) => ({ sha: `${index}`.padStart(8, "0"), subject, body: "" }));
+  const note = "- **Sidebar updates.** Click to download.\n";
+  const changes = fixes([
+    "fix: one",
+    "fix(ui): two",
+    "perf: three",
+    "fix!: four",
+    "feat: five",
+    "docs: six",
+  ]);
+  assert.match(
+    releaseBody(note, changes),
+    /^- \*\*Sidebar.*\n\nPlus 3 more fixes and improvements\.\n\n<details>/,
+  );
+  assert.match(releaseBody(note, changes.slice(0, 2)), /\n\nPlus 1 more fix or improvement\.\n\n/);
+  assert.doesNotMatch(releaseBody(note, changes.slice(4)), /Plus/);
+});
+
+test("notes are a few short highlights and leave the changelog to the script", () => {
+  const note = "- **Sidebar updates.** Click to download.";
   assert.throws(() => checkNotes(""));
   assert.throws(() => checkNotes("Updates in the sidebar."));
-  assert.throws(() => checkNotes("- One\n<details>"));
-  assert.equal(checkNotes("- One\n\n- Two\n"), "- One\n\n- Two");
+  assert.throws(() => checkNotes("- Fixes a crash."));
+  assert.throws(() => checkNotes(`${note}\n<details>`));
+  assert.throws(() => checkNotes(Array(6).fill(note).join("\n")));
+  const lead = "- **Sidebar updates.** ";
+  assert.throws(() => checkNotes(lead + "a".repeat(120 - lead.length)));
+  assert.equal(checkNotes(lead + "a".repeat(119 - lead.length)).length, 119);
+  assert.equal(checkNotes(`${note}\n\n${note}\n`), `${note}\n${note}`);
 });
 
 test("a publish bumps a newer version, resumes its own release commit, and refuses the rest", () => {

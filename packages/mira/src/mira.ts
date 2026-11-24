@@ -13,6 +13,8 @@ import { inputs } from "./inputs.ts";
 import { exited, exiting, failed, stopping } from "./run.ts";
 import { ask, call } from "./call.ts";
 
+export type { AbortEvent, AbortListener, AbortSignal } from "./abort.ts";
+
 declare const console: { readonly warn: (message: string) => void };
 
 const army = <A>(op: string, args: object = {}): Effect.Effect<A> =>
@@ -311,7 +313,7 @@ export type SkillOptions = {
 };
 /** A number is points, and a string like `"60%"` is a percent of the maximum. */
 export type Amount = number | `${number}%`;
-type Bound<T> =
+export type Bound<T> =
   | { readonly atMost: T; readonly atLeast?: never }
   | { readonly atLeast: T; readonly atMost?: never };
 export type Condition =
@@ -756,8 +758,8 @@ export const Settings = {
 
 export type ExitOptions = { readonly logout?: boolean; readonly closeTab?: boolean };
 
-type InputCommon = { readonly label: string; readonly description?: string };
-type InputOptions = readonly [string, ...string[]];
+export type InputCommon = { readonly label: string; readonly description?: string };
+export type InputOptions = readonly [string, ...string[]];
 
 export type Input =
   | (InputCommon & {
@@ -790,7 +792,7 @@ export type Inputs = { readonly [key: string]: Input };
 
 export type Meta = { readonly name?: string; readonly description?: string };
 
-type InputValue<F> = F extends { readonly type: "number" }
+export type InputValue<F> = F extends { readonly type: "number" }
   ? number
   : F extends { readonly type: "boolean" }
     ? boolean
@@ -843,11 +845,11 @@ export const Script = {
     }).pipe(Effect.andThen(Deferred.succeed(exited, undefined)), Effect.andThen(Effect.never)),
 };
 
-export type Subscription<A> = { readonly next: Effect.Effect<A> };
+export type Subscription<A> = { readonly next: () => Effect.Effect<A> };
 
 /** A generator function or a function returning an Effect, like the default export. */
 export type Handler<A> = (value: A) => Effect.Effect<unknown, unknown> | HandlerGenerator;
-type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
+export type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
 
 export type ClientPacket = {
   readonly from: "client";
@@ -934,21 +936,29 @@ const openFeed = <I extends object, A>(
         Effect.andThen(next),
       );
     });
-    return { next };
+    return { next: () => next };
   });
 
 const skipLost = <A>({ next }: Subscription<A | Lost>): Subscription<A> => ({
-  next: Effect.gen(function* () {
-    while (true) {
-      const value = yield* next;
-      if (value !== lost) return value;
-    }
-  }),
+  next: () =>
+    Effect.gen(function* () {
+      while (true) {
+        const value = yield* next();
+        if (value !== lost) return value;
+      }
+    }),
 });
 
 const run = (
   result: Effect.Effect<unknown, unknown> | HandlerGenerator,
 ): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : drive(result));
+
+export type Body<A> = () =>
+  | Effect.Effect<A, unknown>
+  | Generator<Effect.Effect<unknown, unknown>, A, never>;
+
+const perform = <A>(body: Body<A>): Effect.Effect<A> =>
+  Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));
 
 const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
   Effect.onExit(effect, (exit) =>
@@ -958,31 +968,31 @@ const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E
   );
 
 const listen = <A>(
-  next: Effect.Effect<A>,
+  next: () => Effect.Effect<A>,
   handler: Handler<A>,
 ): Effect.Effect<void, never, Scope.Scope> =>
   Effect.forkScoped(
     failingTheScript(
-      Effect.forever(Effect.flatMap(next, (value) => Effect.suspend(() => run(handler(value))))),
+      Effect.forever(Effect.flatMap(next(), (value) => Effect.suspend(() => run(handler(value))))),
     ),
   ).pipe(Effect.asVoid);
 
-export type ForOptions<E> = {
+export type ForOptions = {
   /** Starts after `trigger` finishes. Waits forever when omitted. */
   readonly timeout?: Duration.Input;
   /** Runs once the subscription is open. Returning false skips the wait. */
-  readonly trigger?: Effect.Effect<boolean, E>;
+  readonly trigger?: Body<boolean>;
 };
 
-const waitFor = <A, E>(
+const waitFor = <A>(
   open: Effect.Effect<Subscription<A | Lost>, never, Scope.Scope>,
-  { timeout, trigger }: ForOptions<E>,
-): Effect.Effect<A | null, E> =>
+  { timeout, trigger }: ForOptions,
+): Effect.Effect<A | null> =>
   Effect.scoped(
     Effect.gen(function* () {
       const { next } = yield* open;
-      if (trigger !== undefined && !(yield* trigger)) return null;
-      const first = Effect.map(next, (value) => (value === lost ? null : value));
+      if (trigger !== undefined && !(yield* perform(trigger))) return null;
+      const first = Effect.map(next(), (value) => (value === lost ? null : value));
       return timeout === undefined
         ? yield* first
         : Option.getOrNull(yield* Effect.timeoutOption(first, timeout));
@@ -1164,34 +1174,34 @@ export type UntilOptions = {
   readonly timeout?: Duration.Input;
 };
 
-const poll = <E>(condition: Effect.Effect<boolean, E>, interval: Duration.Input) =>
+const poll = (condition: Body<boolean>, interval: Duration.Input) =>
   Effect.gen(function* () {
-    while (!(yield* condition)) yield* Effect.sleep(interval);
+    while (!(yield* perform(condition))) yield* Effect.sleep(interval);
     return true;
   });
 
 export const Wait = {
   /** Checks right away, then every `interval`. False if `timeout` passes first. */
-  until: <E = never>(
-    condition: Effect.Effect<boolean, E>,
+  until: (
+    condition: Body<boolean>,
     { interval = "100 millis", timeout }: UntilOptions = {},
-  ): Effect.Effect<boolean, E> =>
+  ): Effect.Effect<boolean> =>
     timeout === undefined
       ? poll(condition, interval)
       : poll(condition, interval).pipe(Effect.timeoutOption(timeout), Effect.map(Option.isSome)),
   /** Null if `trigger` returns false, the timeout passes, or the connection drops. */
-  forPacket: <const F extends PacketFilter, E = never>(
+  forPacket: <const F extends PacketFilter>(
     filter: F,
-    options: ForOptions<E> = {},
-  ): Effect.Effect<PacketFor<F> | null, E> => waitFor(openPackets(filter), options),
+    options: ForOptions = {},
+  ): Effect.Effect<PacketFor<F> | null> => waitFor(openPackets(filter), options),
   /**
    * Null if `trigger` returns false, the timeout passes, or the connection drops.
    * A `logout` wait returns the event when the connection drops.
    */
-  forEvent: <const T extends EventType, E = never>(
+  forEvent: <const T extends EventType>(
     filter: EventFilter<T>,
-    options: ForOptions<E> = {},
-  ): Effect.Effect<EventOf<T> | null, E> => waitFor(openEvents(filter), options),
+    options: ForOptions = {},
+  ): Effect.Effect<EventOf<T> | null> => waitFor(openEvents(filter), options),
 };
 
 export type Json =
@@ -1223,10 +1233,6 @@ export type ArmyUntilOptions = ArmyStepOptions & {
 
 export type ArmyMapOptions = CellOptions & ArmyStepOptions;
 
-export type Body<A> = () =>
-  | Effect.Effect<A, unknown>
-  | Generator<Effect.Effect<unknown, unknown>, A, never>;
-
 export type ArmyUntil = {
   readonly done: Body<boolean>;
   readonly work: Body<unknown>;
@@ -1237,7 +1243,7 @@ export type ArmyTurns = {
   readonly turn: Body<boolean>;
 };
 
-export type Rotation = { readonly stop: Effect.Effect<void> };
+export type Rotation = { readonly stop: () => Effect.Effect<void> };
 
 export type LoopTauntTarget = {
   readonly target: MonsterQuery;
@@ -1263,11 +1269,6 @@ export type LoopTauntTarget = {
  */
 export type LoopTauntPlan = readonly (readonly LoopTauntTarget[])[];
 
-type ArmyStart = {
-  (name: string): Effect.Effect<ArmyInfo>;
-  (name: string, options: { readonly timeout: Duration.Input }): Effect.Effect<ArmyInfo | null>;
-};
-
 // The game can leave the consumable slot broken after a class change. Equipping safeClass and
 // safePot first, then safePot again after class, is a workaround meant to restore it.
 const GEAR = [
@@ -1288,16 +1289,22 @@ type Gear = { readonly [Field in (typeof GEAR)[number] | "scroll"]: string | nul
 
 let joined: ArmyInfo | undefined;
 
-const perform = <A>(body: Body<A>): Effect.Effect<A> =>
-  Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));
-
-const start = ((name: string, { timeout }: { readonly timeout?: Duration.Input } = {}) =>
-  army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
+function start(name: string): Effect.Effect<ArmyInfo>;
+function start(
+  name: string,
+  options: { readonly timeout: Duration.Input },
+): Effect.Effect<ArmyInfo | null>;
+function start(
+  name: string,
+  { timeout }: { readonly timeout?: Duration.Input } = {},
+): Effect.Effect<ArmyInfo | null> {
+  return army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
     Effect.map((info) => {
       if (info !== null) joined = info;
       return info;
     }),
-  )) as ArmyStart;
+  );
+}
 
 const sync = (label: string, { timeout }: ArmyStepOptions = {}): Effect.Effect<void> =>
   Effect.asVoid(army<null>("sync", { label, timeoutMs: millis(timeout) }));
@@ -1352,7 +1359,7 @@ const drink = (pot: string): Effect.Effect<boolean> =>
     if (!(yield* Inventory.equip(pot))) return false;
     if (!(yield* Combat.useSkill(5, { force: true, waitUntilReady: true }))) return false;
     return yield* Wait.until(
-      Effect.map(Inventory.getQuantity(pot), (left) => left < item.quantity),
+      () => Effect.map(Inventory.getQuantity(pot), (left) => left < item.quantity),
       { timeout: "5 seconds" },
     );
   });
@@ -1372,7 +1379,7 @@ const equipSet = (name: string, { timeout }: ArmyStepOptions = {}): Effect.Effec
 
 const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<Rotation> =>
   Effect.gen(function* () {
-    if (!(yield* army<boolean>("rotate", { label, players }))) return { stop: Effect.void };
+    if (!(yield* army<boolean>("rotate", { label, players }))) return { stop: () => Effect.void };
     const taking = Effect.gen(function* () {
       let acted: boolean | null = null;
       while (true) {
@@ -1383,7 +1390,7 @@ const takeTurns = (label: string, { players, turn }: ArmyTurns): Effect.Effect<R
     const fiber = yield* Effect.forkDetach(
       failingTheScript(Effect.ensuring(taking, army<null>("leave", { label }))),
     );
-    return { stop: Fiber.interrupt(fiber) };
+    return { stop: () => Fiber.interrupt(fiber) };
   });
 
 type TauntTurn = { readonly lease: number; readonly assignment: number };
@@ -1423,11 +1430,11 @@ const loopTaunt = (
     const fiber = yield* Effect.forkDetach(
       failingTheScript(Effect.ensuring(taunting, army<null>("tauntLeave"))),
     );
-    return { stop: Fiber.interrupt(fiber) };
+    return { stop: () => Fiber.interrupt(fiber) };
   });
 
 export const Army = {
-  /** Reads `~/Documents/Mira/armies/<name>.yaml` and waits until every player in it has started. */
+  /** Reads `~/Mira/armies/<name>.yaml` and waits until every player in it has started. */
   start,
   sync,
   /** Values come back in player order. */

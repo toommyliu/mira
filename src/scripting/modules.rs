@@ -15,7 +15,7 @@ use oxc::{
     transformer::{TransformOptions, Transformer, TypeScriptOptions},
 };
 use rquickjs::{
-    Ctx, Error, Module, Result,
+    Ctx, Exception, Module, Result,
     loader::{ImportAttributes, Loader, Resolver},
     module::Declared,
 };
@@ -49,57 +49,190 @@ fn asset(path: &str) -> Option<&'static str> {
 pub(super) struct Modules(Rc<Shared>);
 
 struct Shared {
-    root: PathBuf,
+    script: Rc<Root>,
+    packages: PathBuf,
+    installed: OnceCell<Vec<Installed>>,
+    roots: RefCell<HashMap<String, Rc<Root>>>,
     entry: OnceCell<(String, String)>,
     maps: RefCell<HashMap<String, LineMap>>,
 }
 
-impl Modules {
-    pub(super) fn for_entry(entry: &Path) -> std::result::Result<Self, String> {
-        let folder = entry
-            .parent()
-            .and_then(|folder| fs::canonicalize(folder).ok())
-            .ok_or_else(|| format!("{} doesn't exist", entry.display()))?;
-        let root = package_root(&folder)?.unwrap_or(folder);
-        Ok(Self(Rc::new(Shared {
-            root,
-            entry: OnceCell::new(),
-            maps: RefCell::default(),
-        })))
-    }
+struct Root {
+    path: PathBuf,
+    package: Option<String>,
+}
 
-    pub(super) fn entry(&self, path: &Path) -> std::result::Result<String, String> {
-        self.user_path(path)
-    }
-
-    pub(super) fn retain_entry(&self, name: String, text: String) {
-        let _ = self.0.entry.set((name, text));
-    }
-
-    fn user_path(&self, path: &Path) -> std::result::Result<String, String> {
-        let path =
-            fs::canonicalize(path).map_err(|_| format!("{} doesn't exist", path.display()))?;
-        if !path.starts_with(&self.0.root) {
-            return Err(format!("{} is outside the script's folder", path.display()));
+impl Root {
+    fn confine(&self, path: &Path) -> std::result::Result<PathBuf, &'static str> {
+        let path = fs::canonicalize(path).map_err(|_| "doesn't exist")?;
+        if !path.starts_with(&self.path) {
+            return Err(match self.package {
+                Some(_) => "is outside the package's folder",
+                None => "is outside the script's folder",
+            });
         }
         if !path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| SCRIPT_EXTENSIONS.contains(&extension))
         {
-            return Err(format!(
-                "{} isn't a .ts, .mts, .js or .mjs file",
-                self.display(&path)
-            ));
+            return Err("isn't a .ts, .mts, .js or .mjs file");
         }
-        Ok(path.to_string_lossy().into_owned())
+        Ok(path)
     }
 
-    pub(super) fn display(&self, path: &Path) -> String {
-        path.strip_prefix(&self.0.root)
-            .unwrap_or(path)
-            .display()
-            .to_string()
+    fn display(&self, path: &Path) -> String {
+        let relative = path.strip_prefix(&self.path).unwrap_or(path).display();
+        match &self.package {
+            Some(name) => format!("{name}/{relative}"),
+            None => relative.to_string(),
+        }
+    }
+}
+
+struct Installed {
+    dir: String,
+    root: PathBuf,
+    name: String,
+    manifest: std::result::Result<Manifest, ManifestError>,
+}
+
+impl Installed {
+    fn main(&self) -> std::result::Result<(Root, PathBuf), String> {
+        let manifest = self.manifest.as_ref().map_err(ToString::to_string)?;
+        let Some(main) = &manifest.main else {
+            return Err("the package has no \"main\" in its package.json".into());
+        };
+        let root = Root {
+            path: fs::canonicalize(&self.root)
+                .map_err(|error| format!("couldn't read the package: {error}"))?,
+            package: Some(self.name.clone()),
+        };
+        let path = root
+            .confine(&self.root.join(main))
+            .map_err(|problem| format!("its main, {main}, {problem}"))?;
+        Ok((root, path))
+    }
+}
+
+fn scan(packages: &Path) -> Vec<Installed> {
+    let Ok(items) = fs::read_dir(packages) else {
+        return Vec::new();
+    };
+    let mut installed: Vec<Installed> = items
+        .flatten()
+        .filter_map(|item| {
+            let root = item.path();
+            let bytes = fs::read(root.join("package.json")).ok()?;
+            let manifest = Manifest::parse(&bytes);
+            let name = match &manifest {
+                Ok(manifest) => manifest.name.clone(),
+                Err(ManifestError::NotAPackage) => return None,
+                Err(_) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()?
+                    .get("name")?
+                    .as_str()?
+                    .trim()
+                    .to_owned(),
+            };
+            Some(Installed {
+                dir: item.file_name().to_string_lossy().into_owned(),
+                root,
+                name,
+                manifest,
+            })
+        })
+        .collect();
+    installed.sort_by(|a, b| a.dir.cmp(&b.dir));
+    installed
+}
+
+fn find<'a>(installed: &'a [Installed], name: &str) -> std::result::Result<&'a Installed, String> {
+    let named: Vec<&Installed> = installed
+        .iter()
+        .filter(|package| package.name == name)
+        .collect();
+    match named[..] {
+        [] => Err("no installed package has that name; scripts can import mira, mira/http, mira/schema, effect, effect/<Module>, installed packages and their own files".into()),
+        [package] => Ok(package),
+        _ => {
+            let dirs: Vec<&str> = named.iter().map(|package| package.dir.as_str()).collect();
+            Err(format!(
+                "more than one installed package has that name: {}",
+                dirs.join(", ")
+            ))
+        }
+    }
+}
+
+pub(super) fn importable(packages: &Path) -> Vec<(String, PathBuf)> {
+    let installed = scan(packages);
+    installed
+        .iter()
+        .filter(|package| builtin(&package.name).is_none())
+        .filter_map(|package| {
+            let (_, main) = find(&installed, &package.name).ok()?.main().ok()?;
+            Some((package.name.clone(), main))
+        })
+        .collect()
+}
+
+impl Modules {
+    pub(super) fn for_entry(entry: &Path, packages: &Path) -> std::result::Result<Self, String> {
+        let folder = entry
+            .parent()
+            .and_then(|folder| fs::canonicalize(folder).ok())
+            .ok_or_else(|| format!("{} doesn't exist", entry.display()))?;
+        let root = package_root(&folder)?.unwrap_or(folder);
+        Ok(Self(Rc::new(Shared {
+            script: Rc::new(Root {
+                path: root,
+                package: None,
+            }),
+            packages: packages.to_owned(),
+            installed: OnceCell::new(),
+            roots: RefCell::default(),
+            entry: OnceCell::new(),
+            maps: RefCell::default(),
+        })))
+    }
+
+    pub(super) fn entry(&self, path: &Path) -> std::result::Result<String, String> {
+        let root = &self.0.script;
+        root.confine(path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|problem| format!("{} {problem}", root.display(path)))
+    }
+
+    pub(super) fn retain_entry(&self, name: String, text: String) {
+        let _ = self.0.entry.set((name, text));
+    }
+
+    fn root_of(&self, name: &str) -> Rc<Root> {
+        self.0
+            .roots
+            .borrow()
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| self.0.script.clone())
+    }
+
+    pub(super) fn display(&self, name: &str) -> String {
+        self.root_of(name).display(Path::new(name))
+    }
+
+    fn user_path(&self, root: Rc<Root>, path: &Path) -> std::result::Result<String, String> {
+        let path = root
+            .confine(path)
+            .map_err(|problem| format!("it {problem}"))?
+            .to_string_lossy()
+            .into_owned();
+        self.0
+            .roots
+            .borrow_mut()
+            .entry(path.clone())
+            .or_insert(root);
+        Ok(path)
     }
 
     fn resolve_name(&self, base: &str, name: &str) -> std::result::Result<String, String> {
@@ -113,26 +246,43 @@ impl Modules {
                 );
                 asset(&joined)
                     .map(|_| format!("{INTERNAL}{joined}"))
-                    .ok_or_else(|| format!("{name} isn't part of Mira's runtime"))
+                    .ok_or_else(|| "it isn't part of Mira's runtime".into())
             } else {
-                package(name)
+                builtin(name).unwrap_or_else(|| Err("it isn't part of Mira's runtime".into()))
             };
         }
         if name.starts_with(INTERNAL) {
             return if base.is_empty() && asset(&name[INTERNAL.len()..]).is_some() {
                 Ok(name.to_owned())
             } else {
-                Err(format!("{name} can't be imported"))
+                Err("it's internal to Mira".into())
             };
         }
+        let root = self.root_of(base);
         if name.starts_with("./") || name.starts_with("../") {
-            let directory = Path::new(base).parent().unwrap_or(&self.0.root);
-            return self.user_path(&directory.join(name));
+            let directory = Path::new(base).parent().unwrap_or(&root.path);
+            let path = directory.join(name);
+            return self.user_path(root, &path);
         }
         if Path::new(name).is_absolute() {
-            return self.user_path(Path::new(name));
+            return self.user_path(root, Path::new(name));
         }
-        package(name)
+        if let Some(builtin) = builtin(name) {
+            return builtin;
+        }
+        let installed = self.0.installed.get_or_init(|| scan(&self.0.packages));
+        let (root, main) = find(installed, name)?.main()?;
+        let main = main.to_string_lossy().into_owned();
+        self.0
+            .roots
+            .borrow_mut()
+            .entry(main.clone())
+            .or_insert_with(|| Rc::new(root));
+        Ok(main)
+    }
+
+    fn import_error(&self, base: &str, name: &str, reason: &str) -> String {
+        format!("Can't import {name} from {}: {reason}", self.display(base))
     }
 
     fn source(&self, name: &str) -> std::result::Result<String, String> {
@@ -142,14 +292,15 @@ impl Modules {
                 .ok_or_else(|| format!("{name} isn't part of Mira's runtime"));
         }
         let path = Path::new(name);
+        let display = self.display(name);
         let text = match self.0.entry.get() {
             Some((entry, text)) if entry == name => text.clone(),
             _ => fs::read_to_string(path)
-                .map_err(|error| format!("couldn't read {}: {error}", self.display(path)))?,
+                .map_err(|error| format!("couldn't read {display}: {error}"))?,
         };
         match path.extension().and_then(|extension| extension.to_str()) {
             Some("ts" | "mts") => {
-                let (code, map) = strip_types(&self.display(path), &text)?;
+                let (code, map) = strip_types(&display, &text)?;
                 self.0.maps.borrow_mut().insert(name.to_owned(), map);
                 Ok(code)
             }
@@ -217,26 +368,22 @@ fn package_root(folder: &Path) -> std::result::Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn package(name: &str) -> std::result::Result<String, String> {
-    match name {
-        "mira" => return Ok(format!("{INTERNAL}mira/index.js")),
-        "mira/http" | "mira/schema" => return Ok(format!("{INTERNAL}{name}.js")),
-        _ => {}
-    }
-    let path = match name.strip_prefix("effect") {
-        Some("") => "effect/index.js".to_owned(),
-        Some(module) if module.starts_with('/') && !module[1..].contains('/') => {
-            format!("effect{module}.js")
-        }
-        _ => {
-            return Err(format!(
-                "{name} can't be imported; scripts can import mira, mira/http, mira/schema, effect, effect/<Module> and their own files"
-            ));
-        }
+fn builtin(name: &str) -> Option<std::result::Result<String, String>> {
+    let path = match name {
+        "mira" => "mira/index.js".to_owned(),
+        "mira/http" | "mira/schema" => format!("{name}.js"),
+        "effect" => "effect/index.js".to_owned(),
+        _ => match name.strip_prefix("effect/") {
+            Some(module) if !module.contains('/') => format!("effect/{module}.js"),
+            Some(_) => return Some(Err("it isn't a module of effect".into())),
+            None => return None,
+        },
     };
-    asset(&path)
-        .map(|_| format!("{INTERNAL}{path}"))
-        .ok_or_else(|| format!("{name} isn't a module of effect"))
+    Some(
+        asset(&path)
+            .map(|_| format!("{INTERNAL}{path}"))
+            .ok_or_else(|| "it isn't a module of effect".into()),
+    )
 }
 
 fn normalize(path: &Path) -> String {
@@ -324,14 +471,14 @@ pub(super) struct ModuleResolver(pub(super) Modules);
 impl Resolver for ModuleResolver {
     fn resolve<'js>(
         &mut self,
-        _ctx: &Ctx<'js>,
+        ctx: &Ctx<'js>,
         base: &str,
         name: &str,
         _attributes: Option<ImportAttributes<'js>>,
     ) -> Result<String> {
-        self.0
-            .resolve_name(base, name)
-            .map_err(|message| Error::new_resolving_message(base, name, message))
+        self.0.resolve_name(base, name).map_err(|reason| {
+            Exception::throw_message(ctx, &self.0.import_error(base, name, &reason))
+        })
     }
 }
 
@@ -347,7 +494,7 @@ impl Loader for ModuleLoader {
         let source = self
             .0
             .source(name)
-            .map_err(|message| Error::new_loading_message(name, message))?;
+            .map_err(|message| Exception::throw_message(ctx, &message))?;
         Module::declare(ctx.clone(), name, source)
     }
 }

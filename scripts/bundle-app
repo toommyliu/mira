@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 name=Mira
-identifier=local.mira.app
+identifier=com.mira.app
 icon=Mira
 if [ "${1-}" = --dev ]; then
     name='Mira (Dev)'
-    identifier=local.mira.dev
+    identifier=com.mira.app.dev
     icon=MiraDev
     shift
 fi
@@ -25,8 +25,7 @@ if [ ! -e "$contents/Resources/Assets.car" ] || [ -n "$(find "$source" "$0" -new
     if ! log=$(xcrun actool "$source" --compile "$contents/Resources" --platform macosx --target-device mac \
         --minimum-deployment-target 11.0 --app-icon "$icon" --output-partial-info-plist "$icon_plist" \
         --output-format human-readable-text --errors --warnings); then
-        printf '%s\n' "$log" >&2
-        exit 1
+        printf '%s\nSkipping the app icon: compiling %s needs Xcode 26 or later.\n' "$log" "$source" >&2
     fi
 fi
 cat > "$contents/Info.plist" <<PLIST

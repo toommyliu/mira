@@ -47,7 +47,7 @@ fn frame(theme: &Theme, content: Div) -> Div {
                 .gap(px(2.0))
                 .p(px(3.0))
                 .rounded_l(theme.radius.small)
-                .bg(theme.sidebar)
+                .bg(theme.frame)
                 .border_r_1()
                 .border_color(theme.sidebar_border)
                 .child(row(true, 0.75))
@@ -108,6 +108,7 @@ pub(super) fn client(theme: &Theme) -> Div {
                     .h(px(8.0))
                     .px(px(4.0))
                     .gap(px(2.0))
+                    .bg(theme.frame)
                     .border_b_1()
                     .border_color(theme.border)
                     .children([8.0, 11.0, 8.0].map(|width| {

@@ -146,7 +146,8 @@ pub enum ColorToken {
     Foreground,
     Card,
     Popover,
-    Sidebar,
+    #[serde(alias = "sidebar")]
+    Frame,
     Muted,
     MutedForeground,
     Border,
@@ -164,7 +165,7 @@ impl ColorToken {
     pub const ADVANCED: [ColorToken; 8] = [
         ColorToken::Card,
         ColorToken::Popover,
-        ColorToken::Sidebar,
+        ColorToken::Frame,
         ColorToken::Muted,
         ColorToken::MutedForeground,
         ColorToken::Border,
@@ -179,7 +180,7 @@ impl ColorToken {
             ColorToken::Foreground => "Foreground",
             ColorToken::Card => "Card",
             ColorToken::Popover => "Popover",
-            ColorToken::Sidebar => "Sidebar",
+            ColorToken::Frame => "Frame",
             ColorToken::Muted => "Muted",
             ColorToken::MutedForeground => "Muted text",
             ColorToken::Border => "Border",
@@ -231,17 +232,39 @@ pub struct Theme {
     pub border: Hsla,
     pub input: Hsla,
     pub ring: Hsla,
-    pub sidebar: Hsla,
+    pub frame: Hsla,
     pub sidebar_foreground: Hsla,
-    pub sidebar_primary: Hsla,
-    pub sidebar_primary_foreground: Hsla,
     pub sidebar_accent: Hsla,
     pub sidebar_accent_foreground: Hsla,
     pub sidebar_border: Hsla,
     pub sidebar_ring: Hsla,
-    pub chart: [Hsla; 5],
 }
 impl Global for Theme {}
+
+struct Seeds {
+    surface: Hsla,
+    ink: Hsla,
+    text: Hsla,
+}
+
+impl Seeds {
+    fn of(dark: bool) -> Self {
+        if dark {
+            Self {
+                surface: gpui::rgb(0x181818).into(),
+                ink: gpui::rgb(0xffffff).into(),
+                text: gpui::rgb(0xdfdfdf).into(),
+            }
+        } else {
+            let ink = gpui::rgb(0x1a1c1f).into();
+            Self {
+                surface: gpui::rgb(0xffffff).into(),
+                ink,
+                text: ink,
+            }
+        }
+    }
+}
 
 impl Theme {
     pub fn light() -> Self {
@@ -251,11 +274,21 @@ impl Theme {
         Self::preset(true)
     }
     fn preset(dark: bool) -> Self {
+        let Seeds { surface, ink, text } = Seeds::of(dark);
+        let neutral = Self::neutral(dark);
+        let mut theme = neutral.clone();
+        theme.derive(&neutral, surface, ink);
+        theme.set_text(text);
+        theme.primary = if dark { mix(surface, ink, 0.9) } else { ink };
+        theme.primary_foreground = surface;
+        theme
+    }
+    fn neutral(dark: bool) -> Self {
         let gray = |l| oklch(l, 0.0, 0.0, 1.0);
         let pair = |l, d| gray(if dark { d } else { l });
         let foreground = pair(0.145, 0.985);
         let primary = pair(0.205, 0.922);
-        let secondary = pair(0.97, 0.269);
+        let secondary = pair(0.955, 0.269);
         let secondary_foreground = pair(0.205, 0.985);
         let border = if dark {
             gray(1.0).opacity(0.10)
@@ -271,11 +304,11 @@ impl Theme {
             layout: Layout::default(),
             radius: Radii::scaled(1.0),
             pointer_cursor: false,
-            background: pair(1.0, 0.145),
+            background: pair(1.0, 0.205),
             foreground,
-            card: pair(1.0, 0.205),
+            card: pair(1.0, 0.232),
             card_foreground: foreground,
-            popover: pair(1.0, 0.205),
+            popover: pair(1.0, 0.245),
             popover_foreground: foreground,
             primary,
             primary_foreground: pair(0.985, 0.205),
@@ -286,9 +319,9 @@ impl Theme {
             accent: secondary,
             accent_foreground: secondary_foreground,
             destructive: if dark {
-                oklch(0.704, 0.191, 22.216, 1.0)
+                gpui::rgb(0xfa423e).into()
             } else {
-                oklch(0.577, 0.245, 27.325, 1.0)
+                gpui::rgb(0xba2623).into()
             },
             warning: if dark {
                 oklch(0.828, 0.189, 84.429, 1.0)
@@ -302,19 +335,12 @@ impl Theme {
                 border
             },
             ring,
-            sidebar: pair(0.985, 0.205),
+            frame: pair(0.966, 0.18),
             sidebar_foreground: foreground,
-            sidebar_primary: if dark {
-                oklch(0.488, 0.243, 264.376, 1.0)
-            } else {
-                primary
-            },
-            sidebar_primary_foreground: gray(0.985),
-            sidebar_accent: secondary,
+            sidebar_accent: pair(0.925, 0.245),
             sidebar_accent_foreground: secondary_foreground,
             sidebar_border: border,
             sidebar_ring: ring,
-            chart: [0.87, 0.556, 0.439, 0.371, 0.269].map(gray),
         }
     }
     pub fn for_window(appearance: WindowAppearance) -> Self {
@@ -339,11 +365,14 @@ impl Theme {
             .iter()
             .any(|(token, _)| matches!(token, ColorToken::Background | ColorToken::Foreground))
         {
+            let seeds = Seeds::of(dark);
+            let foreground = chosen(ColorToken::Foreground);
             theme.derive(
-                &preset,
-                chosen(ColorToken::Background).unwrap_or(preset.background),
-                chosen(ColorToken::Foreground).unwrap_or(preset.foreground),
+                &Self::neutral(dark),
+                chosen(ColorToken::Background).unwrap_or(seeds.surface),
+                foreground.unwrap_or(seeds.ink),
             );
+            theme.set_text(foreground.unwrap_or(seeds.text));
         }
         let (seeds, advanced): (Vec<_>, Vec<_>) =
             colors.iter().partition(|(token, _)| token.is_seed());
@@ -369,24 +398,27 @@ impl Theme {
         self.background = background;
         self.card = surface(preset.card);
         self.popover = surface(preset.popover);
-        self.sidebar = surface(preset.sidebar);
+        self.frame = surface(preset.frame);
         self.secondary = surface(preset.secondary);
         self.muted = self.secondary;
         self.accent = self.secondary;
-        self.sidebar_accent = self.secondary;
-        self.foreground = foreground;
-        self.card_foreground = foreground;
-        self.popover_foreground = foreground;
-        self.sidebar_foreground = foreground;
-        self.secondary_foreground = between(preset.secondary_foreground);
-        self.accent_foreground = self.secondary_foreground;
-        self.sidebar_accent_foreground = self.secondary_foreground;
-        self.muted_foreground = between(preset.muted_foreground);
+        self.sidebar_accent = surface(preset.sidebar_accent);
         self.border = between(preset.border);
         self.input = between(preset.input);
         self.sidebar_border = self.border;
         self.ring = between(preset.ring);
         self.sidebar_ring = self.ring;
+    }
+
+    fn set_text(&mut self, color: Hsla) {
+        self.muted_foreground = mix(self.background, color, 0.7);
+        self.foreground = color;
+        self.card_foreground = color;
+        self.popover_foreground = color;
+        self.sidebar_foreground = color;
+        self.secondary_foreground = color;
+        self.accent_foreground = color;
+        self.sidebar_accent_foreground = color;
     }
 
     pub fn color(&self, token: ColorToken) -> Hsla {
@@ -396,7 +428,7 @@ impl Theme {
             ColorToken::Foreground => self.foreground,
             ColorToken::Card => self.card,
             ColorToken::Popover => self.popover,
-            ColorToken::Sidebar => self.sidebar,
+            ColorToken::Frame => self.frame,
             ColorToken::Muted => self.muted,
             ColorToken::MutedForeground => self.muted_foreground,
             ColorToken::Border => self.border,
@@ -416,10 +448,6 @@ impl Theme {
                 self.primary = color;
                 self.primary_foreground =
                     oklch(if is_dark(color) { 0.985 } else { 0.205 }, 0.0, 0.0, 1.0);
-                if !self.dark_mode {
-                    self.sidebar_primary = color;
-                    self.sidebar_primary_foreground = self.primary_foreground;
-                }
             }
             ColorToken::Background => self.background = color,
             ColorToken::Foreground => {
@@ -430,7 +458,7 @@ impl Theme {
             }
             ColorToken::Card => self.card = color,
             ColorToken::Popover => self.popover = color,
-            ColorToken::Sidebar => self.sidebar = color,
+            ColorToken::Frame => self.frame = color,
             ColorToken::Muted => {
                 self.secondary = color;
                 self.muted = color;
@@ -466,6 +494,14 @@ impl Theme {
     }
     pub fn warning_fill(&self) -> Hsla {
         self.warning.opacity(if self.dark_mode { 0.2 } else { 0.1 })
+    }
+    pub fn warning_row(&self) -> Hsla {
+        self.warning
+            .opacity(if self.dark_mode { 0.07 } else { 0.06 })
+    }
+    pub fn destructive_row(&self) -> Hsla {
+        self.destructive
+            .opacity(if self.dark_mode { 0.09 } else { 0.06 })
     }
     pub fn invalid_halo(&self) -> Hsla {
         self.destructive
@@ -506,13 +542,16 @@ impl Theme {
             .border(width)
             .border_color(color)
     }
+    pub fn surface_edge(&self) -> Hsla {
+        self.foreground.opacity(0.1)
+    }
     pub fn surface_ring(&self, radius: Pixels) -> Div {
         div()
             .absolute()
-            .inset(px(-1.0))
-            .rounded(radius + px(1.0))
+            .inset_0()
+            .rounded(radius)
             .border_1()
-            .border_color(self.foreground.opacity(0.1))
+            .border_color(self.surface_edge())
     }
     pub fn popup_shadow(&self) -> Vec<BoxShadow> {
         let black = gpui::black().opacity(0.1);
@@ -714,7 +753,8 @@ mod tests {
         for (role, was) in [
             (theme.card, preset.card),
             (theme.popover, preset.popover),
-            (theme.sidebar, preset.sidebar),
+            (theme.frame, preset.frame),
+            (theme.sidebar_accent, preset.sidebar_accent),
             (theme.muted, preset.muted),
         ] {
             assert!((step(role, navy) - step(was, preset.background)).abs() < 0.005);
@@ -723,7 +763,7 @@ mod tests {
                 "{role:?} lost the tint"
             );
         }
-        assert_eq!(theme.border, preset.foreground.opacity(0.10));
+        assert_eq!(theme.border, preset.border);
         let muted = lightness(theme.muted_foreground);
         assert!(lightness(navy) < muted && muted < lightness(theme.foreground));
     }

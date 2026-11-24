@@ -1,7 +1,7 @@
 use mira_ui::StyledExt as _;
 use std::{
     collections::BTreeMap,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -32,7 +32,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod previews;
 
 use crate::{
-    packages,
+    data_file, packages,
+    ruffle::extras::Extras,
     ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
     shortcuts::{self, Category, Overrides, Shortcut, Taken},
 };
@@ -217,6 +218,20 @@ impl QuitShortcut {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct CollapsedSources {
+    pub(crate) folders: bool,
+    pub(crate) packages: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Player {
+    pub(crate) smooth_motion: bool,
+    pub(crate) performance_stats: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
@@ -237,6 +252,10 @@ struct Settings {
     skip_update_checks: bool,
     separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
+    start_replacements: bool,
+    collapsed_sources: CollapsedSources,
+    player: Player,
+    extras: Extras,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
 }
@@ -309,35 +328,21 @@ impl Settings {
         }
     }
 
+    #[cfg(test)]
     fn load(path: &Path) -> io::Result<Self> {
-        match fs::read(path) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error),
-        }
+        Ok(data_file::read_json(path)?.unwrap_or_default())
     }
 
-    fn open(path: &Path) -> Option<Self> {
-        let settings = match Self::load(path) {
-            Ok(settings) => settings,
-            Err(error) => {
-                tracing::warn!(%error, path = %path.display(), "couldn't read settings");
-                return None;
-            }
-        };
-        let current = serde_json::to_vec_pretty(&settings).ok();
-        if fs::read(path).ok() != current
-            && let Err(error) = settings.save(path)
-        {
+    fn open(path: &Path) -> Self {
+        let settings: Self = data_file::load_json(path);
+        if let Err(error) = settings.save(path) {
             tracing::warn!(%error, path = %path.display(), "couldn't save settings");
         }
-        Some(settings)
+        settings
     }
 
     fn save(&self, path: &Path) -> io::Result<()> {
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&self)?)?;
-        fs::rename(temporary, path)
+        data_file::write_json(path, self)
     }
 }
 
@@ -359,7 +364,7 @@ struct Open(WindowHandle<SettingsWindow>);
 impl Global for Open {}
 
 pub(crate) fn init(path: PathBuf, on_change: fn(&mut App), cx: &mut App) {
-    let settings = Settings::open(&path).unwrap_or_default();
+    let settings = Settings::open(&path);
     cx.set_global(Store {
         path,
         settings,
@@ -426,6 +431,38 @@ pub(crate) fn sidebar(cx: &App) -> bool {
 
 pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
     change(cx, |settings| settings.sidebar = open);
+}
+
+pub(crate) fn start_replacements(cx: &App) -> bool {
+    cx.global::<Store>().settings.start_replacements
+}
+
+pub(crate) fn set_start_replacements(on: bool, cx: &mut App) {
+    persist(cx, |settings| settings.start_replacements = on);
+}
+
+pub(crate) fn collapsed_sources(cx: &App) -> CollapsedSources {
+    cx.global::<Store>().settings.collapsed_sources
+}
+
+pub(crate) fn collapse_sources(cx: &mut App, edit: impl FnOnce(&mut CollapsedSources)) {
+    persist(cx, |settings| edit(&mut settings.collapsed_sources));
+}
+
+pub(crate) fn player(cx: &App) -> Player {
+    cx.global::<Store>().settings.player
+}
+
+pub(crate) fn change_player(cx: &mut App, edit: impl FnOnce(&mut Player)) {
+    persist(cx, |settings| edit(&mut settings.player));
+}
+
+pub(crate) fn extras(cx: &App) -> Extras {
+    cx.global::<Store>().settings.extras
+}
+
+pub(crate) fn set_extras(extras: Extras, cx: &mut App) {
+    persist(cx, |settings| settings.extras = extras);
 }
 
 pub(crate) fn script_folders(cx: &App) -> &[PathBuf] {
@@ -507,18 +544,24 @@ fn choose(appearance: Appearance, cx: &mut App) {
 }
 
 fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
+    if persist(cx, edit) {
+        let on_change = cx.global::<Store>().on_change;
+        apply(cx);
+        on_change(cx);
+    }
+}
+
+fn persist(cx: &mut App, edit: impl FnOnce(&mut Settings)) -> bool {
     let store = cx.global_mut::<Store>();
     let before = store.settings.clone();
     edit(&mut store.settings);
     if store.settings == before {
-        return;
+        return false;
     }
     if let Err(error) = store.settings.save(&store.path) {
         tracing::warn!(%error, path = %store.path.display(), "couldn't save settings");
     }
-    let on_change = store.on_change;
-    apply(cx);
-    on_change(cx);
+    true
 }
 
 fn apply(cx: &mut App) {
@@ -715,7 +758,6 @@ fn open(cx: &mut App) {
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_minimizable: false,
         window_min_size: Some(size(px(SETTINGS_MIN_WIDTH), px(SETTINGS_MIN_HEIGHT))),
         ..Default::default()
     };
@@ -1033,6 +1075,8 @@ impl SettingsWindow {
                         change(cx, |settings| settings.skip_update_checks = !on);
                         if on {
                             crate::updates::Updates::check(false, cx).detach();
+                            crate::packages::packages(cx)
+                                .update(cx, |packages, cx| packages.check_when_idle(true, cx));
                         }
                     }),
                 )),
@@ -1174,10 +1218,12 @@ impl SettingsWindow {
                 ))
                 .row(Row::new(
                     "Font smoothing",
-                    Some("Thicken text strokes, most of all for light text."),
-                    Switch::new("font-smoothing", "Font smoothing", settings.font_smoothing)
+                    Some("Use thinner text instead of the macOS default."),
+                    Switch::new("font-smoothing", "Font smoothing", !settings.font_smoothing)
                         .hide_label()
-                        .on_toggle(|on, _, cx| change(cx, |settings| settings.font_smoothing = on)),
+                        .on_toggle(|on, _, cx| {
+                            change(cx, |settings| settings.font_smoothing = !on)
+                        }),
                 ))
                 .row(Row::new(
                     "Use pointer cursors",
@@ -1500,6 +1546,8 @@ impl Render for SettingsWindow {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -1541,6 +1589,16 @@ mod tests {
             skip_update_checks: true,
             separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
+            start_replacements: true,
+            collapsed_sources: CollapsedSources {
+                folders: true,
+                packages: false,
+            },
+            player: Player {
+                smooth_motion: true,
+                performance_stats: false,
+            },
+            extras: Extras::default().toggled(crate::ruffle::extras::Extra::ChatRecall),
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
         chosen.save(&path).unwrap();
@@ -1550,6 +1608,10 @@ mod tests {
         assert_eq!(saved["colors"]["dark"]["accent"], "#3B82F6");
         assert_eq!(saved["textSize"], 15);
         assert_eq!(saved["separateAqwSettings"], true);
+        assert_eq!(saved["collapsedSources"]["folders"], true);
+        assert_eq!(saved["player"]["smoothMotion"], true);
+        assert_eq!(saved["extras"]["chatRecall"], true);
+        assert_eq!(saved["extras"]["copyMenus"], false);
         assert_eq!(
             serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
                 .unwrap()
@@ -1603,6 +1665,12 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<Settings>(r#"{"colors":{"dark":{"primary":"blue"}}}"#).is_err()
+        );
+        let saved: Settings =
+            serde_json::from_str(r##"{"colors":{"dark":{"sidebar":"#101010"}}}"##).unwrap();
+        assert_eq!(
+            saved.colors.dark.keys().collect::<Vec<_>>(),
+            [&ColorToken::Frame]
         );
     }
 
@@ -1800,14 +1868,10 @@ mod tests {
     }
 
     #[test]
-    fn opening_writes_the_full_settings_but_never_over_an_unreadable_file() {
-        let mut random = [0; 8];
-        getrandom::getrandom(&mut random).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "mira-settings-open-{:x}.json",
-            u64::from_ne_bytes(random)
-        ));
-        assert_eq!(Settings::open(&path), Some(Settings::default()));
+    fn opening_writes_the_full_settings_and_moves_an_unreadable_file_aside() {
+        let folder = crate::storyboard::scratch("settings-open");
+        let path = folder.join("settings.json");
+        assert_eq!(Settings::open(&path), Settings::default());
         let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             written["shortcuts"].as_object().unwrap().len(),
@@ -1816,15 +1880,16 @@ mod tests {
         assert_eq!(written["shortcuts"]["loadScript"], "cmd-o");
 
         fs::write(&path, r#"{"appearance":"dark"}"#).unwrap();
-        assert!(Settings::open(&path).is_some());
+        Settings::open(&path);
         let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["appearance"], "dark");
         assert_eq!(written["shortcuts"]["bank"], "cmd-b");
 
         fs::write(&path, "{ not json").unwrap();
-        assert_eq!(Settings::open(&path), None);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
-        fs::remove_file(path).unwrap();
+        assert_eq!(Settings::open(&path), Settings::default());
+        assert!(data_file::backed_up(&folder, "{ not json"));
+        assert_eq!(Settings::load(&path).unwrap(), Settings::default());
+        fs::remove_dir_all(folder).unwrap();
     }
 
     fn update_states() -> Vec<(&'static str, crate::updates::Updates)> {

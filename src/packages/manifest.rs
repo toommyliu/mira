@@ -11,6 +11,7 @@ pub(crate) struct Manifest {
     pub(crate) name: String,
     pub(crate) version: Option<String>,
     pub(crate) description: Option<String>,
+    pub(crate) main: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -66,6 +67,7 @@ impl Manifest {
             name: text("name")?.ok_or_else(|| invalid("\"name\" is required".into()))?,
             version: text("version")?,
             description: text("description")?,
+            main: text("main")?,
         })
     }
 }
@@ -82,12 +84,13 @@ mod tests {
     fn a_package_json_is_a_package_only_with_a_mira_object() {
         assert_eq!(
             parse(
-                r#"{"name":"Dailies","version":"1.0.0","description":" Daily runs. ","mira":{}}"#
+                r#"{"name":"@mira/dailies","version":"1.0.0","description":" Daily runs. ","main":"index.ts","mira":{}}"#
             ),
             Ok(Manifest {
-                name: "Dailies".into(),
+                name: "@mira/dailies".into(),
                 version: Some("1.0.0".into()),
                 description: Some("Daily runs.".into()),
+                main: Some("index.ts".into()),
             })
         );
         assert_eq!(
@@ -102,6 +105,10 @@ mod tests {
             (
                 r#"{"name":"x","version":1,"mira":{}}"#,
                 "\"version\" must be a string",
+            ),
+            (
+                r#"{"name":"x","main":["index.ts"],"mira":{}}"#,
+                "\"main\" must be a string",
             ),
             (
                 r#"{"name":"x","mira":{"main":"index.ts"}}"#,

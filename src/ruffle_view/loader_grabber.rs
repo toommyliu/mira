@@ -89,7 +89,6 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_minimizable: false,
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {

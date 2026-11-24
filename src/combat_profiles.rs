@@ -4,7 +4,7 @@ use gpui::{App, BorrowAppContext as _, Global};
 use tokio::sync::watch;
 
 use crate::{
-    account_settings,
+    characters, data_file,
     domain::profiles::{Issue, Library, Profile, same_name},
 };
 
@@ -21,18 +21,31 @@ impl Store {
     fn open(path: PathBuf) -> Self {
         let (library, issues) = match fs::read(&path) {
             Ok(bytes) => Library::parse(&bytes).unwrap_or_else(|problem| {
-                tracing::warn!(%problem, path = %path.display(), "couldn't read combat profiles");
+                data_file::set_aside(&path, &problem);
                 (Library::default(), Vec::new())
             }),
             Err(error) => {
                 if error.kind() != io::ErrorKind::NotFound {
-                    tracing::warn!(%error, path = %path.display(), "couldn't read combat profiles");
+                    data_file::set_aside(&path, &error);
                 }
                 (Library::default(), Vec::new())
             }
         };
         for issue in &issues {
             tracing::warn!(profile = %issue.name, problem = %issue.problem, "skipped a combat profile");
+        }
+        if !issues.is_empty() {
+            match data_file::copy_aside(&path).or_else(|_| data_file::move_aside(&path)) {
+                Ok(backup) => {
+                    tracing::warn!(backup = %backup.display(), "kept a copy of the combat profiles that couldn't all be read");
+                    if let Err(error) = data_file::write(&path, &library.to_json()) {
+                        tracing::warn!(%error, path = %path.display(), "couldn't save combat profiles");
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, path = %path.display(), "couldn't keep a copy of the combat profiles");
+                }
+            }
         }
         Self {
             path,
@@ -43,12 +56,7 @@ impl Store {
     }
 
     fn write(&self, library: Library) -> io::Result<()> {
-        if let Some(folder) = self.path.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, library.to_json())?;
-        fs::rename(temporary, &self.path)?;
+        data_file::write(&self.path, &library.to_json())?;
         self.library.send_replace(Arc::new(library));
         Ok(())
     }
@@ -112,9 +120,48 @@ fn commit(
 ) -> io::Result<()> {
     cx.update_global::<Store, _>(|store, _| store.write(library))?;
     if let Some((from, to)) = moved {
-        account_settings::move_auto_attack_profile(&from, to.as_deref(), cx);
+        characters::move_auto_attack_profile(&from, to.as_deref(), cx);
         cx.global_mut::<Store>().moved.push((from, to));
         cx.defer(|cx| cx.global_mut::<Store>().moved.clear());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{data_file, storyboard::scratch};
+
+    #[test]
+    fn saving_keeps_a_file_that_couldnt_be_read_in_full() {
+        let folder = scratch("combat-profiles");
+        let path = folder.join("combat-profiles.json");
+        let generic = serde_json::to_value(Profile::generic()).unwrap();
+        let partly = serde_json::json!({
+            "version": 1,
+            "profiles": { "Kept": generic, "Broken": 5 },
+        })
+        .to_string();
+        for (damaged, readable) in [("{ not json", &["New"][..]), (&partly, &["Kept", "New"])] {
+            fs::write(&path, damaged).unwrap();
+            let store = Store::open(path.clone());
+            assert!(data_file::backed_up(&folder, damaged));
+            if let Ok(bytes) = fs::read(&path) {
+                assert!(Library::parse(&bytes).unwrap().1.is_empty());
+            }
+            let mut library = Library::clone(&store.library.borrow());
+            library.put(None, "New".into(), Profile::generic());
+            store.write(library).unwrap();
+            assert!(data_file::backed_up(&folder, damaged));
+            let reopened = Store::open(path.clone());
+            assert!(
+                reopened
+                    .library
+                    .borrow()
+                    .names()
+                    .eq(readable.iter().copied())
+            );
+        }
+        fs::remove_dir_all(folder).unwrap();
+    }
 }

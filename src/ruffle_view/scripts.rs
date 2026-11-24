@@ -25,11 +25,11 @@ use mira_ui::{
     components::{Disclosure, Empty, StatusLabel},
     h_flex,
     primitives::{
-        Activity, Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon,
-        Input, InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side,
-        Switch, Tab, Tabs, Toaster, VirtualList,
+        Activity, Alert, Align, Button, DropdownMenu, HoverCard, Icon, Input, InputEvent, List,
+        ListItem, MenuItem, Placement, Popover, Scrollbar, Side, Switch, Tab, Tabs, Toaster,
+        VirtualList,
         button::{Size, Variant},
-        icon,
+        icon, small_icon,
     },
     theme::RING_ROOM,
     v_flex,
@@ -42,24 +42,25 @@ use super::{
     account::file_name,
     client::{CloseSession, drag_area},
     core_bots::CoreBotsPage,
-    form::{note, row, row_label},
+    form::{muted, note, row, row_label},
+    inputs_form::{self, Edited, FormState, InputsForm, Read, reveal_item},
+    log_page::LogPage,
     package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
     script::failure,
-    script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
+    script_form::{ROOM_NOTE, room_text, rows},
+    script_log::duration,
     script_names,
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    account_settings::{self, Scripts as ScriptOptions},
     accounts::AccountId,
+    characters::{self, Scripts as ScriptOptions},
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
-    script_inputs,
-    scripting::{
-        self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
-    },
-    settings, shortcuts,
+    scripting::{self, Declared, Launch, Outcome, Supplied, Values},
+    settings::{self, CollapsedSources},
+    shortcuts,
 };
 
 actions!(mira, [OpenScripts, LoadScript, AddToQueue]);
@@ -162,7 +163,6 @@ struct Source {
     name: SharedString,
     kind: SourceKind,
     problem: Option<SharedString>,
-    scripts: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -176,7 +176,6 @@ impl Library {
         let index = Some(self.sources.len());
         match scanned {
             Ok(entries) => {
-                source.scripts = entries.len();
                 self.entries.extend(entries.into_iter().map(|entry| Entry {
                     source: index,
                     ..entry
@@ -265,7 +264,6 @@ fn scan_all(built_in: &Path, added: &[PathBuf], packages: &Path, skua: &Path) ->
             name: name.into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         library.add(source, scan(root));
     }
@@ -290,7 +288,6 @@ fn skua_package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
         name: packages::SKUA_NAME.into(),
         kind: SourceKind::Skua { origin },
         problem,
-        scripts: 0,
     };
     Some((source, scripts))
 }
@@ -352,7 +349,6 @@ fn package(root: PathBuf) -> Option<(Source, io::Result<Vec<Entry>>)> {
             origin: origin.clone(),
         },
         problem,
-        scripts: 0,
     };
     let bytes = match fs::read(source.root.join("package.json")) {
         Ok(bytes) => bytes,
@@ -486,7 +482,6 @@ struct SourceRow {
     qualifier: Option<SharedString>,
     description: Option<SharedString>,
     path: SharedString,
-    scripts: Option<usize>,
     release: Option<(&'static str, SharedString)>,
     state: Option<SourceState>,
 }
@@ -615,7 +610,6 @@ pub(crate) fn open(
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
         app_owns_titlebar_drag: true,
-        is_minimizable: false,
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
@@ -629,14 +623,17 @@ pub(crate) fn open(
     }
 }
 
-pub(crate) fn load(client: Entity<Client>, folder: PathBuf, types: PathBuf, cx: &mut App) {
-    open(client, folder, types, Target::Selected, cx);
-    if let Some(handle) = cx.try_global::<Open>().map(|open| open.0) {
-        let _ = handle.update(cx, |scripts, window, cx| {
-            if scripts.shown.is_some() && !scripts.running(cx) {
-                scripts.choose_file(window, cx);
-            }
-        });
+pub(super) fn load(cx: &mut App) {
+    let scripts = cx.try_global::<Open>().map(|open| open.0);
+    match scripts.filter(|scripts| cx.active_window() == Some((*scripts).into())) {
+        Some(scripts) => {
+            let _ = scripts.update(cx, |scripts, window, cx| {
+                if scripts.shown.is_some() && !scripts.running(cx) {
+                    scripts.choose_file(window, cx);
+                }
+            });
+        }
+        None => super::client::load_script(cx),
     }
 }
 
@@ -655,8 +652,6 @@ pub(super) struct ScriptsWindow {
     room: Entity<Input>,
     selected: usize,
     page: Page,
-    folders_open: bool,
-    packages_open: bool,
     queued: usize,
     chosen: Option<PathBuf>,
     forms: HashMap<FormKey, Form>,
@@ -673,9 +668,11 @@ pub(super) struct ScriptsWindow {
     displayed: Option<Entry>,
     detail_scroll: ScrollHandle,
     error_cursor: Option<usize>,
-    source_scroll: ScrollHandle,
+    folder_scroll: ScrollHandle,
+    package_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
     core_bots: Entity<CoreBotsPage>,
+    log: Entity<LogPage>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Vec<Subscription>>,
     _subscriptions: [Subscription; 8],
@@ -689,9 +686,8 @@ enum FormKey {
 
 struct Form {
     generation: u64,
-    meta: Meta,
-    edited: bool,
-    state: FormState,
+    inputs: Entity<InputsForm>,
+    _watch: Vec<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -722,22 +718,6 @@ impl Stop {
             Stop::Removed(removed) => removed.load(Ordering::SeqCst),
         }
     }
-}
-
-enum FormState {
-    Broken {
-        title: &'static str,
-        message: SharedString,
-    },
-    Plain {
-        unread: Option<SharedString>,
-    },
-    Fields {
-        definition: Definition,
-        drafts: Vec<FieldDraft>,
-        texts: Vec<Option<Entity<Input>>>,
-        _changes: Vec<Subscription>,
-    },
 }
 
 impl ScriptsWindow {
@@ -823,8 +803,6 @@ impl ScriptsWindow {
             room,
             selected: 0,
             page: Page::Library(None),
-            folders_open: true,
-            packages_open: true,
             queued: 0,
             chosen: None,
             forms: HashMap::new(),
@@ -841,9 +819,11 @@ impl ScriptsWindow {
             displayed: None,
             detail_scroll: ScrollHandle::new(),
             error_cursor: None,
-            source_scroll: ScrollHandle::new(),
+            folder_scroll: ScrollHandle::new(),
+            package_scroll: ScrollHandle::new(),
             package_dialogs,
             core_bots,
+            log: cx.new(LogPage::new),
             toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
@@ -882,6 +862,8 @@ impl ScriptsWindow {
                 cx.subscribe(&view, |this, _, _: &Updated, cx| this.refresh_core_bots(cx)),
             ]
         });
+        let log = self.view().map(|view| view.read(cx).script_log.clone());
+        self.log.update(cx, |page, cx| page.show(log, cx));
         self.queued = 0;
         self.chosen = None;
         self.show_saved_room(cx);
@@ -970,7 +952,7 @@ impl ScriptsWindow {
 
     fn options(&self, cx: &App) -> Option<ScriptOptions> {
         let account = self.account(cx)?;
-        Some(account_settings::get(&account, cx).scripts)
+        Some(characters::get(&account, cx).scripts)
     }
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
@@ -989,13 +971,14 @@ impl ScriptsWindow {
         let types = self.types.clone();
         let scanned = cx.background_spawn(async move {
             let library = scan_all(&built_in, &added, &packages, &skua);
-            let packages = library
+            let roots = library
                 .sources
                 .iter()
                 .filter(|source| matches!(source.kind, SourceKind::Package { .. }))
                 .map(|source| &source.root);
-            let folders = iter::once(&built_in).chain(&added).chain(packages);
+            let folders = iter::once(&built_in).chain(&added).chain(roots);
             scripting::link_types(folders.map(PathBuf::as_path), &types);
+            scripting::link_packages(&types, &packages);
             library
         });
         self.scanning = Some(cx.spawn(async move |this, cx| {
@@ -1229,13 +1212,6 @@ impl ScriptsWindow {
             qualifier: None,
             description: None,
             path: home_relative(&self.folder),
-            scripts: library.map(|library| {
-                library
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.source.is_none())
-                    .count()
-            }),
             release: None,
             state: None,
         };
@@ -1268,7 +1244,6 @@ impl ScriptsWindow {
                     SourceKind::Folder | SourceKind::Skua { .. } => None,
                 },
                 path: home_relative(&source.root),
-                scripts: source.problem.is_none().then_some(source.scripts),
                 release: release(&source.kind),
                 state,
             }
@@ -1366,68 +1341,55 @@ impl ScriptsWindow {
             .collect()
     }
 
-    fn check_for_updates(&self, cx: &App) -> AnyElement {
+    fn review_updates(&self, cx: &App) -> Option<HoverCard> {
+        let pending = self.pending_updates(cx);
+        if pending.is_empty() {
+            return None;
+        }
         let state = packages::packages(cx).read(cx);
         let working = matches!(
             state.activity(),
             Some(packages::Activity::Checking | packages::Activity::Updating(_))
         );
-        let pending = self.pending_updates(cx);
-        if !pending.is_empty() {
-            let title = match pending.len() {
-                1 => SharedString::from("1 update available"),
-                count => format!("{count} updates available").into(),
-            };
-            let card = pending.iter().fold(
-                HoverCard::new("updates-card", title)
-                    .placement(Placement::new(Side::Right, Align::Start)),
-                |card, pending| {
-                    card.row(
-                        pending.name.clone(),
-                        format!("{} → {}", pending.from, pending.to),
-                        Tone::Neutral,
-                    )
-                },
-            );
-            let dialogs = self.package_dialogs.clone();
-            return card
-                .child(
-                    Button::icon("review-updates", Icon::Download, "Review updates")
-                        .size(Size::Small)
-                        .hide_tooltip()
-                        .busy(working)
-                        .disabled(state.activity().is_some())
-                        .on_click(move |_, _, cx| {
-                            dialogs.update(cx, |dialogs, cx| {
-                                dialogs.review_updates(pending.clone(), cx)
-                            })
-                        }),
+        let title = match pending.len() {
+            1 => SharedString::from("1 update available"),
+            count => format!("{count} updates available").into(),
+        };
+        let card = pending.iter().fold(
+            HoverCard::new("updates-card", title)
+                .placement(Placement::new(Side::Right, Align::Start)),
+            |card, pending| {
+                card.row(
+                    pending.name.clone(),
+                    format!("{} → {}", pending.from, pending.to),
+                    Tone::Neutral,
                 )
-                .into_any_element();
-        }
-        let installed = self.library.as_ref().is_some_and(|library| {
-            library
-                .sources
-                .iter()
-                .any(|source| source.kind.origin().is_some())
-        });
+            },
+        );
         let dialogs = self.package_dialogs.clone();
-        Button::icon("check-updates", Icon::RefreshCw, "Check for updates")
-            .size(Size::Small)
-            .busy(working)
-            .disabled(state.activity().is_some() || !installed)
-            .on_click(move |_, _, cx| dialogs.update(cx, |dialogs, cx| dialogs.check(cx)))
-            .into_any_element()
+        Some(
+            card.child(
+                Button::icon("review-updates", Icon::Download, "Review updates")
+                    .size(Size::Small)
+                    .hide_tooltip()
+                    .busy(working)
+                    .disabled(state.activity().is_some())
+                    .on_click(move |_, _, cx| {
+                        dialogs.update(cx, |dialogs, cx| {
+                            dialogs.review_updates(pending.clone(), cx)
+                        })
+                    }),
+            ),
+        )
     }
 
     fn sidebar(&self, theme: &Theme, unfinished: usize, cx: &mut Context<Self>) -> Div {
         let layout = theme.layout;
         let current = (!self.searching(cx)).then_some(&self.page);
-        let total = self.library.as_ref().map(|library| library.entries.len());
         let this = cx.weak_entity();
         let pages = Tabs::new("pages", "Views", PAGES.len(), move |index| {
             let (label, count) = match PAGES[index] {
-                Page::Library(_) | Page::CoreBots => ("Library", total),
+                Page::Library(_) | Page::CoreBots => ("Library", None),
                 Page::Queue => ("Queue", (unfinished > 0).then_some(unfinished)),
                 Page::Log => ("Log", None),
             };
@@ -1447,30 +1409,63 @@ impl ScriptsWindow {
             let _ = this.update(cx, |this, cx| this.set_page(PAGES[index].clone(), cx));
         });
         let (folders, installed) = self.source_rows(cx);
+        let collapsed = settings::collapsed_sources(cx);
         let toggles = cx.weak_entity();
-        let caption =
-            |id: &'static str, label: &'static str, open: bool, set: fn(&mut Self, bool)| {
-                let this = toggles.clone();
-                h_flex()
-                    .flex_none()
-                    .h(layout.control)
-                    .justify_between()
-                    .pl(layout.space(4.0))
-                    .pr(layout.space(2.0))
-                    .child(Disclosure::new(id, label, open).caption().on_toggle(
-                        move |open, _, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                set(this, open);
-                                cx.notify();
-                            });
-                        },
+        let caption = |id: &'static str,
+                       label: &'static str,
+                       collapsed: bool,
+                       set: fn(&mut CollapsedSources, bool)| {
+            let this = toggles.clone();
+            h_flex()
+                .flex_none()
+                .h(layout.control)
+                .justify_between()
+                .pl(layout.space(4.0))
+                .pr(layout.space(2.0))
+                .child(Disclosure::new(id, label, !collapsed).caption().on_toggle(
+                    move |open, _, cx| {
+                        let _ = this.update(cx, |_, cx| {
+                            settings::collapse_sources(cx, |sources| set(sources, !open));
+                            cx.notify();
+                        });
+                    },
+                ))
+        };
+        let section = |caption: Div, list: Option<Tabs>, scroll: &ScrollHandle| {
+            let faded = scroll.max_offset().y + scroll.offset().y > px(0.5);
+            let fade = theme.typography.body_line;
+            v_flex().min_h_0().child(caption).children(list.map(|list| {
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .child(mira_ui::nav::pane_start_above(
+                        scroll.clone(),
+                        if faded { fade } else { px(0.0) },
                     ))
-            };
-        let folders = self
-            .folders_open
+                    .child(list.track_scroll(scroll))
+                    .child(mira_ui::nav::pane_end())
+                    .when(faded, |list| {
+                        list.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right(Scrollbar::GUTTER)
+                                .bottom_0()
+                                .h(fade)
+                                .bg(linear_gradient(
+                                    180.0,
+                                    linear_color_stop(theme.frame.opacity(0.0), 0.0),
+                                    linear_color_stop(theme.frame, 0.7),
+                                )),
+                        )
+                    })
+            }))
+        };
+        let folders = (!collapsed.folders)
             .then(|| self.source_list("folders", "Folders", folders, theme, cx));
-        let installed = self
-            .packages_open
+        let installed = (!collapsed.packages && !installed.is_empty())
             .then(|| self.source_list("packages", "Packages", installed, theme, cx));
         let busy = packages::packages(cx).read(cx).activity().is_some();
         let installing = matches!(
@@ -1478,45 +1473,45 @@ impl ScriptsWindow {
             Some(packages::Activity::Installing)
         );
         let dialogs = self.package_dialogs.clone();
-        let sources = v_flex()
-            .child(
-                caption(
-                    "folders-toggle",
-                    "Folders",
-                    self.folders_open,
-                    |this, open| this.folders_open = open,
-                )
-                .child(
-                    Button::icon("add-folder", Icon::Plus, "Add folder")
-                        .size(Size::Small)
-                        .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
-                ),
+        let folders = section(
+            caption(
+                "folders-toggle",
+                "Folders",
+                collapsed.folders,
+                |sources, collapsed| sources.folders = collapsed,
             )
-            .children(folders)
             .child(
-                caption(
-                    "packages-toggle",
-                    "Packages",
-                    self.packages_open,
-                    |this, open| this.packages_open = open,
-                )
-                .child(
-                    h_flex()
-                        .gap(layout.space(1.0))
-                        .child(self.check_for_updates(cx))
-                        .child(
-                            Button::icon("install-package", Icon::Plus, "Install package")
-                                .size(Size::Small)
-                                .busy(installing)
-                                .disabled(busy)
-                                .on_click(move |_, window, cx| {
-                                    dialogs
-                                        .update(cx, |dialogs, cx| dialogs.open_install(window, cx))
-                                }),
-                        ),
-                ),
+                Button::icon("add-folder", Icon::Plus, "Add folder")
+                    .size(Size::Small)
+                    .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
+            ),
+            folders,
+            &self.folder_scroll,
+        );
+        let installed = section(
+            caption(
+                "packages-toggle",
+                "Packages",
+                collapsed.packages,
+                |sources, collapsed| sources.packages = collapsed,
             )
-            .children(installed);
+            .child(
+                h_flex()
+                    .gap(layout.space(1.0))
+                    .children(self.review_updates(cx))
+                    .child(
+                        Button::icon("install-package", Icon::Plus, "Install package")
+                            .size(Size::Small)
+                            .busy(installing)
+                            .disabled(busy)
+                            .on_click(move |_, window, cx| {
+                                dialogs.update(cx, |dialogs, cx| dialogs.open_install(window, cx))
+                            }),
+                    ),
+            ),
+            installed,
+            &self.package_scroll,
+        );
         theme
             .sidebar_pane()
             .h_full()
@@ -1538,30 +1533,19 @@ impl ScriptsWindow {
             .child(pages)
             .child(
                 div()
-                    .relative()
-                    .flex()
-                    .flex_col()
+                    .grid()
+                    .grid_cols(1)
+                    .grid_rows_max_content(2)
                     .min_h_0()
-                    .my(-RING_ROOM)
-                    .child(
-                        div()
-                            .id("sources")
-                            .min_h_0()
-                            .py(RING_ROOM)
-                            .overflow_y_scroll()
-                            .track_scroll(&self.source_scroll)
-                            .child(sources),
-                    )
-                    .child(
-                        Scrollbar::new("sources-scrollbar", self.source_scroll.clone())
-                            .persistent(),
-                    ),
+                    .child(folders)
+                    .child(installed),
             )
             .child(drag_area().flex_1())
             .child(
-                div()
+                v_flex()
                     .flex_none()
                     .p(layout.space(2.0))
+                    .child(self.options_popover(theme, cx))
                     .child(self.open_file(theme, cx)),
             )
     }
@@ -1753,9 +1737,6 @@ impl ScriptsWindow {
                             .and_then(|state| source_mark(&marks, state)),
                     ),
             );
-            if let Some(scripts) = row.scripts {
-                tab = tab.end_slot(SharedString::from(scripts.to_string()));
-            }
             if let Some(state) = &row.state {
                 tab = tab.description(state.description());
             }
@@ -1831,7 +1812,7 @@ impl ScriptsWindow {
         }
     }
 
-    fn evict(&mut self, rows: &[Row], target: Option<&Path>) {
+    fn evict(&mut self, rows: &[Row], target: Option<&Path>, cx: &App) {
         let span = self.visible.len();
         let end = (self.visible.end + span).min(rows.len());
         let start = self.visible.start.saturating_sub(span).min(end);
@@ -1845,7 +1826,9 @@ impl ScriptsWindow {
             .chain(self.displayed.as_ref().map(|entry| entry.path.as_path()))
             .collect();
         self.forms.retain(|key, form| match key {
-            FormKey::Script(path) => form.edited || kept.contains(path.as_path()),
+            FormKey::Script(path) => {
+                kept.contains(path.as_path()) || form.inputs.read(cx).holds_edits()
+            }
             FormKey::Entry(_) => true,
         });
         if let Some((path, cancelled)) = &self.preloading
@@ -1871,19 +1854,7 @@ impl ScriptsWindow {
         if scripting::is_skua(&script) {
             return self.describe_skua(key, script, load, cx);
         }
-        let read = cx.background_spawn(async move {
-            let display = file_name(&script);
-            let text = fs::read_to_string(&script).map_err(|error| {
-                (
-                    "This script can't be read",
-                    format!("Couldn't read {display}: {error}"),
-                )
-            })?;
-            scripting::extract(&display, &script, &text).map_err(|error| match error {
-                ExtractError::Syntax(message) => ("This script has a syntax error", message),
-                ExtractError::Meta(message) => ("This script's meta is invalid", message),
-            })
-        });
+        let read = inputs_form::read(script, cx);
         let generation = self.generation;
         let task = cx.spawn({
             let key = key.clone();
@@ -1950,33 +1921,14 @@ impl ScriptsWindow {
                     if let FormKey::Entry(id) = &key {
                         this.probes.remove(id);
                     }
-                    match read {
-                        Err(scripting::SkuaHalt::Stopped) => {}
-                        Err(scripting::SkuaHalt::Failed(message)) => this.loaded(
-                            key,
-                            generation,
-                            Err(("This Skua script can't start", message)),
-                            None,
-                            cx,
-                        ),
-                        Ok(described) => {
-                            let (definition, unread) = match described {
-                                scripting::SkuaDescribed::Inputs(definition) => (definition, None),
-                                scripting::SkuaDescribed::Unread(reason) => {
-                                    (None, Some(reason.into()))
-                                }
-                            };
-                            this.loaded(
-                                key,
-                                generation,
-                                Ok(Declared {
-                                    meta: Meta::default(),
-                                    inputs: Ok(definition),
-                                }),
-                                unread,
-                                cx,
-                            );
-                        }
+                    let described = match read {
+                        Err(scripting::SkuaHalt::Stopped) => None,
+                        Err(scripting::SkuaHalt::Failed(message)) => Some(Err(message)),
+                        Ok(described) => Some(Ok(described)),
+                    };
+                    if let Some(described) = described {
+                        let (read, unread) = inputs_form::skua_read(described);
+                        this.loaded(key, generation, read, unread, cx);
                     }
                     cx.notify();
                 });
@@ -2019,134 +1971,55 @@ impl ScriptsWindow {
         &mut self,
         key: FormKey,
         generation: u64,
-        read: Result<Declared, (&'static str, String)>,
+        read: Read,
         unread: Option<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        let (meta, read) = match read {
-            Ok(Declared { meta, inputs }) => (
-                meta,
-                inputs.map_err(|message| ("This script's inputs are invalid", message)),
-            ),
-            Err(broken) => (Meta::default(), Err(broken)),
-        };
         if let Some(form) = self.forms.get_mut(&key)
-            && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
-            && definition == read
+            && let Ok(Declared {
+                meta,
+                inputs: Ok(Some(definition)),
+            }) = &read
+            && form.inputs.read(cx).definition() == Some(definition)
         {
             form.generation = generation;
-            form.meta = meta;
+            let meta = meta.clone();
+            form.inputs.update(cx, |inputs, _| inputs.meta = meta);
             return;
         }
-        let state = match read {
-            Err((title, message)) => FormState::Broken {
-                title,
-                message: message.into(),
-            },
-            Ok(None) => FormState::Plain { unread },
-            Ok(Some(definition)) => {
-                let saved = match &key {
-                    FormKey::Script(path) => match script_inputs::saved(path, cx) {
-                        Supplied::Values(values) => values,
-                        Supplied::StoreUnreadable => Values::new(),
-                    },
-                    FormKey::Entry(id) => self.entry_values(*id, cx).unwrap_or_default(),
-                };
-                let drafts = drafts(&definition, &saved);
-                let mut texts = Vec::new();
-                let mut changes = Vec::new();
-                for (index, (field, draft)) in definition.fields().iter().zip(&drafts).enumerate() {
-                    let Draft::Text(text) = &draft.draft else {
-                        texts.push(None);
-                        continue;
-                    };
-                    let invalid = error(field, draft).is_some();
-                    let label = field.label.clone();
-                    let text = text.clone();
-                    let input = cx.new(|cx| {
-                        let mut input = Input::new(label, cx);
-                        input.set_text(text, cx);
-                        input.set_invalid(invalid, cx);
-                        input
-                    });
-                    let key = key.clone();
-                    changes.push(cx.subscribe(
-                        &input,
-                        move |this, input, event: &InputEvent, cx| {
-                            if matches!(event, InputEvent::Changed) {
-                                let text = input.read(cx).text().to_owned().into();
-                                this.set_draft(&key, index, Draft::Text(text), cx);
-                            }
-                        },
-                    ));
-                    texts.push(Some(input));
-                }
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    _changes: changes,
-                }
+        let inputs = match &key {
+            FormKey::Script(path) => {
+                let path = path.clone();
+                cx.new(|cx| InputsForm::saved(path, read, unread, cx))
+            }
+            FormKey::Entry(id) => {
+                let values = self.entry_values(*id, cx).unwrap_or_default();
+                cx.new(|cx| InputsForm::queued(&values, read, unread, cx))
             }
         };
-        let checked = match (&key, &state) {
-            (
-                FormKey::Entry(_),
-                FormState::Fields {
-                    definition, drafts, ..
-                },
-            ) => Some(values(definition, drafts)),
-            _ => None,
-        };
+        let mut watch = vec![cx.observe(&inputs, |_, _, cx| cx.notify())];
+        if let FormKey::Entry(id) = key {
+            watch.push(cx.subscribe(&inputs, move |this, _, Edited(values), cx| {
+                let values = values.clone();
+                this.edit_queue(cx, |queue| queue.set_values(id, values));
+            }));
+            if inputs.read(cx).definition().is_some() {
+                let values = inputs.read(cx).edited();
+                self.edit_queue(cx, |queue| queue.set_values(id, values));
+            }
+        }
         self.forms.insert(
-            key.clone(),
+            key,
             Form {
                 generation,
-                meta,
-                edited: false,
-                state,
+                inputs,
+                _watch: watch,
             },
         );
-        if let Some(edited) = checked {
-            self.store_entry(&key, edited, cx);
-        }
     }
 
-    fn set_draft(&mut self, key: &FormKey, index: usize, draft: Draft, cx: &mut Context<Self>) {
-        let Some(Form {
-            edited,
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get_mut(key)
-        else {
-            return;
-        };
-        let (Some(field), Some(slot)) = (definition.fields().get(index), drafts.get_mut(index))
-        else {
-            return;
-        };
-        *slot = FieldDraft { draft, stale: None };
-        *edited = true;
-        if let Some(Some(input)) = texts.get(index) {
-            let invalid = error(field, slot).is_some();
-            input.update(cx, |input, cx| input.set_invalid(invalid, cx));
-        }
-        let edited = values(definition, drafts);
-        self.store_entry(key, edited, cx);
-        cx.notify();
-    }
-
-    fn store_entry(&mut self, key: &FormKey, edited: Option<Values>, cx: &mut Context<Self>) {
-        if let FormKey::Entry(id) = key {
-            let id = *id;
-            self.edit_queue(cx, |queue| queue.set_values(id, edited));
-        }
+    fn inputs_form(&self, key: &FormKey) -> Option<&Entity<InputsForm>> {
+        self.forms.get(key).map(|form| &form.inputs)
     }
 
     fn entry_values(&self, id: EntryId, cx: &App) -> Option<Values> {
@@ -2156,79 +2029,21 @@ impl ScriptsWindow {
         entry.values.clone()
     }
 
-    fn reset_form(&mut self, key: &FormKey, cx: &mut Context<Self>) {
-        let Some(Form {
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get_mut(key)
-        else {
-            return;
-        };
-        for ((field, draft), input) in definition.fields().iter().zip(drafts.iter_mut()).zip(texts)
-        {
-            *draft = FieldDraft {
-                draft: starting(field),
-                stale: None,
-            };
-            if let (Some(input), Draft::Text(text)) = (input, &draft.draft) {
-                let invalid = error(field, draft).is_some();
-                let text = text.clone();
-                input.update(cx, |input, cx| {
-                    input.set_text(text, cx);
-                    input.set_invalid(invalid, cx);
-                });
-            }
-        }
-        let edited = values(definition, drafts);
-        self.store_entry(key, edited, cx);
-        cx.notify();
+    fn launch_values(&self, path: &Path, cx: &App) -> Option<Values> {
+        self.inputs_form(&FormKey::Script(path.to_owned()))?
+            .read(cx)
+            .ready_values(cx)
     }
 
-    fn launch_values(&self, path: &Path, cx: &App) -> Option<(Option<&Definition>, Values)> {
-        match &self.forms.get(&FormKey::Script(path.to_owned()))?.state {
-            FormState::Broken { .. } => None,
-            FormState::Plain { unread: None } => Some((None, Values::new())),
-            FormState::Plain { unread: Some(_) } => match script_inputs::saved(path, cx) {
-                Supplied::Values(values) => Some((None, values)),
-                Supplied::StoreUnreadable => Some((None, Values::new())),
-            },
-            FormState::Fields {
-                definition, drafts, ..
-            } => {
-                if script_inputs::unreadable(cx) {
-                    return None;
-                }
-                Some((Some(definition), values(definition, drafts)?))
-            }
-        }
-    }
-
-    fn launch(&mut self, cx: &mut Context<Self>) -> Option<(PathBuf, Values)> {
+    fn launch(&self, cx: &App) -> Option<(PathBuf, Values)> {
         let entry = self.target(cx)?;
-        let (definition, values) = self.launch_values(&entry.path, cx)?;
-        if definition.is_some() {
-            script_inputs::save(&entry.path, values.clone(), cx);
-            if let Some(form) = self.forms.get_mut(&FormKey::Script(entry.path.clone())) {
-                form.edited = false;
-            }
-        }
+        let values = self.launch_values(&entry.path, cx)?;
         Some((entry.path, values))
     }
 
-    fn entry_ready(&self, id: EntryId) -> bool {
-        match self.forms.get(&FormKey::Entry(id)).map(|form| &form.state) {
-            Some(FormState::Plain { .. }) => true,
-            Some(FormState::Fields {
-                definition, drafts, ..
-            }) => values(definition, drafts).is_some(),
-            Some(FormState::Broken { .. }) | None => false,
-        }
+    fn entry_ready(&self, id: EntryId, cx: &App) -> bool {
+        self.inputs_form(&FormKey::Entry(id))
+            .is_some_and(|form| form.read(cx).ready_values(cx).is_some())
     }
 
     fn queue(&self, cx: &App) -> (Vec<queue::Entry>, bool) {
@@ -2287,10 +2102,16 @@ impl ScriptsWindow {
         cx.notify();
     }
 
-    fn options_popover(&self, cx: &mut Context<Self>) -> Popover {
+    fn options_popover(&self, theme: &Theme, cx: &mut Context<Self>) -> Popover {
         let this = cx.entity().downgrade();
         Popover::new("options")
-            .trigger(Button::new("options", "Options").end_slot(Icon::ChevronDown))
+            .trigger(
+                Button::new("options", "Options")
+                    .variant(Variant::Ghost)
+                    .w_full()
+                    .child(div().flex_1().child("Options"))
+                    .end_slot(small_icon(Icon::ChevronRight, theme.muted_foreground)),
+            )
             .content(move |_, _, cx| {
                 let Some(scripts) = this.upgrade() else {
                     return div().into_any_element();
@@ -2304,235 +2125,38 @@ impl ScriptsWindow {
                     cx,
                 )
             })
-            .align(Align::Start)
+            .placement(Placement {
+                side_offset: theme.space(3.0) + px(1.0),
+                ..Placement::new(Side::Right, Align::End)
+            })
             .width(px(376.0))
     }
 
-    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let layout = theme.layout;
-        let Some(form) = self.forms.get(key) else {
-            return vec![muted(theme, "Reading inputs…").into_any_element()];
-        };
-        let (definition, drafts, texts) = match &form.state {
-            FormState::Broken { title, message } => {
-                return vec![
-                    Alert::new("script-broken", Tone::Danger, *title)
-                        .body(message.clone())
-                        .into_any_element(),
-                ];
-            }
-            FormState::Plain { unread } => return vec![no_inputs(theme, unread.as_ref())],
-            FormState::Fields {
-                definition,
-                drafts,
-                texts,
-                ..
-            } => (definition, drafts, texts),
-        };
-        let this = cx.entity().downgrade();
-        let saved = matches!(key, FormKey::Script(_));
-        let (unreadable, stale) = leading(saved, drafts, cx);
-        let unreadable = unreadable.then(|| {
-            let this = this.clone();
-            Alert::new(
-                "inputs-unreadable",
-                Tone::Warning,
-                "Saved inputs couldn't be read",
-            )
-            .body("Start fresh to back up the file and use each script's defaults.")
-            .action(
-                Button::new("inputs-start-fresh", "Start fresh")
-                    .size(Size::Small)
-                    .on_click(move |_, _, cx| {
-                        script_inputs::start_fresh(cx);
-                        let _ = this.update(cx, |_, cx| cx.notify());
-                    }),
-            )
-        });
-        let stale = stale.then(|| {
-            let this = this.clone();
-            let key = key.clone();
-            h_flex()
-                .justify_between()
-                .gap(layout.space(3.0))
-                .child(muted(
-                    theme,
-                    if saved {
-                        "Some saved values don't fit this script anymore."
-                    } else {
-                        "Some queued values don't fit this script anymore."
-                    },
-                ))
-                .child(
-                    Button::new("inputs-reset", "Reset")
-                        .size(Size::Small)
-                        .on_click(move |_, _, cx| {
-                            let _ = this.update(cx, |this, cx| this.reset_form(&key, cx));
-                        }),
-                )
-        });
-        let fields =
-            definition
-                .fields()
-                .iter()
-                .zip(drafts)
-                .enumerate()
-                .map(|(index, (field, draft))| {
-                    let set = {
-                        let this = this.clone();
-                        let key = key.clone();
-                        move |draft: Draft, cx: &mut App| {
-                            let _ =
-                                this.update(cx, |this, cx| this.set_draft(&key, index, draft, cx));
-                        }
-                    };
-                    let label = SharedString::from(field.label.clone());
-                    let control = match (&field.kind, &draft.draft, &texts[index]) {
-                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
-                            Switch::new(("input", index), label.clone(), *on)
-                                .trailing()
-                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx))
-                                .into_any_element()
-                        }
-                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => Select::new(
-                            ("input", index),
-                            label.clone(),
-                            options.iter().cloned().map(SharedString::from),
-                            *chosen,
-                        )
-                        .placeholder("Choose…")
-                        .full_width()
-                        .invalid(error(field, draft).is_some())
-                        .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
-                        .into_any_element(),
-                        (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
-                            let set = Rc::new(set);
-                            v_flex()
-                                .gap(layout.space(3.0))
-                                .children(options.iter().enumerate().map(|(option, name)| {
-                                    let set = set.clone();
-                                    let chosen = chosen.clone();
-                                    let state = if chosen[option] {
-                                        CheckedState::Checked
-                                    } else {
-                                        CheckedState::Unchecked
-                                    };
-                                    Checkbox::new(
-                                        SharedString::from(format!("input-{index}-{option}")),
-                                        name.clone(),
-                                        state,
-                                    )
-                                    .on_toggle(
-                                        move |on, _, cx| {
-                                            let mut chosen = chosen.clone();
-                                            chosen[option] = on;
-                                            set(Draft::Choices(chosen), cx);
-                                        },
-                                    )
-                                }))
-                                .into_any_element()
-                        }
-                        (kind, _, Some(input)) => div()
-                            .when(matches!(kind, Kind::Number { .. }), |slot| {
-                                slot.flex_none().w(px(80.0))
-                            })
-                            .child(input.clone())
-                            .into_any_element(),
-                        _ => div().into_any_element(),
-                    };
-                    let control = match field.kind {
-                        Kind::Boolean { .. } => control,
-                        Kind::Number { .. } => h_flex()
-                            .justify_between()
-                            .gap(layout.space(2.0))
-                            .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(label))
-                            .child(control)
-                            .into_any_element(),
-                        _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
-                    };
-                    let starts_group = field.group.is_some()
-                        && definition
-                            .fields()
-                            .get(index.wrapping_sub(1))
-                            .map(|previous| &previous.group)
-                            != Some(&field.group);
-                    v_flex()
-                        .gap(layout.space(1.0))
-                        .when_some(
-                            field.group.clone().filter(|_| starts_group),
-                            |column, group| {
-                                column.child(
-                                    div()
-                                        .pt(layout.space(2.0))
-                                        .text_caption(theme.typography)
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.muted_foreground)
-                                        .child(group),
-                                )
-                            },
-                        )
-                        .child(control)
-                        .map(|column| match (error(field, draft), &field.description) {
-                            (Some(problem), _) => column
-                                .child(note(problem, true, theme).text_color(theme.destructive)),
-                            (None, Some(description)) => {
-                                column.child(note(description.clone(), true, theme))
-                            }
-                            (None, None) => column,
-                        })
-                });
-        unreadable
-            .map(IntoElement::into_any_element)
-            .into_iter()
-            .chain(stale.map(IntoElement::into_any_element))
-            .chain(fields.map(IntoElement::into_any_element))
-            .collect()
+    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &App) -> Vec<AnyElement> {
+        match self.inputs_form(key) {
+            Some(form) => inputs_form::elements(form, theme, cx),
+            None => vec![muted(theme, "Reading inputs…").into_any_element()],
+        }
     }
 
     fn input_errors(&self, path: &Path, cx: &App) -> usize {
-        match self
-            .forms
-            .get(&FormKey::Script(path.to_owned()))
-            .map(|form| &form.state)
-        {
-            Some(FormState::Fields {
-                definition, drafts, ..
-            }) if !script_inputs::unreadable(cx) => errored_fields(definition, drafts).len(),
-            _ => 0,
-        }
+        self.inputs_form(&FormKey::Script(path.to_owned()))
+            .map_or(0, |form| form.read(cx).errored(cx).len())
     }
 
     fn jump_to_error(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.displayed.as_ref().map(|entry| entry.path.clone()) else {
             return;
         };
-        let Some(Form {
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get(&FormKey::Script(path))
-        else {
+        let Some(form) = self.inputs_form(&FormKey::Script(path)) else {
             return;
         };
-        let errored = errored_fields(definition, drafts);
-        let count = errored.len() as isize;
-        if count == 0 {
+        let form = form.read(cx);
+        let Some((next, field)) = form.step(self.error_cursor, by, cx) else {
             return;
-        }
-        let next = match self.error_cursor {
-            Some(at) => (at as isize + by).rem_euclid(count),
-            None if by > 0 => 0,
-            None => count - 1,
-        } as usize;
-        let field = errored[next];
-        let (unreadable, stale) = leading(true, drafts, cx);
-        let item = usize::from(unreadable) + usize::from(stale) + field;
-        let input = texts.get(field).cloned().flatten();
+        };
+        let item = form.item_of(field, cx);
+        let focus = form.focus_handle(field, cx);
         self.error_cursor = Some(next);
         let theme = cx.theme();
         reveal_item(
@@ -2541,48 +2165,25 @@ impl ScriptsWindow {
             theme.space(6.0),
             error_bar_clearance(theme),
         );
-        if let Some(input) = input {
-            window.focus(&input.focus_handle(cx), cx);
+        if let Some(focus) = focus {
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
 
     fn error_bar(&self, theme: &Theme, errors: usize, cx: &mut Context<Self>) -> AnyElement {
-        let label: SharedString = match errors {
-            1 => "1 error".into(),
-            count => format!("{count} errors").into(),
-        };
-        let step = |id: &'static str, glyph: Icon, name: &'static str, by: isize| {
-            Button::icon(id, glyph, name)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .hide_tooltip()
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.jump_to_error(by, window, cx)),
-                )
-        };
+        let step = cx.listener(|this, by: &isize, window, cx| this.jump_to_error(*by, window, cx));
         theme
             .floating_bar()
             .id("error-bar")
             .role(gpui::Role::Toolbar)
             .aria_label("Input errors")
-            .child(
-                div()
-                    .pr(theme.space(1.0))
-                    .child(status_text("input-errors", label)),
-            )
-            .child(step(
-                "previous-error",
-                Icon::ChevronUp,
-                "Previous error",
-                -1,
-            ))
-            .child(step("next-error", Icon::ChevronDown, "Next error", 1))
+            .children(inputs_form::error_steps(errors, theme, step))
             .into_any_element()
     }
 
     fn about(&self, path: &Path, key: &FormKey, cx: &App) -> About {
-        let meta = self.forms.get(key).map(|form| &form.meta);
+        let meta = self.inputs_form(key).map(|form| &form.read(cx).meta);
         let listed = self
             .library
             .iter()
@@ -2634,7 +2235,8 @@ impl ScriptsWindow {
         };
         let key = FormKey::Entry(queued.id);
         let about = self.about(&queued.script, &key, cx);
-        let body = match self.forms.get(&key).map(|form| &form.state) {
+        let form = self.inputs_form(&key).map(|form| form.read(cx));
+        let body = match form.map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
             Some(FormState::Broken { title, message }) => vec![
@@ -2642,7 +2244,9 @@ impl ScriptsWindow {
                     .body(message.clone())
                     .into_any_element(),
             ],
-            Some(FormState::Plain { unread }) => vec![no_inputs(theme, unread.as_ref())],
+            Some(FormState::Plain { unread }) => {
+                vec![inputs_form::no_inputs(theme, unread.as_ref())]
+            }
             Some(FormState::Fields { definition, .. }) => queued
                 .values
                 .as_ref()
@@ -2698,13 +2302,15 @@ impl ScriptsWindow {
             .map(|queued| {
                 let key = FormKey::Entry(queued.id);
                 let name = self.about(&queued.script, &key, cx).name;
-                let form = self.forms.get(&key).map(|form| &form.state);
+                let form = self.inputs_form(&key).map(|form| form.read(cx));
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
-                        Some(FormState::Broken { .. }) => Some("Can't start".into()),
-                        Some(FormState::Fields {
-                            definition, drafts, ..
-                        }) if values(definition, drafts).is_none() => Some("Needs inputs".into()),
+                        Some(form) if matches!(form.state, FormState::Broken { .. }) => {
+                            Some("Can't start".into())
+                        }
+                        Some(form) if form.ready_values(cx).is_none() => {
+                            Some("Needs inputs".into())
+                        }
                         _ => None,
                     }
                     .map(|meta| (meta, theme.muted_foreground)),
@@ -3028,7 +2634,7 @@ impl Render for ScriptsWindow {
         if matches!(page, Page::Library(_)) {
             self.preload(&rows, cx);
         }
-        self.evict(&rows, target.as_deref());
+        self.evict(&rows, target.as_deref(), cx);
         self.queued = self.queued.min(queue.len().saturating_sub(1));
         let valid = chosen
             .as_ref()
@@ -3042,7 +2648,7 @@ impl Render for ScriptsWindow {
         let startable = queue
             .iter()
             .filter(|entry| entry.waiting())
-            .all(|entry| self.entry_ready(entry.id));
+            .all(|entry| self.entry_ready(entry.id, cx));
         let finished = queue.len() > unfinished;
         let skippable = queue.iter().any(queue::Entry::running);
         let status = self.run_status(cx);
@@ -3063,11 +2669,17 @@ impl Render for ScriptsWindow {
             cx,
         )
         .map(|header| match status {
-            Some(status) => header.child(run_status(
-                status,
-                cx.listener(|this, _, _, cx| this.stop(cx)),
-                &theme,
-            )),
+            Some(status) => {
+                let this = cx.weak_entity();
+                header.child(run_status(
+                    status,
+                    cx.listener(|this, _, _, cx| this.stop(cx)),
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.set_page(Page::Log, cx));
+                    },
+                    &theme,
+                ))
+            }
             None if !has_tab => header.child(
                 div()
                     .id("script-status")
@@ -3096,7 +2708,8 @@ impl Render for ScriptsWindow {
                 detail,
                 |pane, Detail { heading, body, bar }| {
                     let (reserve, covered) = if bar.is_some() {
-                        (theme.space(15.0), error_bar_clearance(&theme))
+                        let clearance = error_bar_clearance(&theme);
+                        (clearance, clearance)
                     } else {
                         (theme.space(4.0), Pixels::ZERO)
                     };
@@ -3208,14 +2821,11 @@ impl Render for ScriptsWindow {
                 "Open a tab to change its CoreBots options.",
             )),
             Page::CoreBots => body.child(div().flex_1().min_w_0().child(self.core_bots.clone())),
-            Page::Log => body.justify_center().items_center().child(Empty::new(
-                "Script logs",
-                "Coming soon. Until then, script output goes to mira.log.",
-            )),
+            Page::Log => body.child(self.log.clone()),
         }
         .relative()
         .child(Toaster::layer(&self.toasts, window, cx));
-        let footer = theme.footer().flex_wrap().child(self.options_popover(cx));
+        let footer = theme.footer().flex_wrap();
         let footer =
             match page {
                 Page::Library(_) => Some(
@@ -3290,7 +2900,11 @@ impl Render for ScriptsWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                window.focus(&this.search.focus_handle(cx), cx);
+                if this.shown_page(cx) == Page::Log {
+                    this.log.update(cx, |log, cx| log.focus_search(window, cx));
+                } else {
+                    window.focus(&this.search.focus_handle(cx), cx);
+                }
             }))
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
@@ -3330,6 +2944,7 @@ struct Failure {
 fn run_status(
     status: RunStatus,
     stop: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    show_log: impl Fn(&mut Window, &mut App) + 'static,
     theme: &Theme,
 ) -> Div {
     h_flex()
@@ -3345,7 +2960,8 @@ fn run_status(
                         HoverCard::new("script-failure", failure.title)
                             .placement(Placement::new(Side::Bottom, Align::End))
                             .path_row("Script", failure.script)
-                            .body(failure.message),
+                            .body(failure.message)
+                            .action("Show log", show_log),
                     )
                 }),
         )
@@ -3365,54 +2981,8 @@ struct Detail {
     bar: Option<AnyElement>,
 }
 
-fn errored_fields(definition: &Definition, drafts: &[FieldDraft]) -> Vec<usize> {
-    definition
-        .fields()
-        .iter()
-        .zip(drafts)
-        .enumerate()
-        .filter(|(_, (field, draft))| error(field, draft).is_some())
-        .map(|(index, _)| index)
-        .collect()
-}
-
 fn error_bar_clearance(theme: &Theme) -> Pixels {
     theme.space(17.0)
-}
-
-fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
-    let Some(item) = scroll.bounds_for_item(index) else {
-        return;
-    };
-    let viewport = scroll.bounds();
-    let mut offset = scroll.offset();
-    let top = item.top() + offset.y;
-    let bottom = item.bottom() + offset.y;
-    if top < viewport.top() + above {
-        offset.y += viewport.top() + above - top;
-    } else if bottom > viewport.bottom() - below {
-        offset.y -= bottom - (viewport.bottom() - below);
-    } else {
-        return;
-    }
-    offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
-    scroll.set_offset(offset);
-}
-
-fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
-    let text = text.into();
-    div()
-        .id(id)
-        .role(gpui::Role::Status)
-        .aria_label(text.clone())
-        .child(text)
-}
-
-fn leading(saved: bool, drafts: &[FieldDraft], cx: &App) -> (bool, bool) {
-    (
-        saved && script_inputs::unreadable(cx),
-        drafts.iter().any(|draft| draft.stale.is_some()),
-    )
 }
 
 fn heading(
@@ -3471,28 +3041,6 @@ fn heading(
         .children(action)
 }
 
-fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
-    let typography = theme.typography;
-    div()
-        .text_size(typography.body)
-        .line_height(typography.body_line)
-        .text_color(theme.muted_foreground)
-        .child(text.into())
-}
-
-fn no_inputs(theme: &Theme, unread: Option<&SharedString>) -> AnyElement {
-    match unread {
-        None => muted(theme, "This script has no inputs.").into_any_element(),
-        Some(reason) => Alert::new(
-            "options-unread",
-            Tone::Warning,
-            "Couldn't read this script's options",
-        )
-        .body(format!("It runs with its defaults. {reason}"))
-        .into_any_element(),
-    }
-}
-
 struct QueueRow {
     name: SharedString,
     folder: SharedString,
@@ -3505,15 +3053,6 @@ fn ended(outcome: &Outcome) -> &'static str {
         Outcome::Failed { .. } | Outcome::Killed(_) => "Failed",
         Outcome::Stopped => "Stopped",
         Outcome::Exited { .. } => "Exited",
-    }
-}
-
-fn duration(took: std::time::Duration) -> String {
-    let seconds = took.as_secs();
-    match seconds {
-        0..60 => format!("{seconds}s"),
-        60..3600 => format!("{}m", seconds / 60),
-        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
     }
 }
 
@@ -3547,7 +3086,7 @@ fn options_panel(
     v_flex()
         .gap(layout.space(2.0))
         .when(!editable, |options| {
-            options.child(note("Log in to change script settings.", true, &theme))
+            options.child(note("Log in to change options.", true, &theme))
         })
         .child(
             Switch::new("safe-start", "Safe start and stop", options.safe_start_stop)
@@ -3592,9 +3131,259 @@ fn options_panel(
         .into_any_element()
 }
 
+#[cfg(any(test, feature = "storyboard"))]
+pub(crate) fn board() -> crate::storyboard::Board {
+    use crate::storyboard::{Board, Story};
+    Board {
+        name: "Scripts",
+        size: size(px(WIDTH), px(HEIGHT)),
+        min_size: size(px(MIN_WIDTH), px(MIN_HEIGHT)),
+        stories: vec![
+            Story {
+                name: "A few sources",
+                build: |window, cx| {
+                    sources_story(
+                        "A few sources",
+                        2,
+                        2,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Update waiting",
+                build: |window, cx| {
+                    sources_story(
+                        "Update waiting",
+                        2,
+                        2,
+                        Sources::UpdateWaiting,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Broken sources",
+                build: |window, cx| {
+                    sources_story(
+                        "Broken sources",
+                        2,
+                        2,
+                        Sources::Broken,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "No packages",
+                build: |window, cx| {
+                    sources_story("No packages", 2, 0, Sources::Healthy, EXPANDED, window, cx)
+                },
+            },
+            Story {
+                name: "Many folders",
+                build: |window, cx| {
+                    sources_story(
+                        "Many folders",
+                        12,
+                        3,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Many of both",
+                build: |window, cx| {
+                    sources_story(
+                        "Many of both",
+                        12,
+                        10,
+                        Sources::Healthy,
+                        EXPANDED,
+                        window,
+                        cx,
+                    )
+                },
+            },
+            Story {
+                name: "Folders collapsed",
+                build: |window, cx| {
+                    let collapsed = CollapsedSources {
+                        folders: true,
+                        packages: false,
+                    };
+                    sources_story(
+                        "Folders collapsed",
+                        12,
+                        3,
+                        Sources::Healthy,
+                        collapsed,
+                        window,
+                        cx,
+                    )
+                },
+            },
+        ],
+    }
+}
+
+#[cfg(any(test, feature = "storyboard"))]
+const EXPANDED: CollapsedSources = CollapsedSources {
+    folders: false,
+    packages: false,
+};
+
+#[cfg(any(test, feature = "storyboard"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sources {
+    Healthy,
+    UpdateWaiting,
+    Broken,
+}
+
+#[cfg(any(test, feature = "storyboard"))]
+fn sources_story(
+    name: &str,
+    folders: usize,
+    installed: usize,
+    sources: Sources,
+    collapsed: CollapsedSources,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyView {
+    const FOLDERS: [&str; 12] = [
+        "community",
+        "bosses",
+        "dailies",
+        "merge",
+        "rep",
+        "classes",
+        "quests",
+        "events",
+        "story",
+        "weekly",
+        "ultras",
+        "legion",
+    ];
+    const PACKAGES: [&str; 10] = [
+        "Daily quests",
+        "Farming",
+        "Legion",
+        "Nulgath",
+        "Ultras",
+        "Void",
+        "Armies",
+        "Drops",
+        "Gold",
+        "Faction",
+    ];
+    let folder = crate::storyboard::scratch(name);
+    let script = |dir: &Path| {
+        fs::create_dir_all(dir).expect("create a story folder");
+        fs::write(dir.join("hunt.ts"), "").expect("write a story script");
+    };
+    let package = |name: &str, manifest: &str| {
+        let root = folder
+            .join("packages")
+            .join(name.to_lowercase().replace(' ', "-"));
+        script(&root.join("scripts"));
+        fs::write(root.join("package.json"), manifest).expect("write a story manifest");
+        root
+    };
+    let theme = cx.theme().clone();
+    script(&folder.join("scripts"));
+    for added in settings::script_folders(cx).to_vec() {
+        settings::remove_script_folder(&added, cx);
+    }
+    settings::collapse_sources(cx, |sources| *sources = collapsed);
+    for name in &FOLDERS[..folders] {
+        let added = folder.join("aqw").join(name);
+        script(&added);
+        settings::add_script_folder(added, cx);
+    }
+    for name in &PACKAGES[..installed] {
+        let root = package(name, &format!(r#"{{"name":"{name}","mira":{{}}}}"#));
+        if sources == Sources::UpdateWaiting && *name == "Daily quests" {
+            let commit = format!("4e1c2f0{}", "0".repeat(33));
+            fs::write(
+                root.join(packages::RECEIPT),
+                format!(
+                    r#"{{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
+                ),
+            )
+            .expect("write a story receipt");
+        }
+    }
+    if sources == Sources::Broken {
+        settings::add_script_folder(folder.join("aqw").join("unplugged"), cx);
+        package(
+            "future",
+            r#"{"name":"future","mira":{"requires":"999.0.0"}}"#,
+        );
+    }
+    crate::packages::init(
+        folder.join("packages"),
+        folder.join("skua"),
+        folder.join("github-token"),
+        cx,
+    );
+    if sources == Sources::UpdateWaiting {
+        let newer =
+            packages::Sha::parse(&format!("9a8b7c6{}", "0".repeat(33))).expect("a story commit");
+        crate::packages::packages(cx).update(cx, |packages, _| {
+            packages.mark(
+                folder.join("packages/daily-quests"),
+                Status::Available(newer),
+            )
+        });
+    }
+    cx.set_global(theme);
+    let client = Client::empty_for_tests(&folder, cx);
+    cx.new(|cx| {
+        ScriptsWindow::new(
+            client,
+            folder.join("scripts"),
+            folder.join("types"),
+            Target::Selected,
+            window,
+            cx,
+        )
+    })
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::script_log::ScriptLog;
     use super::*;
+    use crate::{
+        ruffle_view::script_form::Draft,
+        script_inputs,
+        scripting::{Definition, Kind, Meta},
+    };
+
+    fn form_of(
+        scripts: &Entity<ScriptsWindow>,
+        script: &Path,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Entity<InputsForm> {
+        scripts.read_with(cx, |scripts, _| {
+            scripts
+                .inputs_form(&FormKey::Script(script.to_owned()))
+                .cloned()
+                .expect("the inputs are loaded")
+        })
+    }
 
     const RECEIPT: &str = r#"{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"1111111111111111111111111111111111111111","tree":"2222222222222222222222222222222222222222","files":{}}"#;
 
@@ -3725,7 +3514,7 @@ mod tests {
                 (None, vec![]),
             ]
         );
-        let sources: Vec<(&Path, &str, Option<&str>, usize)> = library
+        let sources: Vec<(&Path, &str, Option<&str>)> = library
             .sources
             .iter()
             .map(|source| {
@@ -3733,7 +3522,6 @@ mod tests {
                     source.root.as_path(),
                     source.name.as_ref(),
                     source.problem.as_deref(),
-                    source.scripts,
                 )
             })
             .collect();
@@ -3745,40 +3533,27 @@ mod tests {
         assert_eq!(
             sources,
             [
-                (community.as_path(), "community", None, 3),
-                (missing.as_path(), "unplugged", Some("Can't read"), 0),
-                (authoring.as_path(), "Work in progress", None, 1),
-                (
-                    packages.join("broken").as_path(),
-                    "broken",
-                    Some(invalid),
-                    0
-                ),
-                (
-                    packages.join("dailies").as_path(),
-                    "@lucent/dailies",
-                    None,
-                    1
-                ),
+                (community.as_path(), "community", None),
+                (missing.as_path(), "unplugged", Some("Can't read")),
+                (authoring.as_path(), "Work in progress", None),
+                (packages.join("broken").as_path(), "broken", Some(invalid)),
+                (packages.join("dailies").as_path(), "@lucent/dailies", None),
                 (
                     packages.join("deleted").as_path(),
                     "deleted",
-                    Some("Its package.json is missing."),
-                    0
+                    Some("Its package.json is missing.")
                 ),
                 (
                     packages.join("future").as_path(),
                     "future",
-                    Some("Needs Mira 999.0.0 or newer."),
-                    0
+                    Some("Needs Mira 999.0.0 or newer.")
                 ),
                 (
                     packages.join("stripped").as_path(),
                     "stripped",
-                    Some("This isn't a Mira script package."),
-                    0
+                    Some("This isn't a Mira script package.")
                 ),
-                (skua.as_path(), "Skua", None, 2),
+                (skua.as_path(), "Skua", None),
             ]
         );
         for index in [3, 5, 7] {
@@ -3817,7 +3592,6 @@ mod tests {
             name: name.to_owned().into(),
             kind: SourceKind::Folder,
             problem: None,
-            scripts: 0,
         };
         let library = Library {
             entries: vec![
@@ -3988,6 +3762,7 @@ mod tests {
         let size = gpui::size(px(WIDTH), px(HEIGHT));
         let build = |window: &mut Window, cx: &mut App| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::settings::collapse_sources(cx, |sources| *sources = Default::default());
             crate::settings::add_script_folder(temp.join("community"), cx);
             crate::settings::add_script_folder(temp.join("unplugged"), cx);
             crate::settings::add_script_folder(temp.join("backup/scripts"), cx);
@@ -4037,10 +3812,10 @@ mod tests {
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
-                    update_scripts(cx, window, |scripts, cx| {
-                        scripts.folders_open = false;
-                        cx.notify();
-                    })
+                    cx.update(|cx| {
+                        crate::settings::collapse_sources(cx, |sources| sources.folders = true)
+                    });
+                    update_scripts(cx, window, |_, cx| cx.notify())
                 }),
             ),
             (
@@ -4052,14 +3827,15 @@ mod tests {
                         Some(gpui::MouseButton::Left),
                     );
                     move |cx, window| {
-                        update_scripts(cx, window, |scripts, cx| {
-                            scripts.folders_open = false;
-                            cx.notify();
+                        cx.update(|cx| {
+                            crate::settings::collapse_sources(cx, |sources| sources.folders = true)
                         });
+                        update_scripts(cx, window, |_, cx| cx.notify());
                         collapse(cx, window);
-                        update_scripts(cx, window, |scripts, _| {
-                            assert!(!scripts.packages_open, "the click collapses Packages")
-                        });
+                        assert!(
+                            cx.update(|cx| crate::settings::collapsed_sources(cx).packages),
+                            "the click collapses Packages"
+                        );
                         for key in ["shift-tab", "tab"] {
                             cx.update_window(window, |_, window, cx| {
                                 window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
@@ -4682,38 +4458,287 @@ export default function* () {}"#,
     }
 
     #[test]
-    fn snapshot_options_open_from_the_footer() {
+    fn snapshot_inputs_scrolled_to_the_end() {
         snapshot_window_with(
-            "scripts-options-open-min",
+            "scripts-inputs-end-min",
             (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            INPUTS,
+            |_| {},
+            |cx, window| {
+                update_scripts(cx, window, |scripts, cx| {
+                    let end = scripts.detail_scroll.max_offset().y;
+                    scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+                    cx.notify();
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_options_open_from_the_sidebar() {
+        let pages: [(&str, fn(&mut ScriptsWindow)); 3] = [
+            ("scripts-options-open-min", |_| {}),
+            ("scripts-options-open-queue-min", |scripts| {
+                scripts.page = Page::Queue
+            }),
+            ("scripts-options-open-log-min", |scripts| {
+                scripts.page = Page::Log
+            }),
+        ];
+        for (name, setup) in pages {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                setup,
+                open_options,
+            );
+        }
+    }
+
+    fn open_options(cx: &mut gpui::HeadlessAppContext, window: gpui::AnyWindowHandle) {
+        let position = gpui::point(px(100.0), px(MIN_HEIGHT - 50.0));
+        for event in [
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+                modifiers: Default::default(),
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers: Default::default(),
+            }),
+        ] {
+            cx.update_window(window, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            })
+            .expect("click Options");
+            cx.run_until_parked();
+        }
+    }
+
+    fn fill_log(log: &mut ScriptLog, cx: &mut Context<ScriptLog>) {
+        use super::super::script_log::Event;
+        use crate::scripting::{Level, Limit};
+        let sink = log.sink();
+        fn ended(outcome: &Outcome) -> Event<'_> {
+            Event::Ended {
+                outcome,
+                took: Duration::from_secs(192),
+            }
+        }
+        log.run(
+            "Hunt".into(),
+            Event::Started {
+                place: Some((1, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "hunting Frogzard (#3) in Enter");
+        sink.push(Level::Info, "killed 1/5");
+        for _ in 0..14 {
+            sink.push(
+                Level::Info,
+                "no live Frogzard in the map, waiting for a respawn",
+            );
+        }
+        sink.push(Level::Info, "hunting Frogzard (#2) in Enter");
+        sink.push(
+            Level::Debug,
+            r#"target {"monMapId":2,"name":"Frogzard","cell":"Enter","hp":1250,"maxHp":1250,"state":"alive"}"#,
+        );
+        sink.push(Level::Info, "killed 2/5");
+        sink.push(
+            Level::Warn,
+            "A subscription fell behind and dropped what it was holding.",
+        );
+        for kill in 3..=5 {
+            sink.push(Level::Info, &format!("killed {kill}/5"));
+        }
+        log.run("Hunt".into(), ended(&Outcome::Completed), cx);
+        log.run(
+            "Daily quests".into(),
+            Event::Started {
+                place: Some((2, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "accepting Bounty Hunter's Drone Parts");
+        log.run("Daily quests".into(), Event::Interrupted, cx);
+        log.run(
+            "Daily quests".into(),
+            Event::Started {
+                place: Some((2, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "accepting Bounty Hunter's Drone Parts");
+        log.run(
+            "Daily quests".into(),
+            ended(&Outcome::Failed {
+                message:
+                    "Couldn't find Ultra Avatar Tyndarius in r4 of ultratyndarius after 30 seconds."
+                        .into(),
+                stack: Some("    at hunt (daily.ts:42:11)\n    at default (daily.ts:88:5)".into()),
+            }),
+            cx,
+        );
+        log.run("Farm".into(), Event::Started { place: None }, cx);
+        sink.push(
+            Level::Error,
+            "Error: no quest 9999\n    at accept (farm.ts:12:3)",
+        );
+        log.run("Farm".into(), ended(&Outcome::Killed(Limit::Turn)), cx);
+    }
+
+    fn show_log(
+        fill: fn(&mut ScriptLog, &mut Context<ScriptLog>),
+    ) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+        move |cx, window| {
+            cx.update_window(window, |root, _, cx| {
+                let scripts = root.downcast::<ScriptsWindow>().unwrap();
+                let log = cx.new(|cx| {
+                    let mut log = ScriptLog::new(cx);
+                    fill(&mut log, cx);
+                    log
+                });
+                scripts.update(cx, |scripts, cx| {
+                    scripts.page = Page::Log;
+                    scripts.log.update(cx, |page, cx| page.show(Some(log), cx));
+                });
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    fn pointer_at(
+        cx: &mut gpui::HeadlessAppContext,
+        window: gpui::AnyWindowHandle,
+        events: Vec<gpui::PlatformInput>,
+    ) {
+        for event in events {
+            cx.update_window(window, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    fn click(x: f32, y: f32, shift: bool) -> Vec<gpui::PlatformInput> {
+        let position = gpui::point(px(x), px(y));
+        let modifiers = gpui::Modifiers {
+            shift,
+            ..Default::default()
+        };
+        vec![
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+                modifiers,
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers,
+            }),
+        ]
+    }
+
+    #[test]
+    fn snapshot_log_scrolled_back() {
+        let show = show_log(fill_log);
+        snapshot_window_with(
+            "scripts-log-scrolled-back",
+            (WIDTH, HEIGHT),
             "Alt 1",
             NESTED,
             |_| {},
-            |cx, window| {
-                let position = gpui::point(px(264.0), px(MIN_HEIGHT - 20.0));
-                for event in [
-                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        click_count: 1,
-                        first_mouse: false,
-                        modifiers: Default::default(),
-                    }),
-                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        click_count: 1,
-                        modifiers: Default::default(),
-                    }),
-                ] {
-                    cx.update_window(window, |_, window, cx| {
-                        window.dispatch_event(event, cx);
-                    })
-                    .expect("click Options");
-                    cx.run_until_parked();
-                }
+            move |cx, window| {
+                show(cx, window);
+                let scroll = gpui::PlatformInput::Scroll(gpui::ScrollEvent {
+                    position: gpui::point(px(500.0), px(300.0)),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(118.0))),
+                    ..Default::default()
+                });
+                pointer_at(cx, window, vec![scroll]);
+                pointer_at(cx, window, click(500.0, 150.0, false));
+                pointer_at(cx, window, click(500.0, 190.0, true));
             },
         );
+    }
+
+    fn fill_midnight(log: &mut ScriptLog, after: u32, cx: &mut Context<ScriptLog>) {
+        use crate::scripting::Level;
+        use chrono::TimeZone as _;
+        let at = |day, hour, minute, second| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 11, day, hour, minute, second)
+                .unwrap()
+        };
+        for (second, kill) in [(31, 37), (38, 38), (44, 39), (52, 40), (58, 41)] {
+            log.record(
+                at(23, 23, 59, second),
+                Level::Info,
+                &format!("killed {kill}/50"),
+                cx,
+            );
+        }
+        log.record(
+            at(24, 0, 0, 1),
+            Level::Warn,
+            "low on potions after 41 kills",
+            cx,
+        );
+        for step in 0..after {
+            let seconds = 4 + step * 7;
+            log.record(
+                at(24, 0, seconds / 60, seconds % 60),
+                Level::Info,
+                &format!("hunting Frogzard (#{}) in Enter", step % 4 + 1),
+                cx,
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_log_across_midnight() {
+        let few: fn(&mut ScriptLog, &mut Context<ScriptLog>) = |log, cx| fill_midnight(log, 4, cx);
+        let many: fn(&mut ScriptLog, &mut Context<ScriptLog>) =
+            |log, cx| fill_midnight(log, 40, cx);
+        for (name, fill) in [
+            ("scripts-log-midnight", few),
+            ("scripts-log-midnight-pinned", many),
+        ] {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                |_| {},
+                show_log(fill),
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_log() {
+        for (name, size) in [
+            ("scripts-log", (WIDTH, HEIGHT)),
+            ("scripts-log-min", (MIN_WIDTH, MIN_HEIGHT)),
+        ] {
+            snapshot_window_with(name, size, "Alt 1", NESTED, |_| {}, show_log(fill_log));
+        }
     }
 
     #[test]
@@ -4723,7 +4748,7 @@ export default function* () {}"#,
             ("scripts-queue-min", NESTED, |scripts| {
                 scripts.page = Page::Queue
             }),
-            ("scripts-log-min", NESTED, |scripts| {
+            ("scripts-log-no-tab-min", NESTED, |scripts| {
                 scripts.page = Page::Log
             }),
         ];
@@ -4750,7 +4775,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
                 .children(self.statuses.iter().map(|(text, activity, stoppable)| {
                     let failure = text.strip_prefix("hunt failed: ").map(|message| Failure {
                         title: "hunt failed".into(),
-                        script: "~/Documents/Mira/scripts/hunt.ts".into(),
+                        script: "~/Mira/scripts/hunt.ts".into(),
                         message: message.to_owned().into(),
                     });
                     shown_tab::header(
@@ -4770,6 +4795,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
                             failure,
                         },
                         |_, _, _| {},
+                        |_, _| {},
                         &theme,
                     ))
                 }))
@@ -5183,10 +5209,12 @@ Cells visited: Enter, r1, r2, r3, r4.";
         );
         assert!(!loaded("s100.ts", cx), "a row far out of view waits");
 
-        let edited = FormKey::Script(folder.join("s003.ts"));
-        scripts.update(cx, |scripts, cx| {
-            scripts.set_draft(&edited, 0, Draft::Text("7".into()), cx)
-        });
+        for (name, text) in [("s003.ts", "many"), ("s004.ts", "7")] {
+            let form = form_of(&scripts, &folder.join(name), cx);
+            form.update(cx, |form, cx| {
+                form.set_draft(0, Draft::Text(text.into()), cx)
+            });
+        }
         scripts.update(cx, |scripts, cx| {
             scripts.selected = 120;
             cx.notify();
@@ -5194,7 +5222,14 @@ Cells visited: Enter, r1, r2, r3, r4.";
         settle(cx);
         assert!(loaded("s118.ts", cx), "rows around the new position load");
         assert!(!loaded("s000.ts", cx), "rows left far behind let go");
-        assert!(loaded("s003.ts", cx), "a form with unsaved edits stays");
+        assert!(
+            loaded("s003.ts", cx),
+            "a form with edits that can't be saved stays"
+        );
+        assert!(
+            !loaded("s004.ts", cx),
+            "a form whose edits were saved lets go"
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -5346,13 +5381,208 @@ Cells visited: Enter, r1, r2, r3, r4.";
     }
 
     #[gpui::test]
+    fn the_window_and_saved_inputs_stay_in_step(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-edits-{:x}", u64::from_ne_bytes(random)));
+        let script = temp.join("scripts/wheel.ts");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(
+            &script,
+            r#"export const inputs = {
+                bankRewards: { type: "boolean", label: "Bank rewards", default: true },
+                spins: { type: "number", label: "Spins", integer: true, min: 1, default: 1 },
+            };"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.join("inputs.json"),
+            serde_json::to_vec(&serde_json::json!({
+                fs::canonicalize(&script).unwrap().to_str().unwrap(): { "bankRewards": true, "spins": 1 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let form = form_of(&scripts, &script, cx);
+        let spins = form.read_with(cx, |form, _| form.text(1).expect("a text field"));
+        let run_values = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| script_inputs::values(&script, cx).unwrap())
+        };
+        let expected = |banks: bool, spins: u64| {
+            serde_json::json!({ "bankRewards": banks, "spins": spins })
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+
+        assert_eq!(run_values(cx), expected(true, 1));
+
+        form.update(cx, |form, cx| form.set_draft(0, Draft::Toggle(false), cx));
+        cx.run_until_parked();
+        assert_eq!(run_values(cx), expected(false, 1));
+
+        spins.update(cx, |input, cx| input.set_text("", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            run_values(cx),
+            expected(false, 1),
+            "an input shown as invalid is never handed to a run"
+        );
+
+        spins.update(cx, |input, cx| input.set_text("3", cx));
+        cx.run_until_parked();
+        assert_eq!(run_values(cx), expected(false, 3));
+
+        cx.update(|_, cx| script_inputs::save(&script, expected(true, 7), cx));
+        cx.run_until_parked();
+        let shown = |cx: &mut gpui::VisualTestContext| {
+            let spins = spins.read_with(cx, |input, _| input.text().to_owned());
+            let banks = form.read_with(cx, |form, _| match &form.state {
+                FormState::Fields { drafts, .. } => drafts[0].draft.clone(),
+                _ => panic!("the inputs are loaded"),
+            });
+            (banks, spins)
+        };
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), "7".to_owned()),
+            "inputs saved from elsewhere show in the window"
+        );
+        assert_eq!(run_values(cx), expected(true, 7));
+
+        spins.update(cx, |input, cx| input.set_text("", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            script_inputs::save(&temp.join("scripts/other.ts"), expected(false, 1), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), String::new()),
+            "saving another script leaves a half-typed value alone"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn starting_fresh_saves_inputs_edited_while_they_were_unreadable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-fresh-{:x}", u64::from_ne_bytes(random)));
+        let wheel = temp.join("scripts/wheel.ts");
+        fs::create_dir_all(wheel.parent().unwrap()).unwrap();
+        fs::write(
+            &wheel,
+            r#"export const inputs = {
+                bankRewards: { type: "boolean", label: "Bank rewards", default: true },
+            };"#,
+        )
+        .unwrap();
+        let hunt = temp.join("scripts/hunt.ts");
+        fs::write(
+            &hunt,
+            r#"export const inputs = { kills: { type: "number", label: "Kills", default: 5 } };"#,
+        )
+        .unwrap();
+        fs::write(temp.join("inputs.json"), "{ \"oops\": ").unwrap();
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let select = |script: &Path, cx: &mut gpui::VisualTestContext| {
+            scripts.update(cx, |scripts, cx| {
+                scripts.selected = scripts
+                    .rows(cx)
+                    .iter()
+                    .position(|row| matches!(row, Row::Script(entry) if entry.path == script))
+                    .unwrap();
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        select(&wheel, cx);
+        form_of(&scripts, &wheel, cx)
+            .update(cx, |form, cx| form.set_draft(0, Draft::Toggle(false), cx));
+        select(&hunt, cx);
+
+        cx.update(|_, cx| script_inputs::start_fresh(cx));
+        let saved = |script: &Path, cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| script_inputs::values(script, cx).unwrap())
+        };
+        assert_eq!(
+            saved(&wheel, cx),
+            serde_json::json!({ "bankRewards": false })
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(
+            saved(&hunt, cx),
+            serde_json::json!({ "kills": 5 })
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
     fn the_inputs_bar_counts_inputs_to_fix_and_steps_through_them(cx: &mut gpui::TestAppContext) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let temp = std::env::temp_dir().join(format!("mira-fix-{:x}", u64::from_ne_bytes(random)));
         let script = temp.join("scripts/inputs.ts");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
-        fs::write(&script, include_str!("../../examples/inputs.ts")).unwrap();
+        fs::write(
+            &script,
+            format!(
+                "{}\nexport const meta = {{ description: \"Every kind of input.\" }};\n",
+                include_str!("../../examples/inputs.ts")
+            ),
+        )
+        .unwrap();
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
@@ -5381,16 +5611,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert_eq!(errors(cx), 2);
 
         let text = |field: usize, cx: &mut gpui::VisualTestContext| {
-            scripts.read_with(cx, |scripts, _| {
-                let Some(Form {
-                    state: FormState::Fields { texts, .. },
-                    ..
-                }) = scripts.forms.get(&FormKey::Script(script.clone()))
-                else {
-                    panic!("the inputs are loaded");
-                };
-                texts[field].clone().expect("a text field")
-            })
+            form_of(&scripts, &script, cx)
+                .read_with(cx, |form, _| form.text(field).expect("a text field"))
         };
         let offset = text(4, cx);
         let focused = |input: &Entity<Input>, cx: &mut gpui::VisualTestContext| {
@@ -5405,8 +5627,24 @@ Cells visited: Enter, r1, r2, r3, r4.";
         jump(1, cx);
         assert!(focused(&offset, cx), "the first input to fix is Offset");
         jump(1, cx);
-        let scrolled = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
-        assert!(scrolled < px(0.0), "stepping to Room scrolls it into view");
+        let (viewport, room, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
+            let scroll = &scripts.detail_scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(8).unwrap(),
+                scroll.offset().y,
+                error_bar_clearance(cx.theme()),
+            )
+        });
+        assert!(
+            room.top() + scrolled >= viewport.top()
+                && room.bottom() + scrolled <= viewport.bottom() - clearance,
+            "stepping to Room scrolls it into view: {room:?} in {viewport:?} at {scrolled:?}"
+        );
+        let room = form_of(&scripts, &script, cx)
+            .read_with(cx, |form, cx| form.focus_handle(8, cx))
+            .unwrap();
+        assert!(cx.update(|window, _| room.is_focused(window)));
         jump(1, cx);
         assert!(
             focused(&offset, cx),
@@ -5416,6 +5654,26 @@ Cells visited: Enter, r1, r2, r3, r4.";
         offset.update(cx, |input, cx| input.set_text("3", cx));
         cx.run_until_parked();
         assert_eq!(errors(cx), 1);
+
+        scripts.update(cx, |scripts, cx| {
+            let end = scripts.detail_scroll.max_offset().y;
+            scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (viewport, buy, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
+            let scroll = &scripts.detail_scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(9).unwrap(),
+                scroll.offset().y,
+                error_bar_clearance(cx.theme()),
+            )
+        });
+        assert!(
+            buy.bottom() + scrolled <= viewport.bottom() - clearance,
+            "scrolled to the end, Buy clears the bar and its fade: {buy:?} in {viewport:?} at {scrolled:?}"
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -5451,16 +5709,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
         cx.run_until_parked();
         let input = |field: usize, cx: &mut gpui::VisualTestContext| {
-            scripts.read_with(cx, |scripts, _| {
-                let Some(Form {
-                    state: FormState::Fields { texts, .. },
-                    ..
-                }) = scripts.forms.get(&FormKey::Script(script.clone()))
-                else {
-                    panic!("the inputs are loaded");
-                };
-                texts[field].clone().expect("a text field")
-            })
+            form_of(&scripts, &script, cx)
+                .read_with(cx, |form, _| form.text(field).expect("a text field"))
         };
         let (name, offset) = (input(0, cx), input(4, cx));
         cx.update(|window, cx| window.focus(&name.focus_handle(cx), cx));
@@ -5483,6 +5733,71 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert!(
             at_mode < at_offset,
             "tabbing on to Mode scrolls further, even with Offset still marked invalid"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn arrowing_through_sources_keeps_the_selected_one_in_view(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-arrow-{:x}", u64::from_ne_bytes(random)));
+        let folders: Vec<PathBuf> = (0..8)
+            .map(|index| temp.join(format!("folder-{index}")))
+            .collect();
+        for folder in folders.iter().chain([&temp.join("scripts")]) {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("hunt.ts"), "").unwrap();
+        }
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            for folder in &folders {
+                crate::settings::add_script_folder(folder.clone(), cx);
+            }
+            crate::packages::init(
+                temp.join("packages"),
+                temp.join("skua"),
+                temp.join("github-token"),
+                cx,
+            );
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        cx.simulate_click(gpui::point(px(100.0), px(222.0)), gpui::Modifiers::none());
+        cx.run_until_parked();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("down");
+            cx.run_until_parked();
+        }
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let shown = scripts.read_with(cx, |scripts, _| scripts.page.clone());
+        assert_eq!(shown, Page::Library(Some(folders[3].clone())));
+        let (viewport, row) = scripts.read_with(cx, |scripts, _| {
+            let scroll = &scripts.folder_scroll;
+            let laid_out = scroll.bounds_for_item(4).unwrap();
+            (
+                scroll.bounds(),
+                laid_out.top() + scroll.offset().y..laid_out.bottom() + scroll.offset().y,
+            )
+        });
+        let fade = cx.update(|_, cx| cx.theme().typography.body_line);
+        assert!(
+            row.start >= viewport.top() && row.end <= viewport.bottom() - fade,
+            "the selected folder sits fully in view above the fade: {row:?} in {viewport:?}"
         );
         fs::remove_dir_all(temp).unwrap();
     }

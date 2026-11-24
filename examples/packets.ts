@@ -13,7 +13,7 @@ export default function* () {
 
   const arrival = yield* Wait.forPacket(
     { from: "server", cmd: "moveToArea" },
-    { trigger: Player.joinMap("yulgar"), timeout: "10 seconds" },
+    { trigger: () => Player.joinMap("yulgar"), timeout: "10 seconds" },
   );
   console.log(`moveToArea arrived: ${arrival !== null}`);
 

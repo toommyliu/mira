@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use super::{Align, Placement, Side, hover_card::Card, placement::COLLISION_MARGIN};
-use crate::{ActiveTheme as _, Theme, motion};
+use crate::{ActiveTheme as _, Theme, motion, motion::From};
 
 #[derive(IntoElement)]
 pub struct Tooltip {
@@ -397,7 +397,15 @@ pub(crate) fn hover(
         )
         .when_some(frame, |trigger, (entrance, fade)| {
             let viewport = window.viewport_size();
-            let (positioner, from) = placement.resolve(at, measured.get(), viewport);
+            let bridge = match kind {
+                Kind::Card => placement.side_offset,
+                Kind::Tooltip => Pixels::ZERO,
+            };
+            let (positioner, from) = Placement {
+                side_offset: placement.side_offset - bridge,
+                ..placement
+            }
+            .resolve(at, measured.get(), viewport);
             let theme = cx.theme();
             let content = help
                 .panel(theme, window)
@@ -411,6 +419,12 @@ pub(crate) fn hover(
                 .relative()
                 .max_w(viewport.width - COLLISION_MARGIN * 2.0)
                 .opacity(fade)
+                .map(|panel| match from {
+                    From::Above => panel.pt(bridge),
+                    From::Below => panel.pb(bridge),
+                    From::Left => panel.pl(bridge),
+                    From::Right => panel.pr(bridge),
+                })
                 .when(matches!(kind, Kind::Card), |panel| {
                     panel.occlude().on_hover(move |over, _, cx| {
                         tip.update(cx, |tip, cx| tip.pointer(Over::Panel, *over, cx))

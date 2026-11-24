@@ -7,15 +7,24 @@ if [ "$(uname -sm)" != "Darwin arm64" ]; then
 fi
 scripts/build-app --release
 app=target/Mira.app
+node scripts/licenses.ts "$app/Contents/Resources/THIRD_PARTY_LICENSES.md"
 version=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
 out="target/releases/$version"
 rm -rf "$out"
 mkdir -p "$out"
 codesign --force --deep --sign - "$app"
 ditto -c -k --keepParent "$app" "$out/Mira.zip"
-stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
-ditto "$app" "$stage/Mira.app"
-ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -volname Mira -srcfolder "$stage" -format UDZO "$out/Mira.dmg"
+art=$(mktemp -d)
+trap 'rm -rf "$art"' EXIT
+swift scripts/dmg-background.swift "$art"
+attempt=1
+until uvx dmgbuild==1.6.7 -s scripts/dmg-settings.py -D app="$app" -D background="$art/background.png" Mira "$out/Mira.dmg"; do
+    rm -f "$out/Mira.dmg"
+    if [ "$attempt" -eq 5 ]; then
+        exit 1
+    fi
+    echo "dmgbuild failed on attempt $attempt, retrying" >&2
+    attempt=$((attempt + 1))
+    sleep $((attempt * 5))
+done
 echo "Packaged Mira $version in $out"

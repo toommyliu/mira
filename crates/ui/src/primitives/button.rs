@@ -130,6 +130,7 @@ pub struct Button {
     expanded: Option<bool>,
     tooltip: Option<SharedString>,
     focus: Option<gpui::FocusHandle>,
+    focusable: bool,
     invalid: bool,
     on_click: Option<ClickHandler>,
     on_press: Option<PressHandler>,
@@ -162,6 +163,7 @@ impl Button {
             expanded: None,
             tooltip: None,
             focus: None,
+            focusable: true,
             invalid: false,
             on_click: None,
             on_press: None,
@@ -293,12 +295,21 @@ impl Button {
         self
     }
 
+    pub(crate) fn unfocusable(mut self) -> Self {
+        self.focusable = false;
+        self
+    }
+
     pub(crate) fn id(&self) -> &ElementId {
         &self.id
     }
 
     pub(crate) fn label(&self) -> &SharedString {
         &self.label
+    }
+
+    pub(crate) fn joins_previous(&self) -> bool {
+        self.joined == Some(Joined::Previous)
     }
 
     pub(crate) fn is_disabled(&self) -> bool {
@@ -475,9 +486,10 @@ impl RenderOnce for Button {
             .when(self.invalid, |button| {
                 button.aria_description("Invalid value")
             })
-            .when(!self.disabled || focus.is_focused(window), |button| {
-                button.track_focus(&focus.clone().tab_stop(!self.disabled))
-            })
+            .when(
+                self.focusable && (!self.disabled || focus.is_focused(window)),
+                |button| button.track_focus(&focus.clone().tab_stop(!self.disabled)),
+            )
             .relative()
             .flex_none()
             .justify_center()

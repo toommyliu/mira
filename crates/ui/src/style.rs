@@ -88,7 +88,7 @@ impl Theme {
             .flex_none()
             .w(self.layout.sidebar)
             .min_h_0()
-            .bg(self.sidebar)
+            .bg(self.frame)
             .text_color(self.sidebar_foreground)
             .border_r_1()
             .border_color(self.sidebar_border)

@@ -117,9 +117,15 @@ fn start_with(
             entry: folder.0.join(entry),
             inputs,
         },
+        folder.0.join("packages"),
         limits,
         Box::new(move |level, message| {
-            let prefix = if level == Level::Error { "error: " } else { "" };
+            let prefix = match level {
+                Level::Debug => "debug: ",
+                Level::Info => "",
+                Level::Warn => "warn: ",
+                Level::Error => "error: ",
+            };
             sink.lock().unwrap().push(format!("{prefix}{message}"));
         }),
         player,
@@ -283,6 +289,42 @@ fn plain_javascript_modules_run_as_written() {
     ]);
     assert_eq!(finished.outcome, Outcome::Completed);
     assert_eq!(finished.logs, ["42"]);
+}
+
+#[test]
+fn effect_logs_reach_the_log_at_the_same_levels_as_console_calls() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+
+export default function* () {
+  console.log("plain");
+  console.debug("details");
+  console.warn("careful");
+  yield* Effect.log("from effect");
+  yield* Effect.logDebug("effect details");
+  yield* Effect.logWarning("effect careful", 42);
+  yield* Effect.logError("effect broke");
+  yield* Effect.logTrace("effect trace");
+  yield* Effect.log("annotated").pipe(Effect.annotateLogs({ cell: "Enter" }));
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            "plain",
+            "debug: details",
+            "warn: careful",
+            "from effect",
+            "debug: effect details",
+            "warn: effect careful 42",
+            "error: effect broke",
+            "debug: effect trace",
+            r#"annotated {"cell":"Enter"}"#,
+        ]
+    );
 }
 
 #[test]
@@ -585,6 +627,130 @@ fn scripts_can_only_import_effect_and_their_own_folder() {
         None,
     );
     assert_eq!(failure(&finished.outcome).0, "Needs Mira 999.0.0 or newer.");
+}
+
+#[test]
+fn scripts_import_installed_packages_by_name() {
+    let long = "a".repeat(200);
+    let manifest = |name: &str, main: Option<&str>| {
+        let main = main.map_or(String::new(), |main| format!(r#""main":"{main}","#));
+        format!(r#"{{"name":"{name}",{main}"mira":{{}}}}"#)
+    };
+    let importer = |name: &str| {
+        format!(
+            "import {{ Dailies }} from \"{name}\";\nexport default function* () {{ console.log(Dailies.run()); }}\n"
+        )
+    };
+    let dailies = manifest("@mira/dailies", Some("index.ts"));
+    let escape = manifest("escape", Some("index.ts"));
+    let twin = manifest("twin", Some("index.ts"));
+    let files = [
+        ("outside.ts", "export const secret = 1;\n".to_owned()),
+        ("packages/o-mira-dailies/package.json", dailies),
+        (
+            "packages/o-mira-dailies/index.ts",
+            "import { ready } from \"./lib/ready.ts\";\nexport const Dailies = { run: (): string => ready };\n".into(),
+        ),
+        (
+            "packages/o-mira-dailies/lib/ready.ts",
+            "export const ready = \"ready\";\n".into(),
+        ),
+        ("scripts/dailies.ts", importer("@mira/dailies")),
+        ("added/dailies.ts", importer("@mira/dailies")),
+        (
+            "packages/o-consumer/package.json",
+            manifest("consumer", None),
+        ),
+        ("packages/o-consumer/scripts/dailies.ts", importer("@mira/dailies")),
+        (&format!("packages/{long}/package.json"), escape),
+        (
+            &format!("packages/{long}/index.ts"),
+            "import \"../../outside.ts\";\nexport const Dailies = {};\n".into(),
+        ),
+        ("scripts/escape.ts", importer("escape")),
+        (
+            "packages/o-outside/package.json",
+            manifest("outside", Some("../../outside.ts")),
+        ),
+        ("scripts/outside.ts", importer("outside")),
+        ("packages/o-none/package.json", manifest("none", None)),
+        ("scripts/none.ts", importer("none")),
+        ("packages/o-gone/package.json", manifest("gone", Some("index.ts"))),
+        ("scripts/gone.ts", importer("gone")),
+        (
+            "packages/o-folder/package.json",
+            manifest("folder", Some("lib")),
+        ),
+        ("packages/o-folder/lib/index.ts", String::new()),
+        ("scripts/folder.ts", importer("folder")),
+        (
+            "packages/o-newer/package.json",
+            r#"{"name":"twin","main":"index.ts","mira":{"requires":"999.0.0"}}"#.into(),
+        ),
+        ("packages/o-twin/package.json", twin.clone()),
+        ("packages/o-twin/index.ts", String::new()),
+        ("packages/p-twin/package.json", twin),
+        ("packages/p-twin/index.ts", String::new()),
+        ("scripts/twin.ts", importer("twin")),
+        (
+            "packages/o-broken/package.json",
+            r#"{"name":"broken","main":5,"mira":{}}"#.into(),
+        ),
+        ("scripts/broken.ts", importer("broken")),
+        ("scripts/missing.ts", importer("@mira/missing")),
+    ];
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    let folder = Folder::new(&files);
+
+    for entry in [
+        "scripts/dailies.ts",
+        "added/dailies.ts",
+        "packages/o-consumer/scripts/dailies.ts",
+    ] {
+        let finished = run_in(&folder, entry, Limits::default(), None);
+        assert_eq!(finished.outcome, Outcome::Completed, "{entry}");
+        assert_eq!(finished.logs, ["ready"], "{entry}");
+    }
+    for (entry, message) in [
+        (
+            "scripts/escape.ts",
+            "Can't import ../../outside.ts from escape/index.ts: it is outside the package's folder",
+        ),
+        (
+            "scripts/outside.ts",
+            "Can't import outside from outside.ts: its main, ../../outside.ts, is outside the package's folder",
+        ),
+        (
+            "scripts/none.ts",
+            "Can't import none from none.ts: the package has no \"main\" in its package.json",
+        ),
+        (
+            "scripts/gone.ts",
+            "Can't import gone from gone.ts: its main, index.ts, doesn't exist",
+        ),
+        (
+            "scripts/folder.ts",
+            "Can't import folder from folder.ts: its main, lib, isn't a .ts, .mts, .js or .mjs file",
+        ),
+        (
+            "scripts/twin.ts",
+            "Can't import twin from twin.ts: more than one installed package has that name: o-newer, o-twin, p-twin",
+        ),
+        (
+            "scripts/broken.ts",
+            "Can't import broken from broken.ts: Its package.json isn't valid: \"main\" must be a string.",
+        ),
+        (
+            "scripts/missing.ts",
+            "Can't import @mira/missing from missing.ts: no installed package has that name; scripts can import mira, mira/http, mira/schema, effect, effect/<Module>, installed packages and their own files",
+        ),
+    ] {
+        let finished = run_in(&folder, entry, Limits::default(), None);
+        assert_eq!(failure(&finished.outcome).0, message, "{entry}");
+    }
 }
 
 #[test]
@@ -1112,10 +1278,12 @@ fn waiting_until_a_condition_holds_checks_it_right_away_and_then_on_each_interva
 import { Wait } from "mira";
 
 export default function* () {
-  const already = yield* Wait.until(Effect.succeed(true), { interval: "1 hour" });
+  const already = yield* Wait.until(() => Effect.succeed(true), { interval: "1 hour" });
   let checks = 0;
-  const met = yield* Wait.until(Effect.sync(() => ++checks === 3), { interval: "10 millis" });
-  const timedOut = yield* Wait.until(Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
+  const met = yield* Wait.until(function* () {
+    return ++checks === 3;
+  }, { interval: "10 millis" });
+  const timedOut = yield* Wait.until(() => Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
   console.log(already, met, checks, timedOut);
 }
 "#,
@@ -1193,7 +1361,7 @@ fn waiting_for_a_packet_subscribes_before_the_trigger_and_returns_the_first_matc
 export default function* () {
   const reply = yield* Wait.forPacket(
     { from: "server", cmd: "loadShop" },
-    { trigger: Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
+    { trigger: () => Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
   );
   console.log(JSON.stringify(reply));
 }
@@ -1258,7 +1426,7 @@ export default function* () {
   const str = yield* Wait.forPacket({ from: "server", cmd: "respawnMon" });
   const dropped = yield* Wait.forPacket({ cmd: "ct" });
   const late = yield* Wait.forPacket({ cmd: "ct" }, { timeout: "30 millis" });
-  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: Effect.succeed(false) });
+  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: () => Effect.succeed(false) });
   console.log(JSON.stringify([client, str, dropped, late, skipped]));
 }
 "#,
@@ -1321,7 +1489,7 @@ export default function* () {
     assert_eq!(
         finished.logs,
         [
-            "A subscription fell behind and dropped what it was holding.",
+            "warn: A subscription fell behind and dropped what it was holding.",
             "ct",
             "ct"
         ]
@@ -1337,8 +1505,8 @@ import { Packets } from "mira";
 
 export default function* () {
   const subscription = yield* Packets.subscribe({ cmd: "ct" });
-  console.log((yield* Effect.timeoutOption(subscription.next, "30 millis"))._tag);
-  console.log((yield* subscription.next).cmd);
+  console.log((yield* Effect.timeoutOption(subscription.next(), "30 millis"))._tag);
+  console.log((yield* subscription.next()).cmd);
 }
 "#,
     )]);
@@ -1385,7 +1553,7 @@ fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
 export default function* () {
   const death = yield* Wait.forEvent(
     { type: "monsterDeath", monMapId: 4 },
-    { trigger: Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
+    { trigger: () => Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
   );
   console.log(JSON.stringify(death));
 }
@@ -3097,7 +3265,7 @@ export default function* () {
     { timeout: "5 seconds" },
   );
   yield* Army.sync("done");
-  yield* taunt.stop;
+  yield* taunt.stop();
   console.log("done");
 }
 "#,
@@ -3414,7 +3582,7 @@ export default function* () {
     },
   });
   yield* Script.sleep("50 millis");
-  yield* rotation.stop;
+  yield* rotation.stop();
   console.log(turns);
 }
 "#,
@@ -3702,4 +3870,70 @@ export default function* () {
     assert_eq!(finished.logs, ["done"]);
     assert!(finished.elapsed < Duration::from_secs(3));
     assert!(shown.lock().unwrap().len() <= 1);
+}
+
+fn read_tree(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    into: &str,
+    files: &mut Vec<(String, String)>,
+) {
+    for item in fs::read_dir(dir).unwrap() {
+        let path = item.unwrap().path();
+        if path.is_dir() {
+            read_tree(root, &path, into, files);
+        } else {
+            let relative = path.strip_prefix(root).unwrap().to_str().unwrap();
+            files.push((
+                format!("{into}/{relative}"),
+                fs::read_to_string(&path).unwrap(),
+            ));
+        }
+    }
+}
+
+#[test]
+fn vendored_scripts_load_and_stop_at_the_ready_check_while_logged_out() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("script-packages");
+    let mut files = Vec::new();
+    read_tree(&root, &root, "packages", &mut files);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let scripts: Vec<&str> = files
+        .iter()
+        .map(|(path, _)| *path)
+        .filter(|path| path.split('/').nth(2) == Some("scripts") && super::runnable(path))
+        .collect();
+    assert!(!scripts.is_empty());
+    for (path, text) in &files {
+        if path.ends_with("/package.json") {
+            crate::packages::Manifest::parse(text.as_bytes()).unwrap();
+        }
+    }
+    let folder = Folder::new(&files);
+    for script in scripts {
+        let player = FakePlayer::default();
+        let finished = start(
+            &folder,
+            script,
+            Limits::default(),
+            player.answering(|request, _| match request {
+                Request::Player(P::Ready) => Some(Ok(json!(false))),
+                _ => Some(Ok(json!(null))),
+            }),
+        )
+        .finish();
+        assert_eq!(finished.outcome, Outcome::Completed, "{script}");
+        let calls: Vec<Request> = player
+            .seen()
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Call(_, request) => Some(request),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, [Request::Player(P::Ready)], "{script}");
+    }
 }

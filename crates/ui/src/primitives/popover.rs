@@ -293,6 +293,7 @@ impl RenderOnce for Popover {
         trigger = trigger.attach(
             menu::attach(
                 self.placement,
+                state.read(cx).trigger_bounds(),
                 &state,
                 menu::dismiss(&state),
                 window,

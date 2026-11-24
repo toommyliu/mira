@@ -24,8 +24,8 @@ use super::{
 use mira_ui::{
     ActiveTheme as _, Theme, Tone, h_flex,
     primitives::{
-        Align, Button, Dialog, HoverCard, Icon, Kbd, MenuItem, Placement, Side, Tab as TabItem,
-        Tabs,
+        Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, HoverCard, Icon, Kbd,
+        MenuItem, Placement, Side, Tab as TabItem, Tabs,
         button::{Size, Variant},
     },
     theme::CONTROL_SM,
@@ -34,11 +34,13 @@ use mira_ui::{
 use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
+    characters,
+    file_panel::{self, Pick},
     ruffle::{Inbox, Msg, extras},
     script_inputs,
     scripting::Values,
-    settings,
-    shared_objects::SharedObjects,
+    settings, shared_objects,
+    shortcuts::keys_for,
 };
 
 actions!(
@@ -63,8 +65,15 @@ pub(super) const TRAFFIC_LIGHTS_WIDTH: Pixels = px(78.0);
 const SHORTCUT_HINT_DELAY: Duration = Duration::from_millis(400);
 const STATUS_LINGER: Duration = Duration::from_millis(1500);
 const STATUS_PADDING: Pixels = px(16.0);
+const TAB_MENU_WIDTH: Pixels = px(304.0);
 
-fn fully_visible(viewport: (f32, f32), scrolled: f32, tabs: &[(f32, f32)]) -> Vec<usize> {
+fn fully_visible(
+    viewport: (f32, f32),
+    scrolled: f32,
+    max_scroll: f32,
+    tabs: &[(f32, f32)],
+) -> Vec<usize> {
+    let scrolled = scrolled.clamp(-max_scroll, 0.0);
     tabs.iter()
         .enumerate()
         .filter(|(_, (top, bottom))| {
@@ -125,13 +134,22 @@ pub struct Client {
     unopened: HashMap<AccountId, SharedString>,
     ended: HashMap<AccountId, ScriptState>,
     closing: Option<Closing>,
+    replacing: Option<Replacing>,
     _activation: Subscription,
+    _focus_lost: Subscription,
 }
 
 struct Closing {
     open: bool,
     view: EntityId,
     title: SharedString,
+}
+
+struct Replacing {
+    open: bool,
+    view: EntityId,
+    running: Option<SharedString>,
+    queue: bool,
 }
 
 struct Status {
@@ -297,7 +315,7 @@ pub(crate) fn init(
     super::script_names::init(cx);
     cx.set_global(Game {
         shared: Shared {
-            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
+            extras: Rc::new(extras::Store::new(settings::extras(cx))),
             data,
             accounts,
             device,
@@ -505,11 +523,21 @@ impl Client {
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
                 closing: None,
+                replacing: None,
                 _activation: cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                     if window.is_window_active() {
                         activated(window.window_handle().window_id(), cx);
                     } else {
                         this.hide_shortcut_hints(cx);
+                    }
+                }),
+                _focus_lost: cx.on_focus_lost(window, |this: &mut Self, window, cx| {
+                    match window
+                        .focus_lost_restore_target(cx)
+                        .filter(|target| *target != this.focus)
+                    {
+                        Some(target) => window.focus(&target, cx),
+                        None => this.focus_active(window, cx),
                     }
                 }),
             }
@@ -520,7 +548,7 @@ impl Client {
         Ok(client)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "storyboard"))]
     pub(crate) fn empty_for_tests(folder: &std::path::Path, cx: &mut App) -> Entity<Client> {
         cx.new(|cx| {
             cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify())
@@ -528,7 +556,7 @@ impl Client {
             cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
                 .detach();
             Client {
-                extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
+                extras: Rc::new(extras::Store::new(Default::default())),
                 data: folder.to_path_buf(),
                 accounts: folder.join("accounts.json"),
                 device: reqwest::header::HeaderValue::from_static("test"),
@@ -548,7 +576,9 @@ impl Client {
                 unopened: HashMap::new(),
                 ended: HashMap::new(),
                 closing: None,
+                replacing: None,
                 _activation: Subscription::new(|| {}),
+                _focus_lost: Subscription::new(|| {}),
             }
         })
     }
@@ -559,13 +589,14 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Entity<RuffleView>> {
-        let shared_objects = cx.global::<SharedObjects>();
+        let seed = shared_objects::seed(&self.data);
         let storage = match account.filter(|_| settings::separate_aqw_settings(cx)) {
-            Some(account) => shared_objects.account(&account.id())?,
-            None => shared_objects.shared(),
+            Some(account) => {
+                shared_objects::of_character(&seed, &characters::folder(&account.id(), cx)?)?
+            }
+            None => seed,
         };
         let view = RuffleView::new(
-            self.data.clone(),
             storage,
             self.device.clone(),
             self.armies.clone(),
@@ -582,7 +613,7 @@ impl Client {
                 (window_size.height - cx.theme().layout.chrome).max(px(1.0)),
             ),
         );
-        let inset = bar_inset(window, left);
+        let inset = bar_inset(window, self.sidebar, cx.theme());
         view.update(cx, |view, _| {
             view.bar_inset = inset;
             view.layout(player, window)
@@ -851,7 +882,7 @@ impl Client {
         if let Some(index) = self.session_of(account, cx) {
             self.sessions[index]
                 .view
-                .update(cx, |view, cx| view.start_loaded_script(cx));
+                .update(cx, |view, cx| view.restart_script(cx));
         }
     }
 
@@ -911,12 +942,124 @@ impl Client {
         }
     }
 
-    fn asking(&self) -> bool {
+    fn asking(&self, cx: &App) -> bool {
         self.closing.as_ref().is_some_and(|closing| closing.open)
+            || self
+                .replacing
+                .as_ref()
+                .is_some_and(|replacing| replacing.open)
+            || self
+                .active_view(cx)
+                .is_some_and(|(view, _)| view.read(cx).script.asking_inputs(cx))
+    }
+
+    fn load_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking(cx)) else {
+            return;
+        };
+        window.activate_window();
+        let tab = view.read(cx);
+        let running = tab
+            .script
+            .entry()
+            .filter(|_| tab.script.stoppable())
+            .map(|entry| super::script_names::name(entry, cx));
+        let queue = tab.queue.playing();
+        if running.is_none() && !queue {
+            return choose_script(view, false, window, cx);
+        }
+        self.replacing = Some(Replacing {
+            open: true,
+            view: view.entity_id(),
+            running,
+            queue,
+        });
+        cx.notify();
+    }
+
+    fn confirm_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(replacing) = self.replacing.as_mut().filter(|replacing| replacing.open) else {
+            return;
+        };
+        replacing.open = false;
+        let view = replacing.view;
+        cx.notify();
+        if let Some(session) = self
+            .sessions
+            .iter()
+            .find(|session| session.view.entity_id() == view)
+        {
+            choose_script(
+                session.view.clone(),
+                settings::start_replacements(cx),
+                window,
+                cx,
+            );
+        }
+    }
+
+    fn dismiss_replace(&mut self, cx: &mut Context<Self>) {
+        if let Some(replacing) = &mut self.replacing {
+            replacing.open = false;
+            cx.notify();
+        }
+    }
+
+    fn replace_dialog(&self, cx: &mut Context<Self>) -> Option<Dialog> {
+        let replacing = self.replacing.as_ref()?;
+        let dismiss = cx.weak_entity();
+        let toggled = cx.weak_entity();
+        let (title, description) = match (&replacing.running, replacing.queue) {
+            (Some(name), false) => (
+                format!("Replace {name}?"),
+                format!("{name} keeps running until you choose a file to load in its place."),
+            ),
+            (Some(name), true) => (
+                format!("Replace {name}?"),
+                format!(
+                    "{name} keeps running until you choose a file. Then it stops and the queue pauses."
+                ),
+            ),
+            (None, _) => (
+                "Pause the queue?".to_owned(),
+                "The queue pauses once you choose a file to load.".to_owned(),
+            ),
+        };
+        let start = if settings::start_replacements(cx) {
+            CheckedState::Checked
+        } else {
+            CheckedState::Unchecked
+        };
+        Some(
+            Dialog::new("replace-script", replacing.open, title)
+                .alert()
+                .description(description)
+                .footer_start_slot(
+                    Checkbox::new("replace-script-start", "Start it once it loads", start)
+                        .on_toggle(move |on, _, cx| {
+                            settings::set_start_replacements(on, cx);
+                            toggled.update(cx, |_, cx| cx.notify()).ok();
+                        }),
+                )
+                .action(
+                    Button::new("replace-script-cancel", "Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_replace(cx))),
+                )
+                .action(
+                    Button::new("replace-script-confirm", "Replace…")
+                        .variant(Variant::Danger)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.confirm_replace(window, cx)),
+                        ),
+                )
+                .on_close(move |_, cx| {
+                    dismiss.update(cx, |this, cx| this.dismiss_replace(cx)).ok();
+                }),
+        )
     }
 
     fn request_close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.get(index).filter(|_| !self.asking()) else {
+        let Some(session) = self.sessions.get(index).filter(|_| !self.asking(cx)) else {
             return;
         };
         let running = session
@@ -998,6 +1141,13 @@ impl Client {
         {
             closing.open = false;
         }
+        if let Some(replacing) = self
+            .replacing
+            .as_mut()
+            .filter(|replacing| replacing.view == session.view.entity_id())
+        {
+            replacing.open = false;
+        }
         let account = session.view.read(cx).account_id();
         if let Some(account) = &account
             && self.launches.remove(account)
@@ -1023,7 +1173,7 @@ impl Client {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.sessions.len() && !self.asking() {
+        if index < self.sessions.len() && !self.asking(cx) {
             self.active = index;
             self.show(window, cx);
         }
@@ -1051,14 +1201,18 @@ impl Client {
                 .view
                 .update(cx, |view, cx| view.present(tiled, active, window, cx));
         }
+        if !self.sessions.is_empty() {
+            reveal_tab(&self.tab_scroll, self.active, self.sessions.len());
+        }
+        self.focus_active(window, cx);
+        cx.notify();
+    }
+
+    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.sessions.get(self.active) {
-            Some(session) => {
-                reveal_tab(&self.tab_scroll, self.active, self.sessions.len());
-                window.focus(&session.view.focus_handle(cx), cx)
-            }
+            Some(session) => window.focus(&session.view.focus_handle(cx), cx),
             None => window.focus(&self.focus, cx),
         }
-        cx.notify();
     }
 
     fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -1210,6 +1364,7 @@ impl Client {
         fully_visible(
             (f32::from(viewport.top()), f32::from(viewport.bottom())),
             f32::from(self.tab_scroll.offset().y),
+            f32::from(self.tab_scroll.max_offset().y),
             &tabs,
         )
     }
@@ -1303,7 +1458,7 @@ impl Client {
                     )
                     .child(self.grid_toggle(cx)),
             )
-            .child(div().flex_none().child(tabs))
+            .child(tabs)
             .child(drag_area().flex_1())
             .children(
                 crate::updates::button(Placement::new(Side::Right, Align::End), cx).map(|update| {
@@ -1316,7 +1471,7 @@ impl Client {
             )
     }
 
-    fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn bar_start(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let layout = cx.theme().layout;
         let label = match self.sidebar {
             Sidebar::Hidden => "Show sidebar",
@@ -1334,13 +1489,48 @@ impl Client {
         if dot.is_some() {
             toggle = toggle.tooltip("Show sidebar · an update is available");
         }
-        div()
+        h_flex()
             .absolute()
             .left(traffic_lights_inset(window))
             .top((cx.theme().layout.chrome - layout.control_sm) / 2.0)
+            .gap(layout.space(0.5))
             .occlude()
-            .child(toggle)
-            .children(dot)
+            .child(div().relative().child(toggle).children(dot))
+            .when(self.sidebar == Sidebar::Hidden, |row| {
+                row.child(self.tab_menu(cx))
+            })
+    }
+
+    fn tab_menu(&self, cx: &mut Context<Self>) -> DropdownMenu {
+        let client = cx.weak_entity();
+        DropdownMenu::new("tab-menu")
+            .trigger(bar_icon_button(
+                "tab-menu",
+                Icon::GalleryVerticalEnd,
+                "Tabs",
+            ))
+            .disabled(self.asking(cx))
+            .width(TAB_MENU_WIDTH)
+            .items(move |_, cx| {
+                let Some(this) = client.upgrade() else {
+                    return Vec::new();
+                };
+                let this = this.read(cx);
+                let shortcuts = this.shortcut_tabs();
+                let tabs = this
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, session)| MenuTab {
+                        title: session.title(cx),
+                        glance: session.view.read(cx).glance(cx).map(|glance| glance.label),
+                        active: index == this.active,
+                        shortcut: shortcut_for(&shortcuts, index)
+                            .and_then(|number| keys_for(&SelectSession(number - 1), cx)),
+                    })
+                    .collect();
+                tab_items(&client, tabs, this.layout, cx)
+            })
     }
 
     fn toggle_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1453,6 +1643,79 @@ impl Client {
     }
 }
 
+struct MenuTab {
+    title: SharedString,
+    glance: Option<SharedString>,
+    active: bool,
+    shortcut: Option<SharedString>,
+}
+
+fn tab_items(
+    client: &WeakEntity<Client>,
+    tabs: Vec<MenuTab>,
+    layout: Layout,
+    cx: &App,
+) -> Vec<MenuItem> {
+    let shortcut = |item: MenuItem, action: &dyn gpui::Action| match keys_for(action, cx) {
+        Some(keys) => item.shortcut(keys),
+        None => item,
+    };
+    let mut items: Vec<MenuItem> = tabs
+        .into_iter()
+        .enumerate()
+        .map(|(index, tab)| {
+            let select = on_client(client, move |client, window, cx| {
+                client.select(index, window, cx)
+            });
+            let close = on_client(client, move |client, window, cx| {
+                client.request_close(index, window, cx)
+            });
+            let mut item = MenuItem::action(tab.title, select)
+                .checked(tab.active)
+                .dismiss("Close tab", close);
+            if let Some(glance) = tab.glance {
+                item = item.description(glance);
+            }
+            if let Some(keys) = tab.shortcut {
+                item = item.shortcut(keys);
+            }
+            item
+        })
+        .collect();
+    if !items.is_empty() {
+        items.push(MenuItem::separator().pinned());
+    }
+    let new_tab = on_client(client, |client, window, cx| {
+        if let Err(error) = client.open_session(None, window, cx) {
+            tracing::error!(%error, "couldn't open a session");
+        }
+    });
+    items.push(shortcut(
+        MenuItem::action("New tab", new_tab).pinned(),
+        &NewSession,
+    ));
+    let grid = match layout {
+        Layout::Single => "Grid view",
+        Layout::Grid => "Single view",
+    };
+    let toggle_grid = on_client(client, Client::toggle_grid);
+    items.push(shortcut(
+        MenuItem::action(grid, toggle_grid).pinned(),
+        &ToggleGrid,
+    ));
+    items
+}
+
+fn on_client(
+    client: &WeakEntity<Client>,
+    f: impl Fn(&mut Client, &mut Window, &mut Context<Client>) + 'static,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let client = client.clone();
+    move |window, cx| {
+        client.update(cx, |client, cx| f(client, window, cx)).ok();
+    }
+}
+
 fn tab_title(
     theme: &Theme,
     label: &SharedString,
@@ -1519,8 +1782,12 @@ fn traffic_lights_inset(window: &Window) -> Pixels {
     }
 }
 
-fn bar_inset(window: &Window, sidebar_width: Pixels) -> Pixels {
-    (traffic_lights_inset(window) + CONTROL_SM - sidebar_width).max(BAR_PADDING)
+fn bar_inset(window: &Window, sidebar: Sidebar, theme: &Theme) -> Pixels {
+    let lights = traffic_lights_inset(window);
+    match sidebar {
+        Sidebar::Hidden => lights + CONTROL_SM * 2.0 + theme.layout.space(0.5),
+        Sidebar::Full => (lights + CONTROL_SM - theme.layout.sidebar).max(BAR_PADDING),
+    }
 }
 
 pub(crate) fn drag_area() -> gpui::Div {
@@ -1545,7 +1812,7 @@ pub(crate) fn bar(cx: &App) -> gpui::Div {
         .gap(layout.space(0.5))
         .h(cx.theme().layout.chrome)
         .pr(BAR_PADDING)
-        .bg(theme.background)
+        .bg(theme.frame)
         .border_b_1()
         .border_color(theme.border)
 }
@@ -1581,7 +1848,7 @@ pub(crate) fn bar_separator(cx: &App) -> gpui::Div {
 
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = bar_inset(window, self.sidebar.width(cx.theme()));
+        let inset = bar_inset(window, self.sidebar, cx.theme());
         for session in &self.sessions {
             if session.view.read(cx).bar_inset != inset {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
@@ -1622,8 +1889,8 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (bar_background, bar_border) = (cx.theme().background, cx.theme().border);
-        let show_empty_bar = self.sidebar == Sidebar::Hidden && self.sessions.is_empty();
+        let (bar_background, bar_border) = (cx.theme().frame, cx.theme().border);
+        let show_empty_bar = self.sessions.is_empty();
         div()
             .window_text(cx.theme())
             .id("client")
@@ -1634,6 +1901,9 @@ impl Client {
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
+                if this.asking(cx) {
+                    return;
+                }
                 if let Err(error) = this.open_session(None, window, cx) {
                     tracing::error!(%error, "couldn't open a session");
                 }
@@ -1660,7 +1930,10 @@ impl Client {
                 self.sessions
                     .get(self.active)
                     .map(|session| session.view.clone()),
-                |root, view| super::game_bar::on_actions(root, view, cx.weak_entity()),
+                |root, view| {
+                    let has_inputs = view.read(cx).script.has_inputs();
+                    super::game_bar::on_actions(root, view, has_inputs, cx.weak_entity())
+                },
             )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {
@@ -1692,8 +1965,27 @@ impl Client {
                     .child(body)
                     .children(self.status(window, cx)),
             )
-            .child(self.sidebar_toggle(window, cx))
+            .child(self.bar_start(window, cx))
             .children(self.close_dialog(cx))
+            .children(self.replace_dialog(cx))
+    }
+}
+
+fn choose_script(view: Entity<RuffleView>, start: bool, window: &Window, cx: &App) {
+    let chosen = file_panel::open(Pick::File, "Load", window, cx);
+    let view = view.downgrade();
+    cx.spawn(async move |cx| {
+        if let Some(path) = chosen.await {
+            let _ = view.update(cx, |view, cx| view.load_script(path, start, cx));
+        }
+    })
+    .detach();
+}
+
+pub(super) fn load_script(cx: &mut App) {
+    let game = live(cx).next().map(|(game, _)| game.handle);
+    if let Some(game) = game {
+        let _ = game.update(cx, |client, window, cx| client.load_script(window, cx));
     }
 }
 
@@ -1729,10 +2021,14 @@ mod tests {
         let tabs: Vec<_> = (0..12)
             .map(|index| (index as f32 * 30.0, index as f32 * 30.0 + 28.0))
             .collect();
-        assert_eq!(fully_visible((0.0, 130.0), 0.0, &tabs), [0, 1, 2, 3]);
-        assert_eq!(fully_visible((0.0, 130.0), -45.0, &tabs), [2, 3, 4]);
+        assert_eq!(fully_visible((0.0, 130.0), 0.0, 228.0, &tabs), [0, 1, 2, 3]);
+        assert_eq!(fully_visible((0.0, 130.0), -45.0, 228.0, &tabs), [2, 3, 4]);
         assert_eq!(
-            fully_visible((0.0, 1000.0), 0.0, &tabs),
+            fully_visible((0.0, 130.0), -1000.0, 228.0, &tabs),
+            [8, 9, 10, 11]
+        );
+        assert_eq!(
+            fully_visible((0.0, 1000.0), 0.0, 0.0, &tabs),
             (0..9).collect::<Vec<_>>()
         );
     }
@@ -1793,6 +2089,49 @@ mod tests {
     }
 
     #[gpui::test]
+    fn the_sidebar_shortcut_works_after_it_hides_the_open_tab_menu(cx: &mut gpui::TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("mira-tab-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            bind_keys(cx);
+            crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+            crate::shortcuts::apply(cx);
+            crate::settings::set_sidebar(false, cx);
+            init(
+                folder.clone(),
+                folder.join("accounts.json"),
+                reqwest::header::HeaderValue::from_static("test"),
+                Armies::new(folder.join("armies")),
+                cx,
+            );
+        });
+        let window = cx
+            .update(|cx| open(Home::Setup("Daily".into()), false, cx))
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let trigger = point(
+            TRAFFIC_LIGHTS_WIDTH + CONTROL_SM * 1.5 + px(2.0),
+            cx.update(|_, cx| cx.theme().layout.chrome) / 2.0,
+        );
+        cx.simulate_click(trigger, Modifiers::none());
+        assert!(cx.debug_bounds("menu-panel").is_some());
+        let sidebar = |cx: &mut gpui::VisualTestContext| {
+            window
+                .read_with(cx, |client, _| client.sidebar == Sidebar::Full)
+                .unwrap()
+        };
+        for open in [true, false] {
+            cx.simulate_keystrokes("ctrl-cmd-s");
+            cx.run_until_parked();
+            assert_eq!(sidebar(cx), open);
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
     fn tools_open_for_an_open_client_and_never_open_one(cx: &mut gpui::TestAppContext) {
         use crate::ruffle_view::{
             LoadScript, OpenEnvironment, OpenLoaderGrabber, OpenPackets, OpenScripts, init_tools,
@@ -1826,6 +2165,9 @@ mod tests {
         let client = cx
             .update(|cx| open(Home::Setup("Daily".into()), false, cx))
             .unwrap();
+        cx.update(|cx| cx.dispatch_action(&LoadScript));
+        cx.run_until_parked();
+        assert_eq!(cx.windows(), [client.into()], "Load script opened a window");
         cx.update(|cx| cx.dispatch_action(&OpenPackets));
         cx.run_until_parked();
         assert_eq!(cx.windows().len(), 2);
@@ -1896,6 +2238,31 @@ mod tests {
                         open: true,
                         view: cx.entity_id(),
                         title: "Close Player1?".into(),
+                    });
+                });
+                cx.new(|_| Shown(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    #[test]
+    fn snapshot_replace_running_script() {
+        let folder = std::env::temp_dir().join("mira-replace-script-snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in mira_ui::snapshot(
+            "client-replace-running-script",
+            gpui::size(px(720.0), px(420.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                client.update(cx, |client, cx| {
+                    client.replacing = Some(Replacing {
+                        open: true,
+                        view: cx.entity_id(),
+                        running: Some("hunt.ts".into()),
+                        queue: true,
                     });
                 });
                 cx.new(|_| Shown(client))
@@ -2030,7 +2397,7 @@ mod tests {
                     div()
                         .w(theme.layout.sidebar)
                         .h_full()
-                        .bg(theme.sidebar)
+                        .bg(theme.frame)
                         .child(
                             Tabs::new("sessions", "Tabs", 1, move |_| {
                                 let (view, title) = (row.view, row.title.clone());
@@ -2068,7 +2435,7 @@ mod tests {
                 glance: Some(Glance { label: label.into(), tone }),
                 details: Details {
                     server: Some("Swordhaven (EU)".into()),
-                    script: Some("/Users/player/Documents/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
+                    script: Some("/Users/player/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
                     error: Some("Couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into()),
                 },
                 hint,
@@ -2082,7 +2449,7 @@ mod tests {
                     div()
                         .w(theme.layout.sidebar)
                         .h_full()
-                        .bg(theme.sidebar)
+                        .bg(theme.frame)
                         .child(
                             Tabs::new("sessions", "Tabs", rows.len(), move |index| {
                                 let row = &rows[index];
@@ -2167,6 +2534,17 @@ mod tests {
                     after.get_pixel(x, y),
                     "row stays uncovered"
                 );
+                let pixel = |x, y| {
+                    let (x, y) = point(x, y);
+                    after.get_pixel(x, y)
+                };
+                let edge = pixel(204, 40);
+                assert_eq!(
+                    pixel(300, 8),
+                    edge,
+                    "card edge over the stage matches its edge over the sidebar"
+                );
+                assert_ne!(pixel(208, 40), edge, "card edge stands out from its fill");
             },
         );
     }
@@ -2229,6 +2607,147 @@ mod tests {
                 assert_ne!(image.get_pixel(w / 2, h / 32).0, player, "game bar");
             },
         );
+    }
+
+    struct CollapsedBar(Entity<Client>);
+
+    impl Render for CollapsedBar {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let (inset, start) = self.0.update(cx, |client, cx| {
+                let inset = bar_inset(window, client.sidebar, cx.theme());
+                (inset, client.bar_start(window, cx))
+            });
+            div()
+                .window_text(cx.theme())
+                .relative()
+                .size_full()
+                .bg(gpui::black())
+                .child(super::super::game_bar::preview(inset, cx))
+                .child(start)
+        }
+    }
+
+    #[test]
+    fn snapshot_collapsed_bar() {
+        let folder = crate::storyboard::scratch("client-collapsed-bar");
+        for path in mira_ui::snapshot(
+            "client-collapsed-bar",
+            gpui::size(px(720.0), px(80.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                let client = Client::empty_for_tests(&folder, cx);
+                cx.new(|_| CollapsedBar(client))
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    struct TabMenu {
+        extra: usize,
+        active: usize,
+    }
+
+    impl Render for TabMenu {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let menu = DropdownMenu::new("tab-menu")
+                .trigger(bar_icon_button(
+                    "tab-menu",
+                    Icon::GalleryVerticalEnd,
+                    "Tabs",
+                ))
+                .width(TAB_MENU_WIDTH)
+                .default_open(true)
+                .items({
+                    let (extra, active) = (self.extra, self.active);
+                    move |_, cx| {
+                        let tab = |title: &str, glance: Option<&str>, number: usize| MenuTab {
+                            title: title.to_owned().into(),
+                            glance: glance.map(|glance| glance.to_owned().into()),
+                            active: number == active,
+                            shortcut: keys_for(&SelectSession(number - 1), cx),
+                        };
+                        let mut tabs = vec![
+                            tab("Artix", Some("Running hunt.ts"), 1),
+                            tab("Zorbak", Some("Logging in, attempt 2 of 3"), 2),
+                            tab("Warlic", None, 3),
+                        ];
+                        tabs.extend((4..4 + extra).map(|number| {
+                            tab(&format!("Farmer{number}"), Some("Running daily.ts"), number)
+                        }));
+                        tab_items(&WeakEntity::new_invalid(), tabs, Layout::Single, cx)
+                    }
+                });
+            div()
+                .window_text(&theme)
+                .size_full()
+                .bg(theme.background)
+                .child(
+                    window_bar(window, cx)
+                        .gap(theme.layout.space(0.5))
+                        .child(bar_icon_button(
+                            "sidebar-toggle",
+                            Icon::Sidebar,
+                            "Show sidebar",
+                        ))
+                        .child(menu),
+                )
+        }
+    }
+
+    #[test]
+    fn snapshot_tab_menu() {
+        let folder = crate::storyboard::scratch("client-tab-menu");
+        mira_ui::snapshot_with(
+            "client-tab-menu",
+            gpui::size(px(480.0), px(260.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                bind_keys(cx);
+                crate::shortcuts::apply(cx);
+                cx.new(|_| TabMenu {
+                    extra: 0,
+                    active: 1,
+                })
+            },
+            |cx, owner| {
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(160.0 + nudge), px(104.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_long_tab_menu() {
+        let folder = crate::storyboard::scratch("client-tab-menu-long");
+        for path in mira_ui::snapshot(
+            "client-tab-menu-long",
+            gpui::size(px(480.0), px(400.0)),
+            move |_, cx| {
+                crate::settings::init(folder.join("settings.json"), |_| {}, cx);
+                bind_keys(cx);
+                crate::shortcuts::apply(cx);
+                cx.new(|_| TabMenu {
+                    extra: 9,
+                    active: 11,
+                })
+            },
+        ) {
+            assert!(path.exists(), "{} was not written", path.display());
+        }
     }
 
     #[test]

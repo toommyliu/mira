@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use super::{
-    Button, ContextMenu, DropdownMenu, Flow, HoverCard, Icon, MenuItem, Pose, Sortable,
+    Button, ContextMenu, DropdownMenu, Flow, HoverCard, Icon, MenuItem, Pose, Scrollbar, Sortable,
     button::Size,
     menu::{self, Handler, ItemsBuilder, MenuState},
 };
@@ -539,6 +539,7 @@ impl RenderOnce for Tabs {
             Axis::Horizontal
         };
         let on_key = self.on_select;
+        let scrolls = self.scroll.is_some();
         let tab = self.tab;
         let list = div()
             .id(self.id.clone())
@@ -564,6 +565,9 @@ impl RenderOnce for Tabs {
                     nav::step(Some(selected), count, step, true, |_| true),
                     &on_key,
                 ) {
+                    if scrolls {
+                        nav::request_reveal(cx);
+                    }
                     on_select(next, window, cx);
                 }
                 cx.stop_propagation();
@@ -589,7 +593,7 @@ impl RenderOnce for Tabs {
                         })
                 }
             });
-        match self.on_reorder {
+        let tabs = match self.on_reorder {
             Some(reorder) => {
                 let flow = if vertical { Flow::Column } else { Flow::Row };
                 let sortable = Sortable::new(
@@ -605,11 +609,22 @@ impl RenderOnce for Tabs {
                 }
             }
             None => list
-                .when_some(self.scroll, |list, scroll| {
+                .when_some(self.scroll.clone(), |list, scroll| {
                     list.overflow_y_scroll().track_scroll(&scroll)
                 })
                 .children((0..count).map(|index| render.tab(index, Pose::Rest, window, cx)))
                 .into_any_element(),
+        };
+        match self.scroll {
+            Some(scroll) => div()
+                .relative()
+                .flex()
+                .flex_col()
+                .min_h_0()
+                .child(tabs)
+                .child(Scrollbar::new((self.id, "scrollbar"), scroll).persistent())
+                .into_any_element(),
+            None => tabs,
         }
     }
 }

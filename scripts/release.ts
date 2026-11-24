@@ -15,7 +15,8 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const manifestPath = join(root, "Cargo.toml");
 const usage = `Usage:
   pnpm release changes
-  pnpm release publish <version> --notes <file> [--dry-run]`;
+  pnpm release publish <version> --notes <file> [--dry-run]
+  pnpm release ci <version> --notes <file>`;
 
 export function parseVersion(text: string): Version {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(text.trim());
@@ -81,27 +82,40 @@ export function remoteFor(remotes: string, repository: Repository): string {
   throw new Error(`No git remote points at ${wanted}`);
 }
 
+const highlights = 5;
+const longest = 120;
+
 export function checkNotes(notes: string): string {
   const lines = notes
-    .trim()
     .split("\n")
-    .map((line) => line.trimEnd());
-  if (lines.length === 0 || lines[0] === "") throw new Error("The notes file is empty");
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (lines.length === 0) throw new Error("The notes file is empty");
+  if (lines.length > highlights) throw new Error(`Pick at most ${highlights} highlights`);
   for (const line of lines) {
-    if (line === "") continue;
-    if (!line.startsWith("- ")) throw new Error(`Each note is a "- " bullet: ${line}`);
-    if (line.includes("<details")) throw new Error("Leave the full changelog to the script");
+    if (!/^- \*\*[^*]+\.\*\* \S/.test(line)) {
+      throw new Error(`Each note is "- **Lead.** One sentence.": ${line}`);
+    }
+    if (line.length >= longest)
+      throw new Error(`Keep each note under ${longest} characters: ${line}`);
   }
   return lines.join("\n");
 }
 
 export function releaseBody(notes: string, changes: readonly Change[]): string {
+  const highlights = checkNotes(notes);
+  const fixes = changes.filter((change) => /^(fix|perf)(\(.+\))?!?: /.test(change.subject));
+  const more = fixes.length - highlights.split("\n").length;
   const log = changes.map((change) => `- ${change.subject} (${change.sha.slice(0, 8)})`);
+  const count = `${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
   return [
-    checkNotes(notes),
+    highlights,
     "",
+    ...(more > 0
+      ? [`Plus ${more} more ${more === 1 ? "fix or improvement" : "fixes and improvements"}.`, ""]
+      : []),
     "<details>",
-    "<summary>Full changelog</summary>",
+    `<summary>Full changelog (${count})</summary>`,
     "",
     ...(log.length > 0 ? log : ["- No commits since the last release."]),
     "",
@@ -189,53 +203,100 @@ function published(slug: string, name: string): Published | null {
   }
 }
 
-function changesSince(remote: string, tag: string | null): Change[] {
-  const range = ["HEAD"];
-  if (tag) {
-    run("git", ["fetch", "--quiet", "--no-tags", remote, `refs/tags/${tag}`]);
-    range.unshift("^FETCH_HEAD");
-  }
+function fetchCommit(remote: string, ref: string): string {
+  run("git", ["fetch", "--quiet", "--no-tags", remote, ref]);
+  return run("git", ["rev-parse", "FETCH_HEAD"]).trim();
+}
+
+function changesSince(remote: string, tip: string, tag: string | null): Change[] {
+  const range = [tip];
+  if (tag) range.unshift(`^${fetchCommit(remote, `refs/tags/${tag}`)}`);
   return parseChanges(run("git", ["log", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", ...range]));
 }
 
 async function context() {
-  const manifest = await readFile(manifestPath, "utf8");
-  const repository = manifestRepository(manifest);
+  const repository = manifestRepository(await readFile(manifestPath, "utf8"));
+  const slug = `${repository.owner}/${repository.name}`;
   const remote = remoteFor(run("git", ["remote", "-v"]), repository);
+  const branch = run("gh", ["api", `repos/${slug}`, "--jq", ".default_branch"]).trim();
+  const tip = fetchCommit(remote, `refs/heads/${branch}`);
   const tag = latestTag(repository);
-  return { manifest, repository, remote, tag, changes: changesSince(remote, tag) };
+  return {
+    manifest: run("git", ["show", `${tip}:Cargo.toml`]),
+    head: run("git", ["log", "-1", "--format=%s", tip]).trim(),
+    slug,
+    remote,
+    branch,
+    tip,
+    tag,
+    changes: changesSince(remote, tip, tag),
+  };
 }
 
 async function changes(): Promise<void> {
-  const { manifest, tag, changes } = await context();
-  console.log(`Mira ${formatVersion(manifestVersion(manifest))}, last release ${tag ?? "none"}`);
+  const { manifest, remote, branch, tag, changes } = await context();
+  const version = formatVersion(manifestVersion(manifest));
+  console.log(`Mira ${version} on ${remote}/${branch}, last release ${tag ?? "none"}`);
   for (const change of changes) {
     console.log(`\n${change.sha.slice(0, 8)} ${change.subject}`);
     if (change.body) console.log(change.body.replace(/^/gm, "  "));
   }
 }
 
-async function publish(versionText: string, notesPath: string, dryRun: boolean): Promise<void> {
-  const { manifest, repository, remote, tag, changes } = await context();
+async function prepare(versionText: string, notesPath: string) {
+  const current = await context();
+  const { manifest, slug, remote, branch, tip, head, tag } = current;
   const version = parseVersion(versionText);
   const name = `v${formatVersion(version)}`;
-  const head = run("git", ["log", "-1", "--format=%s"]).trim();
   const step = plan(version, manifestVersion(manifest), head, tag);
-  const slug = `${repository.owner}/${repository.name}`;
   const existing = published(slug, name);
   if (existing && step === "bump") {
     throw new Error(
       `${name} already has a release. Resume from its release commit or delete it first`,
     );
   }
-  const body = releaseBody(await readFile(notesPath, "utf8"), changes);
-  const branch = run("gh", ["api", `repos/${slug}`, "--jq", ".default_branch"]).trim();
+  const notes = checkNotes(await readFile(notesPath, "utf8"));
+  const body = releaseBody(notes, current.changes);
   const action = step === "resume" ? "Resume" : "Release";
-  console.log(`${action} ${name} to ${slug} (${remote}/${branch}), previous ${tag ?? "none"}\n`);
+  const at = `${remote}/${branch} at ${tip.slice(0, 8)}`;
+  console.log(`${action} ${name} to ${slug} (${at}), previous ${tag ?? "none"}\n`);
   if (!existing) console.log(body);
+  return { ...current, version, name, step, existing, notes, body };
+}
+
+async function publish(versionText: string, notesPath: string, dryRun: boolean): Promise<void> {
+  const { slug, branch, version, notes } = await prepare(versionText, notesPath);
   if (dryRun) return;
+  run(
+    "gh",
+    [
+      "workflow",
+      "run",
+      "release.yml",
+      "--repo",
+      slug,
+      "--ref",
+      branch,
+      "-f",
+      `version=${formatVersion(version)}`,
+      "-f",
+      `notes=${notes}`,
+    ],
+    true,
+  );
+}
+
+async function ci(versionText: string, notesPath: string): Promise<void> {
+  if (process.env["GITHUB_ACTIONS"] !== "true") {
+    throw new Error("Releases run in the Release workflow. Start one with pnpm release publish");
+  }
+  const { manifest, slug, remote, branch, tip, version, name, step, existing, body } =
+    await prepare(versionText, notesPath);
+  if (run("git", ["rev-parse", "HEAD"]).trim() !== tip) {
+    throw new Error(`HEAD isn't the tip of ${remote}/${branch}`);
+  }
   if (run("git", ["status", "--porcelain", "--untracked-files=no"]).trim()) {
-    throw new Error("Commit or stash your changes before releasing");
+    throw new Error("The checkout has uncommitted changes");
   }
   if (step === "bump") {
     await writeFile(manifestPath, withVersion(manifest, version));
@@ -301,8 +362,9 @@ async function main(): Promise<void> {
   });
   const [command, version, ...extra] = positionals;
   if (command === "changes" && version === undefined) return changes();
-  if (command === "publish" && version !== undefined && extra.length === 0 && values.notes) {
-    return publish(version, values.notes, values["dry-run"]);
+  if (version !== undefined && extra.length === 0 && values.notes) {
+    if (command === "publish") return publish(version, values.notes, values["dry-run"]);
+    if (command === "ci" && !values["dry-run"]) return ci(version, values.notes);
   }
   throw new Error(usage);
 }

@@ -293,16 +293,6 @@ impl PackageDialogs {
         })
         .detach();
     }
-
-    pub(super) fn check(&mut self, cx: &mut Context<Self>) {
-        let task = packages::packages(cx).update(cx, |packages, cx| packages.check(false, cx));
-        cx.spawn(async move |_, _| {
-            if let Err(message) = task.await {
-                tracing::warn!(error = %message, "couldn't check packages for updates");
-            }
-        })
-        .detach();
-    }
 }
 
 fn edit_lines(edits: &Edits) -> Vec<String> {

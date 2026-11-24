@@ -1,15 +1,17 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Mira supports macOS only.");
 
-mod account_settings;
 mod accounts;
 mod app_menu;
 mod army;
 mod automation;
 mod beep;
 mod bridge;
+mod characters;
+mod clock;
 mod combat_profiles;
 mod core_bots;
+mod data_file;
 mod domain;
 mod file_panel;
 mod jitter;
@@ -43,12 +45,13 @@ fn main() -> anyhow::Result<()> {
         .join("Mira");
     std::fs::create_dir_all(&data)?;
     let device = net::device_id(&data.join("device-id"))?;
-    let documents = dirs::document_dir()
-        .ok_or_else(|| anyhow::anyhow!("No Documents directory"))?
+    let files = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("No home directory"))?
         .join("Mira");
-    let armies = army::Armies::new(documents.join("armies"));
-    let scripts = documents.join("scripts");
+    let armies = army::Armies::new(files.join("armies"));
+    let scripts = files.join("scripts");
     let types = data.join("types");
+    let installed_packages = files.join("packages");
     let app = mira_platform::application();
     app.on_reopen(ruffle_view::open_launch_window);
     app.with_quit_mode(gpui::QuitMode::Explicit)
@@ -76,12 +79,12 @@ fn main() -> anyhow::Result<()> {
                     settings::init(data.join("settings.json"), settings_changed, cx);
                     shortcuts::apply(cx);
                     cx.on_keyboard_layout_change(settings_changed).detach();
-                    account_settings::init(data.join("account-settings"), cx);
+                    characters::init(data.join("characters"), cx);
                     combat_profiles::init(data.join("combat-profiles.json"), cx);
                     script_inputs::init(data.join("script-inputs.json"), cx);
                     packages::init(
-                        documents.join("packages"),
-                        documents.join("skua"),
+                        installed_packages.clone(),
+                        files.join("skua"),
                         data.join("github-token"),
                         cx,
                     );
@@ -89,11 +92,22 @@ fn main() -> anyhow::Result<()> {
                         runner: packages::resources()
                             .unwrap_or_default()
                             .join("skua/Mira.Skua.dll"),
-                        home: documents.join("skua"),
+                        home: files.join("skua"),
                         cache: dirs::cache_dir()
                             .unwrap_or_else(|| data.clone())
                             .join("Mira/skua"),
                     });
+                    let (mapped, mapping) = (types.clone(), installed_packages.clone());
+                    cx.observe(&packages::packages(cx), move |state, cx| {
+                        if state.read(cx).activity().is_none() {
+                            let (types, packages) = (mapped.clone(), mapping.clone());
+                            cx.background_spawn(async move {
+                                scripting::link_packages(&types, &packages);
+                            })
+                            .detach();
+                        }
+                    })
+                    .detach();
                     packages::start(cx);
                     updates::start(cx);
                     let installed = types.clone();
@@ -105,11 +119,11 @@ fn main() -> anyhow::Result<()> {
                             tracing::warn!(%error, path = %installed.display(), "couldn't install the script types");
                         }
                         scripting::link_types(folders.iter().map(PathBuf::as_path), &installed);
+                        scripting::link_packages(&installed, &installed_packages);
                     })
                     .detach();
                     app_menu::set_menus(cx);
                     let accounts = data.join("accounts.json");
-                    shared_objects::init(data.join("shared-objects"), &accounts, cx);
                     ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
                     ruffle_view::open_launch_window(cx);
                     if cx.windows().is_empty() {

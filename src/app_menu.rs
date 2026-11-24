@@ -90,7 +90,7 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Client", game::OpenClient),
             MenuItem::action("Manager", game::OpenManager),
-            MenuItem::action("Combat Profiles", game::OpenCombatProfiles),
+            MenuItem::action("Combat profiles", game::OpenCombatProfiles),
             MenuItem::separator(),
             MenuItem::action("Scripts", game::OpenScripts),
             MenuItem::action("Environment", game::OpenEnvironment),
@@ -98,6 +98,12 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::action("Packets", game::OpenPackets),
             MenuItem::separator(),
             MenuItem::action("Toggle Full Screen", ToggleFullScreen),
+        ]),
+        Menu::new("Script").items([
+            MenuItem::action("Load Script…", game::LoadScript),
+            MenuItem::action("Edit Inputs…", game::EditScriptInputs),
+            MenuItem::separator(),
+            MenuItem::action("Start/Stop Script", game::ToggleScript),
         ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),

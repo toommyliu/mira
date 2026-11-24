@@ -1,14 +1,13 @@
 use std::{
     collections::HashSet,
-    fs,
-    io::{self, Write as _},
-    os::unix::fs::OpenOptionsExt as _,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    data_file,
     domain::auth::Credentials,
     setups::{self, Member, Setup},
 };
@@ -16,7 +15,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AccountId(String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Account {
     pub(crate) name: String,
@@ -49,12 +48,32 @@ impl Account {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct Draft {
     pub(crate) name: String,
     pub(crate) username: String,
     pub(crate) password: String,
     pub(crate) server: Option<String>,
+}
+
+impl fmt::Debug for Account {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Account")
+            .field("name", &self.name)
+            .field("username", &self.username)
+            .field("server", &self.server)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Draft {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Draft")
+            .field("name", &self.name)
+            .field("username", &self.username)
+            .field("server", &self.server)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Draft {
@@ -288,16 +307,7 @@ fn write(path: &Path, accounts: &[Account], setups: &[Setup]) -> io::Result<()> 
     })
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
-    let temporary = path.with_extension("json.tmp");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    data_file::write_secret(path, &bytes)
 }
 
 #[cfg(test)]
@@ -320,6 +330,21 @@ mod tests {
             username: username.into(),
             password: "secret".into(),
             ..Draft::default()
+        }
+    }
+
+    #[test]
+    fn debug_output_hides_the_password() {
+        let draft = draft("Artix");
+        let account = Account {
+            name: draft.name.clone(),
+            username: draft.username.clone(),
+            password: draft.password.clone(),
+            server: None,
+        };
+        for debugged in [format!("{draft:?}"), format!("{account:?}")] {
+            assert!(debugged.contains("Artix"), "{debugged}");
+            assert!(!debugged.contains("secret"), "{debugged}");
         }
     }
 

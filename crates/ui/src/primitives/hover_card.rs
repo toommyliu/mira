@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, Div, ElementId, FontWeight, HighlightStyle, Hsla, InteractiveElement as _,
     IntoElement, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, Stateful,
@@ -8,7 +10,11 @@ use gpui::{
 const LABEL_MIN: Pixels = px(44.0);
 const NOTES_MAX_HEIGHT: Pixels = px(240.0);
 
-use super::{Scrollbar, tooltip};
+use super::{
+    Button, Icon, Scrollbar,
+    button::{Size, Variant},
+    icon, tooltip,
+};
 use crate::Tone;
 
 enum Value {
@@ -16,11 +22,20 @@ enum Value {
     Path(SharedString),
 }
 
+type Action = Rc<dyn Fn(&mut Window, &mut App)>;
+
+enum Link {
+    Url(SharedString),
+    Action(Action),
+}
+
 pub(super) struct Card {
     title: SharedString,
     rows: Vec<(SharedString, Value)>,
     body: Option<SharedString>,
     notes: Vec<(Option<SharedString>, SharedString)>,
+    after: Option<SharedString>,
+    link: Option<(SharedString, Link)>,
     scroll: ScrollHandle,
     fit: bool,
 }
@@ -42,6 +57,8 @@ impl HoverCard {
                 rows: Vec::new(),
                 body: None,
                 notes: Vec::new(),
+                after: None,
+                link: None,
                 scroll: ScrollHandle::new(),
                 fit: false,
             },
@@ -90,6 +107,25 @@ impl HoverCard {
 
     pub fn note(mut self, lead: Option<SharedString>, text: impl Into<SharedString>) -> Self {
         self.card.notes.push((lead, text.into()));
+        self
+    }
+
+    pub fn after_notes(mut self, text: impl Into<SharedString>) -> Self {
+        self.card.after = Some(text.into());
+        self
+    }
+
+    pub fn link(mut self, label: impl Into<SharedString>, url: impl Into<SharedString>) -> Self {
+        self.card.link = Some((label.into(), Link::Url(url.into())));
+        self
+    }
+
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.card.link = Some((label.into(), Link::Action(Rc::new(f))));
         self
     }
 
@@ -229,71 +265,100 @@ pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::
                 )
                 .child(cell)
         }))
-        .when(card.body.is_some() || !card.notes.is_empty(), |popup| {
-            let scroll = card.scroll.clone();
-            let overflows = scroll.max_offset().y > Pixels::ZERO;
-            let measured = scroll.clone();
+        .when(
+            card.body.is_some() || !card.notes.is_empty() || card.after.is_some(),
+            |popup| {
+                let scroll = card.scroll.clone();
+                let overflows = scroll.max_offset().y > Pixels::ZERO;
+                let measured = scroll.clone();
+                popup.child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .min_h_0()
+                        .mr(-inset)
+                        .child(
+                            div()
+                                .id("hover-card-notes")
+                                .flex()
+                                .flex_col()
+                                .gap(layout.space(1.5))
+                                .max_h(NOTES_MAX_HEIGHT)
+                                .pr(if overflows {
+                                    Scrollbar::GUTTER + px(2.0)
+                                } else {
+                                    inset
+                                })
+                                .overflow_y_scroll()
+                                .track_scroll(&scroll)
+                                .text_size(typography.secondary)
+                                .line_height(typography.secondary_line)
+                                .text_color(theme.muted_foreground)
+                                .children(
+                                    card.body
+                                        .map(|body| div().mt(layout.space(0.5)).child(body)),
+                                )
+                                .children(card.notes.into_iter().map(|(lead, text)| {
+                                    let (line, bold) = match lead {
+                                        Some(lead) => (format!("{lead} {text}"), lead.len()),
+                                        None => (text.to_string(), 0),
+                                    };
+                                    let lead = HighlightStyle {
+                                        font_weight: Some(FontWeight::MEDIUM),
+                                        color: Some(theme.foreground),
+                                        ..Default::default()
+                                    };
+                                    div()
+                                        .flex()
+                                        .flex_none()
+                                        .gap(layout.space(2.0))
+                                        .child(div().flex_none().child("•"))
+                                        .child(
+                                            div().flex_1().min_w_0().child(
+                                                StyledText::new(line)
+                                                    .with_highlights([(0..bold, lead)]),
+                                            ),
+                                        )
+                                }))
+                                .children(card.after.map(|after| div().child(after))),
+                        )
+                        .child(
+                            canvas(
+                                move |_, window, _| {
+                                    if (measured.max_offset().y > Pixels::ZERO) != overflows {
+                                        window.request_animation_frame();
+                                    }
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_0(),
+                        )
+                        .child(Scrollbar::new("hover-card-notes-scrollbar", scroll).persistent()),
+                )
+            },
+        )
+        .when_some(card.link, |popup, (label, link)| {
+            let button = Button::new("hover-card-link", label)
+                .variant(Variant::Ghost)
+                .size(Size::XSmall)
+                .unfocusable();
+            let button = match link {
+                Link::Url(url) => button
+                    .end_slot(
+                        icon(Icon::ArrowUpRight, theme.muted_foreground)
+                            .size(Size::XSmall.icon_size()),
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                Link::Action(action) => button.on_click(move |_, window, cx| action(window, cx)),
+            };
             popup.child(
                 div()
-                    .relative()
+                    .debug_selector(|| "hover-card-link".into())
                     .flex()
-                    .flex_col()
-                    .min_h_0()
-                    .mr(-inset)
-                    .child(
-                        div()
-                            .id("hover-card-notes")
-                            .flex()
-                            .flex_col()
-                            .gap(layout.space(1.5))
-                            .max_h(NOTES_MAX_HEIGHT)
-                            .pr(if overflows {
-                                Scrollbar::GUTTER + px(2.0)
-                            } else {
-                                inset
-                            })
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll)
-                            .text_size(typography.secondary)
-                            .line_height(typography.secondary_line)
-                            .text_color(theme.muted_foreground)
-                            .children(
-                                card.body
-                                    .map(|body| div().mt(layout.space(0.5)).child(body)),
-                            )
-                            .children(card.notes.into_iter().map(|(lead, text)| {
-                                let (line, bold) = match lead {
-                                    Some(lead) => (format!("{lead} {text}"), lead.len()),
-                                    None => (text.to_string(), 0),
-                                };
-                                let lead = HighlightStyle {
-                                    font_weight: Some(FontWeight::MEDIUM),
-                                    color: Some(theme.foreground),
-                                    ..Default::default()
-                                };
-                                div()
-                                    .flex()
-                                    .flex_none()
-                                    .gap(layout.space(2.0))
-                                    .child(div().flex_none().child("•"))
-                                    .child(div().flex_1().min_w_0().child(
-                                        StyledText::new(line).with_highlights([(0..bold, lead)]),
-                                    ))
-                            })),
-                    )
-                    .child(
-                        canvas(
-                            move |_, window, _| {
-                                if (measured.max_offset().y > Pixels::ZERO) != overflows {
-                                    window.request_animation_frame();
-                                }
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_0(),
-                    )
-                    .child(Scrollbar::new("hover-card-notes-scrollbar", scroll).persistent()),
+                    .ml(-layout.space(2.0))
+                    .child(button),
             )
         })
 }

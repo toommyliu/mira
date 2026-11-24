@@ -2,7 +2,7 @@ use std::{
     fs::{self, File},
     io::{self, Write},
     panic::{self, PanicHookInfo},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -20,15 +20,25 @@ use tracing_subscriber::{
     util::SubscriberInitExt as _,
 };
 
-const FILE_FILTER: &str = "info,mira=debug";
+const FILE_FILTER: &str = if cfg!(debug_assertions) {
+    "warn,mira=debug,avm_trace=info"
+} else {
+    "warn,mira=debug"
+};
+const CONSOLE_FILTER: &str = if cfg!(debug_assertions) {
+    "info"
+} else {
+    "info,avm_trace=off"
+};
 const LOG_FILE: &str = "~/Library/Logs/Mira/mira.log";
+const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 
 pub(crate) struct Logging(Vec<Arc<Mutex<Output>>>);
 
 pub(crate) fn init() -> Logging {
     let console = output(Box::new(io::stdout()));
     let console_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(CONSOLE_FILTER));
     let (opened, file) = match log_file() {
         Ok(file) => (Ok(()), Some(output(Box::new(file)))),
         Err(error) => (Err(error), None),
@@ -93,20 +103,56 @@ fn log_panic(info: &PanicHookInfo) {
     );
 }
 
-fn log_file() -> io::Result<File> {
+fn log_file() -> io::Result<LogFile> {
     let directory = dirs::home_dir()
         .ok_or_else(|| io::Error::other("no home directory"))?
         .join("Library/Logs/Mira");
-    log_file_in(&directory)
+    LogFile::open(directory, MAX_LOG_BYTES)
 }
 
-fn log_file_in(directory: &Path) -> io::Result<File> {
-    fs::create_dir_all(directory)?;
-    let path = directory.join("mira.log");
-    if path.exists() {
-        fs::rename(&path, directory.join("mira.previous.log"))?;
+struct LogFile {
+    directory: PathBuf,
+    file: File,
+    len: u64,
+    max_len: u64,
+}
+
+impl LogFile {
+    fn open(directory: PathBuf, max_len: u64) -> io::Result<Self> {
+        fs::create_dir_all(&directory)?;
+        let file = Self::start(&directory)?;
+        Ok(Self {
+            directory,
+            file,
+            len: 0,
+            max_len,
+        })
     }
-    File::create(path)
+
+    fn start(directory: &Path) -> io::Result<File> {
+        let path = directory.join("mira.log");
+        match fs::rename(&path, directory.join("mira.previous.log")) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        File::create(path)
+    }
+}
+
+impl Write for LogFile {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.len > 0 && self.len + bytes.len() as u64 > self.max_len {
+            self.file = Self::start(&self.directory)?;
+            self.len = 0;
+        }
+        let written = self.file.write(bytes)?;
+        self.len += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
 }
 
 fn output(sink: Box<dyn Write + Send>) -> Arc<Mutex<Output>> {
@@ -250,6 +296,32 @@ mod tests {
     }
 
     #[test]
+    fn game_traces_are_logged_only_in_debug_builds() {
+        let (console, console_sink) = shared();
+        let (file, file_sink) = shared();
+        let subscriber = subscriber(
+            console_sink,
+            EnvFilter::new(CONSOLE_FILTER),
+            Some(file_sink),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "avm_trace", "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%");
+            tracing::info!(target: "ruffle_core::context", "Loaded SWF version 43");
+            tracing::debug!(target: "mira::bridge", "unhandled loader call");
+        });
+        let (console, file) = (text(&console), text(&file));
+        let packet = "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%";
+        assert_eq!(
+            console.contains(packet),
+            cfg!(debug_assertions),
+            "{console}"
+        );
+        assert_eq!(file.contains(packet), cfg!(debug_assertions), "{file}");
+        assert!(file.contains("unhandled loader call"), "{file}");
+        assert!(!file.contains("Loaded SWF"), "{file}");
+    }
+
+    #[test]
     fn panics_reach_the_log_file() {
         let (_, console) = shared();
         let (file, sink) = shared();
@@ -275,23 +347,28 @@ mod tests {
     }
 
     #[test]
-    fn each_run_keeps_the_previous_log() {
+    fn the_log_keeps_the_previous_run_and_rotates_at_its_size_limit() {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let directory =
             std::env::temp_dir().join(format!("mira-logs-{:x}", u64::from_ne_bytes(random)));
-        let path = directory.join("mira.log");
-        let mut first = log_file_in(&directory).unwrap();
-        writeln!(first, "first run").unwrap();
+        let read = |name: &str| fs::read_to_string(directory.join(name)).unwrap();
+
+        let mut first = LogFile::open(directory.clone(), 16).unwrap();
+        first.write_all(b"first run\n").unwrap();
         drop(first);
-        let mut second = log_file_in(&directory).unwrap();
-        writeln!(second, "second run").unwrap();
-        drop(second);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "second run\n");
-        assert_eq!(
-            fs::read_to_string(directory.join("mira.previous.log")).unwrap(),
-            "first run\n"
-        );
+        let mut second = LogFile::open(directory.clone(), 16).unwrap();
+        second.write_all(b"second run\n").unwrap();
+        assert_eq!(read("mira.log"), "second run\n");
+        assert_eq!(read("mira.previous.log"), "first run\n");
+
+        second.write_all(b"line 2\n").unwrap();
+        second.write_all(b"line 3\n").unwrap();
+        assert_eq!(read("mira.previous.log"), "second run\n");
+        assert_eq!(read("mira.log"), "line 2\nline 3\n");
+        second.write_all(b"a line longer than the limit\n").unwrap();
+        assert_eq!(read("mira.previous.log"), "line 2\nline 3\n");
+        assert_eq!(read("mira.log"), "a line longer than the limit\n");
         fs::remove_dir_all(directory).unwrap();
     }
 }
