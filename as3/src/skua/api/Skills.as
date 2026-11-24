@@ -1,5 +1,6 @@
 package skua.api {
 
+import mira.game.World;
 import skua.Main;
 
 public class Skills {
@@ -87,9 +88,10 @@ public class Skills {
     }
 
     public static function useSkill(index:int):String {
-        var skill:* = Main.instance.game.world.actions.active[index];
-        if (skill != null && actionTimeCheck(skill)) {
-            Main.instance.game.world.testAction(skill);
+        var world:* = Main.instance.game.world;
+        var skill:* = world.actions.active[index];
+        if (skill != null && actionTimeCheck(skill) && mira.game.World.hasCellUserData(world)) {
+            world.testAction(skill);
             return true.toString();
         }
 
