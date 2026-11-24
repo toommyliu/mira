@@ -25,7 +25,7 @@ use mira_ui::{
 };
 
 use super::{
-    client::{CloseSession, bar_title, drag_area, reveal_tab, window_bar},
+    client::{CloseSession, bar_title, drag_area, refocus_root_when_lost, reveal_tab, window_bar},
     form,
     profile_form::{Form, FormStep, FormTrigger, Item, Rule, Subject},
 };
@@ -117,7 +117,9 @@ pub(crate) fn open(selected: Option<String>, cx: &mut App) {
                 editor.select_named(name, window, cx);
             }
         });
-        window.focus(&editor.read(cx).focus.clone(), cx);
+        let root = editor.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&editor, root, window, cx);
         let weak = editor.downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |editor, cx| editor.may_close(cx))

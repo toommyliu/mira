@@ -35,7 +35,7 @@ use crate::file_panel::{self, Pick};
 use super::{
     Changed, Client, RuffleView, ScriptPhase,
     account::file_name,
-    client::{CloseSession, drag_area},
+    client::{CloseSession, drag_area, refocus_root_when_lost},
     form::{muted, note, row, row_label},
     inputs_form::{self, Edited, FormState, InputsForm, Read, reveal_item},
     log_page::LogPage,
@@ -513,6 +513,8 @@ pub(crate) fn open(
         let scripts = cx.new(|cx| ScriptsWindow::new(client, folder, types, target, window, cx));
         let search = scripts.read(cx).search.focus_handle(cx);
         window.focus(&search, cx);
+        let root = scripts.read(cx).focus.clone();
+        refocus_root_when_lost(&scripts, root, window, cx);
         scripts
     }) {
         Ok(handle) => cx.set_global(Open(handle)),

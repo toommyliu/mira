@@ -73,7 +73,7 @@ pub(crate) use account::{
 pub(crate) use client::{
     Client, CloseSession, OpenClient, ToggleGrid, ToggleSidebar, bar_title, bind_keys,
     current as current_client, drag_area, init as init_client, open_launch_window, open_tabs,
-    window_bar,
+    refocus_root_when_lost, window_bar,
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use game_bar::{
