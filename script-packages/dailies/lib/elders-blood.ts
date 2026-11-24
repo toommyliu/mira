@@ -70,7 +70,8 @@ export function* eldersBlood(): Generator<
     if (drop === null) {
       throw new Error(`Couldn't complete quest ${QUEST}.`);
     }
-    if (!(yield* Drops.accept(ELDERS_BLOOD))) {
+    yield* Drops.accept(ELDERS_BLOOD);
+    if (!(yield* Wait.until(() => Inventory.contains(ELDERS_BLOOD), { timeout: "5 seconds" }))) {
       throw new Error("Couldn't pick up Elders' Blood.");
     }
   } else if (!(yield* Quests.complete(QUEST))) {
