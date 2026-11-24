@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ElementId, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ElementId, FocusHandle, IntoElement, ParentElement as _, Pixels, RenderOnce,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -78,6 +79,7 @@ pub struct Select {
     disabled: bool,
     invalid: bool,
     small: bool,
+    focus: Option<FocusHandle>,
     on_select: Option<IndexHandler>,
 }
 
@@ -100,6 +102,7 @@ impl Select {
             disabled: false,
             invalid: false,
             small: false,
+            focus: None,
             on_select: None,
         }
     }
@@ -149,6 +152,11 @@ impl Select {
         self
     }
 
+    pub fn focus(mut self, focus: FocusHandle) -> Self {
+        self.focus = Some(focus);
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
@@ -168,6 +176,7 @@ impl RenderOnce for Select {
         let trigger = Button::new((self.id.clone(), "trigger"), self.label.clone())
             .combobox(value.clone())
             .when(self.small, |button| button.size(super::button::Size::Small))
+            .when_some(self.focus, Button::focus)
             .disabled(self.disabled)
             .invalid(self.invalid)
             .end_slot(div().text_color(muted).child(Icon::ChevronDown))

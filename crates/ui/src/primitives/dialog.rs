@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, ElementId, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce, Role, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, DefiniteLength, ElementId, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
+    Role, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    anchored, deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{Button, Icon, Scrollbar, button::Size};
@@ -45,12 +45,14 @@ pub struct Dialog {
     alert: bool,
     title: SharedString,
     width: Option<Pixels>,
+    max_height: Option<DefiniteLength>,
     description: Option<SharedString>,
     header_end: Option<AnyElement>,
     body: Vec<AnyElement>,
     footer_start: Option<AnyElement>,
     actions: Vec<AnyElement>,
     on_close: Option<CloseHandler>,
+    scroll: Option<ScrollHandle>,
 }
 
 impl Dialog {
@@ -61,12 +63,14 @@ impl Dialog {
             alert: false,
             title: title.into(),
             width: None,
+            max_height: None,
             description: None,
             header_end: None,
             body: Vec::new(),
             footer_start: None,
             actions: Vec::new(),
             on_close: None,
+            scroll: None,
         }
     }
 
@@ -77,6 +81,11 @@ impl Dialog {
 
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    pub fn max_height(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.max_height = Some(height.into());
         self
     }
 
@@ -109,6 +118,11 @@ impl Dialog {
         self.on_close = Some(Rc::new(f));
         self
     }
+
+    pub fn scroll(mut self, handle: ScrollHandle) -> Self {
+        self.scroll = Some(handle);
+        self
+    }
 }
 
 impl RenderOnce for Dialog {
@@ -128,6 +142,7 @@ impl RenderOnce for Dialog {
                 state.scroll.clone(),
             )
         };
+        let scroll = self.scroll.clone().unwrap_or(scroll);
         if self.open != was_open {
             let opening = self.open;
             let return_focus = opening.then(|| window.focused(cx)).flatten();
@@ -245,7 +260,14 @@ impl RenderOnce for Dialog {
                                     }
                                 }))
                                 .max_w(viewport.width - inset * 2.0)
-                                .max_h(viewport.height - inset * 2.0)
+                                .max_h(self.max_height.map_or(
+                                    viewport.height - inset * 2.0,
+                                    |height| {
+                                        height
+                                            .to_pixels(viewport.height.into(), window.rem_size())
+                                            .min(viewport.height - inset * 2.0)
+                                    },
+                                ))
                                 .p(inset)
                                 .rounded(theme.radius.dialog)
                                 .bg(theme.popover)
@@ -324,10 +346,13 @@ impl RenderOnce for Dialog {
                                                     .track_scroll(&scroll)
                                                     .children(self.body),
                                             )
-                                            .child(Scrollbar::new(
-                                                (self.id.clone(), "scrollbar"),
-                                                scroll,
-                                            )),
+                                            .child(
+                                                Scrollbar::new(
+                                                    (self.id.clone(), "scrollbar"),
+                                                    scroll,
+                                                )
+                                                .persistent(),
+                                            ),
                                     )
                                 })
                                 .when(

@@ -20,9 +20,9 @@ use mira_ui::{
     components::{Disclosure, Empty, StatusLabel},
     h_flex,
     primitives::{
-        Activity, Alert, Align, Button, Checkbox, CheckedState, DropdownMenu, HoverCard, Icon,
-        Input, InputEvent, List, ListItem, MenuItem, Placement, Popover, Scrollbar, Select, Side,
-        Switch, Tab, Tabs, Toaster, VirtualList,
+        Activity, Alert, Align, Button, DropdownMenu, HoverCard, Icon, Input, InputEvent, List,
+        ListItem, MenuItem, Placement, Popover, Scrollbar, Side, Switch, Tab, Tabs, Toaster,
+        VirtualList,
         button::{Size, Variant},
         icon, small_icon,
     },
@@ -36,12 +36,13 @@ use super::{
     Changed, Client, RuffleView, ScriptPhase,
     account::file_name,
     client::{CloseSession, drag_area},
-    form::{note, row, row_label},
+    form::{muted, note, row, row_label},
+    inputs_form::{self, Edited, FormState, InputsForm, Read, reveal_item},
     log_page::LogPage,
     package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
     script::failure,
-    script_form::{Draft, FieldDraft, ROOM_NOTE, drafts, error, room_text, rows, starting, values},
+    script_form::{ROOM_NOTE, room_text, rows},
     script_log::duration,
     script_names,
     shown_tab::{self, ShownTab, Target},
@@ -51,10 +52,7 @@ use crate::{
     characters::{self, Scripts as ScriptOptions},
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
-    script_inputs,
-    scripting::{
-        self, Declared, Definition, ExtractError, Kind, Launch, Meta, Outcome, Supplied, Values,
-    },
+    scripting::{self, Declared, Launch, Outcome, Supplied, Values},
     settings::{self, CollapsedSources},
     shortcuts,
 };
@@ -575,22 +573,8 @@ enum FormKey {
 
 struct Form {
     generation: u64,
-    meta: Meta,
-    state: FormState,
-}
-
-enum FormState {
-    Broken {
-        title: &'static str,
-        message: SharedString,
-    },
-    Plain,
-    Fields {
-        definition: Definition,
-        drafts: Vec<FieldDraft>,
-        texts: Vec<Option<Entity<Input>>>,
-        _changes: Vec<Subscription>,
-    },
+    inputs: Entity<InputsForm>,
+    _watch: Vec<Subscription>,
 }
 
 impl ScriptsWindow {
@@ -1573,20 +1557,7 @@ impl ScriptsWindow {
         if current || pending {
             return;
         }
-        let script = path.to_owned();
-        let read = cx.background_spawn(async move {
-            let display = file_name(&script);
-            let text = fs::read_to_string(&script).map_err(|error| {
-                (
-                    "This script can't be read",
-                    format!("Couldn't read {display}: {error}"),
-                )
-            })?;
-            scripting::extract(&display, &script, &text).map_err(|error| match error {
-                ExtractError::Syntax(message) => ("This script has a syntax error", message),
-                ExtractError::Meta(message) => ("This script's meta is invalid", message),
-            })
-        });
+        let read = inputs_form::read(path.to_owned(), cx);
         let generation = self.generation;
         let task = cx.spawn({
             let key = key.clone();
@@ -1641,140 +1612,52 @@ impl ScriptsWindow {
         }
     }
 
-    fn loaded(
-        &mut self,
-        key: FormKey,
-        generation: u64,
-        read: Result<Declared, (&'static str, String)>,
-        cx: &mut Context<Self>,
-    ) {
-        let (meta, read) = match read {
-            Ok(Declared { meta, inputs }) => (
-                meta,
-                inputs.map_err(|message| ("This script's inputs are invalid", message)),
-            ),
-            Err(broken) => (Meta::default(), Err(broken)),
-        };
+    fn loaded(&mut self, key: FormKey, generation: u64, read: Read, cx: &mut Context<Self>) {
         if let Some(form) = self.forms.get_mut(&key)
-            && let (FormState::Fields { definition, .. }, Ok(Some(read))) = (&form.state, &read)
-            && definition == read
+            && let Ok(Declared {
+                meta,
+                inputs: Ok(Some(definition)),
+            }) = &read
+            && form.inputs.read(cx).definition() == Some(definition)
         {
             form.generation = generation;
-            form.meta = meta;
+            let meta = meta.clone();
+            form.inputs.update(cx, |inputs, _| inputs.meta = meta);
             return;
         }
-        let state = match read {
-            Err((title, message)) => FormState::Broken {
-                title,
-                message: message.into(),
-            },
-            Ok(None) => FormState::Plain,
-            Ok(Some(definition)) => {
-                let saved = match &key {
-                    FormKey::Script(path) => match script_inputs::saved(path, cx) {
-                        Supplied::Values(values) => values,
-                        Supplied::StoreUnreadable => Values::new(),
-                    },
-                    FormKey::Entry(id) => self.entry_values(*id, cx).unwrap_or_default(),
-                };
-                let drafts = drafts(&definition, &saved);
-                let mut texts = Vec::new();
-                let mut changes = Vec::new();
-                for (index, (field, draft)) in definition.fields().iter().zip(&drafts).enumerate() {
-                    let Draft::Text(text) = &draft.draft else {
-                        texts.push(None);
-                        continue;
-                    };
-                    let invalid = error(field, draft).is_some();
-                    let label = field.label.clone();
-                    let text = text.clone();
-                    let input = cx.new(|cx| {
-                        let mut input = Input::new(label, cx);
-                        input.set_text(text, cx);
-                        input.set_invalid(invalid, cx);
-                        input
-                    });
-                    let key = key.clone();
-                    changes.push(cx.subscribe(
-                        &input,
-                        move |this, input, event: &InputEvent, cx| {
-                            if matches!(event, InputEvent::Changed) {
-                                let text = input.read(cx).text().to_owned().into();
-                                this.set_draft(&key, index, Draft::Text(text), cx);
-                            }
-                        },
-                    ));
-                    texts.push(Some(input));
-                }
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    _changes: changes,
-                }
+        let inputs = match &key {
+            FormKey::Script(path) => {
+                let path = path.clone();
+                cx.new(|cx| InputsForm::saved(path, read, cx))
+            }
+            FormKey::Entry(id) => {
+                let values = self.entry_values(*id, cx).unwrap_or_default();
+                cx.new(|cx| InputsForm::queued(&values, read, cx))
             }
         };
-        let checked = match (&key, &state) {
-            (
-                FormKey::Entry(_),
-                FormState::Fields {
-                    definition, drafts, ..
-                },
-            ) => Some(values(definition, drafts)),
-            _ => None,
-        };
+        let mut watch = vec![cx.observe(&inputs, |_, _, cx| cx.notify())];
+        if let FormKey::Entry(id) = key {
+            watch.push(cx.subscribe(&inputs, move |this, _, Edited(values), cx| {
+                let values = values.clone();
+                this.edit_queue(cx, |queue| queue.set_values(id, values));
+            }));
+            if inputs.read(cx).definition().is_some() {
+                let values = inputs.read(cx).edited();
+                self.edit_queue(cx, |queue| queue.set_values(id, values));
+            }
+        }
         self.forms.insert(
-            key.clone(),
+            key,
             Form {
                 generation,
-                meta,
-                state,
+                inputs,
+                _watch: watch,
             },
         );
-        if let Some(edited) = checked {
-            self.store(&key, edited, cx);
-        }
     }
 
-    fn set_draft(&mut self, key: &FormKey, index: usize, draft: Draft, cx: &mut Context<Self>) {
-        let Some(Form {
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get_mut(key)
-        else {
-            return;
-        };
-        let (Some(field), Some(slot)) = (definition.fields().get(index), drafts.get_mut(index))
-        else {
-            return;
-        };
-        *slot = FieldDraft { draft, stale: None };
-        if let Some(Some(input)) = texts.get(index) {
-            let invalid = error(field, slot).is_some();
-            input.update(cx, |input, cx| input.set_invalid(invalid, cx));
-        }
-        let edited = values(definition, drafts);
-        self.store(key, edited, cx);
-        cx.notify();
-    }
-
-    fn store(&mut self, key: &FormKey, edited: Option<Values>, cx: &mut Context<Self>) {
-        match (key, edited) {
-            (FormKey::Entry(id), edited) => {
-                let id = *id;
-                self.edit_queue(cx, |queue| queue.set_values(id, edited));
-            }
-            (FormKey::Script(path), Some(edited)) if !script_inputs::unreadable(cx) => {
-                script_inputs::save(path, edited, cx);
-            }
-            (FormKey::Script(_), _) => {}
-        }
+    fn inputs_form(&self, key: &FormKey) -> Option<&Entity<InputsForm>> {
+        self.forms.get(key).map(|form| &form.inputs)
     }
 
     fn entry_values(&self, id: EntryId, cx: &App) -> Option<Values> {
@@ -1784,72 +1667,10 @@ impl ScriptsWindow {
         entry.values.clone()
     }
 
-    fn reset_form(&mut self, key: &FormKey, cx: &mut Context<Self>) {
-        let Some(Form {
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get_mut(key)
-        else {
-            return;
-        };
-        for ((field, draft), input) in definition.fields().iter().zip(drafts.iter_mut()).zip(texts)
-        {
-            *draft = FieldDraft {
-                draft: starting(field),
-                stale: None,
-            };
-            if let (Some(input), Draft::Text(text)) = (input, &draft.draft) {
-                let invalid = error(field, draft).is_some();
-                let text = text.clone();
-                input.update(cx, |input, cx| {
-                    input.set_text(text, cx);
-                    input.set_invalid(invalid, cx);
-                });
-            }
-        }
-        let edited = values(definition, drafts);
-        self.store(key, edited, cx);
-        cx.notify();
-    }
-
-    fn start_fresh(&mut self, cx: &mut Context<Self>) {
-        script_inputs::start_fresh(cx);
-        if !script_inputs::unreadable(cx) {
-            for (key, form) in &self.forms {
-                if let (
-                    FormKey::Script(path),
-                    FormState::Fields {
-                        definition, drafts, ..
-                    },
-                ) = (key, &form.state)
-                    && let Some(values) = values(definition, drafts)
-                {
-                    script_inputs::save(path, values, cx);
-                }
-            }
-        }
-        cx.notify();
-    }
-
     fn launch_values(&self, path: &Path, cx: &App) -> Option<Values> {
-        match &self.forms.get(&FormKey::Script(path.to_owned()))?.state {
-            FormState::Broken { .. } => None,
-            FormState::Plain => Some(Values::new()),
-            FormState::Fields {
-                definition, drafts, ..
-            } => {
-                if script_inputs::unreadable(cx) {
-                    return None;
-                }
-                values(definition, drafts)
-            }
-        }
+        self.inputs_form(&FormKey::Script(path.to_owned()))?
+            .read(cx)
+            .ready_values(cx)
     }
 
     fn launch(&self, cx: &App) -> Option<(PathBuf, Values)> {
@@ -1858,14 +1679,9 @@ impl ScriptsWindow {
         Some((entry.path, values))
     }
 
-    fn entry_ready(&self, id: EntryId) -> bool {
-        match self.forms.get(&FormKey::Entry(id)).map(|form| &form.state) {
-            Some(FormState::Plain) => true,
-            Some(FormState::Fields {
-                definition, drafts, ..
-            }) => values(definition, drafts).is_some(),
-            Some(FormState::Broken { .. }) | None => false,
-        }
+    fn entry_ready(&self, id: EntryId, cx: &App) -> bool {
+        self.inputs_form(&FormKey::Entry(id))
+            .is_some_and(|form| form.read(cx).ready_values(cx).is_some())
     }
 
     fn queue(&self, cx: &App) -> (Vec<queue::Entry>, bool) {
@@ -1948,213 +1764,31 @@ impl ScriptsWindow {
             .width(px(376.0))
     }
 
-    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let layout = theme.layout;
-        let Some(form) = self.forms.get(key) else {
-            return vec![muted(theme, "Reading inputs…").into_any_element()];
-        };
-        let (definition, drafts, texts) = match &form.state {
-            FormState::Broken { title, message } => {
-                return vec![
-                    Alert::new("script-broken", Tone::Danger, *title)
-                        .body(message.clone())
-                        .into_any_element(),
-                ];
-            }
-            FormState::Plain => {
-                return vec![muted(theme, "This script has no inputs.").into_any_element()];
-            }
-            FormState::Fields {
-                definition,
-                drafts,
-                texts,
-                ..
-            } => (definition, drafts, texts),
-        };
-        let this = cx.entity().downgrade();
-        let saved = matches!(key, FormKey::Script(_));
-        let (unreadable, stale) = leading(saved, drafts, cx);
-        let unreadable = unreadable.then(|| {
-            let this = this.clone();
-            Alert::new(
-                "inputs-unreadable",
-                Tone::Warning,
-                "Saved inputs couldn't be read",
-            )
-            .body("Start fresh to back up the file and use each script's defaults.")
-            .action(
-                Button::new("inputs-start-fresh", "Start fresh")
-                    .size(Size::Small)
-                    .on_click(move |_, _, cx| {
-                        let _ = this.update(cx, |this, cx| this.start_fresh(cx));
-                    }),
-            )
-        });
-        let stale = stale.then(|| {
-            let this = this.clone();
-            let key = key.clone();
-            h_flex()
-                .justify_between()
-                .gap(layout.space(3.0))
-                .child(muted(
-                    theme,
-                    if saved {
-                        "Some saved values don't fit this script anymore."
-                    } else {
-                        "Some queued values don't fit this script anymore."
-                    },
-                ))
-                .child(
-                    Button::new("inputs-reset", "Reset")
-                        .size(Size::Small)
-                        .on_click(move |_, _, cx| {
-                            let _ = this.update(cx, |this, cx| this.reset_form(&key, cx));
-                        }),
-                )
-        });
-        let fields =
-            definition
-                .fields()
-                .iter()
-                .zip(drafts)
-                .enumerate()
-                .map(|(index, (field, draft))| {
-                    let set = {
-                        let this = this.clone();
-                        let key = key.clone();
-                        move |draft: Draft, cx: &mut App| {
-                            let _ =
-                                this.update(cx, |this, cx| this.set_draft(&key, index, draft, cx));
-                        }
-                    };
-                    let label = SharedString::from(field.label.clone());
-                    let control = match (&field.kind, &draft.draft, &texts[index]) {
-                        (Kind::Boolean { .. }, Draft::Toggle(on), _) => {
-                            Switch::new(("input", index), label.clone(), *on)
-                                .trailing()
-                                .on_toggle(move |on, _, cx| set(Draft::Toggle(on), cx))
-                                .into_any_element()
-                        }
-                        (Kind::Select { options, .. }, Draft::Choice(chosen), _) => Select::new(
-                            ("input", index),
-                            label.clone(),
-                            options.iter().cloned().map(SharedString::from),
-                            *chosen,
-                        )
-                        .placeholder("Choose…")
-                        .full_width()
-                        .invalid(error(field, draft).is_some())
-                        .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
-                        .into_any_element(),
-                        (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
-                            let set = Rc::new(set);
-                            v_flex()
-                                .gap(layout.space(3.0))
-                                .children(options.iter().enumerate().map(|(option, name)| {
-                                    let set = set.clone();
-                                    let chosen = chosen.clone();
-                                    let state = if chosen[option] {
-                                        CheckedState::Checked
-                                    } else {
-                                        CheckedState::Unchecked
-                                    };
-                                    Checkbox::new(
-                                        SharedString::from(format!("input-{index}-{option}")),
-                                        name.clone(),
-                                        state,
-                                    )
-                                    .on_toggle(
-                                        move |on, _, cx| {
-                                            let mut chosen = chosen.clone();
-                                            chosen[option] = on;
-                                            set(Draft::Choices(chosen), cx);
-                                        },
-                                    )
-                                }))
-                                .into_any_element()
-                        }
-                        (kind, _, Some(input)) => div()
-                            .when(matches!(kind, Kind::Number { .. }), |slot| {
-                                slot.flex_none().w(px(80.0))
-                            })
-                            .child(input.clone())
-                            .into_any_element(),
-                        _ => div().into_any_element(),
-                    };
-                    let control = match field.kind {
-                        Kind::Boolean { .. } => control,
-                        Kind::Number { .. } => h_flex()
-                            .justify_between()
-                            .gap(layout.space(2.0))
-                            .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(label))
-                            .child(control)
-                            .into_any_element(),
-                        _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
-                    };
-                    v_flex()
-                        .gap(layout.space(1.0))
-                        .child(control)
-                        .map(|column| match (error(field, draft), &field.description) {
-                            (Some(problem), _) => column
-                                .child(note(problem, true, theme).text_color(theme.destructive)),
-                            (None, Some(description)) => {
-                                column.child(note(description.clone(), true, theme))
-                            }
-                            (None, None) => column,
-                        })
-                });
-        unreadable
-            .map(IntoElement::into_any_element)
-            .into_iter()
-            .chain(stale.map(IntoElement::into_any_element))
-            .chain(fields.map(IntoElement::into_any_element))
-            .collect()
+    fn inputs(&self, theme: &Theme, key: &FormKey, cx: &App) -> Vec<AnyElement> {
+        match self.inputs_form(key) {
+            Some(form) => inputs_form::elements(form, theme, cx),
+            None => vec![muted(theme, "Reading inputs…").into_any_element()],
+        }
     }
 
     fn input_errors(&self, path: &Path, cx: &App) -> usize {
-        match self
-            .forms
-            .get(&FormKey::Script(path.to_owned()))
-            .map(|form| &form.state)
-        {
-            Some(FormState::Fields {
-                definition, drafts, ..
-            }) if !script_inputs::unreadable(cx) => errored_fields(definition, drafts).len(),
-            _ => 0,
-        }
+        self.inputs_form(&FormKey::Script(path.to_owned()))
+            .map_or(0, |form| form.read(cx).errored(cx).len())
     }
 
     fn jump_to_error(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.displayed.as_ref().map(|entry| entry.path.clone()) else {
             return;
         };
-        let Some(Form {
-            state:
-                FormState::Fields {
-                    definition,
-                    drafts,
-                    texts,
-                    ..
-                },
-            ..
-        }) = self.forms.get(&FormKey::Script(path))
-        else {
+        let Some(form) = self.inputs_form(&FormKey::Script(path)) else {
             return;
         };
-        let errored = errored_fields(definition, drafts);
-        let count = errored.len() as isize;
-        if count == 0 {
+        let form = form.read(cx);
+        let Some((next, field)) = form.step(self.error_cursor, by, cx) else {
             return;
-        }
-        let next = match self.error_cursor {
-            Some(at) => (at as isize + by).rem_euclid(count),
-            None if by > 0 => 0,
-            None => count - 1,
-        } as usize;
-        let field = errored[next];
-        let (unreadable, stale) = leading(true, drafts, cx);
-        let item = usize::from(unreadable) + usize::from(stale) + field;
-        let input = texts.get(field).cloned().flatten();
+        };
+        let item = usize::from(form.meta.description.is_some()) + form.item_of(field, cx);
+        let focus = form.focus_handle(field, cx);
         self.error_cursor = Some(next);
         let theme = cx.theme();
         reveal_item(
@@ -2163,43 +1797,20 @@ impl ScriptsWindow {
             theme.space(6.0),
             error_bar_clearance(theme),
         );
-        if let Some(input) = input {
-            window.focus(&input.focus_handle(cx), cx);
+        if let Some(focus) = focus {
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
 
     fn error_bar(&self, theme: &Theme, errors: usize, cx: &mut Context<Self>) -> AnyElement {
-        let label: SharedString = match errors {
-            1 => "1 error".into(),
-            count => format!("{count} errors").into(),
-        };
-        let step = |id: &'static str, glyph: Icon, name: &'static str, by: isize| {
-            Button::icon(id, glyph, name)
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .hide_tooltip()
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.jump_to_error(by, window, cx)),
-                )
-        };
+        let step = cx.listener(|this, by: &isize, window, cx| this.jump_to_error(*by, window, cx));
         theme
             .floating_bar()
             .id("error-bar")
             .role(gpui::Role::Toolbar)
             .aria_label("Input errors")
-            .child(
-                div()
-                    .pr(theme.space(1.0))
-                    .child(status_text("input-errors", label)),
-            )
-            .child(step(
-                "previous-error",
-                Icon::ChevronUp,
-                "Previous error",
-                -1,
-            ))
-            .child(step("next-error", Icon::ChevronDown, "Next error", 1))
+            .children(inputs_form::error_steps(errors, theme, step))
             .into_any_element()
     }
 
@@ -2213,7 +1824,7 @@ impl ScriptsWindow {
         let errors = self.input_errors(&entry.path, cx);
         let bar = (errors > 0).then(|| self.error_bar(theme, errors, cx));
         let key = FormKey::Script(entry.path.clone());
-        let meta = self.forms.get(&key).map(|form| &form.meta);
+        let meta = self.inputs_form(&key).map(|form| &form.read(cx).meta);
         let name = meta
             .and_then(|meta| meta.name.clone())
             .map_or_else(|| entry.name.clone(), SharedString::from);
@@ -2243,14 +1854,15 @@ impl ScriptsWindow {
             _ => None,
         };
         let key = FormKey::Entry(queued.id);
-        let meta = self.forms.get(&key).map(|form| &form.meta);
+        let form = self.inputs_form(&key).map(|form| form.read(cx));
+        let meta = form.map(|form| &form.meta);
         let name = meta
             .and_then(|meta| meta.name.clone())
             .unwrap_or_else(|| script_names::name(&queued.script, cx).into());
         let description = meta
             .and_then(|meta| meta.description.clone())
             .map(|description| muted(theme, description).into_any_element());
-        let body = match self.forms.get(&key).map(|form| &form.state) {
+        let body = match form.map(|form| &form.state) {
             _ if queued.waiting() => self.inputs(theme, &key, cx),
             None => vec![muted(theme, "Reading inputs…").into_any_element()],
             Some(FormState::Broken { title, message }) => vec![
@@ -2314,17 +1926,20 @@ impl ScriptsWindow {
         let rows: Rc<[QueueRow]> = queue
             .iter()
             .map(|queued| {
-                let form = self.forms.get(&FormKey::Entry(queued.id));
+                let form = self
+                    .inputs_form(&FormKey::Entry(queued.id))
+                    .map(|form| form.read(cx));
                 let name = form
                     .and_then(|form| form.meta.name.clone())
                     .unwrap_or_else(|| script_names::name(&queued.script, cx).into());
-                let form = form.map(|form| &form.state);
                 let meta: Option<(SharedString, Hsla)> = match &queued.state {
                     queue::State::Waiting => match form {
-                        Some(FormState::Broken { .. }) => Some("Can't start".into()),
-                        Some(FormState::Fields {
-                            definition, drafts, ..
-                        }) if values(definition, drafts).is_none() => Some("Needs inputs".into()),
+                        Some(form) if matches!(form.state, FormState::Broken { .. }) => {
+                            Some("Can't start".into())
+                        }
+                        Some(form) if form.ready_values(cx).is_none() => {
+                            Some("Needs inputs".into())
+                        }
                         _ => None,
                     }
                     .map(|meta| (meta, theme.muted_foreground)),
@@ -2629,7 +2244,7 @@ impl Render for ScriptsWindow {
         let startable = queue
             .iter()
             .filter(|entry| entry.waiting())
-            .all(|entry| self.entry_ready(entry.id));
+            .all(|entry| self.entry_ready(entry.id, cx));
         let finished = queue.len() > unfinished;
         let skippable = queue.iter().any(queue::Entry::running);
         let status = self.run_status(cx);
@@ -2955,54 +2570,8 @@ struct Detail {
     bar: Option<AnyElement>,
 }
 
-fn errored_fields(definition: &Definition, drafts: &[FieldDraft]) -> Vec<usize> {
-    definition
-        .fields()
-        .iter()
-        .zip(drafts)
-        .enumerate()
-        .filter(|(_, (field, draft))| error(field, draft).is_some())
-        .map(|(index, _)| index)
-        .collect()
-}
-
 fn error_bar_clearance(theme: &Theme) -> Pixels {
     theme.space(17.0)
-}
-
-fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, below: Pixels) {
-    let Some(item) = scroll.bounds_for_item(index) else {
-        return;
-    };
-    let viewport = scroll.bounds();
-    let mut offset = scroll.offset();
-    let top = item.top() + offset.y;
-    let bottom = item.bottom() + offset.y;
-    if top < viewport.top() + above {
-        offset.y += viewport.top() + above - top;
-    } else if bottom > viewport.bottom() - below {
-        offset.y -= bottom - (viewport.bottom() - below);
-    } else {
-        return;
-    }
-    offset.y = offset.y.clamp(-scroll.max_offset().y, px(0.0));
-    scroll.set_offset(offset);
-}
-
-fn status_text(id: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
-    let text = text.into();
-    div()
-        .id(id)
-        .role(gpui::Role::Status)
-        .aria_label(text.clone())
-        .child(text)
-}
-
-fn leading(saved: bool, drafts: &[FieldDraft], cx: &App) -> (bool, bool) {
-    (
-        saved && script_inputs::unreadable(cx),
-        drafts.iter().any(|draft| draft.stale.is_some()),
-    )
 }
 
 fn heading(
@@ -3030,15 +2599,6 @@ fn heading(
                 ),
         )
         .children(action)
-}
-
-fn muted(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
-    let typography = theme.typography;
-    div()
-        .text_size(typography.body)
-        .line_height(typography.body_line)
-        .text_color(theme.muted_foreground)
-        .child(text.into())
 }
 
 struct QueueRow {
@@ -3355,6 +2915,20 @@ fn sources_story(
 mod tests {
     use super::super::script_log::ScriptLog;
     use super::*;
+    use crate::{ruffle_view::script_form::Draft, script_inputs};
+
+    fn form_of(
+        scripts: &Entity<ScriptsWindow>,
+        script: &Path,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Entity<InputsForm> {
+        scripts.read_with(cx, |scripts, _| {
+            scripts
+                .inputs_form(&FormKey::Script(script.to_owned()))
+                .cloned()
+                .expect("the inputs are loaded")
+        })
+    }
 
     const RECEIPT: &str = r#"{"repository":1,"owner":"o","repo":"r","path":"","branch":"main","commit":"1111111111111111111111111111111111111111","tree":"2222222222222222222222222222222222222222","files":{}}"#;
 
@@ -4888,7 +4462,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
     }
 
     #[gpui::test]
-    fn runs_started_outside_the_window_get_the_inputs_it_shows(cx: &mut gpui::TestAppContext) {
+    fn the_window_and_saved_inputs_stay_in_step(cx: &mut gpui::TestAppContext) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let temp =
@@ -4927,17 +4501,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
             )
         });
         cx.run_until_parked();
-        let key = FormKey::Script(script.clone());
-        let spins = scripts.read_with(cx, |scripts, _| {
-            let Some(Form {
-                state: FormState::Fields { texts, .. },
-                ..
-            }) = scripts.forms.get(&key)
-            else {
-                panic!("the inputs are loaded");
-            };
-            texts[1].clone().expect("a text field")
-        });
+        let form = form_of(&scripts, &script, cx);
+        let spins = form.read_with(cx, |form, _| form.text(1).expect("a text field"));
         let run_values = |cx: &mut gpui::VisualTestContext| {
             cx.update(|_, cx| script_inputs::values(&script, cx).unwrap())
         };
@@ -4950,9 +4515,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
 
         assert_eq!(run_values(cx), expected(true, 1));
 
-        scripts.update(cx, |scripts, cx| {
-            scripts.set_draft(&key, 0, Draft::Toggle(false), cx)
-        });
+        form.update(cx, |form, cx| form.set_draft(0, Draft::Toggle(false), cx));
         cx.run_until_parked();
         assert_eq!(run_values(cx), expected(false, 1));
 
@@ -4967,6 +4530,35 @@ Cells visited: Enter, r1, r2, r3, r4.";
         spins.update(cx, |input, cx| input.set_text("3", cx));
         cx.run_until_parked();
         assert_eq!(run_values(cx), expected(false, 3));
+
+        cx.update(|_, cx| script_inputs::save(&script, expected(true, 7), cx));
+        cx.run_until_parked();
+        let shown = |cx: &mut gpui::VisualTestContext| {
+            let spins = spins.read_with(cx, |input, _| input.text().to_owned());
+            let banks = form.read_with(cx, |form, _| match &form.state {
+                FormState::Fields { drafts, .. } => drafts[0].draft.clone(),
+                _ => panic!("the inputs are loaded"),
+            });
+            (banks, spins)
+        };
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), "7".to_owned()),
+            "inputs saved from elsewhere show in the window"
+        );
+        assert_eq!(run_values(cx), expected(true, 7));
+
+        spins.update(cx, |input, cx| input.set_text("", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            script_inputs::save(&temp.join("scripts/other.ts"), expected(false, 1), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            shown(cx),
+            (Draft::Toggle(true), String::new()),
+            "saving another script leaves a half-typed value alone"
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -5022,12 +4614,11 @@ Cells visited: Enter, r1, r2, r3, r4.";
             cx.run_until_parked();
         };
         select(&wheel, cx);
-        scripts.update(cx, |scripts, cx| {
-            scripts.set_draft(&FormKey::Script(wheel.clone()), 0, Draft::Toggle(false), cx)
-        });
+        form_of(&scripts, &wheel, cx)
+            .update(cx, |form, cx| form.set_draft(0, Draft::Toggle(false), cx));
         select(&hunt, cx);
 
-        scripts.update(cx, |scripts, cx| scripts.start_fresh(cx));
+        cx.update(|_, cx| script_inputs::start_fresh(cx));
         let saved = |script: &Path, cx: &mut gpui::VisualTestContext| {
             cx.update(|_, cx| script_inputs::values(script, cx).unwrap())
         };
@@ -5055,7 +4646,14 @@ Cells visited: Enter, r1, r2, r3, r4.";
         let temp = std::env::temp_dir().join(format!("mira-fix-{:x}", u64::from_ne_bytes(random)));
         let script = temp.join("scripts/inputs.ts");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
-        fs::write(&script, include_str!("../../examples/inputs.ts")).unwrap();
+        fs::write(
+            &script,
+            format!(
+                "{}\nexport const meta = {{ description: \"Every kind of input.\" }};\n",
+                include_str!("../../examples/inputs.ts")
+            ),
+        )
+        .unwrap();
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
@@ -5079,16 +4677,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert_eq!(errors(cx), 2);
 
         let text = |field: usize, cx: &mut gpui::VisualTestContext| {
-            scripts.read_with(cx, |scripts, _| {
-                let Some(Form {
-                    state: FormState::Fields { texts, .. },
-                    ..
-                }) = scripts.forms.get(&FormKey::Script(script.clone()))
-                else {
-                    panic!("the inputs are loaded");
-                };
-                texts[field].clone().expect("a text field")
-            })
+            form_of(&scripts, &script, cx)
+                .read_with(cx, |form, _| form.text(field).expect("a text field"))
         };
         let offset = text(4, cx);
         let focused = |input: &Entity<Input>, cx: &mut gpui::VisualTestContext| {
@@ -5103,8 +4693,24 @@ Cells visited: Enter, r1, r2, r3, r4.";
         jump(1, cx);
         assert!(focused(&offset, cx), "the first input to fix is Offset");
         jump(1, cx);
-        let scrolled = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
-        assert!(scrolled < px(0.0), "stepping to Room scrolls it into view");
+        let (viewport, room, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
+            let scroll = &scripts.detail_scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(9).unwrap(),
+                scroll.offset().y,
+                error_bar_clearance(cx.theme()),
+            )
+        });
+        assert!(
+            room.top() + scrolled >= viewport.top()
+                && room.bottom() + scrolled <= viewport.bottom() - clearance,
+            "stepping to Room, below the description, scrolls it into view: {room:?} in {viewport:?} at {scrolled:?}"
+        );
+        let room = form_of(&scripts, &script, cx)
+            .read_with(cx, |form, cx| form.focus_handle(8, cx))
+            .unwrap();
+        assert!(cx.update(|window, _| room.is_focused(window)));
         jump(1, cx);
         assert!(
             focused(&offset, cx),
@@ -5144,16 +4750,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
         cx.run_until_parked();
         let input = |field: usize, cx: &mut gpui::VisualTestContext| {
-            scripts.read_with(cx, |scripts, _| {
-                let Some(Form {
-                    state: FormState::Fields { texts, .. },
-                    ..
-                }) = scripts.forms.get(&FormKey::Script(script.clone()))
-                else {
-                    panic!("the inputs are loaded");
-                };
-                texts[field].clone().expect("a text field")
-            })
+            form_of(&scripts, &script, cx)
+                .read_with(cx, |form, _| form.text(field).expect("a text field"))
         };
         let (name, offset) = (input(0, cx), input(4, cx));
         cx.update(|window, cx| window.focus(&name.focus_handle(cx), cx));

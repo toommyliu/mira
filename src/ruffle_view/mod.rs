@@ -5,6 +5,8 @@ mod environment;
 mod form;
 mod game_bar;
 mod input;
+mod inputs_dialog;
+mod inputs_form;
 mod launches;
 mod loader_grabber;
 mod log_page;
@@ -72,7 +74,7 @@ pub(crate) use client::{
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use game_bar::{
-    GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
+    EditScriptInputs, GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
     ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
 };
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
@@ -865,6 +867,10 @@ impl Render for RuffleView {
             .size_full()
             .when(!self.tiled, |root| root.child(self.bar(cx)))
             .child(player)
+            .when_some(
+                self.script.inputs().filter(|_| self.selected),
+                |root, inputs| root.child(inputs),
+            )
             .when_some(
                 self.script.dialogs().filter(|_| self.selected),
                 |root, dialogs| root.child(dialogs),

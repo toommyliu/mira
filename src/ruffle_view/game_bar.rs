@@ -16,7 +16,7 @@ use mira_ui::{
     primitives::{
         Button, Dot, DropdownMenu, Field, Icon, Input, InputEvent, Kbd, MenuItem, Menubar, Numeric,
         PopoverClose, Scrollbar, Spinner, Switch,
-        button::{Size, Variant},
+        button::{Joined, Size, Variant},
         divider, icon,
     },
     theme::DISABLED_OPACITY,
@@ -45,6 +45,7 @@ actions!(
     mira,
     [
         ToggleScript,
+        EditScriptInputs,
         ToggleAutoAttack,
         OpenBank,
         OpenJump,
@@ -398,6 +399,7 @@ struct Relogin {
 pub(super) fn on_actions<E: gpui::InteractiveElement>(
     element: E,
     view: Entity<RuffleView>,
+    has_inputs: bool,
     client: WeakEntity<super::Client>,
 ) -> E {
     let on = |f: fn(&mut RuffleView, &mut Context<RuffleView>)| {
@@ -413,6 +415,12 @@ pub(super) fn on_actions<E: gpui::InteractiveElement>(
         on(|view, cx| view.toggle_rendering(RenderingMode::Minimal, cx)),
         on(|view, cx| view.toggle_rendering(RenderingMode::InterfaceOnly, cx)),
     );
+    let edit = on(RuffleView::edit_inputs);
+    let element = if has_inputs {
+        element.on_action(move |_: &EditScriptInputs, _, cx| edit(cx))
+    } else {
+        element
+    };
     element
         .on_action(move |_: &ToggleScript, _, cx| script(cx))
         .on_action(move |_: &ToggleAutoAttack, _, cx| attack(cx))
@@ -441,10 +449,13 @@ impl RuffleView {
     }
 
     fn toggle_script(&mut self, cx: &mut Context<Self>) {
+        if self.script.asking_inputs(cx) {
+            return;
+        }
         if self.script.stoppable() {
             self.stop_script(cx);
         } else {
-            self.start_loaded_script(cx);
+            self.request_start(cx);
         }
     }
 
@@ -793,6 +804,7 @@ struct Bar {
     relogin_detail: Option<Detail>,
     attack: bool,
     script: ScriptControl,
+    has_inputs: bool,
     toggle_panel: Option<&'static str>,
 }
 
@@ -813,12 +825,14 @@ pub(super) fn bar(view: &mut RuffleView, cx: &mut Context<RuffleView>) -> impl I
         relogin_detail: relogin_value(view),
         attack: view.automation.auto_attack().enabled,
         script,
+        has_inputs: view.script.has_inputs(),
         toggle_panel: view.bar.toggle_panel.take(),
     };
     menubar(bar, cx.weak_entity(), cx)
 }
 
 fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
+    let has_inputs = bar.has_inputs;
     let theme = cx.theme();
     let layout = theme.layout;
     let menubar = Menubar::new(("game-bar", this.entity_id()), "Game")
@@ -875,7 +889,15 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
             },
         )
         .child(super::client::bar_separator(cx))
-        .button(script_button(bar.script, this.clone()))
+        .button(script_button(bar.script, this.clone()).joined(Joined::Next))
+        .menu(
+            Button::icon("script-menu", Icon::ChevronDown, "Script options")
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .joined(Joined::Previous)
+                .hide_tooltip(),
+            move |_, cx| script_menu(has_inputs, cx),
+        )
         .child(super::client::drag_area().flex_1())
         .popover(
             trigger("jump", "Jump", None, None, cx).disabled(!bar.live),
@@ -914,6 +936,7 @@ pub(super) fn preview(inset: Pixels, cx: &App) -> Menubar {
         relogin_detail: None,
         attack: false,
         script: ScriptControl::Start(Some("hunt.ts".into())),
+        has_inputs: true,
         toggle_panel: None,
     };
     menubar(bar, WeakEntity::new_invalid(), cx)
@@ -932,6 +955,23 @@ fn script_button(script: ScriptControl, this: WeakEntity<RuffleView>) -> Button 
         .child(verb)
         .tooltip(label)
         .on_click(move |_, _, cx| update(&this, cx, RuffleView::toggle_script))
+}
+
+fn script_menu(has_inputs: bool, cx: &App) -> Vec<MenuItem> {
+    let load = MenuItem::action("Load script…", |window, cx| {
+        window.dispatch_action(Box::new(super::LoadScript), cx)
+    });
+    let load = match shortcuts::keys_for(&super::LoadScript, cx) {
+        Some(keys) => load.shortcut(keys),
+        None => load,
+    };
+    vec![
+        load,
+        MenuItem::action("Edit inputs…", |window, cx| {
+            window.dispatch_action(Box::new(EditScriptInputs), cx)
+        })
+        .disabled(!has_inputs),
+    ]
 }
 
 fn windows_menu(cx: &App) -> Vec<MenuItem> {
@@ -2366,6 +2406,7 @@ mod tests {
                             relogin_detail,
                             attack,
                             script,
+                            has_inputs: true,
                             toggle_panel: None,
                         };
                         let now = Instant::now();
