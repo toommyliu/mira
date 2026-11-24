@@ -123,7 +123,7 @@ enum View {
 }
 
 pub(crate) struct Manager {
-    accounts: Result<Accounts, SharedString>,
+    accounts: Result<Accounts, Unloaded>,
     device: HeaderValue,
     servers: Servers,
     view: View,
@@ -144,6 +144,18 @@ pub(crate) struct Manager {
     fake: Option<Fake>,
     watching: HashMap<EntityId, [Subscription; 2]>,
     _subscriptions: [Subscription; 4],
+}
+
+struct Unloaded {
+    path: PathBuf,
+    error: SharedString,
+}
+
+fn load(path: PathBuf) -> Result<Accounts, Unloaded> {
+    Accounts::open(path.clone()).map_err(|error| Unloaded {
+        path,
+        error: error.into(),
+    })
 }
 
 #[cfg(test)]
@@ -446,7 +458,7 @@ impl Manager {
             .map(|client| (client.entity_id(), watch(client, cx)))
             .collect();
         Self {
-            accounts: Accounts::open(path).map_err(Into::into),
+            accounts: load(path),
             device,
             servers: Servers {
                 list: Vec::new(),
@@ -514,6 +526,13 @@ impl Manager {
     fn check_stale_servers(&mut self, cx: &mut Context<Self>) {
         if self.servers.stale() {
             self.check_servers(cx);
+        }
+    }
+
+    fn reload_accounts(&mut self, cx: &mut Context<Self>) {
+        if let Err(unloaded) = &self.accounts {
+            self.accounts = load(unloaded.path.clone());
+            cx.notify();
         }
     }
 
