@@ -308,6 +308,10 @@ impl Button {
         &self.label
     }
 
+    pub(crate) fn joins_previous(&self) -> bool {
+        self.joined == Some(Joined::Previous)
+    }
+
     pub(crate) fn is_disabled(&self) -> bool {
         self.disabled
     }

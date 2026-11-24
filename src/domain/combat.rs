@@ -316,12 +316,24 @@ impl Packet for FightMessagesPacket {
 
 #[derive(Deserialize)]
 pub(crate) struct Animation {
-    #[serde(default, deserialize_with = "wire::text")]
+    #[serde(default, deserialize_with = "message")]
     pub(crate) msg: String,
     #[serde(rename = "cInf", default, deserialize_with = "wire::text")]
     pub(crate) caster: String,
     #[serde(rename = "tInf", default, deserialize_with = "wire::text")]
     pub(crate) target: String,
+}
+
+fn message<'de, D: serde::Deserializer<'de>>(input: D) -> Result<String, D::Error> {
+    Ok(match serde_json::Value::deserialize(input)? {
+        serde_json::Value::String(text) => text,
+        serde_json::Value::Array(lines) => lines
+            .iter()
+            .map(|line| line.as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => String::new(),
+    })
 }
 
 #[derive(Deserialize)]

@@ -629,7 +629,7 @@ mod tests {
                     automation.watch_game_settings(),
                     automation.watch_frame_rate(),
                 ));
-                let mut options = crate::account_settings::Options::default();
+                let mut options = crate::characters::Options::default();
                 options.game.rendering.set(RenderingMode::Minimal);
                 options.frame_rate = Some(15);
                 options.apply_to(&automation);

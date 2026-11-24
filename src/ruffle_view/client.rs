@@ -34,12 +34,12 @@ use mira_ui::{
 use crate::{
     accounts::{Account, AccountId, Accounts},
     army::Armies,
+    characters,
     file_panel::{self, Pick},
     ruffle::{Inbox, Msg, extras},
     script_inputs,
     scripting::Values,
-    settings,
-    shared_objects::SharedObjects,
+    settings, shared_objects,
     shortcuts::keys_for,
 };
 
@@ -315,7 +315,7 @@ pub(crate) fn init(
     super::script_names::init(cx);
     cx.set_global(Game {
         shared: Shared {
-            extras: Rc::new(extras::Store::open(data.join("as3.json"))),
+            extras: Rc::new(extras::Store::new(settings::extras(cx))),
             data,
             accounts,
             device,
@@ -556,7 +556,7 @@ impl Client {
             cx.observe_global::<super::script_names::Names>(|_, cx| cx.notify())
                 .detach();
             Client {
-                extras: Rc::new(extras::Store::open(folder.join("as3.json"))),
+                extras: Rc::new(extras::Store::new(Default::default())),
                 data: folder.to_path_buf(),
                 accounts: folder.join("accounts.json"),
                 device: reqwest::header::HeaderValue::from_static("test"),
@@ -589,13 +589,14 @@ impl Client {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Entity<RuffleView>> {
-        let shared_objects = cx.global::<SharedObjects>();
+        let seed = shared_objects::seed(&self.data);
         let storage = match account.filter(|_| settings::separate_aqw_settings(cx)) {
-            Some(account) => shared_objects.account(&account.id())?,
-            None => shared_objects.shared(),
+            Some(account) => {
+                shared_objects::of_character(&seed, &characters::folder(&account.id(), cx)?)?
+            }
+            None => seed,
         };
         let view = RuffleView::new(
-            self.data.clone(),
             storage,
             self.device.clone(),
             self.armies.clone(),
@@ -881,7 +882,7 @@ impl Client {
         if let Some(index) = self.session_of(account, cx) {
             self.sessions[index]
                 .view
-                .update(cx, |view, cx| view.start_loaded_script(cx));
+                .update(cx, |view, cx| view.restart_script(cx));
         }
     }
 
@@ -941,16 +942,19 @@ impl Client {
         }
     }
 
-    fn asking(&self) -> bool {
+    fn asking(&self, cx: &App) -> bool {
         self.closing.as_ref().is_some_and(|closing| closing.open)
             || self
                 .replacing
                 .as_ref()
                 .is_some_and(|replacing| replacing.open)
+            || self
+                .active_view(cx)
+                .is_some_and(|(view, _)| view.read(cx).script.asking_inputs(cx))
     }
 
     fn load_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking()) else {
+        let Some((view, _)) = self.active_view(cx).filter(|_| !self.asking(cx)) else {
             return;
         };
         window.activate_window();
@@ -1055,7 +1059,7 @@ impl Client {
     }
 
     fn request_close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.get(index).filter(|_| !self.asking()) else {
+        let Some(session) = self.sessions.get(index).filter(|_| !self.asking(cx)) else {
             return;
         };
         let running = session
@@ -1169,7 +1173,7 @@ impl Client {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.sessions.len() && !self.asking() {
+        if index < self.sessions.len() && !self.asking(cx) {
             self.active = index;
             self.show(window, cx);
         }
@@ -1505,7 +1509,7 @@ impl Client {
                 Icon::GalleryVerticalEnd,
                 "Tabs",
             ))
-            .disabled(self.asking())
+            .disabled(self.asking(cx))
             .width(TAB_MENU_WIDTH)
             .items(move |_, cx| {
                 let Some(this) = client.upgrade() else {
@@ -1897,6 +1901,9 @@ impl Client {
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| {
+                if this.asking(cx) {
+                    return;
+                }
                 if let Err(error) = this.open_session(None, window, cx) {
                     tracing::error!(%error, "couldn't open a session");
                 }
@@ -1923,7 +1930,10 @@ impl Client {
                 self.sessions
                     .get(self.active)
                     .map(|session| session.view.clone()),
-                |root, view| super::game_bar::on_actions(root, view, cx.weak_entity()),
+                |root, view| {
+                    let has_inputs = view.read(cx).script.has_inputs();
+                    super::game_bar::on_actions(root, view, has_inputs, cx.weak_entity())
+                },
             )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
                 if let Some(&index) = this.shortcut_tabs().get(action.0) {

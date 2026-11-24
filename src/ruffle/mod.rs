@@ -3,7 +3,6 @@ pub(crate) mod context_menu;
 pub(crate) mod extras;
 mod net;
 mod pacing;
-mod preferences;
 pub(crate) mod stats;
 mod surface;
 pub(crate) mod view;
@@ -135,7 +134,7 @@ pub(crate) struct Runtime {
 impl Runtime {
     pub(crate) fn spawn(
         surface: Surface,
-        data: PathBuf,
+        preferences: crate::settings::Player,
         storage: PathBuf,
         device: reqwest::header::HeaderValue,
         failures: async_channel::Sender<String>,
@@ -160,7 +159,7 @@ impl Runtime {
                 let _session = span.entered();
                 if let Err(error) = run(
                     surface,
-                    data,
+                    preferences,
                     storage,
                     device,
                     rx,
@@ -226,7 +225,7 @@ impl Drop for Runtime {
 
 fn run(
     surface: Surface,
-    data: PathBuf,
+    preferences: crate::settings::Player,
     storage: PathBuf,
     device: reqwest::header::HeaderValue,
     rx: mpsc::Receiver<Msg>,
@@ -479,23 +478,17 @@ fn run(
         }
         let _ = loading_outputs.try_send(Output::Loaded);
     });
-    let smooth_motion = preferences::BoolPreference::new(data.join("smooth-motion"));
-    match smooth_motion.load() {
-        Ok(enabled) => player.lock().unwrap().set_frame_interpolation(enabled),
-        Err(error) => tracing::warn!(%error, "couldn't load smooth motion preference"),
-    }
+    player
+        .lock()
+        .unwrap()
+        .set_frame_interpolation(preferences.smooth_motion);
     let mut open_menu: Option<OpenMenu> = None;
     let mut scripts = Calls::default();
     let scripts_bridge = bridge.clone();
     let commands_bridge = bridge.clone();
     let mut input = PlayerInput::new(bridge);
-    let show_stats = preferences::BoolPreference::new(data.join("show-stats"));
-    let stats_enabled = show_stats.load().unwrap_or_else(|error| {
-        tracing::warn!(%error, "couldn't load stats preference");
-        false
-    });
     let mut stats = stats::Collector::new(stats);
-    stats.set_enabled(&mut player.lock().unwrap(), stats_enabled);
+    stats.set_enabled(&mut player.lock().unwrap(), preferences.performance_stats);
     let mut last_tick = Instant::now();
     let mut frame_clock_enabled = false;
     let mut stage = None;
@@ -651,14 +644,6 @@ fn run(
                         if matches!(selection, Some(MenuSelection::Stats)) {
                             let enabled = !stats.enabled();
                             stats.set_enabled(&mut player, enabled);
-                            if let Err(error) = show_stats.save(enabled) {
-                                tracing::error!(%error, "couldn't save stats preference");
-                            }
-                        }
-                        if matches!(selection, Some(MenuSelection::SmoothMotion))
-                            && let Err(error) = smooth_motion.save(player.frame_interpolation())
-                        {
-                            tracing::error!(%error, "couldn't save smooth motion preference");
                         }
                     }
                 }

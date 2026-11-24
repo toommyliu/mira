@@ -1,0 +1,7 @@
+{
+  "name": "@mira/dailies",
+  "version": "0.1.0",
+  "description": "Daily and weekly quests.",
+  "main": "index.ts",
+  "mira": {}
+}

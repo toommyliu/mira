@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Toggled, Transformation, Window,
-    point, prelude::FluentBuilder as _, px, size,
+    App, ElementId, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Toggled,
+    Transformation, Window, point, prelude::FluentBuilder as _, px, size,
 };
 
 use super::{
@@ -27,6 +27,7 @@ pub struct Checkbox {
     description: Option<SharedString>,
     show_label: bool,
     disabled: bool,
+    focus: Option<FocusHandle>,
     on_toggle: Option<ToggleHandler>,
 }
 
@@ -43,6 +44,7 @@ impl Checkbox {
             description: None,
             show_label: true,
             disabled: false,
+            focus: None,
             on_toggle: None,
         }
     }
@@ -100,6 +102,11 @@ impl Checkbox {
         self
     }
 
+    pub fn focus(mut self, focus: FocusHandle) -> Self {
+        self.focus = Some(focus);
+        self
+    }
+
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self
@@ -117,6 +124,7 @@ impl RenderOnce for Checkbox {
             self.label.clone(),
             self.description.clone(),
             self.disabled,
+            self.focus,
             window,
             cx,
         );

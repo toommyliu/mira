@@ -1,7 +1,7 @@
 use mira_ui::StyledExt as _;
 use std::{
     collections::BTreeMap,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -32,7 +32,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod previews;
 
 use crate::{
-    packages,
+    data_file, packages,
+    ruffle::extras::Extras,
     ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
     shortcuts::{self, Category, Overrides, Shortcut, Taken},
 };
@@ -224,6 +225,13 @@ pub(crate) struct CollapsedSources {
     pub(crate) packages: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Player {
+    pub(crate) smooth_motion: bool,
+    pub(crate) performance_stats: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Settings {
@@ -246,6 +254,8 @@ struct Settings {
     hidden_recent_scripts: Vec<PathBuf>,
     start_replacements: bool,
     collapsed_sources: CollapsedSources,
+    player: Player,
+    extras: Extras,
     #[serde(with = "shortcuts")]
     shortcuts: Overrides,
 }
@@ -318,35 +328,21 @@ impl Settings {
         }
     }
 
+    #[cfg(test)]
     fn load(path: &Path) -> io::Result<Self> {
-        match fs::read(path) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error),
-        }
+        Ok(data_file::read_json(path)?.unwrap_or_default())
     }
 
-    fn open(path: &Path) -> Option<Self> {
-        let settings = match Self::load(path) {
-            Ok(settings) => settings,
-            Err(error) => {
-                tracing::warn!(%error, path = %path.display(), "couldn't read settings");
-                return None;
-            }
-        };
-        let current = serde_json::to_vec_pretty(&settings).ok();
-        if fs::read(path).ok() != current
-            && let Err(error) = settings.save(path)
-        {
+    fn open(path: &Path) -> Self {
+        let settings: Self = data_file::load_json(path);
+        if let Err(error) = settings.save(path) {
             tracing::warn!(%error, path = %path.display(), "couldn't save settings");
         }
-        Some(settings)
+        settings
     }
 
     fn save(&self, path: &Path) -> io::Result<()> {
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&self)?)?;
-        fs::rename(temporary, path)
+        data_file::write_json(path, self)
     }
 }
 
@@ -368,7 +364,7 @@ struct Open(WindowHandle<SettingsWindow>);
 impl Global for Open {}
 
 pub(crate) fn init(path: PathBuf, on_change: fn(&mut App), cx: &mut App) {
-    let settings = Settings::open(&path).unwrap_or_default();
+    let settings = Settings::open(&path);
     cx.set_global(Store {
         path,
         settings,
@@ -451,6 +447,22 @@ pub(crate) fn collapsed_sources(cx: &App) -> CollapsedSources {
 
 pub(crate) fn collapse_sources(cx: &mut App, edit: impl FnOnce(&mut CollapsedSources)) {
     persist(cx, |settings| edit(&mut settings.collapsed_sources));
+}
+
+pub(crate) fn player(cx: &App) -> Player {
+    cx.global::<Store>().settings.player
+}
+
+pub(crate) fn change_player(cx: &mut App, edit: impl FnOnce(&mut Player)) {
+    persist(cx, |settings| edit(&mut settings.player));
+}
+
+pub(crate) fn extras(cx: &App) -> Extras {
+    cx.global::<Store>().settings.extras
+}
+
+pub(crate) fn set_extras(extras: Extras, cx: &mut App) {
+    persist(cx, |settings| settings.extras = extras);
 }
 
 pub(crate) fn script_folders(cx: &App) -> &[PathBuf] {
@@ -1534,6 +1546,8 @@ impl Render for SettingsWindow {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -1580,6 +1594,11 @@ mod tests {
                 folders: true,
                 packages: false,
             },
+            player: Player {
+                smooth_motion: true,
+                performance_stats: false,
+            },
+            extras: Extras::default().toggled(crate::ruffle::extras::Extra::ChatRecall),
             shortcuts: Overrides::from([(Shortcut::Bank, None)]),
         };
         chosen.save(&path).unwrap();
@@ -1590,6 +1609,9 @@ mod tests {
         assert_eq!(saved["textSize"], 15);
         assert_eq!(saved["separateAqwSettings"], true);
         assert_eq!(saved["collapsedSources"]["folders"], true);
+        assert_eq!(saved["player"]["smoothMotion"], true);
+        assert_eq!(saved["extras"]["chatRecall"], true);
+        assert_eq!(saved["extras"]["copyMenus"], false);
         assert_eq!(
             serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
                 .unwrap()
@@ -1839,14 +1861,10 @@ mod tests {
     }
 
     #[test]
-    fn opening_writes_the_full_settings_but_never_over_an_unreadable_file() {
-        let mut random = [0; 8];
-        getrandom::getrandom(&mut random).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "mira-settings-open-{:x}.json",
-            u64::from_ne_bytes(random)
-        ));
-        assert_eq!(Settings::open(&path), Some(Settings::default()));
+    fn opening_writes_the_full_settings_and_moves_an_unreadable_file_aside() {
+        let folder = crate::storyboard::scratch("settings-open");
+        let path = folder.join("settings.json");
+        assert_eq!(Settings::open(&path), Settings::default());
         let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             written["shortcuts"].as_object().unwrap().len(),
@@ -1855,15 +1873,16 @@ mod tests {
         assert_eq!(written["shortcuts"]["loadScript"], "cmd-o");
 
         fs::write(&path, r#"{"appearance":"dark"}"#).unwrap();
-        assert!(Settings::open(&path).is_some());
+        Settings::open(&path);
         let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["appearance"], "dark");
         assert_eq!(written["shortcuts"]["bank"], "cmd-b");
 
         fs::write(&path, "{ not json").unwrap();
-        assert_eq!(Settings::open(&path), None);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
-        fs::remove_file(path).unwrap();
+        assert_eq!(Settings::open(&path), Settings::default());
+        assert!(data_file::backed_up(&folder, "{ not json"));
+        assert_eq!(Settings::load(&path).unwrap(), Settings::default());
+        fs::remove_dir_all(folder).unwrap();
     }
 
     fn update_states() -> Vec<(&'static str, crate::updates::Updates)> {

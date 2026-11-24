@@ -2,35 +2,36 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use gpui::{App, Global};
 
-use crate::scripting::{Supplied, Values};
+use crate::{
+    data_file,
+    scripting::{Supplied, Values},
+};
 
 pub(crate) struct Store {
     path: PathBuf,
     saved: Option<BTreeMap<PathBuf, Values>>,
+    unsaved: bool,
 }
 
 impl Global for Store {}
 
 impl Store {
     fn open(path: PathBuf) -> Self {
-        let saved = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .inspect_err(|error| {
-                    tracing::error!(%error, path = %path.display(), "couldn't read saved script inputs");
-                })
-                .ok(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Some(BTreeMap::new()),
-            Err(error) => {
+        let saved = data_file::read_json(&path)
+            .inspect_err(|error| {
                 tracing::error!(%error, path = %path.display(), "couldn't read saved script inputs");
-                None
-            }
-        };
-        Self { path, saved }
+            })
+            .ok()
+            .map(Option::unwrap_or_default);
+        Self {
+            path,
+            saved,
+            unsaved: false,
+        }
     }
 
     fn saved(&self, script: &Path) -> Supplied {
@@ -43,56 +44,34 @@ impl Store {
     }
 
     fn save(&mut self, script: &Path, values: Values) -> io::Result<()> {
-        let Some(saved) = &self.saved else {
+        let Some(saved) = &mut self.saved else {
             return Err(io::Error::other("saved script inputs couldn't be read"));
         };
         let script = canonical(script);
-        if saved.get(&script) == Some(&values) {
+        if !self.unsaved && saved.get(&script) == Some(&values) {
             return Ok(());
         }
-        let mut next = saved.clone();
-        next.insert(script, values);
-        if let Some(folder) = self.path.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let temporary = self.path.with_extension("json.tmp");
-        let mut bytes = serde_json::to_vec_pretty(&next).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, &self.path)?;
-        self.saved = Some(next);
-        Ok(())
+        saved.insert(script, values);
+        let written = data_file::write_json(&self.path, saved);
+        self.unsaved = written.is_err();
+        written
+    }
+
+    fn unsaved(&self) -> bool {
+        self.unsaved
     }
 
     fn start_fresh(&mut self) -> io::Result<()> {
         if self.saved.is_some() {
             return Ok(());
         }
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs());
-        let stem = self
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("script-inputs");
-        let backup = (0..)
-            .map(|attempt| {
-                let suffix = if attempt == 0 {
-                    String::new()
-                } else {
-                    format!("-{attempt}")
-                };
-                self.path
-                    .with_file_name(format!("{stem}-{seconds}{suffix}.json.bad"))
-            })
-            .find(|backup| !backup.exists())
-            .expect("some backup name is free");
-        match fs::rename(&self.path, &backup) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-            _ => {}
+        match data_file::move_aside(&self.path) {
+            Ok(backup) => {
+                tracing::warn!(backup = %backup.display(), "moved unreadable script inputs aside");
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
-        tracing::warn!(backup = %backup.display(), "moved unreadable script inputs aside");
         self.saved = Some(BTreeMap::new());
         Ok(())
     }
@@ -125,6 +104,10 @@ pub(crate) fn values(script: &Path, cx: &App) -> anyhow::Result<Values> {
 
 pub(crate) fn unreadable(cx: &App) -> bool {
     cx.global::<Store>().saved.is_none()
+}
+
+pub(crate) fn unsaved(cx: &App) -> bool {
+    cx.global::<Store>().unsaved()
 }
 
 pub(crate) fn save(script: &Path, values: Values, cx: &mut App) {
@@ -192,6 +175,47 @@ mod tests {
         assert_eq!(
             reopened.saved(&folder.join("other.ts")),
             Supplied::Values(Values::new())
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn inputs_that_fail_to_save_apply_until_the_next_save_writes_them() {
+        let folder = scratch();
+        let path = folder.join("script-inputs.json");
+        let hunt = folder.join("hunt.ts");
+        let daily = folder.join("daily.ts");
+        fs::write(&hunt, "").unwrap();
+        fs::write(&daily, "").unwrap();
+        let mut store = Store::open(path.clone());
+        store.save(&hunt, values(json!({ "kills": 1 }))).unwrap();
+        let writable = fs::metadata(&folder).unwrap().permissions();
+        let mut locked = writable.clone();
+        locked.set_readonly(true);
+        fs::set_permissions(&folder, locked).unwrap();
+
+        assert!(store.save(&daily, values(json!({ "day": "All" }))).is_err());
+        assert!(store.unsaved());
+        assert_eq!(
+            store.saved(&daily),
+            Supplied::Values(values(json!({ "day": "All" })))
+        );
+        assert_eq!(
+            Store::open(path.clone()).saved(&daily),
+            Supplied::Values(Values::new())
+        );
+
+        fs::set_permissions(&folder, writable).unwrap();
+        store.save(&daily, values(json!({ "day": "All" }))).unwrap();
+        assert!(!store.unsaved());
+        let reopened = Store::open(path);
+        assert_eq!(
+            reopened.saved(&daily),
+            Supplied::Values(values(json!({ "day": "All" })))
+        );
+        assert_eq!(
+            reopened.saved(&hunt),
+            Supplied::Values(values(json!({ "kills": 1 })))
         );
         fs::remove_dir_all(folder).unwrap();
     }

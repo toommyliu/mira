@@ -2855,6 +2855,15 @@ impl Bar<'_> {
         }
     }
 
+    fn hold(&mut self, key: &'static str) {
+        self.cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: Keystroke::parse(key).unwrap(),
+            is_held: true,
+            prefer_character_input: false,
+        });
+        self.cx.run_until_parked();
+    }
+
     fn chosen(&self) -> Vec<&'static str> {
         self.view
             .read_with(self.cx, |view, _| view.chosen.borrow().clone())
@@ -2918,6 +2927,23 @@ fn menubar_moves_between_entries_with_left_and_right(cx: &mut TestAppContext) {
     bar.click(Bar::FILE);
     bar.keys("right right enter");
     assert_eq!(bar.chosen(), ["undo", "new", "new"]);
+}
+
+#[gpui::test]
+fn menubar_ignores_a_return_held_from_before(cx: &mut TestAppContext) {
+    let mut bar = game_bar(cx);
+    bar.keys("tab");
+    bar.hold("enter");
+    bar.hold("enter");
+    assert_eq!(bar.chosen(), Vec::<&str>::new());
+    bar.keys("enter");
+    assert_eq!(
+        bar.chosen(),
+        Vec::<&str>::new(),
+        "a fresh Return only opens File"
+    );
+    bar.keys("enter");
+    assert_eq!(bar.chosen(), ["new"]);
 }
 
 #[gpui::test]

@@ -1,9 +1,10 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseDownEvent, ParentElement, Refineable as _, RenderOnce, Role, SharedString,
-    Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    AnyElement, App, Bounds, Div, ElementId, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, MouseDownEvent, ParentElement, Pixels, Refineable as _, RenderOnce,
+    Role, SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
+    div,
 };
 
 use super::{
@@ -157,7 +158,16 @@ impl Bar {
     fn over_trigger(&self, event: &MouseDownEvent, cx: &App) -> bool {
         self.states
             .iter()
-            .any(|state| menu::over_trigger(state, event, cx))
+            .zip(&self.panels)
+            .any(|(state, &panel)| panel && menu::over_trigger(state, event, cx))
+    }
+
+    fn anchor(&self, index: usize, joins_previous: bool, cx: &App) -> Bounds<Pixels> {
+        let own = self.states[index].read(cx).trigger_bounds();
+        match index.checked_sub(1).filter(|_| joins_previous) {
+            Some(previous) => self.states[previous].read(cx).trigger_bounds().union(&own),
+            None => own,
+        }
     }
 
     fn show(
@@ -307,8 +317,10 @@ fn render_entry(
         return entry
             .trigger
             .focus(bar.triggers[index].clone())
+            .attach(menu::trigger_probe(&bar.states[index]).into_any_element())
             .into_any_element();
     };
+    let anchor = bar.anchor(index, entry.trigger.joins_previous(), cx);
     let id = entry_id(index);
     let state = bar.states[index].clone();
     let label = entry.trigger.label().clone();
@@ -331,6 +343,7 @@ fn render_entry(
         Rc::new(
             move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
                 let from_end = match event.keystroke.key.as_str() {
+                    "enter" | "space" if event.is_held => return,
                     "down" | "enter" | "space" => false,
                     "up" => true,
                     _ => return,
@@ -381,6 +394,7 @@ fn render_entry(
             let items = items(window, cx);
             menu::attach(
                 super::Placement::menubar(),
+                anchor,
                 &state,
                 on_outside,
                 window,
@@ -400,6 +414,7 @@ fn render_entry(
             .child(content);
             menu::attach(
                 super::Placement::menubar(),
+                anchor,
                 &state,
                 on_outside,
                 window,
