@@ -238,7 +238,7 @@ struct Settings {
     start: Start,
     quit_shortcut: QuitShortcut,
     skip_close_confirmation: bool,
-    sidebar: bool,
+    hide_sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
     font_smoothing: bool,
@@ -426,11 +426,11 @@ pub(crate) fn separate_aqw_settings(cx: &App) -> bool {
 }
 
 pub(crate) fn sidebar(cx: &App) -> bool {
-    cx.global::<Store>().settings.sidebar
+    !cx.global::<Store>().settings.hide_sidebar
 }
 
 pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
-    change(cx, |settings| settings.sidebar = open);
+    change(cx, |settings| settings.hide_sidebar = !open);
 }
 
 pub(crate) fn start_replacements(cx: &App) -> bool {
@@ -1565,14 +1565,14 @@ mod tests {
         assert_eq!(Settings::default().start, Start::Client);
         assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
         assert!(!Settings::default().skip_close_confirmation);
-        assert!(!Settings::default().sidebar);
+        assert!(!Settings::default().hide_sidebar);
         assert!(!Settings::default().skip_update_checks);
         assert!(!Settings::default().separate_aqw_settings);
         let chosen = Settings {
             start: Start::Manager,
             quit_shortcut: QuitShortcut::DoublePress,
             skip_close_confirmation: true,
-            sidebar: true,
+            hide_sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
             font_smoothing: true,
