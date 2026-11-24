@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     script_inputs,
-    scripting::{Declared, Supplied},
+    scripting::{Declared, Supplied, Values},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub(super) fn preflight(read: &Read, saved: &Supplied) -> Preflight {
 }
 
 pub(super) enum InputsEvent {
-    Start,
+    Start(Values),
     Closed,
 }
 
@@ -132,8 +132,11 @@ impl InputsDialog {
         match self.purpose {
             Purpose::Start if script_inputs::unreadable(cx) => {}
             Purpose::Start => {
+                let Some(values) = self.form.read(cx).ready_values(cx) else {
+                    return;
+                };
                 self.close(cx);
-                cx.emit(InputsEvent::Start);
+                cx.emit(InputsEvent::Start(values));
             }
             Purpose::Fill | Purpose::Edit => self.close(cx),
         }
@@ -250,7 +253,7 @@ mod tests {
     use super::*;
     use crate::{
         ruffle_view::{account::file_name, script_form::Draft},
-        scripting::{self, Values},
+        scripting,
     };
 
     const HUNT: &str = r#"export const inputs = {
@@ -262,6 +265,7 @@ mod tests {
         focus: FocusHandle,
         dialog: Entity<InputsDialog>,
         events: Rc<RefCell<Vec<&'static str>>>,
+        started: Rc<RefCell<Option<Values>>>,
         _events: Subscription,
     }
 
@@ -318,10 +322,14 @@ mod tests {
             let read = read(&script);
             let dialog = cx.new(|cx| InputsDialog::new(script.clone(), read, purpose, false, cx));
             let events = Rc::new(RefCell::new(Vec::new()));
-            let seen = events.clone();
+            let started = Rc::new(RefCell::new(None));
+            let (seen, ran) = (events.clone(), started.clone());
             let subscription = cx.subscribe(&dialog, move |_, _, event: &InputsEvent, _| {
                 seen.borrow_mut().push(match event {
-                    InputsEvent::Start => "start",
+                    InputsEvent::Start(values) => {
+                        *ran.borrow_mut() = Some(values.clone());
+                        "start"
+                    }
                     InputsEvent::Closed => "closed",
                 })
             });
@@ -329,6 +337,7 @@ mod tests {
                 focus,
                 dialog,
                 events,
+                started,
                 _events: subscription,
             }
         });
@@ -525,6 +534,31 @@ mod tests {
     }
 
     #[gpui::test]
+    fn start_runs_what_the_form_shows_when_saving_fails(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let folder = scratch("unwritable");
+        let (cx, host, script) = host(cx, &folder, HUNT, Purpose::Start);
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+        text(&host, 1, cx).update(cx, |input, cx| input.set_text("Frogzard", cx));
+        cx.run_until_parked();
+        press(cx, "enter");
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(state(&host, cx), (false, vec!["closed", "start"]));
+        assert_eq!(
+            host.read_with(cx, |host, _| host.started.borrow().clone()),
+            Some(values(json!({ "kills": 5, "monster": "Frogzard" })))
+        );
+        assert_eq!(
+            cx.update(|_, cx| script_inputs::values(&script, cx).unwrap()),
+            Values::new(),
+            "the save failed"
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
     fn start_waits_for_unreadable_inputs_to_start_fresh(cx: &mut TestAppContext) {
         let folder = scratch("unreadable");
         fs::write(folder.join("inputs.json"), "{ \"oops\": ").unwrap();
@@ -582,6 +616,7 @@ mod tests {
                         focus,
                         dialog,
                         events: Rc::default(),
+                        started: Rc::default(),
                         _events: subscription,
                     }
                 })

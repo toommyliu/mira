@@ -19,7 +19,7 @@ use crate::{
     characters, packages,
     ruffle::{Command, Msg},
     script_inputs,
-    scripting::{Declared, Launch, Level, Limit, Limits, Outcome, Run},
+    scripting::{Declared, Launch, Level, Limit, Limits, Outcome, Run, Supplied},
 };
 
 pub(super) struct CloseTab;
@@ -380,10 +380,13 @@ impl RuffleView {
         let running = self.script.running();
         let view = cx.new(|cx| InputsDialog::new(entry, read, purpose, running, cx));
         let events = cx.subscribe(&view, |this, view, event: &InputsEvent, cx| match event {
-            InputsEvent::Start if this.script.entry() == Some(view.read(cx).script()) => {
-                this.start_loaded_script(cx)
+            InputsEvent::Start(values) => {
+                let entry = view.read(cx).script().clone();
+                if this.script.entry() == Some(&entry) {
+                    let inputs = Supplied::Values(values.clone());
+                    this.start_script(Launch { entry, inputs }, cx);
+                }
             }
-            InputsEvent::Start => {}
             InputsEvent::Closed => this.changed(cx),
         });
         self.script.inputs = Some(Inputs {
