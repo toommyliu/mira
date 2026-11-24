@@ -1788,7 +1788,7 @@ impl ScriptsWindow {
             return;
         };
         let item = usize::from(form.meta.description.is_some()) + form.item_of(field, cx);
-        let input = form.text(field);
+        let focus = form.focus_handle(field, cx);
         self.error_cursor = Some(next);
         let theme = cx.theme();
         reveal_item(
@@ -1797,8 +1797,8 @@ impl ScriptsWindow {
             theme.space(6.0),
             error_bar_clearance(theme),
         );
-        if let Some(input) = input {
-            window.focus(&input.focus_handle(cx), cx);
+        if let Some(focus) = focus {
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
@@ -4707,6 +4707,10 @@ Cells visited: Enter, r1, r2, r3, r4.";
                 && room.bottom() + scrolled <= viewport.bottom() - clearance,
             "stepping to Room, below the description, scrolls it into view: {room:?} in {viewport:?} at {scrolled:?}"
         );
+        let room = form_of(&scripts, &script, cx)
+            .read_with(cx, |form, cx| form.focus_handle(8, cx))
+            .unwrap();
+        assert!(cx.update(|window, _| room.is_focused(window)));
         jump(1, cx);
         assert!(
             focused(&offset, cx),

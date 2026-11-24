@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf, rc::Rc};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
@@ -53,6 +53,7 @@ pub(super) enum FormState {
         definition: Definition,
         drafts: Vec<FieldDraft>,
         texts: Vec<Option<Entity<Input>>>,
+        selects: Vec<Option<FocusHandle>>,
         _changes: Vec<Subscription>,
     },
 }
@@ -105,6 +106,13 @@ impl InputsForm {
             Ok(Some(definition)) => {
                 let drafts = drafts(&definition, shown);
                 let mut texts = Vec::new();
+                let selects = definition
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        matches!(field.kind, Kind::Select { .. }).then(|| cx.focus_handle())
+                    })
+                    .collect();
                 let mut changes = Vec::new();
                 for (index, (field, draft)) in definition.fields().iter().zip(&drafts).enumerate() {
                     let Draft::Text(text) = &draft.draft else {
@@ -136,6 +144,7 @@ impl InputsForm {
                     definition,
                     drafts,
                     texts,
+                    selects,
                     _changes: changes,
                 }
             }
@@ -214,6 +223,16 @@ impl InputsForm {
     pub(super) fn item_of(&self, field: usize, cx: &App) -> usize {
         let (unreadable, stale) = self.leading(cx);
         usize::from(unreadable) + usize::from(stale) + field
+    }
+
+    pub(super) fn focus_handle(&self, field: usize, cx: &App) -> Option<FocusHandle> {
+        if let Some(input) = self.text(field) {
+            return Some(input.focus_handle(cx));
+        }
+        match &self.state {
+            FormState::Fields { selects, .. } => selects.get(field).cloned().flatten(),
+            FormState::Broken { .. } | FormState::Plain => None,
+        }
     }
 
     pub(super) fn text(&self, field: usize) -> Option<Entity<Input>> {
@@ -361,7 +380,7 @@ fn show_drafts(
 pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Vec<AnyElement> {
     let layout = theme.layout;
     let inputs = form.read(cx);
-    let (definition, drafts, texts) = match &inputs.state {
+    let (definition, drafts, texts, selects) = match &inputs.state {
         FormState::Broken { title, message } => {
             return vec![
                 Alert::new("script-broken", Tone::Danger, *title)
@@ -376,8 +395,9 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
             definition,
             drafts,
             texts,
+            selects,
             ..
-        } => (definition, drafts, texts),
+        } => (definition, drafts, texts, selects),
     };
     let this = form.downgrade();
     let saved = inputs.script.is_some();
@@ -450,6 +470,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                     )
                     .placeholder("Choose…")
                     .full_width()
+                    .when_some(selects[index].clone(), Select::focus)
                     .invalid(error(field, draft).is_some())
                     .on_select(move |chosen, _, cx| set(Draft::Choice(Some(chosen)), cx))
                     .into_any_element(),

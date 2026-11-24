@@ -1574,6 +1574,7 @@ pub(crate) fn trigger_handlers(
     let keys = Rc::new(
         move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
             let from_end = match event.keystroke.key.as_str() {
+                "enter" | "space" if event.is_held => return,
                 "enter" | "space" => false,
                 "right" if beside && !event.keystroke.modifiers.modified() => false,
                 "down" if !beside => false,

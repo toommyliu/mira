@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
+    AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px,
 };
@@ -117,9 +117,7 @@ impl InputsDialog {
             })
         });
         self.reveal = field;
-        self.focus = field
-            .and_then(|field| form.text(field))
-            .map(|input| input.focus_handle(cx));
+        self.focus = field.and_then(|field| form.focus_handle(field, cx));
     }
 
     fn accept(&mut self, cx: &mut Context<Self>) {
@@ -158,7 +156,7 @@ impl InputsDialog {
             return;
         };
         let item = form.item_of(field, cx);
-        let focus = form.text(field).map(|input| input.focus_handle(cx));
+        let focus = form.focus_handle(field, cx);
         let margin = cx.theme().space(1.0);
         reveal_item(&self.scroll, item, margin, margin);
         self.cursor = Some(cursor);
@@ -246,15 +244,14 @@ impl Render for InputsDialog {
 mod tests {
     use std::{cell::RefCell, fs, path::Path, rc::Rc};
 
-    use gpui::{KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext, px};
+    use gpui::{
+        Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext, px,
+    };
     use mira_ui::FOCUS_SCOPE;
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        ruffle_view::{account::file_name, script_form::Draft},
-        scripting,
-    };
+    use crate::{ruffle_view::account::file_name, scripting};
 
     const HUNT: &str = r#"export const inputs = {
         kills: { type: "number", label: "Kills", integer: true, min: 1, default: 5 },
@@ -450,9 +447,28 @@ mod tests {
             (true, vec![]),
             "Room still needs choosing"
         );
+        let room = form(&host, cx)
+            .read_with(cx, |form, cx| form.focus_handle(8, cx))
+            .unwrap();
+        assert!(cx.update(|window, _| room.is_focused(window)));
 
-        form(&host, cx).update(cx, |form, cx| form.set_draft(8, Draft::Choice(Some(1)), cx));
-        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.simulate_event(KeyDownEvent {
+                keystroke: Keystroke::parse("enter").unwrap(),
+                is_held: true,
+                prefer_character_input: false,
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            form(&host, cx).read_with(cx, |form, cx| form.errored(cx)),
+            vec![8],
+            "a Return held from the field before doesn't choose a room"
+        );
+
+        press(cx, "enter");
+        press(cx, "down");
+        press(cx, "enter");
         cx.update(|window, cx| window.focus(&offset.focus_handle(cx), cx));
         press(cx, "enter");
         assert_eq!(state(&host, cx), (false, vec!["closed", "start"]));
@@ -488,6 +504,27 @@ mod tests {
             item.top() + offset.y >= viewport.top()
                 && item.bottom() + offset.y <= viewport.bottom(),
             "{item:?} shows in {viewport:?} at {offset:?}"
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
+    fn opens_with_focus_on_a_dropdown_to_fix(cx: &mut TestAppContext) {
+        let folder = scratch("dropdown");
+        let source = r#"export const inputs = {
+            monster: { type: "string", label: "Monster", default: "Frogzard" },
+            room: { type: "select", label: "Room", options: ["Public", "Private"] },
+        };"#;
+        let (cx, host, script) = host(cx, &folder, source, Purpose::Edit);
+        let room = form(&host, cx)
+            .read_with(cx, |form, cx| form.focus_handle(1, cx))
+            .expect("the dropdown takes focus");
+        assert!(cx.update(|window, _| room.is_focused(window)));
+        press(cx, "enter");
+        press(cx, "enter");
+        assert_eq!(
+            cx.update(|_, cx| script_inputs::values(&script, cx).unwrap()),
+            values(json!({ "monster": "Frogzard", "room": "Public" }))
         );
         fs::remove_dir_all(folder).unwrap();
     }
