@@ -63,6 +63,7 @@ pub(super) struct InputsDialog {
     scroll: ScrollHandle,
     cursor: Option<usize>,
     focus: Option<FocusHandle>,
+    reveal: Option<usize>,
     _watch: [Subscription; 2],
 }
 
@@ -88,6 +89,7 @@ impl InputsDialog {
             scroll: ScrollHandle::new(),
             cursor: None,
             focus: None,
+            reveal: None,
             _watch: watch,
         };
         dialog.focus_first(cx);
@@ -109,15 +111,12 @@ impl InputsDialog {
 
     fn focus_first(&mut self, cx: &mut Context<Self>) {
         let form = self.form.read(cx);
-        let field = match self.purpose {
-            Purpose::Start | Purpose::Fill => form.errored(cx).first().copied(),
-            Purpose::Edit => None,
-        };
-        let field = field.or_else(|| {
+        let field = form.errored(cx).first().copied().or_else(|| {
             form.definition().and_then(|definition| {
                 (0..definition.fields().len()).find(|&field| form.text(field).is_some())
             })
         });
+        self.reveal = field;
         self.focus = field
             .and_then(|field| form.text(field))
             .map(|input| input.focus_handle(cx));
@@ -145,6 +144,7 @@ impl InputsDialog {
             return;
         }
         self.open = false;
+        self.reveal = None;
         cx.emit(InputsEvent::Closed);
         cx.notify();
     }
@@ -181,6 +181,16 @@ impl Render for InputsDialog {
             });
         }
         let theme = cx.theme().clone();
+        if let Some(field) = self.reveal {
+            if self.scroll.bounds_for_item(0).is_some() {
+                let item = self.form.read(cx).item_of(field, cx);
+                let margin = theme.space(1.0);
+                reveal_item(&self.scroll, item, margin, margin);
+                self.reveal = None;
+            } else {
+                window.request_animation_frame();
+            }
+        }
         let errors = self.form.read(cx).errored(cx).len();
         let title: SharedString = script_names::name(&self.script, cx);
         let start = self.purpose == Purpose::Start;
@@ -300,7 +310,7 @@ mod tests {
         fs::write(&script, source).unwrap();
         cx.update(mira_ui::init);
         let inputs = folder.join("inputs.json");
-        let (host, cx) = cx.add_window_view(|window, cx| {
+        let window = cx.open_window(gpui::size(px(960.0), px(588.0)), |window, cx| {
             script_inputs::init(inputs, cx);
             let focus = cx.focus_handle();
             window.activate_window();
@@ -322,6 +332,8 @@ mod tests {
                 _events: subscription,
             }
         });
+        let host = window.root(cx).unwrap();
+        let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
         cx.run_until_parked();
         (cx, host, script)
     }
@@ -442,12 +454,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn opens_scrolled_to_the_first_field_to_fix(cx: &mut TestAppContext) {
+        let folder = scratch("reveal");
+        let fields = (0..12)
+            .map(|index| {
+                format!("n{index}: {{ type: \"number\", label: \"N{index}\", default: 1 }},")
+            })
+            .collect::<String>();
+        let source = format!(
+            "export const inputs = {{ {fields} last: {{ type: \"string\", label: \"Last\", required: true }} }};"
+        );
+        let (cx, host, _) = host(cx, &folder, &source, Purpose::Edit);
+        assert!(focused(&text(&host, 12, cx), cx));
+        let (viewport, item) = host.read_with(cx, |host, cx| {
+            let dialog = host.dialog.read(cx);
+            let item = dialog.form.read(cx).item_of(12, cx);
+            (
+                dialog.scroll.bounds(),
+                dialog.scroll.bounds_for_item(item).unwrap(),
+            )
+        });
+        let offset = host.read_with(cx, |host, cx| host.dialog.read(cx).scroll.offset());
+        assert!(
+            item.top() + offset.y >= viewport.top()
+                && item.bottom() + offset.y <= viewport.bottom(),
+            "{item:?} shows in {viewport:?} at {offset:?}"
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
     fn escape_closes_and_keeps_what_was_saved(cx: &mut TestAppContext) {
         let folder = scratch("escape");
         fs::write(folder.join("inputs.json"), "{}").unwrap();
         let (cx, host, script) = host(cx, &folder, HUNT, Purpose::Edit);
+        assert!(
+            focused(&text(&host, 1, cx), cx),
+            "the first field to fix takes focus"
+        );
         let kills = text(&host, 0, cx);
-        assert!(focused(&kills, cx), "the first text field takes focus");
 
         for _ in 0..3 {
             cx.simulate_event(KeyDownEvent {
