@@ -881,13 +881,18 @@ code.type {
 
 .shape-row dt {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 12px;
   align-items: baseline;
 }
 
 .shape-row dt > code:first-child {
+  flex: none;
   font: 500 13px/20px var(--font-mono);
+}
+
+.shape-row dt > code.type {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .shape-row dd {
