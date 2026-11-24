@@ -99,12 +99,6 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Toggle Full Screen", ToggleFullScreen),
         ]),
-        Menu::new("Script").items([
-            MenuItem::action("Load Script…", game::LoadScript),
-            MenuItem::action("Edit Inputs…", game::EditScriptInputs),
-            MenuItem::separator(),
-            MenuItem::action("Start/Stop Script", game::ToggleScript),
-        ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
