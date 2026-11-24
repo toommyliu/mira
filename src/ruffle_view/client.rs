@@ -7,8 +7,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable, Global,
-    InteractiveElement as _, IntoElement, Modifiers, ModifiersChangedEvent, MouseButton,
+    AnyElement, App, AppContext as _, Bounds, Context, Entity, EntityId, FocusHandle, Focusable,
+    Global, InteractiveElement as _, IntoElement, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, TitlebarOptions, WeakEntity,
     Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, actions, div,
@@ -153,6 +153,7 @@ struct Replacing {
 }
 
 struct Status {
+    session: Option<usize>,
     states: [SharedString; 2],
     on: bool,
     entered: Instant,
@@ -1258,11 +1259,13 @@ impl Client {
                 cx.notify();
             });
         });
+        let session = self.sessions.get(self.active).map(|session| session.number);
         let entered = match &self.status {
-            Some(status) if status.left.is_none() => status.entered,
+            Some(status) if status.left.is_none() && status.session == session => status.entered,
             _ => cx.background_executor().now(),
         };
         self.status = Some(Status {
+            session,
             states: [
                 format!("{option}: Off").into(),
                 format!("{option}: On").into(),
@@ -1275,10 +1278,18 @@ impl Client {
         cx.notify();
     }
 
-    fn status(&mut self, window: &mut Window, cx: &mut App) -> Option<impl IntoElement + use<>> {
+    fn status(
+        &mut self,
+        top: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<impl IntoElement + use<>> {
         let layout = cx.theme().layout;
         let typography = cx.theme().typography;
-        let status = self.status.as_ref()?;
+        let status = self
+            .status
+            .as_ref()
+            .filter(|status| status.session == self.sessions.get(self.active).map(|s| s.number))?;
         let progress = match status.left {
             None => mira_ui::motion::settling(status.entered, window, cx),
             Some(since) => match mira_ui::motion::leaving(since, window, cx) {
@@ -1333,7 +1344,7 @@ impl Client {
         Some(
             h_flex()
                 .absolute()
-                .top(cx.theme().layout.chrome + px(12.0))
+                .top(top + px(12.0))
                 .left_0()
                 .right_0()
                 .justify_center()
@@ -1578,7 +1589,11 @@ impl Client {
             }))
     }
 
-    fn grid(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn grid(
+        &self,
+        mut status: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let (columns, rows) = grid_shape(self.sessions.len());
         div()
@@ -1597,6 +1612,7 @@ impl Client {
                     .children((0..columns).map(|column| {
                         let index = row * columns + column;
                         let cell = div()
+                            .relative()
                             .flex()
                             .h_full()
                             .min_w_0()
@@ -1604,6 +1620,7 @@ impl Client {
                             .flex_grow(1.0);
                         if index < self.sessions.len() {
                             cell.child(self.tile(&theme, index, cx))
+                                .when(index == self.active, |cell| cell.children(status.take()))
                         } else {
                             cell.bg(theme.background)
                         }
@@ -1851,9 +1868,18 @@ impl Render for Client {
                 session.view.update(cx, |view, _| view.bar_inset = inset);
             }
         }
+        let tiled = self.layout == Layout::Grid && !self.sessions.is_empty();
+        let status_top = if tiled {
+            Pixels::ZERO
+        } else {
+            cx.theme().layout.chrome
+        };
+        let mut status = self
+            .status(status_top, window, cx)
+            .map(IntoElement::into_any_element);
         let body = if self.sessions.is_empty() {
             self.empty(cx).into_any_element()
-        } else if self.layout == Layout::Grid {
+        } else if tiled {
             let bar = self.sessions[self.active]
                 .view
                 .update(cx, |view, cx| view.bar(cx));
@@ -1864,7 +1890,7 @@ impl Render for Client {
                 .w_full()
                 .min_h_0()
                 .child(bar)
-                .child(self.grid(cx))
+                .child(self.grid(status.take(), cx))
                 .into_any_element()
         } else {
             div()
@@ -1875,7 +1901,7 @@ impl Render for Client {
                 .child(self.sessions[self.active].view.clone())
                 .into_any_element()
         };
-        self.frame(body, window, cx)
+        self.frame(body, status, window, cx)
     }
 }
 
@@ -1883,6 +1909,7 @@ impl Client {
     fn frame(
         &mut self,
         body: impl IntoElement,
+        status: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
@@ -1960,7 +1987,7 @@ impl Client {
                         )
                     })
                     .child(body)
-                    .children(self.status(window, cx)),
+                    .children(status),
             )
             .child(self.bar_start(window, cx))
             .children(self.close_dialog(cx))
@@ -2578,7 +2605,7 @@ mod tests {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let frame = self.0.update(cx, |client, cx| {
                     let body = div().flex_1().child(bar(cx));
-                    client.frame(body, window, cx)
+                    client.frame(body, None, window, cx)
                 });
                 div().size_full().bg(gpui::rgb(0xff00ff)).child(frame)
             }
