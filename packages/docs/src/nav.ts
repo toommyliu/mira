@@ -34,7 +34,7 @@ export type Area = "docs" | "reference";
 
 const AREAS = {
   docs: ["App", "Scripting"],
-  reference: ["Reference"],
+  reference: ["API", "Packages"],
 } as const satisfies Record<Area, readonly Route["section"][]>;
 
 export function area(path: string): Area | null {
@@ -52,8 +52,7 @@ export async function home(area: Area): Promise<string> {
 
 export async function navigation(area: Area): Promise<readonly NavSection[]> {
   const all = await routes();
-  return AREAS[area].map((title) => ({
-    title,
-    items: grouped(all.filter((route) => route.section === title)),
-  }));
+  return AREAS[area]
+    .map((title) => ({ title, items: grouped(all.filter((route) => route.section === title)) }))
+    .filter((section) => section.items.length > 0);
 }

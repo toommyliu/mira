@@ -8,8 +8,31 @@ import { convert } from "../src/reference/project.ts";
 import { signatureTokens } from "../src/reference/tokens.ts";
 
 const fixture = (file: string) => fileURLToPath(new URL(`fixture/${file}`, import.meta.url));
-const project = await convert([fixture("mira.ts"), fixture("http.ts")], fixture("tsconfig.json"));
-const { pages, links } = reference(project, ["mira", "mira/http"]);
+const modules = [
+  {
+    specifier: "mira",
+    slug: "",
+    origin: "runtime",
+    description: undefined,
+    path: fixture("mira.ts"),
+  },
+  {
+    specifier: "mira/http",
+    slug: "http",
+    origin: "runtime",
+    description: undefined,
+    path: fixture("http.ts"),
+  },
+  {
+    specifier: "@mira/dailies",
+    slug: "packages/dailies",
+    origin: "vendored",
+    description: "Daily and weekly quests.",
+    path: fixture("dailies.ts"),
+  },
+] as const;
+const project = await convert(modules, fixture("tsconfig.json"));
+const { pages, links } = reference(project, modules);
 const page = (slug: string) => {
   const found = pages.find((candidate) => candidate.slug === slug);
   assert.ok(found, `no page /reference/${slug}`);
@@ -19,7 +42,7 @@ const page = (slug: string) => {
 test("each namespace gets a page after its module's page", () => {
   assert.deepEqual(
     pages.map((candidate) => candidate.slug),
-    ["", "combat", "world", "http"],
+    ["", "combat", "world", "http", "packages/dailies"],
   );
 });
 
@@ -111,4 +134,21 @@ test("a module without namespaces is one page imported as a namespace", () => {
     http.types.map((type) => type.name),
     ["Response", "RequestError"],
   );
+});
+
+test("a vendored package's generator shows what yield* gives back", () => {
+  const dailies = page("packages/dailies");
+  assert.equal(dailies.origin, "vendored");
+  assert.equal(commentText(dailies.comment), "Daily and weekly quests.");
+  const wheel = dailies.members.find((member) => member.path === "wheelOfDoom");
+  assert.ok(wheel?.body.kind === "call");
+  const [signature] = wheel.body.signatures;
+  assert.ok(signature);
+  assert.equal(
+    signatureTokens("Dailies.wheelOfDoom", signature, links)
+      .map((token) => token.text)
+      .join(""),
+    "yield* Dailies.wheelOfDoom(): Spin",
+  );
+  assert.ok([...links.values()].includes("/reference/packages/dailies/#Spin"));
 });

@@ -49,8 +49,16 @@ export type Declaration = {
       };
 };
 
+export type Module = {
+  readonly specifier: string;
+  readonly slug: string;
+  readonly origin: "runtime" | "vendored";
+  readonly description: string | undefined;
+};
+
 export type Page = {
   readonly slug: string;
+  readonly origin: Module["origin"];
   readonly title: string;
   readonly specifier: string;
   readonly binding:
@@ -82,13 +90,19 @@ function isNamespace(
   );
 }
 
-function isEffect(type: TypeNode): type is J.ReferenceType {
+function isReference(type: J.ReferenceType, packageName: string, qualifiedName: string) {
   return (
-    type.type === "reference" &&
     typeof type.target === "object" &&
-    type.target.packageName === "effect" &&
-    type.target.qualifiedName === "Effect"
+    type.target.packageName === packageName &&
+    type.target.qualifiedName === qualifiedName
   );
+}
+
+function yielded(type: TypeNode): readonly (TypeNode | undefined)[] {
+  if (type.type !== "reference") return [];
+  if (isReference(type, "effect", "Effect")) return type.typeArguments ?? [];
+  if (isReference(type, "typescript", "Generator")) return [type.typeArguments?.[1]];
+  return [];
 }
 
 function named(parameters: readonly J.ParameterReflection[]): J.ParameterReflection[] {
@@ -105,7 +119,7 @@ function named(parameters: readonly J.ParameterReflection[]): J.ParameterReflect
 
 function signature(sig: J.SignatureReflection): Signature {
   const type = sig.type ?? { type: "intrinsic", name: "void" };
-  const [value, error] = isEffect(type) ? (type.typeArguments ?? []) : [];
+  const [value, error] = yielded(type);
   return {
     typeParameters: sig.typeParameters ?? [],
     parameters: named(sig.parameters ?? []),
@@ -285,18 +299,14 @@ function bindingOf(specifier: string): string {
   return last.charAt(0).toUpperCase() + last.slice(1);
 }
 
-function slugOf(specifier: string): string {
-  return specifier === "mira" ? "" : specifier.replace(/^mira\//, "");
-}
-
-export function reference(project: J.ProjectReflection, specifiers: readonly string[]): Reference {
+export function reference(project: J.ProjectReflection, modules: readonly Module[]): Reference {
   const pages: Page[] = [];
   const links = new Map<number, string>();
   const declarations = new Map<number, Declaration>();
-  const modules = project.children ?? [];
+  const converted = project.children ?? [];
 
-  for (const specifier of specifiers) {
-    const module = modules.find((candidate) => candidate.name === specifier);
+  for (const { specifier, slug: moduleSlug, origin, description } of modules) {
+    const module = converted.find((candidate) => candidate.name === specifier);
     if (module === undefined) throw new Error(`TypeDoc produced no module named ${specifier}`);
     const children = module.children ?? [];
     const namespaces = children
@@ -307,27 +317,34 @@ export function reference(project: J.ProjectReflection, specifiers: readonly str
       (child) => !isNamespace(child) && (child.kind & typeKinds) === 0,
     );
     const owned = owners(namespaces, types);
-    const moduleSlug = slugOf(specifier);
+    const namespaceSlug = (namespace: string) =>
+      moduleSlug === "" ? namespace.toLowerCase() : `${moduleSlug}/${namespace.toLowerCase()}`;
     const declared = types.map((type) => ({ id: type.id, declaration: declaration(type) }));
     for (const type of declared) declarations.set(type.id, type.declaration);
 
     pages.push({
       slug: moduleSlug,
+      origin,
       title: specifier,
       specifier,
       binding: values.length === 0 ? undefined : { kind: "namespace", name: bindingOf(specifier) },
-      comment: module.comment,
+      comment:
+        module.comment ??
+        (description === undefined
+          ? undefined
+          : { summary: [{ kind: "text", text: description }] }),
       namespaces: namespaces.map((namespace) => ({
         title: namespace.name,
-        slug: namespace.name.toLowerCase(),
+        slug: namespaceSlug(namespace.name),
       })),
       members: members(values, ""),
       types: declared.filter((type) => !owned.has(type.id)).map((type) => type.declaration),
     });
     for (const namespace of namespaces) {
-      const slug = namespace.name.toLowerCase();
+      const slug = namespaceSlug(namespace.name);
       pages.push({
         slug,
+        origin,
         title: namespace.name,
         specifier,
         binding: { kind: "named", name: namespace.name },
@@ -343,7 +360,7 @@ export function reference(project: J.ProjectReflection, specifiers: readonly str
 
     const pageOf = (child: J.DeclarationReflection) => {
       const owner = owned.get(child.id);
-      return owner === undefined ? moduleSlug : owner.toLowerCase();
+      return owner === undefined ? moduleSlug : namespaceSlug(owner);
     };
     for (const type of types) links.set(type.id, href(pageOf(type), type.name));
     for (const value of values) links.set(value.id, href(moduleSlug, value.name));

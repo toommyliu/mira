@@ -5,7 +5,7 @@ import type { Page } from "./reference/model.ts";
 import { load } from "./reference/project.ts";
 
 export type Route = {
-  readonly section: "App" | "Scripting" | "Reference";
+  readonly section: "App" | "Scripting" | "API" | "Packages";
   readonly group: string | null;
   readonly kind: "page" | "package" | "namespace";
   readonly title: string;
@@ -79,7 +79,7 @@ export async function routes(): Promise<readonly Route[]> {
     ...pages.map((page): Route => {
       const href = page.slug === "" ? "/reference/" : `/reference/${page.slug}/`;
       return {
-        section: "Reference",
+        section: page.origin === "vendored" ? "Packages" : "API",
         group: null,
         kind: page.binding?.kind === "named" ? "namespace" : "package",
         title: page.title,
