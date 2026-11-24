@@ -400,13 +400,15 @@ impl Manager {
         window_bar(window, cx)
             .child(bar_title("Manager", cx))
             .child(drag_area().flex_1().h_full())
-            .child(
-                div()
-                    .min_w(px(120.0))
-                    .w(px(200.0))
-                    .mr(layout.space(1.5))
-                    .child(self.search.clone()),
-            )
+            .when(self.accounts.is_ok(), |bar| {
+                bar.child(
+                    div()
+                        .min_w(px(120.0))
+                        .w(px(200.0))
+                        .mr(layout.space(1.5))
+                        .child(self.search.clone()),
+                )
+            })
     }
 
     fn sidebar(
@@ -2090,22 +2092,39 @@ impl Render for Manager {
         self.columns = theme.account_columns(window.viewport_size().width - layout.sidebar);
         mira_ui::nav::set_scroll_root(&self.grid_scroll, window, cx);
         let title_bar = self.title_bar(window, cx);
-        let sidebar = self.sidebar(&theme, &frame.presences, cx);
+        let sidebar = self
+            .accounts
+            .is_ok()
+            .then(|| self.sidebar(&theme, &frame.presences, cx));
         let selected = if editing {
             Vec::new()
         } else {
             self.checked_accounts()
         };
         let content = match &self.accounts {
-            Err(error) => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .px(layout.space(6.0))
-                .text_color(theme.destructive)
-                .child(format!("Mira couldn't load your accounts: {error}"))
-                .into_any_element(),
+            Err(unloaded) => {
+                let path = unloaded.path.clone();
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Empty::new("Couldn't load your accounts", unloaded.error.clone())
+                            .action(
+                                Button::new("accounts-retry", "Try again")
+                                    .variant(Variant::Primary)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.reload_accounts(cx)),
+                                    ),
+                            )
+                            .action(
+                                Button::new("accounts-show", "Show in Finder")
+                                    .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                            ),
+                    )
+                    .into_any_element()
+            }
             Ok(all) if all.list().is_empty() => self.empty(cx).into_any_element(),
             Ok(_) => {
                 let header = match &setup {
@@ -2221,7 +2240,7 @@ impl Render for Manager {
             .role(Role::Group)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
-            .when(!self.dialog_open(), |root| {
+            .when(self.accounts.is_ok() && !self.dialog_open(), |root| {
                 root.on_action(cx.listener(|this, _: &AddAccount, _, cx| this.edit(None, cx)))
                     .on_action(
                         cx.listener(|this, _: &NewSetup, window, cx| this.new_setup(window, cx)),
@@ -2250,7 +2269,7 @@ impl Render for Manager {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(sidebar)
+                    .children(sidebar)
                     .child(content),
             )
             .children(form)

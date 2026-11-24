@@ -1029,6 +1029,49 @@ fn snapshot_an_update_in_the_sidebar() {
 }
 
 #[test]
+fn snapshot_accounts_that_fail_to_load() {
+    let dir = std::env::temp_dir().join(format!("mira-manager-broken-{}", std::process::id()));
+    let path = dir.join("Application Support").join("accounts.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, r#"{ "accounts": [], "setups": [], }"#).unwrap();
+    for written in mira_ui::snapshot(
+        "manager-accounts-invalid",
+        size(px(720.0), px(420.0)),
+        |window, cx| {
+            crate::settings::init(dir.join("settings.json"), |_| {}, cx);
+            cx.new(|cx| Manager::new(path.clone(), HeaderValue::from_static("test"), window, cx))
+        },
+    ) {
+        assert!(written.exists());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn trying_again_loads_accounts_once_the_file_is_fixed(cx: &mut gpui::TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("mira-manager-retry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("accounts.json");
+    std::fs::write(&path, r#"{ "accounts": [], "setups": [], }"#).unwrap();
+    cx.update(|cx| {
+        mira_ui::init(cx);
+        crate::settings::init(dir.join("settings.json"), |_| {}, cx);
+    });
+    let (manager, cx) = cx.add_window_view(|window, cx| {
+        Manager::new(path, HeaderValue::from_static("test"), window, cx)
+    });
+    manager.update(cx, |manager, cx| manager.reload_accounts(cx));
+    assert!(manager.read_with(cx, |manager, _| manager.accounts.is_err()));
+    write_accounts(&dir);
+    manager.update(cx, |manager, cx| manager.reload_accounts(cx));
+    assert_eq!(
+        manager.read_with(cx, |manager, _| manager.account_list().len()),
+        ROSTER.len()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn snapshot_stress() {
     let now = Instant::now();
     let minutes = |count: u64| now - Duration::from_secs(count * 60);
