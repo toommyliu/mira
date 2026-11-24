@@ -2303,7 +2303,8 @@ impl Render for ScriptsWindow {
                 detail,
                 |pane, Detail { heading, body, bar }| {
                     let (reserve, covered) = if bar.is_some() {
-                        (theme.space(15.0), error_bar_clearance(&theme))
+                        let clearance = error_bar_clearance(&theme);
+                        (clearance, clearance)
                     } else {
                         (theme.space(4.0), Pixels::ZERO)
                     };
@@ -3734,6 +3735,24 @@ export default function* () {}"#,
     }
 
     #[test]
+    fn snapshot_inputs_scrolled_to_the_end() {
+        snapshot_window_with(
+            "scripts-inputs-end-min",
+            (MIN_WIDTH, MIN_HEIGHT),
+            "Alt 1",
+            INPUTS,
+            |_| {},
+            |cx, window| {
+                update_scripts(cx, window, |scripts, cx| {
+                    let end = scripts.detail_scroll.max_offset().y;
+                    scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+                    cx.notify();
+                });
+            },
+        );
+    }
+
+    #[test]
     fn snapshot_options_open_from_the_sidebar() {
         let pages: [(&str, fn(&mut ScriptsWindow)); 3] = [
             ("scripts-options-open-min", |_| {}),
@@ -4720,6 +4739,26 @@ Cells visited: Enter, r1, r2, r3, r4.";
         offset.update(cx, |input, cx| input.set_text("3", cx));
         cx.run_until_parked();
         assert_eq!(errors(cx), 1);
+
+        scripts.update(cx, |scripts, cx| {
+            let end = scripts.detail_scroll.max_offset().y;
+            scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (viewport, buy, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
+            let scroll = &scripts.detail_scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(10).unwrap(),
+                scroll.offset().y,
+                error_bar_clearance(cx.theme()),
+            )
+        });
+        assert!(
+            buy.bottom() + scrolled <= viewport.bottom() - clearance,
+            "scrolled to the end, Buy clears the bar and its fade: {buy:?} in {viewport:?} at {scrolled:?}"
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 
