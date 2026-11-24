@@ -269,7 +269,7 @@ fn run(
             tasks.clone(),
             outputs.clone(),
         ))
-        .with_boxed_audio(backends::audio::audio())
+        .with_boxed_audio(Box::new(backends::audio::audio()))
         .with_external_interface(Box::new(bridge.clone()))
         .with_ui(Ui::new(arboard::Clipboard::new()?, outputs.clone()))
         .with_storage(Box::new(Storage::new(storage)))
@@ -648,6 +648,7 @@ fn run(
         let mut player = player.lock().unwrap();
         let clock = frame_shown_at.unwrap_or(now).max(last_tick);
         player.tick(FloatDuration::from_std(clock - last_tick));
+        backends::audio::follow_game_volume(&mut player);
         last_tick = clock;
         if player.frame_rate() != frame_rate {
             frame_rate = player.frame_rate();
