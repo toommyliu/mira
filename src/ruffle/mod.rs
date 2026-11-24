@@ -60,7 +60,6 @@ pub(crate) enum Msg {
         credentials: Credentials,
         server: Option<String>,
     },
-    WatchSignIn,
     Wake,
     Stop,
 }
@@ -208,10 +207,6 @@ impl Runtime {
             server,
         });
     }
-
-    pub(crate) fn watch_sign_in(&self) {
-        self.inbox.post(Msg::WatchSignIn);
-    }
 }
 
 impl Drop for Runtime {
@@ -332,6 +327,30 @@ fn run(
             },
         ),
     );
+    let reported = outputs.clone();
+    let identified = bridge.clone();
+    let statuses = Rc::new(sign_in::Statuses::new(move |status| {
+        if matches!(status, sign_in::Status::Online(_)) {
+            match player::identity(&identified) {
+                Ok(identity) => {
+                    let _ = reported.try_send(Output::Identity(identity));
+                }
+                Err(error) => tracing::debug!(%error, "couldn't read the player's name and guild"),
+            }
+        }
+        let _ = reported.try_send(Output::SignIn(status));
+    }));
+    let watched = bridge.clone();
+    let watch = sign_in::watch(
+        bridge.clone(),
+        logins.clone(),
+        bridge.subscribe(auto_relogin::wants),
+        statuses.clone(),
+    );
+    spawn_local(&inbox, &tasks, async move {
+        watched.ready().await;
+        watch.await
+    });
     spawn_local(
         &inbox,
         &tasks,
@@ -536,50 +555,18 @@ fn run(
                     credentials,
                     server,
                 }) => {
-                    let statuses = outputs.clone();
                     let bridge = commands_bridge.clone();
-                    let connections = bridge.subscribe(auto_relogin::wants);
-                    let logins = logins.clone();
-                    let settings = automation.auto_relogin();
+                    let attempt = sign_in::run(
+                        bridge.clone(),
+                        logins.clone(),
+                        credentials,
+                        server,
+                        automation.auto_relogin(),
+                        statuses.clone(),
+                    );
                     drop(signing_in.replace(spawn(&inbox, async move {
                         bridge.ready().await;
-                        sign_in::run(
-                            bridge,
-                            logins,
-                            connections,
-                            credentials,
-                            server,
-                            settings,
-                            move |status| {
-                                let _ = statuses.try_send(Output::SignIn(status));
-                            },
-                        )
-                        .await
-                    })));
-                }
-                Some(Msg::WatchSignIn) => {
-                    let statuses = outputs.clone();
-                    let bridge = commands_bridge.clone();
-                    let connections = bridge.subscribe(auto_relogin::wants);
-                    let identified = bridge.clone();
-                    let logins = logins.clone();
-                    drop(signing_in.replace(spawn(&inbox, async move {
-                        bridge.ready().await;
-                        sign_in::watch(bridge, logins, connections, move |status| {
-                            if matches!(status, sign_in::Status::Online(_)) {
-                                match player::identity(&identified) {
-                                    Ok(identity) => {
-                                        let _ = statuses.try_send(Output::Identity(identity));
-                                    }
-                                    Err(error) => tracing::debug!(
-                                        %error,
-                                        "couldn't read the player's name and guild"
-                                    ),
-                                }
-                            }
-                            let _ = statuses.try_send(Output::SignIn(status));
-                        })
-                        .await
+                        attempt.await
                     })));
                 }
                 Some(Msg::Command(command)) => spawn_local(

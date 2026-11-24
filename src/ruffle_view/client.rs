@@ -619,9 +619,6 @@ impl Client {
             view.layout(player, window)
         });
         let player = view.read(cx).session.inbox();
-        if account.is_none() {
-            view.read(cx).session.watch_sign_in();
-        }
         self.numbered += 1;
         self.sessions.push(Session {
             number: self.numbered,
