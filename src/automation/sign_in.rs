@@ -17,89 +17,169 @@ pub(crate) enum Status {
     Failed(String),
 }
 
-pub(crate) async fn run(
+pub(crate) struct Statuses {
+    state: RefCell<State>,
+    report: Box<dyn Fn(Status)>,
+}
+
+#[derive(Default)]
+struct State {
+    connection: Option<Status>,
+    attempt: Attempt,
+    reported: Option<Status>,
+}
+
+#[derive(Default)]
+enum Attempt {
+    #[default]
+    Idle,
+    Running(Option<Status>),
+    Joining(Option<Status>),
+    Ended(Status),
+}
+
+impl State {
+    fn online(&self) -> bool {
+        matches!(self.connection, Some(Status::Online(_)))
+    }
+
+    fn current(&self) -> Option<&Status> {
+        if self.online() {
+            return self.connection.as_ref();
+        }
+        match &self.attempt {
+            Attempt::Idle => self.connection.as_ref(),
+            Attempt::Running(progress) | Attempt::Joining(progress) => progress.as_ref(),
+            Attempt::Ended(outcome) => Some(outcome),
+        }
+    }
+}
+
+impl Statuses {
+    pub(crate) fn new(report: impl Fn(Status) + 'static) -> Self {
+        Self {
+            state: RefCell::default(),
+            report: Box::new(report),
+        }
+    }
+
+    fn begin(&self) {
+        self.update(|state| {
+            state.attempt = Attempt::Running(None);
+            state.reported = None;
+        });
+    }
+
+    fn progress(&self, status: Status) {
+        self.update(|state| state.attempt = Attempt::Running(Some(status)));
+    }
+
+    fn end(&self, outcome: Option<Status>) {
+        self.update(|state| {
+            state.attempt = match (outcome, std::mem::take(&mut state.attempt)) {
+                _ if state.online() => Attempt::Idle,
+                (Some(outcome), _) => Attempt::Ended(outcome),
+                (None, Attempt::Running(progress)) => Attempt::Joining(progress),
+                (None, attempt) => attempt,
+            }
+        });
+    }
+
+    fn connection(&self, status: Status) {
+        self.update(|state| {
+            if matches!(status, Status::Online(_)) || matches!(state.attempt, Attempt::Joining(_)) {
+                state.attempt = Attempt::Idle;
+            }
+            state.connection = Some(status);
+        });
+    }
+
+    fn update(&self, change: impl FnOnce(&mut State)) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            change(&mut state);
+            let current = state.current().cloned();
+            match current {
+                Some(current) if state.reported.as_ref() != Some(&current) => {
+                    state.reported = Some(current.clone());
+                    Some(current)
+                }
+                _ => None,
+            }
+        };
+        if let Some(status) = changed {
+            (self.report)(status);
+        }
+    }
+}
+
+pub(crate) fn run(
     loader: impl Loader,
     logins: Rc<Logins>,
-    connections: Subscription,
     credentials: Credentials,
     server: Option<String>,
     settings: auto_relogin::Settings,
-    report: impl Fn(Status),
-) {
-    let report = on_change(report);
-    let settings = auto_relogin::Settings {
-        delay_seconds: 0,
-        ..settings
-    };
-    let signed_in = auto_relogin::recover(
-        &loader,
-        &logins,
-        &credentials,
-        server.as_deref(),
-        &settings,
-        |phase| match phase {
-            Phase::Attempt { attempt, of } => report(Status::LoggingIn { attempt, of }),
-            Phase::Backoff { attempt, of, .. } => report(Status::Retrying { attempt, of }),
-            Phase::Off | Phase::Armed | Phase::Waiting(_) | Phase::Failed(_) => {}
-        },
-    )
-    .await;
-    match signed_in {
-        Ok(()) if auth::in_game(&loader).unwrap_or(false) => report(online(&loader)),
-        Ok(()) => report(Status::ChooseServer),
-        Err(error) => return report(Status::Failed(error.to_string())),
+    statuses: Rc<Statuses>,
+) -> impl Future<Output = ()> {
+    statuses.begin();
+    async move {
+        let settings = auto_relogin::Settings {
+            delay_seconds: 0,
+            ..settings
+        };
+        let signed_in = auto_relogin::recover(
+            &loader,
+            &logins,
+            &credentials,
+            server.as_deref(),
+            &settings,
+            |phase| match phase {
+                Phase::Attempt { attempt, of } => {
+                    statuses.progress(Status::LoggingIn { attempt, of })
+                }
+                Phase::Backoff { attempt, of, .. } => {
+                    statuses.progress(Status::Retrying { attempt, of })
+                }
+                Phase::Off | Phase::Armed | Phase::Waiting(_) | Phase::Failed(_) => {}
+            },
+        )
+        .await;
+        statuses.end(match signed_in {
+            Ok(()) if auth::in_game(&loader).unwrap_or(false) => None,
+            Ok(()) => Some(Status::ChooseServer),
+            Err(error) => Some(Status::Failed(error.to_string())),
+        });
     }
-    follow(&loader, &logins, &connections, &report).await
 }
 
 pub(crate) async fn watch(
     loader: impl Loader,
     logins: Rc<Logins>,
     connections: Subscription,
-    report: impl Fn(Status),
+    statuses: Rc<Statuses>,
 ) {
-    let report = on_change(report);
-    if ready(&loader).await {
-        report(online(&loader));
-    } else {
-        report(Status::Offline);
-    }
-    follow(&loader, &logins, &connections, &report).await
-}
-
-fn on_change(report: impl Fn(Status)) -> impl Fn(Status) {
-    let last = RefCell::new(None);
-    move |status: Status| {
-        if last.borrow().as_ref() != Some(&status) {
-            last.replace(Some(status.clone()));
-            report(status);
-        }
-    }
-}
-
-async fn follow(
-    loader: &impl Loader,
-    logins: &Logins,
-    connections: &Subscription,
-    report: &impl Fn(Status),
-) {
+    statuses.connection(check(&loader, &logins).await);
     loop {
         match connections.next().await {
             Ok(Event::Connection { status }) if status == "OnConnection" => {
-                if ready(loader).await {
-                    report(online(loader));
+                if ready(&loader).await {
+                    statuses.connection(online(&loader));
                 }
             }
             Ok(Event::Connection { status }) if status == "OnConnectionLost" => {
-                report(offline(logins))
+                statuses.connection(offline(&logins))
             }
             Ok(_) => {}
-            Err(Lagged) => {
-                if !bridge::auth::is_logged_in(loader).unwrap_or(false) {
-                    report(offline(logins));
-                }
-            }
+            Err(Lagged) => statuses.connection(check(&loader, &logins).await),
         }
+    }
+}
+
+async fn check(loader: &impl Loader, logins: &Logins) -> Status {
+    if ready(loader).await {
+        online(loader)
+    } else {
+        offline(logins)
     }
 }
 
@@ -138,32 +218,29 @@ mod tests {
         reports: Rc<RefCell<Vec<Status>>>,
         loader: Rc<FakeLoader>,
         logins: Rc<Logins>,
+        statuses: Rc<Statuses>,
+    }
+
+    impl Running {
+        fn sign_in(&self, server: Option<&str>) {
+            tokio::task::spawn_local(run(
+                self.loader.clone(),
+                self.logins.clone(),
+                Credentials {
+                    username: "player1".into(),
+                    password: "hunter2".into(),
+                },
+                server.map(str::to_owned),
+                auto_relogin::Settings::default(),
+                self.statuses.clone(),
+            ));
+        }
     }
 
     fn start(server: Option<&str>) -> Running {
-        let (world, loader) = World::new();
-        let loader = Rc::new(loader);
-        let logins = Rc::new(Logins::default());
-        let reports = Rc::new(RefCell::new(Vec::new()));
-        let seen = reports.clone();
-        tokio::task::spawn_local(run(
-            loader.clone(),
-            logins.clone(),
-            world.events.subscribe(auto_relogin::wants),
-            Credentials {
-                username: "player1".into(),
-                password: "hunter2".into(),
-            },
-            server.map(str::to_owned),
-            auto_relogin::Settings::default(),
-            move |status| seen.borrow_mut().push(status),
-        ));
-        Running {
-            world,
-            reports,
-            loader,
-            logins,
-        }
+        let running = watching(false, None);
+        running.sign_in(server);
+        running
     }
 
     fn watching(connected: bool, dialog: Option<&str>) -> Running {
@@ -174,17 +251,19 @@ mod tests {
         let logins = Rc::new(Logins::default());
         let reports = Rc::new(RefCell::new(Vec::new()));
         let seen = reports.clone();
+        let statuses = Rc::new(Statuses::new(move |status| seen.borrow_mut().push(status)));
         tokio::task::spawn_local(watch(
             loader.clone(),
             logins.clone(),
             world.events.subscribe(auto_relogin::wants),
-            move |status| seen.borrow_mut().push(status),
+            statuses.clone(),
         ));
         Running {
             world,
             reports,
             loader,
             logins,
+            statuses,
         }
     }
 
@@ -320,6 +399,50 @@ mod tests {
                 );
             })
             .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_player_who_logs_in_by_hand_after_a_failed_login_is_followed() {
+        LocalSet::new()
+            .run_until(async {
+                let running = start(Some("Twilly"));
+                running.world.game.borrow_mut().failing_logins = u32::MAX;
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                let failed = running.reports.borrow().len();
+                assert!(matches!(
+                    running.reports.borrow().last(),
+                    Some(Status::Failed(_))
+                ));
+                running.world.connect();
+                settle().await;
+                running.world.lose_connection();
+                settle().await;
+                assert_eq!(
+                    running.reports.borrow()[failed..],
+                    [Status::Online(Some("Twilly".into())), Status::Offline]
+                );
+            })
+            .await;
+    }
+
+    #[test]
+    fn a_sign_in_that_succeeds_just_before_the_connection_drops_shows_offline() {
+        let reports = Rc::new(RefCell::new(Vec::new()));
+        let seen = reports.clone();
+        let statuses = Statuses::new(move |status| seen.borrow_mut().push(status));
+        statuses.connection(Status::Offline);
+        statuses.begin();
+        statuses.progress(Status::LoggingIn { attempt: 1, of: 4 });
+        statuses.end(None);
+        statuses.connection(Status::Offline);
+        assert_eq!(
+            *reports.borrow(),
+            [
+                Status::Offline,
+                Status::LoggingIn { attempt: 1, of: 4 },
+                Status::Offline,
+            ]
+        );
     }
 
     #[tokio::test(start_paused = true)]
