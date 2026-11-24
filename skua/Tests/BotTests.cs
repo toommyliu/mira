@@ -56,6 +56,25 @@ public class BotTests
     }
 
     [Fact]
+    public void A_jump_waits_the_action_delay_after_it_is_sent()
+    {
+        var clock = new System.Diagnostics.Stopwatch();
+        TimeSpan? jumped = null;
+        var bot = new Offline((key, _) =>
+        {
+            if (key.StartsWith("skua.jumpCorrectRoom:"))
+                jumped = clock.Elapsed;
+            return null;
+        }).Bot();
+        bot.Options.ActionDelay = 200;
+
+        clock.Start();
+        bot.Map.Jump("r2", "Left");
+
+        Assert.True(clock.Elapsed - jumped >= TimeSpan.FromMilliseconds(200), $"returned {(clock.Elapsed - jumped)?.TotalMilliseconds} ms after the jump");
+    }
+
+    [Fact]
     public void A_map_item_waits_the_action_delay_before_it_is_sent()
     {
         var clock = new System.Diagnostics.Stopwatch();

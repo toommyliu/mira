@@ -39,6 +39,7 @@ public sealed class Map(Game game, Paths paths, IFlashUtil flash, Func<IScriptIn
     public void Jump(string cell, string pad, bool autoCorrect = true, bool clientOnly = false)
     {
         flash.Call("jumpCorrectRoom", cell, pad, autoCorrect, clientOnly);
+        bot().Sleep(Options.ActionDelay);
         bot().Wait.ForCellChange(cell);
     }
 
