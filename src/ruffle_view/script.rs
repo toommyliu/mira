@@ -210,6 +210,10 @@ impl Script {
         Some(Launch { entry, inputs })
     }
 
+    fn rerun(&self) -> Option<Launch> {
+        Some(self.loaded.as_ref()?.launch.clone())
+    }
+
     pub(super) fn failure(&self) -> Option<String> {
         match &self.loaded.as_ref()?.phase {
             Phase::Finished(outcome) => failure(outcome),
@@ -411,8 +415,14 @@ impl RuffleView {
         .detach();
     }
 
-    pub(super) fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
+    fn start_loaded_script(&mut self, cx: &mut Context<Self>) {
         if let Some(launch) = self.script.start_launch(cx) {
+            self.start_script(launch, cx);
+        }
+    }
+
+    pub(super) fn restart_script(&mut self, cx: &mut Context<Self>) {
+        if let Some(launch) = self.script.rerun() {
             self.start_script(launch, cx);
         }
     }
@@ -947,7 +957,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn start_runs_the_inputs_saved_since_the_file_was_loaded(cx: &mut gpui::TestAppContext) {
+    fn start_uses_saved_inputs_and_restart_reruns_the_last_launch(cx: &mut gpui::TestAppContext) {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
         let folder = std::env::temp_dir().join(format!(
@@ -982,8 +992,25 @@ mod tests {
                 Some(Supplied::Values(values(50)))
             );
 
-            script.end(Outcome::Completed, false);
             script_inputs::save(&hunt, values(3), cx);
+            let queued = Supplied::Values(values(25));
+            script.loaded = Some(Loaded {
+                launch: Launch {
+                    entry: hunt.clone(),
+                    inputs: queued.clone(),
+                },
+                character: None,
+                phase: Phase::Finished(Outcome::Failed {
+                    message: "no monsters".into(),
+                    stack: None,
+                }),
+                since: Instant::now(),
+            });
+            assert_eq!(
+                script.rerun().map(|launch| launch.inputs),
+                Some(queued),
+                "a restart reruns the queue entry's own inputs"
+            );
             assert_eq!(
                 script.start_launch(cx).map(|launch| launch.inputs),
                 Some(Supplied::Values(values(3)))

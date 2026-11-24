@@ -882,7 +882,7 @@ impl Client {
         if let Some(index) = self.session_of(account, cx) {
             self.sessions[index]
                 .view
-                .update(cx, |view, cx| view.start_loaded_script(cx));
+                .update(cx, |view, cx| view.restart_script(cx));
         }
     }
 
