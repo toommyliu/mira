@@ -21,14 +21,14 @@ use tracing_subscriber::{
 };
 
 const FILE_FILTER: &str = if cfg!(debug_assertions) {
-    "warn,mira=debug,avm_trace=info"
+    "warn,mira=debug,avm_trace=info,symphonia=off"
 } else {
-    "warn,mira=debug"
+    "warn,mira=debug,symphonia=off"
 };
 const CONSOLE_FILTER: &str = if cfg!(debug_assertions) {
-    "info"
+    "info,symphonia=off"
 } else {
-    "info,avm_trace=off"
+    "info,avm_trace=off,symphonia=off"
 };
 const LOG_FILE: &str = "~/Library/Logs/Mira/mira.log";
 const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn game_traces_are_logged_only_in_debug_builds() {
+    fn filters_drop_decoder_noise_and_keep_game_traces_to_debug_builds() {
         let (console, console_sink) = shared();
         let (file, file_sink) = shared();
         let subscriber = subscriber(
@@ -308,6 +308,7 @@ mod tests {
             tracing::info!(target: "avm_trace", "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%");
             tracing::info!(target: "ruffle_core::context", "Loaded SWF version 43");
             tracing::debug!(target: "mira::bridge", "unhandled loader call");
+            tracing::warn!(target: "symphonia_bundle_mp3::layer3", "mpa: invalid main_data_begin");
         });
         let (console, file) = (text(&console), text(&file));
         let packet = "[Net] [Sending - STR]: %xt%zm%mv%1%223%446%10%";
@@ -319,6 +320,8 @@ mod tests {
         assert_eq!(file.contains(packet), cfg!(debug_assertions), "{file}");
         assert!(file.contains("unhandled loader call"), "{file}");
         assert!(!file.contains("Loaded SWF"), "{file}");
+        assert!(!console.contains("main_data_begin"), "{console}");
+        assert!(!file.contains("main_data_begin"), "{file}");
     }
 
     #[test]
