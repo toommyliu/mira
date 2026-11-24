@@ -4,7 +4,7 @@ use gpui::{
     AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _, relative,
+    prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     ActiveTheme as _, h_flex,
@@ -214,7 +214,7 @@ impl Render for InputsDialog {
             title,
         )
         .when_some(self.description(), Dialog::description)
-        .max_height(relative(0.6))
+        .max_height((window.viewport_size().height * 0.6).min(px(480.0)))
         .scroll(self.scroll.clone());
         let dialog = body.into_iter().fold(dialog, Dialog::body);
         div().child(
@@ -632,6 +632,15 @@ mod tests {
     fn snapshot_script_inputs_dialog() {
         let example = include_str!("../../examples/inputs.ts");
         snapshot("fill", 960.0, 588.0, example, None, Purpose::Fill, false);
+        snapshot(
+            "fill-tall",
+            960.0,
+            1200.0,
+            example,
+            None,
+            Purpose::Fill,
+            false,
+        );
         snapshot(
             "start-min",
             920.0,
