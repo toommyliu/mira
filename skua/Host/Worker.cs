@@ -148,7 +148,7 @@ static partial class Worker
     private sealed class Session(Host host, Start start) : IConnection
     {
         private readonly CancellationTokenSource stopping = new();
-        private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonNode?>> pending = new();
+        private readonly ConcurrentDictionary<long, PendingCall> pending = new();
         private readonly object sending = new();
         private bool ended;
 
@@ -175,7 +175,7 @@ static partial class Worker
             lock (sending)
                 ended = true;
             foreach (var call in pending.Values)
-                call.TrySetCanceled();
+                call.Cancel();
             host.Ended(this, outcome);
             context.Unload();
         }
@@ -192,15 +192,15 @@ static partial class Worker
             if (!pending.TryRemove(frame["id"]!.GetValue<long>(), out var call))
                 return;
             if (frame["error"] is { } error)
-                call.TrySetException(new MiraException(error.GetValue<string>()));
+                call.Fail(error.GetValue<string>());
             else
-                call.TrySetResult(frame["ok"]?.DeepClone());
+                call.Answer(Detach(frame, "ok"));
         }
 
         private JsonNode? Wait(string type, JsonObject request, CancellationToken cancel)
         {
             var id = host.NextCall();
-            var call = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var call = new PendingCall();
             lock (sending)
             {
                 if (ended)
@@ -211,7 +211,7 @@ static partial class Worker
             }
             try
             {
-                call.Task.Wait(cancel);
+                call.Wait(cancel);
             }
             catch (OperationCanceledException)
             {
@@ -219,11 +219,48 @@ static partial class Worker
                     host.Send(new JsonObject { ["type"] = "cancel", ["run"] = Id, ["id"] = id });
                 throw;
             }
-            catch (AggregateException failed) when (failed.InnerException is { } inner)
-            {
-                throw inner is TaskCanceledException ? new OperationCanceledException(cancel) : inner;
-            }
-            return call.Task.Result;
+            return call.Result(cancel);
+        }
+
+        private static JsonNode? Detach(JsonObject frame, string name)
+        {
+            var node = frame[name];
+            frame.Remove(name);
+            return node;
+        }
+    }
+
+    private sealed class PendingCall
+    {
+        private readonly ManualResetEventSlim settled = new(false, 0);
+        private int state;
+        private JsonNode? answer;
+        private string? error;
+        private bool canceled;
+
+        public void Answer(JsonNode? value) => Settle(() => answer = value);
+
+        public void Fail(string message) => Settle(() => error = message);
+
+        public void Cancel() => Settle(() => canceled = true);
+
+        public void Wait(CancellationToken cancel)
+        {
+            if (!settled.IsSet)
+                settled.Wait(cancel);
+        }
+
+        public JsonNode? Result(CancellationToken cancel) =>
+            canceled ? throw new OperationCanceledException(cancel)
+            : error is not null ? throw new MiraException(error)
+            : answer;
+
+        private void Settle(Action set)
+        {
+            if (Interlocked.Exchange(ref state, 1) != 0)
+                return;
+            set();
+            settled.Set();
         }
     }
 }
