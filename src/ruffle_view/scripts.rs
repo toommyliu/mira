@@ -1092,17 +1092,27 @@ impl ScriptsWindow {
             .library
             .as_ref()
             .and_then(|library| library.sources.iter().find(|source| source.root == root));
+        let readable = source.is_none_or(|source| {
+            source.problem.is_none() || matches!(source.kind, SourceKind::Package { .. })
+        });
+        let mut items = Vec::new();
+        if readable {
+            let (this, root) = (this.clone(), root.to_owned());
+            items.push(MenuItem::action("Show in Finder", move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.show_folder(&root, cx));
+            }));
+        }
         let Some(source) = source else {
-            return Vec::new();
+            return items;
         };
         let SourceKind::Package { origin, .. } = &source.kind else {
             let this = this.clone();
             let root = root.to_owned();
-            return vec![MenuItem::action("Remove from library", move |_, cx| {
+            items.push(MenuItem::action("Remove from library", move |_, cx| {
                 let _ = this.update(cx, |this, cx| this.remove_folder(&root, cx));
-            })];
+            }));
+            return items;
         };
-        let mut items = Vec::new();
         if let Some(origin) = origin {
             let url = origin.url.clone();
             items.push(MenuItem::action("Open on GitHub", move |_, cx| {
@@ -1408,7 +1418,6 @@ impl ScriptsWindow {
             return None;
         };
         let (folders, installed) = self.source_rows(cx);
-        let package = installed.iter().any(|row| row.root == root);
         let row = folders
             .into_iter()
             .chain(installed)
@@ -1444,35 +1453,25 @@ impl ScriptsWindow {
             ),
             _ => None,
         };
-        let readable = package || !matches!(row.state, Some(SourceState::Problem(_)));
-        let show = readable.then(|| {
-            let root = row.root.clone();
-            Button::new("source-show", "Show in Finder")
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .on_click(cx.listener(move |this, _, _, cx| this.show_folder(&root, cx)))
-        });
         let this = cx.weak_entity();
         let menu_root = row.root.clone();
-        let menu = (row.root != self.folder).then(|| {
-            DropdownMenu::new("source-actions")
-                .trigger(
-                    Button::icon(
-                        "source-actions-trigger",
-                        Icon::Ellipsis,
-                        format!("More {} actions", row.name),
-                    )
-                    .variant(Variant::Ghost)
-                    .size(Size::Small)
-                    .hide_tooltip(),
+        let menu = DropdownMenu::new("source-actions")
+            .trigger(
+                Button::icon(
+                    "source-actions-trigger",
+                    Icon::Ellipsis,
+                    format!("More {} actions", row.name),
                 )
-                .align(Align::End)
-                .items(move |_, cx| {
-                    this.upgrade()
-                        .map(|scripts| scripts.read(cx).source_actions(&menu_root, &this, cx))
-                        .unwrap_or_default()
-                })
-        });
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .hide_tooltip(),
+            )
+            .align(Align::End)
+            .items(move |_, cx| {
+                this.upgrade()
+                    .map(|scripts| scripts.read(cx).source_actions(&menu_root, &this, cx))
+                    .unwrap_or_default()
+            });
         let facts = match &row.release {
             Some((label, value)) => h_flex().child(format!("{label} {value}")),
             None => h_flex()
@@ -1494,14 +1493,13 @@ impl ScriptsWindow {
         Some(
             v_flex()
                 .flex_none()
-                .gap(px(2.0))
                 .pl(layout.space(5.0))
                 .pr(layout.space(3.0))
                 .pt(layout.space(3.0))
                 .pb(layout.space(1.0))
                 .child(
                     h_flex()
-                        .min_h(layout.control_sm)
+                        .h(typography.body_line)
                         .gap(layout.space(2.0))
                         .child(
                             div()
@@ -1515,8 +1513,7 @@ impl ScriptsWindow {
                                 .child(row.name.clone()),
                         )
                         .children(status)
-                        .children(show)
-                        .children(menu),
+                        .child(menu),
                 )
                 .child(
                     v_flex()
@@ -3350,7 +3347,7 @@ mod tests {
                 pick(cx, window);
             })
         };
-        let shots: [(&str, Interaction); 10] = [
+        let shots: [(&str, Interaction); 11] = [
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
@@ -3448,6 +3445,20 @@ mod tests {
             ),
             ("scripts-source-folder", select(temp.join("community"))),
             ("scripts-source-default", select(temp.join("scripts"))),
+            (
+                "scripts-source-default-actions",
+                Box::new({
+                    let pick = select(temp.join("scripts"));
+                    let open = pointer(
+                        gpui::point(px(WIDTH - 24.0), px(62.0)),
+                        Some(gpui::MouseButton::Left),
+                    );
+                    move |cx, window| {
+                        pick(cx, window);
+                        open(cx, window);
+                    }
+                }),
+            ),
             (
                 "scripts-updates-card",
                 Box::new(pointer(gpui::point(px(159.0), px(341.0)), None)),
