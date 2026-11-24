@@ -37,6 +37,7 @@ pub(super) struct Card {
     after: Option<SharedString>,
     link: Option<(SharedString, Link)>,
     scroll: ScrollHandle,
+    fit: bool,
 }
 
 #[derive(IntoElement)]
@@ -59,6 +60,7 @@ impl HoverCard {
                 after: None,
                 link: None,
                 scroll: ScrollHandle::new(),
+                fit: false,
             },
             children: Vec::new(),
             placement: super::Placement::new(super::Side::Bottom, super::Align::Center),
@@ -90,6 +92,11 @@ impl HoverCard {
         self.card
             .rows
             .push((label.into(), Value::Path(path.into())));
+        self
+    }
+
+    pub fn fit(mut self) -> Self {
+        self.card.fit = true;
         self
     }
 
@@ -182,11 +189,39 @@ pub(super) fn popup(card: Card, theme: &crate::Theme, window: &Window) -> gpui::
         .fold(LABEL_MIN, Pixels::max)
         .min((super::popover::POPOVER_WIDTH - inset * 2.0) / 2.0)
         .ceil();
+    let width = if card.fit {
+        let line = |text: &SharedString, size: Pixels, weight: FontWeight| {
+            let run = TextRun {
+                len: text.len(),
+                font: gpui::Font {
+                    weight,
+                    ..gpui::font(theme.font_family.clone())
+                },
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(text.clone(), size, &[run], None)
+                .width
+        };
+        let title = line(&card.title, typography.body, FontWeight::MEDIUM);
+        let body = card.body.as_ref().map_or(Pixels::ZERO, |body| {
+            line(body, typography.secondary, FontWeight::NORMAL)
+        });
+        (title.max(body) + inset * 2.0)
+            .ceil()
+            .min(super::popover::POPOVER_WIDTH)
+    } else {
+        super::popover::POPOVER_WIDTH
+    };
     div()
         .flex()
         .flex_col()
         .gap(layout.space(1.5))
-        .w(super::popover::POPOVER_WIDTH)
+        .w(width)
         .max_w_full()
         .p(inset)
         .rounded(theme.radius.panel)

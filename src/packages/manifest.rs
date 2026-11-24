@@ -16,7 +16,7 @@ pub(crate) struct Manifest {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum ManifestError {
-    #[error("This isn't a Mira script package. Its package.json needs a \"mira\" field.")]
+    #[error("This isn't a Mira script package.")]
     NotAPackage,
     #[error("Its package.json isn't valid: {0}.")]
     Invalid(String),

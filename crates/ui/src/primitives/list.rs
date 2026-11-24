@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Instant};
+use std::{ops::Range, rc::Rc, time::Instant};
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
@@ -17,6 +17,7 @@ use crate::{
 
 type ReorderHandler = Rc<dyn Fn(usize, usize, &mut Window, &mut App)>;
 type RowBuilder = Rc<dyn Fn(usize) -> ListItem>;
+type RangeHandler = Rc<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 
 const LIST_INSET: Pixels = px(4.0);
 const PANE_INSET: Pixels = px(12.0);
@@ -491,6 +492,7 @@ pub struct VirtualList {
     height: Height,
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
+    on_visible: Option<RangeHandler>,
     flush: bool,
 }
 
@@ -510,6 +512,7 @@ impl VirtualList {
             height: Height::Fixed(px(320.0)),
             on_select: None,
             on_activate: None,
+            on_visible: None,
             flush: false,
         }
     }
@@ -542,6 +545,29 @@ impl VirtualList {
     pub fn on_activate(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_activate = Some(Rc::new(f));
         self
+    }
+
+    pub fn on_visible(mut self, f: impl Fn(Range<usize>, &mut Window, &mut App) + 'static) -> Self {
+        self.on_visible = Some(Rc::new(f));
+        self
+    }
+}
+
+struct Watch(RangeHandler);
+
+impl gpui::UniformListDecoration for Watch {
+    fn compute(
+        &self,
+        visible_range: Range<usize>,
+        _: gpui::Bounds<Pixels>,
+        _: gpui::Point<Pixels>,
+        _: Pixels,
+        _: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::AnyElement {
+        (self.0)(visible_range, window, cx);
+        div().into_any_element()
     }
 }
 
@@ -582,6 +608,7 @@ impl RenderOnce for VirtualList {
             scroll.0.borrow().base_handle.clone(),
         );
         let flush = self.flush;
+        let on_visible = self.on_visible;
         list_frame(self.id.clone(), self.label, flush, &options)
             .relative()
             .on_scroll(contain_scroll)
@@ -604,6 +631,9 @@ impl RenderOnce for VirtualList {
                 })
                 .track_scroll(&scroll)
                 .size_full()
+                .when_some(on_visible, |rows, on_visible| {
+                    rows.with_decoration(Watch(on_visible))
+                })
                 .map(|rows| {
                     if flush {
                         rows.px(PANE_INSET).py(PANE_BLOCK_INSET)

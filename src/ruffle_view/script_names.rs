@@ -65,7 +65,7 @@ fn resolve(path: PathBuf, cx: &App) {
     let read = cx.background_executor().spawn(async move {
         let name = fs::read_to_string(&path)
             .ok()
-            .and_then(|text| scripting::display_name(&path, &text))
+            .and_then(|text| scripting::read_meta(&path, &text)?.name)
             .unwrap_or_else(|| file_name(&path));
         (path, SharedString::from(name))
     });

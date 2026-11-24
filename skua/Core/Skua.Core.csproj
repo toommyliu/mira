@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Nullable>annotations</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS0108;CS0618;CS1998;CS4014</NoWarn>
+    <WeaverConfiguration>
+      <Weavers>
+        <Caseless />
+      </Weavers>
+    </WeaverConfiguration>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../vendor/Skua/Skua.Core/Options/Option.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Messaging/ScriptableEventMessages.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Messaging/MessageChannels.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptWait.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptKill.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptHunt.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptSkill.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/Inventory/ScriptInventoryHelper.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptLite.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptFaction.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/ScriptMonster.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/Inventory/ScriptTempInv.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Scripts/Inventory/ScriptHouseInv.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Flash/FlashArray.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Flash/FlashObject.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Skills/AdvancedSkillCommand.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/Skills/AdvancedSkillProvider.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/ViewModels/Dialogs/DialogViewModelBase.cs" />
+    <Compile Include="../vendor/Skua/Skua.Core/ViewModels/Dialogs/InputDialogViewModel.cs" />
+    <PackageReference Include="Caseless.Fody" Version="1.9.1" PrivateAssets="all" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <ProjectReference Include="../Interfaces/Skua.Core.Interfaces.csproj" />
+    <ProjectReference Include="../Generators/Skua.Core.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

@@ -22,6 +22,7 @@ use super::{
     inputs::{self, Supplied},
     limits::{CappedAllocator, Clock, Limits, Tripped},
     modules::{BOOTSTRAP, ModuleLoader, ModuleResolver, Modules, PRELUDE},
+    skua,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,14 +65,15 @@ pub(crate) type Dialogs = Box<dyn Fn(ToDialogs) + Send>;
 pub(crate) enum Command {
     Stop,
     Reply { id: CallId, reply: Reply },
+    Skua(skua::Event),
 }
 
 #[derive(Clone)]
-struct Link {
-    run: RunId,
-    player: Rc<dyn Fn(ToPlayer)>,
-    dialogs: Rc<dyn Fn(ToDialogs)>,
-    commands: mpsc::Sender<Command>,
+pub(super) struct Link {
+    pub(super) run: RunId,
+    pub(super) player: Rc<dyn Fn(ToPlayer)>,
+    pub(super) dialogs: Rc<dyn Fn(ToDialogs)>,
+    pub(super) commands: mpsc::Sender<Command>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,6 +179,9 @@ fn execute(
     log: Log,
     link: Link,
 ) -> Outcome {
+    if skua::is_entry(&launch.entry) {
+        return skua::execute(launch, clock, commands, log, link);
+    }
     let modules = match Modules::for_entry(&launch.entry, packages) {
         Ok(modules) => modules,
         Err(message) => return failed(message),
@@ -364,7 +369,7 @@ fn run(
                 |hooks| &hooks.deliver,
                 (id.0, calls::encode(reply)),
             ),
-            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+            Ok(Command::Stop | Command::Skua(_)) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Outcome::Stopped,
         };
         let fired = delivered

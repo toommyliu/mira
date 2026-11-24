@@ -1699,7 +1699,8 @@ export default function* () {
                 Request::Player(P::JoinMap {
                     map: "battleon".into(),
                     cell: Some("r2".into()),
-                    pad: None
+                    pad: None,
+                    rooms: None
                 })
             ),
             Seen::Call(2, Request::Player(P::Map)),
@@ -1817,7 +1818,8 @@ export default function* () {
                 Request::Player(P::JoinMap {
                     map: "yulgar".into(),
                     cell: None,
-                    pad: None
+                    pad: None,
+                    rooms: None
                 })
             ),
             Seen::Cancel(1),
@@ -3433,7 +3435,8 @@ export default function* () {
             Request::Player(P::JoinMap {
                 map: "bossmap-4321".into(),
                 cell: Some("Enter".into()),
-                pad: None
+                pad: None,
+                rooms: None
             }),
             Request::World(W::RoomNumber),
             Request::Army(AY::Gather {

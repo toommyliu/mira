@@ -10,6 +10,7 @@ mod bridge;
 mod characters;
 mod clock;
 mod combat_profiles;
+mod core_bots;
 mod data_file;
 mod domain;
 mod file_panel;
@@ -81,7 +82,21 @@ fn main() -> anyhow::Result<()> {
                     characters::init(data.join("characters"), cx);
                     combat_profiles::init(data.join("combat-profiles.json"), cx);
                     script_inputs::init(data.join("script-inputs.json"), cx);
-                    packages::init(installed_packages.clone(), data.join("github-token"), cx);
+                    packages::init(
+                        installed_packages.clone(),
+                        files.join("skua"),
+                        data.join("github-token"),
+                        cx,
+                    );
+                    scripting::init_skua(scripting::SkuaSetup {
+                        runner: packages::resources()
+                            .unwrap_or_default()
+                            .join("skua/Mira.Skua.dll"),
+                        home: files.join("skua"),
+                        cache: dirs::cache_dir()
+                            .unwrap_or_else(|| data.clone())
+                            .join("Mira/skua"),
+                    });
                     let (mapped, mapping) = (types.clone(), installed_packages.clone());
                     cx.observe(&packages::packages(cx), move |state, cx| {
                         if state.read(cx).activity().is_none() {

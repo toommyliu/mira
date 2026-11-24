@@ -25,6 +25,7 @@ pub(crate) struct Definition(Vec<Field>);
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Field {
     pub(crate) key: String,
+    pub(crate) group: Option<String>,
     pub(crate) label: String,
     pub(crate) description: Option<String>,
     pub(crate) kind: Kind,
@@ -64,6 +65,10 @@ pub(crate) enum Problem {
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 impl Definition {
+    pub(crate) fn new(fields: Vec<Field>) -> Self {
+        Self(fields)
+    }
+
     pub(crate) fn fields(&self) -> &[Field] {
         &self.0
     }
@@ -268,6 +273,14 @@ pub(super) fn prepare(
     else {
         return Ok(Values::new());
     };
+    resolve(display, &definition, supplied)
+}
+
+pub(super) fn resolve(
+    display: &str,
+    definition: &Definition,
+    supplied: &Supplied,
+) -> Result<Values, String> {
     match supplied {
         Supplied::Values(values) => definition
             .resolve(values)
@@ -291,11 +304,9 @@ pub(crate) fn extract(display: &str, path: &Path, text: &str) -> Result<Declared
     Ok(Declared { meta, inputs })
 }
 
-pub(crate) fn display_name(path: &Path, text: &str) -> Option<String> {
+pub(crate) fn read_meta(path: &Path, text: &str) -> Option<Meta> {
     let allocator = Allocator::default();
-    declared_meta(&parse(&allocator, path, text).ok()?)
-        .ok()?
-        .name
+    declared_meta(&parse(&allocator, path, text).ok()?).ok()
 }
 
 fn parse<'a>(allocator: &'a Allocator, path: &Path, text: &'a str) -> Result<Program<'a>, Error> {
@@ -823,6 +834,7 @@ fn field(key: String, offset: u32, properties: Vec<Property>) -> Result<Field, E
     };
     Ok(Field {
         key,
+        group: None,
         label,
         description,
         kind,
@@ -1027,7 +1039,8 @@ mod tests {
 
     #[test]
     fn the_display_name_survives_broken_inputs_but_not_a_broken_file() {
-        let name = |source: &str| display_name(Path::new("hunt.ts"), source);
+        let name =
+            |source: &str| read_meta(Path::new("hunt.ts"), source).and_then(|meta| meta.name);
         assert_eq!(
             name("export const meta = { name: \"Hunt\" };\nexport const inputs = { kills: {} };"),
             Some("Hunt".into())

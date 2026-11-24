@@ -41,12 +41,31 @@ pub(crate) fn from_json(json: serde_json::Value) -> Value {
     }
 }
 
+pub(crate) fn to_json(value: Value) -> serde_json::Value {
+    match value {
+        Value::Undefined | Value::Null => serde_json::Value::Null,
+        Value::Bool(flag) => serde_json::Value::Bool(flag),
+        Value::Number(number) => serde_json::Number::from_f64(number)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::String(text) => serde_json::Value::String(text),
+        Value::List(items) => serde_json::Value::Array(items.into_iter().map(to_json).collect()),
+        Value::Object(fields) => serde_json::Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, field)| (key, to_json(field)))
+                .collect(),
+        ),
+    }
+}
+
 const MAILBOX_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub(crate) enum CallError {
     #[error("the loader hasn't registered {0}")]
     Unavailable(&'static str),
+    #[error("Mira doesn't expose {0} to Skua scripts")]
+    NotExposed(String),
     #[error("{0} ran before the loader was ready")]
     NotReady(&'static str),
     #[error("{callback} threw: {message}")]

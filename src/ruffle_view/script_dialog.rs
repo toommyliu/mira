@@ -47,8 +47,16 @@ const STOP_INSET: Pixels = px(10.0);
 struct Content {
     title: SharedString,
     message: SharedString,
-    cancel: Option<SharedString>,
-    accept: SharedString,
+    responses: Responses,
+}
+
+#[derive(Debug, PartialEq)]
+enum Responses {
+    Answer {
+        cancel: Option<SharedString>,
+        accept: SharedString,
+    },
+    Choose(Vec<SharedString>),
 }
 
 impl Content {
@@ -59,8 +67,12 @@ impl Content {
                 .filter(|label| !label.trim().is_empty())
                 .map_or_else(|| fallback.into(), |label| shorten(label, MAX_LABEL))
         };
-        let (message, title, cancel, accept) = match request {
-            DialogRequest::Alert { message, title } => (message, title, None, "OK".into()),
+        let answer = |cancel: Option<SharedString>, accept: SharedString| Responses::Answer {
+            cancel,
+            accept,
+        };
+        let (message, title, responses) = match request {
+            DialogRequest::Alert { message, title } => (message, title, answer(None, "OK".into())),
             DialogRequest::Confirm {
                 message,
                 title,
@@ -69,12 +81,25 @@ impl Content {
             } => (
                 message,
                 title,
-                Some(label(cancel, "Cancel")),
-                label(confirm, "Confirm"),
+                answer(Some(label(cancel, "Cancel")), label(confirm, "Confirm")),
             ),
             DialogRequest::Prompt { message, title, .. } => {
-                (message, title, Some("Cancel".into()), "OK".into())
+                (message, title, answer(Some("Cancel".into()), "OK".into()))
             }
+            DialogRequest::Choose {
+                message,
+                title,
+                choices,
+            } => (
+                message,
+                title,
+                Responses::Choose(
+                    choices
+                        .iter()
+                        .map(|choice| shorten(choice, MAX_LABEL))
+                        .collect(),
+                ),
+            ),
         };
         let title = title
             .as_deref()
@@ -83,8 +108,7 @@ impl Content {
         Self {
             title,
             message: message.clone().into(),
-            cancel,
-            accept,
+            responses,
         }
     }
 }
@@ -101,6 +125,13 @@ fn shorten(text: &str, max: usize) -> SharedString {
 enum By {
     Key,
     Pointer,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Response {
+    Accept,
+    Cancel,
+    Pick(usize),
 }
 
 struct Prompt {
@@ -171,8 +202,14 @@ impl ScriptDialogs {
         cx.notify();
     }
 
-    fn answer(&mut self, accept: bool, by: By, cx: &mut Context<Self>) {
+    fn answer(&mut self, response: Response, by: By, cx: &mut Context<Self>) {
         if by == By::Key && !self.armed {
+            return;
+        }
+        let Some(front) = self.queue.front() else {
+            return;
+        };
+        if response == Response::Accept && matches!(front.request, DialogRequest::Choose { .. }) {
             return;
         }
         let Some(dialog) = self.queue.pop_front() else {
@@ -181,16 +218,18 @@ impl ScriptDialogs {
         if by == By::Key {
             self.armed = false;
         }
-        if accept {
-            let entered = self
-                .prompt
-                .as_ref()
-                .filter(|prompt| prompt.id == dialog.id)
-                .map(|prompt| prompt.input.read(cx).text().to_owned())
-                .unwrap_or_default();
-            dialog.accept(&entered);
-        } else {
-            dialog.cancel();
+        match response {
+            Response::Accept => {
+                let entered = self
+                    .prompt
+                    .as_ref()
+                    .filter(|prompt| prompt.id == dialog.id)
+                    .map(|prompt| prompt.input.read(cx).text().to_owned())
+                    .unwrap_or_default();
+                dialog.accept(&entered);
+            }
+            Response::Cancel => dialog.cancel(),
+            Response::Pick(choice) => dialog.pick(choice),
         }
         self.prepare(cx);
         cx.notify();
@@ -258,8 +297,7 @@ impl Render for ScriptDialogs {
         let Content {
             title,
             message,
-            cancel,
-            accept,
+            responses,
         } = Content::of(request, &script_names::name(&self.script, cx));
         let theme = cx.theme();
         let overflowing = self.scroll.max_offset().y > px(0.0);
@@ -286,7 +324,7 @@ impl Render for ScriptDialogs {
                 }
                 cx.stop_propagation();
                 if !event.is_held && !event.keystroke.modifiers.modified() {
-                    this.answer(true, By::Key, cx);
+                    this.answer(Response::Accept, By::Key, cx);
                 }
             })
         };
@@ -348,34 +386,58 @@ impl Render for ScriptDialogs {
                 .variant(Variant::Ghost)
                 .on_click(move |_, _, cx| stop(cx)),
         );
-        let answer = |accept: bool| {
+        let answer = |response: Response| {
             cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.click_count() == 1 {
-                    this.answer(accept, By::Pointer, cx);
+                    this.answer(response, By::Pointer, cx);
                 }
             })
         };
-        let cancel = cancel
-            .map(|cancel| Button::new("script-dialog-cancel", cancel).on_click(answer(false)));
-        let accept = div()
-            .flex_none()
-            .debug_selector(|| "script-dialog-accept".into())
-            .child(
-                Button::new("script-dialog-accept", accept)
-                    .variant(Variant::Primary)
-                    .on_click(answer(true)),
-            );
+        let actions: Vec<_> = match responses {
+            Responses::Answer { cancel, accept } => cancel
+                .map(|cancel| {
+                    Button::new("script-dialog-cancel", cancel)
+                        .on_click(answer(Response::Cancel))
+                        .into_any_element()
+                })
+                .into_iter()
+                .chain([div()
+                    .flex_none()
+                    .debug_selector(|| "script-dialog-accept".into())
+                    .child(
+                        Button::new("script-dialog-accept", accept)
+                            .variant(Variant::Primary)
+                            .on_click(answer(Response::Accept)),
+                    )
+                    .into_any_element()])
+                .collect(),
+            Responses::Choose(choices) => choices
+                .into_iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("script-dialog-choice-{index}"))
+                        .child(
+                            Button::new(("script-dialog-choice", index), choice)
+                                .on_click(answer(Response::Pick(index))),
+                        )
+                        .into_any_element()
+                })
+                .collect(),
+        };
         let this = cx.weak_entity();
-        let dialog = Dialog::new("script-dialog", self.waiting(), title)
-            .alert()
-            .width(WIDTH)
-            .body(body)
-            .footer_start_slot(stop)
-            .when_some(cancel, Dialog::action)
-            .action(accept)
-            .on_close(move |_, cx| {
-                let _ = this.update(cx, |this, cx| this.answer(false, By::Key, cx));
-            });
+        let dialog = actions.into_iter().fold(
+            Dialog::new("script-dialog", self.waiting(), title)
+                .alert()
+                .width(WIDTH)
+                .body(body)
+                .footer_start_slot(stop),
+            Dialog::action,
+        );
+        let dialog = dialog.on_close(move |_, cx| {
+            let _ = this.update(cx, |this, cx| this.answer(Response::Cancel, By::Key, cx));
+        });
         div()
             .key_context(CONTEXT)
             .capture_key_down(|event: &KeyDownEvent, _, cx| {
@@ -518,6 +580,40 @@ mod tests {
             default: default.map(Into::into),
             placeholder: None,
         }
+    }
+
+    fn choose(message: &str, choices: &[&str]) -> DialogRequest {
+        DialogRequest::Choose {
+            message: message.into(),
+            title: None,
+            choices: choices.iter().map(|&choice| choice.into()).collect(),
+        }
+    }
+
+    #[gpui::test]
+    fn enter_picks_no_choice_and_escape_dismisses_without_one(cx: &mut TestAppContext) {
+        let (cx, mut asks, _, stopped) = host(cx);
+        let (_, mode) = asks.open(choose("Mode?", &["Select Amount", "GO FOR BROKE!"]));
+        settle(cx);
+        press(cx, "enter");
+        assert_eq!(mode(), None);
+        press(cx, "escape");
+        assert_eq!(mode(), Some(Json::Null));
+        assert!(!stopped.get());
+    }
+
+    #[gpui::test]
+    fn clicking_a_choice_answers_its_position(cx: &mut TestAppContext) {
+        let (cx, mut asks, _, _) = host(cx);
+        let (_, mode) = asks.open(choose(
+            "Mode?",
+            &["Select Amount", "GO FOR BROKE!", "Just crunch the numbers"],
+        ));
+        settle(cx);
+        let third = cx.debug_bounds("script-dialog-choice-2").unwrap().center();
+        cx.simulate_click(third, Modifiers::none());
+        settle(cx);
+        assert_eq!(mode(), Some(json!(2)));
     }
 
     #[gpui::test]
@@ -853,8 +949,10 @@ mod tests {
             Content {
                 title: "hunt.ts".into(),
                 message: "".into(),
-                cancel: Some("Cancel".into()),
-                accept: "Confirm".into(),
+                responses: Responses::Answer {
+                    cancel: Some("Cancel".into()),
+                    accept: "Confirm".into(),
+                },
             }
         );
     }
@@ -870,8 +968,24 @@ mod tests {
             },
             &"hunt.ts".into(),
         );
-        assert_eq!(content.accept, "Deposit every single AC…");
-        assert_eq!(content.cancel.as_deref(), Some("Exactly twenty-four char"));
+        assert_eq!(
+            content.responses,
+            Responses::Answer {
+                cancel: Some("Exactly twenty-four char".into()),
+                accept: "Deposit every single AC…".into(),
+            }
+        );
+        let content = Content::of(
+            &choose("", &["Select Amount", "Just crunch all of the numbers"]),
+            &"hunt.ts".into(),
+        );
+        assert_eq!(
+            content.responses,
+            Responses::Choose(vec![
+                "Select Amount".into(),
+                "Just crunch all of the…".into()
+            ])
+        );
     }
 
     fn snapshot(name: &str, width: f32, height: f32, requests: &[DialogRequest]) {
@@ -909,7 +1023,35 @@ mod tests {
             .map(|line| format!("Line {line} of a message that keeps going."))
             .collect::<Vec<_>>()
             .join("\n");
-        let scenes: [(&str, f32, f32, DialogRequest); 10] = [
+        let scenes: [(&str, f32, f32, DialogRequest); 12] = [
+            (
+                "choose",
+                640.0,
+                400.0,
+                DialogRequest::Choose {
+                    message: "Do you wish to use select how many tickets to use?\nOr maybe you wanna go for broke".into(),
+                    title: Some("Mode Selector".into()),
+                    choices: vec![
+                        "Select Amount".into(),
+                        "GO FOR BROKE!".into(),
+                        "Just crunch the numbers".into(),
+                    ],
+                },
+            ),
+            (
+                "choose-narrow",
+                360.0,
+                320.0,
+                choose(
+                    "Pick a mode.",
+                    &[
+                        "Select Amount",
+                        "GO FOR BROKE!",
+                        "Just crunch the numbers",
+                        "Something else entirely",
+                    ],
+                ),
+            ),
             (
                 "confirm",
                 640.0,

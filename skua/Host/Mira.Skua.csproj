@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Mira.Skua</AssemblyName>
+    <RootNamespace>Mira.Skua</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+    <RollForward>Major</RollForward>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Protocol/Mira.Skua.Protocol.csproj" />
+    <ProjectReference Include="../Bot/Mira.Skua.Bot.csproj" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <InternalsVisibleTo Include="Mira.Skua.Tests" />
+  </ItemGroup>
+</Project>

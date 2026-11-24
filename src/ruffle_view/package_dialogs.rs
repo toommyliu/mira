@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, path::PathBuf};
 
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
@@ -21,7 +21,7 @@ const WIDTH: f32 = 440.0;
 const LISTED_EDITS: usize = 8;
 
 pub(super) enum PackageEvent {
-    Installed(String),
+    Installed(PathBuf),
     Changed,
 }
 
@@ -34,20 +34,20 @@ struct Install {
 }
 
 struct Confirm {
-    dir: String,
+    root: PathBuf,
     name: SharedString,
     edits: Edits,
 }
 
 struct Uninstall {
-    dir: String,
+    root: PathBuf,
     name: SharedString,
     error: Option<SharedString>,
 }
 
 #[derive(Clone)]
 pub(super) struct Pending {
-    pub(super) dir: String,
+    pub(super) root: PathBuf,
     pub(super) name: SharedString,
     pub(super) from: SharedString,
     pub(super) to: SharedString,
@@ -65,7 +65,7 @@ pub(super) struct PackageDialogs {
     confirm: Option<Confirm>,
     uninstall: Option<Uninstall>,
     review: Option<Vec<Pending>>,
-    queue: VecDeque<(String, SharedString)>,
+    queue: VecDeque<(PathBuf, SharedString)>,
     toasts: Entity<Toaster>,
     _packages: Subscription,
 }
@@ -175,9 +175,9 @@ impl PackageDialogs {
                     return;
                 }
                 match result {
-                    Ok(Installed { dir, .. }) | Err(Failure::AlreadyInstalled(dir)) => {
+                    Ok(Installed { root, .. }) | Err(Failure::AlreadyInstalled(root)) => {
                         this.close_install(cx);
-                        cx.emit(PackageEvent::Installed(dir));
+                        cx.emit(PackageEvent::Installed(root));
                     }
                     Err(Failure::Other(message)) => {
                         if let Some(install) = &mut this.install {
@@ -193,21 +193,21 @@ impl PackageDialogs {
 
     pub(super) fn update(
         &mut self,
-        dir: String,
+        root: PathBuf,
         name: SharedString,
         overwrite_edits: bool,
         cx: &mut Context<Self>,
     ) {
         self.confirm = None;
         let task = packages::packages(cx).update(cx, |packages, cx| {
-            packages.update(dir.clone(), overwrite_edits, cx)
+            packages.update(root.clone(), overwrite_edits, cx)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(Updated::Edited(edits)) => {
-                        this.confirm = Some(Confirm { dir, name, edits });
+                        this.confirm = Some(Confirm { root, name, edits });
                     }
                     Ok(Updated::Replaced) => {
                         cx.emit(PackageEvent::Changed);
@@ -230,15 +230,15 @@ impl PackageDialogs {
         if let Some(review) = self.review.take() {
             self.queue = review
                 .into_iter()
-                .map(|pending| (pending.dir, pending.name))
+                .map(|pending| (pending.root, pending.name))
                 .collect();
             self.advance(cx);
         }
     }
 
     fn advance(&mut self, cx: &mut Context<Self>) {
-        if let Some((dir, name)) = self.queue.pop_front() {
-            self.update(dir, name, false, cx);
+        if let Some((root, name)) = self.queue.pop_front() {
+            self.update(root, name, false, cx);
         }
     }
 
@@ -250,12 +250,12 @@ impl PackageDialogs {
 
     pub(super) fn open_uninstall(
         &mut self,
-        dir: String,
+        root: PathBuf,
         name: SharedString,
         cx: &mut Context<Self>,
     ) {
         self.uninstall = Some(Uninstall {
-            dir,
+            root,
             name,
             error: None,
         });
@@ -272,8 +272,8 @@ impl PackageDialogs {
             return;
         };
         uninstall.error = None;
-        let dir = uninstall.dir.clone();
-        let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(dir, cx));
+        let root = uninstall.root.clone();
+        let task = packages::packages(cx).update(cx, |packages, cx| packages.uninstall(root, cx));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -336,12 +336,7 @@ impl Render for PackageDialogs {
                     v_flex()
                         .gap(layout.space(1.0))
                         .child(label("GitHub link"))
-                        .child(install.link.clone())
-                        .child(note(
-                            "Its package.json needs a \u{201c}mira\u{201d} field.",
-                            true,
-                            &theme,
-                        )),
+                        .child(install.link.clone()),
                 )
                 .child(
                     v_flex()
@@ -426,7 +421,7 @@ impl Render for PackageDialogs {
         let removing = self.uninstall.as_ref().is_some_and(|uninstall| {
             matches!(
                 packages::packages(cx).read(cx).activity(),
-                Some(Activity::Removing(dir)) if *dir == uninstall.dir
+                Some(Activity::Removing(root)) if *root == uninstall.root
             )
         });
         let uninstall_error = self
@@ -512,7 +507,7 @@ impl Render for PackageDialogs {
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(confirm) = this.confirm.take() {
-                                    this.update(confirm.dir, confirm.name, true, cx);
+                                    this.update(confirm.root, confirm.name, true, cx);
                                 }
                             })),
                     )
@@ -600,7 +595,12 @@ mod tests {
     ) {
         for written in mira_ui::snapshot(name, size(px(720.0), px(500.0)), move |window, cx| {
             let scratch = std::env::temp_dir().join(format!("mira-{name}"));
-            packages::init(scratch.join("packages"), scratch.join("token"), cx);
+            packages::init(
+                scratch.join("packages"),
+                scratch.join("skua"),
+                scratch.join("token"),
+                cx,
+            );
             cx.new(|cx| {
                 let mut dialogs = PackageDialogs::new(Toaster::new(window, cx), cx);
                 prepare(&mut dialogs, window, cx);
@@ -646,10 +646,7 @@ mod tests {
         dialogs("install-package-error", |dialogs, window, cx| {
             dialogs.open_install(window, cx);
             let install = dialogs.install.as_mut().unwrap();
-            install.error = Some(
-                "This isn't a Mira script package. Its package.json needs a \u{201c}mira\u{201d} field."
-                    .into(),
-            );
+            install.error = Some("This isn't a Mira script package.".into());
         });
     }
 
@@ -669,11 +666,11 @@ mod tests {
         let fake = Fake::start();
         cx.update(mira_ui::init);
         let (dialogs, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
+            packages::init_against(fake.url(), root.join("packages"), root.join("skua"), cx);
             PackageDialogs::new(Toaster::new(window, cx), cx)
         });
         let pending = |dir: &str| Pending {
-            dir: dir.into(),
+            root: root.join("packages").join(dir),
             name: dir.to_owned().into(),
             from: "1111111".into(),
             to: "3333333".into(),
@@ -686,13 +683,13 @@ mod tests {
         let packages = cx.update(|_, cx| packages::packages(cx));
         packages.read_with(cx, |packages, _| {
             for dir in ["first", "second"] {
+                let status = packages.status(&root.join("packages").join(dir));
                 assert!(
                     matches!(
-                        packages.status(dir),
+                        status,
                         Some(packages::Status::Failed(message)) if message.starts_with("Couldn't find o/r")
                     ),
-                    "{dir}: {:?}",
-                    packages.status(dir)
+                    "{dir}: {status:?}",
                 );
             }
         });
@@ -709,11 +706,11 @@ mod tests {
         let fake = Fake::start();
         cx.update(mira_ui::init);
         let (dialogs, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
+            packages::init_against(fake.url(), root.join("packages"), root.join("skua"), cx);
             PackageDialogs::new(Toaster::new(window, cx), cx)
         });
         dialogs.update(cx, |dialogs, cx| {
-            dialogs.open_uninstall("gone".into(), "Gone".into(), cx);
+            dialogs.open_uninstall(root.join("packages/gone"), "Gone".into(), cx);
             dialogs.confirm_uninstall(cx);
         });
         cx.run_until_parked();
@@ -806,7 +803,7 @@ mod tests {
         serve_dailies(&fake);
         cx.update(mira_ui::init);
         let (host, cx) = cx.add_window_view(|window, cx| {
-            packages::init_against(fake.url(), root.join("packages"), cx);
+            packages::init_against(fake.url(), root.join("packages"), root.join("skua"), cx);
             let toasts = Toaster::new(window, cx);
             Host {
                 dialogs: cx.new(|cx| PackageDialogs::new(toasts.clone(), cx)),
@@ -819,7 +816,7 @@ mod tests {
             let events = events.clone();
             cx.subscribe(&dialogs, move |_, event: &PackageEvent, _| {
                 events.borrow_mut().push(match event {
-                    PackageEvent::Installed(dir) => format!("show {dir}"),
+                    PackageEvent::Installed(root) => format!("show {}", root.display()),
                     PackageEvent::Changed => "rescan".to_owned(),
                 });
             })
@@ -869,7 +866,7 @@ mod tests {
     fn snapshot_review_updates() {
         dialogs("review-package-updates", |dialogs, _, cx| {
             let pending = |dir: &str, name: &str, from: &str, to: &str| Pending {
-                dir: dir.into(),
+                root: dir.into(),
                 name: name.to_owned().into(),
                 from: from.to_owned().into(),
                 to: to.to_owned().into(),
@@ -903,7 +900,7 @@ mod tests {
         dialogs("confirm-package-update", |dialogs, _, _| {
             let path = |text: &str| PackagePath::parse(text).unwrap();
             dialogs.confirm = Some(Confirm {
-                dir: "toommyliu-mira-dailies".into(),
+                root: "toommyliu-mira-dailies".into(),
                 name: "Dailies".into(),
                 edits: Edits {
                     changed: vec![path("scripts/spin.ts"), path("lib/wheel.ts")],

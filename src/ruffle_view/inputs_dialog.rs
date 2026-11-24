@@ -75,7 +75,7 @@ impl InputsDialog {
         running: bool,
         cx: &mut Context<Self>,
     ) -> Self {
-        let form = cx.new(|cx| InputsForm::saved(script.clone(), read, cx));
+        let form = cx.new(|cx| InputsForm::saved(script.clone(), read, None, cx));
         let watch = [
             cx.observe(&form, |_, _, cx| cx.notify()),
             cx.subscribe(&form, |this, _, _: &Submitted, cx| this.accept(cx)),

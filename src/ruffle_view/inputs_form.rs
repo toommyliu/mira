@@ -7,7 +7,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
-    Theme, Tone, h_flex,
+    StyledExt as _, Theme, Tone, h_flex,
     primitives::{
         Alert, Button, Checkbox, CheckedState, Icon, Input, InputEvent, Select, Switch,
         button::{Size, Variant},
@@ -29,6 +29,14 @@ pub(super) type Read = Result<Declared, (&'static str, String)>;
 
 pub(super) fn read(script: PathBuf, cx: &App) -> Task<Read> {
     cx.background_spawn(async move {
+        if scripting::is_skua(&script) {
+            let described = match scripting::describe_skua(&script, &|| false) {
+                Ok(described) => Ok(described),
+                Err(scripting::SkuaHalt::Failed(message)) => Err(message),
+                Err(scripting::SkuaHalt::Stopped) => unreachable!("nothing stops this read"),
+            };
+            return skua_read(described).0;
+        }
         let display = file_name(&script);
         let text = fs::read_to_string(&script).map_err(|error| {
             (
@@ -43,12 +51,29 @@ pub(super) fn read(script: PathBuf, cx: &App) -> Task<Read> {
     })
 }
 
+pub(super) fn skua_read(
+    described: Result<scripting::SkuaDescribed, String>,
+) -> (Read, Option<SharedString>) {
+    let (inputs, unread) = match described {
+        Err(message) => return (Err(("This Skua script can't start", message)), None),
+        Ok(scripting::SkuaDescribed::Inputs(definition)) => (definition, None),
+        Ok(scripting::SkuaDescribed::Unread(reason)) => (None, Some(reason.into())),
+    };
+    let declared = Declared {
+        meta: Meta::default(),
+        inputs: Ok(inputs),
+    };
+    (Ok(declared), unread)
+}
+
 pub(super) enum FormState {
     Broken {
         title: &'static str,
         message: SharedString,
     },
-    Plain,
+    Plain {
+        unread: Option<SharedString>,
+    },
     Fields {
         definition: Definition,
         drafts: Vec<FieldDraft>,
@@ -63,6 +88,7 @@ pub(super) struct InputsForm {
     pub(super) meta: Meta,
     pub(super) state: FormState,
     saved: Option<Values>,
+    touched: bool,
     _store: Option<Subscription>,
 }
 
@@ -75,21 +101,36 @@ pub(super) struct Submitted;
 impl EventEmitter<Submitted> for InputsForm {}
 
 impl InputsForm {
-    pub(super) fn saved(script: PathBuf, read: Read, cx: &mut Context<Self>) -> Self {
+    pub(super) fn saved(
+        script: PathBuf,
+        read: Read,
+        unread: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let saved = saved_values(&script, cx);
         let shown = saved.clone().unwrap_or_default();
-        let mut form = Self::new(read, &shown, cx);
+        let mut form = Self::new(read, unread, &shown, cx);
         form.script = Some(script);
         form.saved = saved;
         form._store = Some(cx.observe_global::<script_inputs::Store>(Self::sync_saved));
         form
     }
 
-    pub(super) fn queued(values: &Values, read: Read, cx: &mut Context<Self>) -> Self {
-        Self::new(read, values, cx)
+    pub(super) fn queued(
+        values: &Values,
+        read: Read,
+        unread: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(read, unread, values, cx)
     }
 
-    fn new(read: Read, shown: &Values, cx: &mut Context<Self>) -> Self {
+    fn new(
+        read: Read,
+        unread: Option<SharedString>,
+        shown: &Values,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (meta, read) = match read {
             Ok(Declared { meta, inputs }) => (
                 meta,
@@ -102,7 +143,7 @@ impl InputsForm {
                 title,
                 message: message.into(),
             },
-            Ok(None) => FormState::Plain,
+            Ok(None) => FormState::Plain { unread },
             Ok(Some(definition)) => {
                 let drafts = drafts(&definition, shown);
                 let mut texts = Vec::new();
@@ -158,6 +199,7 @@ impl InputsForm {
             meta,
             state,
             saved: None,
+            touched: false,
             _store: None,
         }
     }
@@ -165,7 +207,7 @@ impl InputsForm {
     pub(super) fn definition(&self) -> Option<&Definition> {
         match &self.state {
             FormState::Fields { definition, .. } => Some(definition),
-            FormState::Broken { .. } | FormState::Plain => None,
+            FormState::Broken { .. } | FormState::Plain { .. } => None,
         }
     }
 
@@ -174,14 +216,15 @@ impl InputsForm {
             FormState::Fields {
                 definition, drafts, ..
             } => values(definition, drafts),
-            FormState::Broken { .. } | FormState::Plain => None,
+            FormState::Broken { .. } | FormState::Plain { .. } => None,
         }
     }
 
     pub(super) fn ready_values(&self, cx: &App) -> Option<Values> {
         match &self.state {
             FormState::Broken { .. } => None,
-            FormState::Plain => Some(Values::new()),
+            FormState::Plain { unread: None } => Some(Values::new()),
+            FormState::Plain { unread: Some(_) } => Some(self.saved.clone().unwrap_or_default()),
             FormState::Fields { .. } if self.unreadable(cx) => None,
             FormState::Fields {
                 definition, drafts, ..
@@ -235,14 +278,14 @@ impl InputsForm {
         }
         match &self.state {
             FormState::Fields { picks, .. } => picks.get(field).cloned().flatten(),
-            FormState::Broken { .. } | FormState::Plain => None,
+            FormState::Broken { .. } | FormState::Plain { .. } => None,
         }
     }
 
     pub(super) fn text(&self, field: usize) -> Option<Entity<Input>> {
         match &self.state {
             FormState::Fields { texts, .. } => texts.get(field).cloned().flatten(),
-            FormState::Broken { .. } | FormState::Plain => None,
+            FormState::Broken { .. } | FormState::Plain { .. } => None,
         }
     }
 
@@ -264,6 +307,7 @@ impl InputsForm {
             return;
         }
         *slot = FieldDraft { draft, stale: None };
+        self.touched = true;
         if let Some(Some(input)) = texts.get(index) {
             let invalid = error(field, slot).is_some();
             input.update(cx, |input, cx| input.set_invalid(invalid, cx));
@@ -288,7 +332,12 @@ impl InputsForm {
             };
         }
         show_drafts(definition, drafts, texts, cx);
+        self.touched = true;
         self.store(cx);
+    }
+
+    pub(super) fn holds_edits(&self) -> bool {
+        self.touched && self.edited() != self.saved
     }
 
     fn store(&mut self, cx: &mut Context<Self>) {
@@ -346,7 +395,7 @@ impl InputsForm {
     fn leading(&self, cx: &App) -> (bool, bool) {
         let stale = match &self.state {
             FormState::Fields { drafts, .. } => drafts.iter().any(|draft| draft.stale.is_some()),
-            FormState::Broken { .. } | FormState::Plain => false,
+            FormState::Broken { .. } | FormState::Plain { .. } => false,
         };
         let store =
             self.script.is_some() && (script_inputs::unreadable(cx) || script_inputs::unsaved(cx));
@@ -392,9 +441,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                     .into_any_element(),
             ];
         }
-        FormState::Plain => {
-            return vec![muted(theme, "This script has no inputs.").into_any_element()];
-        }
+        FormState::Plain { unread } => return vec![no_inputs(theme, unread.as_ref())],
         FormState::Fields {
             definition,
             drafts,
@@ -526,8 +573,27 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                         .into_any_element(),
                     _ => mira_ui::primitives::Field::new(label, control).into_any_element(),
                 };
+                let starts_group = field.group.is_some()
+                    && definition
+                        .fields()
+                        .get(index.wrapping_sub(1))
+                        .map(|previous| &previous.group)
+                        != Some(&field.group);
                 v_flex()
                     .gap(layout.space(1.0))
+                    .when_some(
+                        field.group.clone().filter(|_| starts_group),
+                        |column, group| {
+                            column.child(
+                                div()
+                                    .pt(layout.space(2.0))
+                                    .text_caption(theme.typography)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.muted_foreground)
+                                    .child(group),
+                            )
+                        },
+                    )
                     .child(control)
                     .map(|column| match (error(field, draft), &field.description) {
                         (Some(problem), _) => {
@@ -545,6 +611,19 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
         .chain(stale.map(IntoElement::into_any_element))
         .chain(fields.map(IntoElement::into_any_element))
         .collect()
+}
+
+pub(super) fn no_inputs(theme: &Theme, unread: Option<&SharedString>) -> AnyElement {
+    match unread {
+        None => muted(theme, "This script has no inputs.").into_any_element(),
+        Some(reason) => Alert::new(
+            "options-unread",
+            Tone::Warning,
+            "Couldn't read this script's options",
+        )
+        .body(format!("It runs with its defaults. {reason}"))
+        .into_any_element(),
+    }
 }
 
 pub(super) fn error_steps(

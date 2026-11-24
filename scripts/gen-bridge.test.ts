@@ -81,6 +81,20 @@ test("rust bindings pass declared defaults when an argument is omitted", () => {
   assert.match(renderRust(parseBridge([source])), /pad\.unwrap_or\("Spawn"\)/);
 });
 
+test("rust lists every export name for calls by name", () => {
+  const source = world(`
+    [BridgeExport]
+    public static function jump(cell:String):void {}
+
+    [BridgeExport("walk")]
+    public static function walkTo(x:Number, y:Number):void {}
+`);
+  assert.match(
+    renderRust(parseBridge([source])),
+    /pub\(crate\) const EXPORTS: &\[&str\] = &\["world\.jump", "world\.walk"\];/,
+  );
+});
+
 test("a parameter can take a Rust type that converts into a loader value", () => {
   const source = world(`
     [BridgeExport]
