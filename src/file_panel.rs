@@ -6,7 +6,7 @@ use objc2::{class, msg_send, rc::Retained};
 use objc2_app_kit::{
     NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSavePanel, NSView, NSWindow,
 };
-use objc2_foundation::{NSProcessInfo, NSString, NSURL};
+use objc2_foundation::{NSString, NSURL};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tokio::sync::oneshot;
 
@@ -120,12 +120,7 @@ fn without_doubled_extension(mut path: PathBuf) -> PathBuf {
     };
     let parts: Vec<_> = name.split('.').collect();
     let doubled = matches!(parts[..], [_, second, third] if second.starts_with(third));
-    if doubled
-        && NSProcessInfo::processInfo()
-            .operatingSystemVersion()
-            .majorVersion
-            >= 15
-    {
+    if doubled {
         path.set_extension("");
     }
     path

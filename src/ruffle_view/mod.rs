@@ -188,7 +188,6 @@ impl RuffleView {
             extras.watch(),
             crate::combat_profiles::watch(cx),
             armies,
-            native.supports_display_frames(),
             span.clone(),
         )?;
         let inbox = session.inbox();
