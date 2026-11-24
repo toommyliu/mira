@@ -581,7 +581,7 @@ impl Input {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.password && !self.selected.is_empty() {
+        if !self.masked() && !self.selected.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected.clone()].to_string(),
             ));
@@ -589,7 +589,7 @@ impl Input {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.password && !self.selected.is_empty() {
+        if !self.masked() && !self.selected.is_empty() {
             self.copy(&Copy, window, cx);
             self.replace_text_in_range(None, "", window, cx);
         }
