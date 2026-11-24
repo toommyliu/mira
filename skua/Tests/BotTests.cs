@@ -70,6 +70,40 @@ public class BotTests
     }
 
     [Fact]
+    public void Ensuring_several_quests_waits_the_action_delay_between_them()
+    {
+        var clock = new System.Diagnostics.Stopwatch();
+        var accepts = new List<TimeSpan>();
+        var completes = new List<TimeSpan>();
+        var progress = new HashSet<int>();
+        JsonNode? Send(List<TimeSpan> sends, JsonObject request, bool accept)
+        {
+            sends.Add(clock.Elapsed);
+            var id = request["questId"]!.GetValue<int>();
+            if (accept)
+                progress.Add(id);
+            else
+                progress.Remove(id);
+            return true;
+        }
+        var bot = new Offline((key, request) => key switch
+        {
+            "quests.accept" => Send(accepts, request, accept: true),
+            "quests.complete" => Send(completes, request, accept: false),
+            "quests.inProgress" => progress.Contains(request["questId"]!.GetValue<int>()),
+            _ => null,
+        }).Bot();
+        bot.Options.ActionDelay = 200;
+
+        clock.Start();
+        bot.Quests.EnsureAccept(new[] { 1, 2 });
+        bot.Quests.EnsureComplete(new[] { 1, 2 });
+
+        Assert.True(accepts[1] - accepts[0] >= TimeSpan.FromMilliseconds(200), $"accepted {(accepts[1] - accepts[0]).TotalMilliseconds} ms apart");
+        Assert.True(completes[1] - completes[0] >= TimeSpan.FromMilliseconds(200), $"completed {(completes[1] - completes[0]).TotalMilliseconds} ms apart");
+    }
+
+    [Fact]
     public void Drop_options_decide_what_mira_accepts_and_rejects()
     {
         var config = new JsonObject

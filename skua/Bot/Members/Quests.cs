@@ -112,7 +112,10 @@ public sealed class Quests(Game game, Paths paths, Func<IScriptInterface> bot) :
     public void EnsureAccept(params int[] ids)
     {
         foreach (var id in ids)
+        {
             EnsureAccept(id);
+            Bot.Sleep(Bot.Options.ActionDelay);
+        }
     }
 
     public bool CanComplete(int id) => game.Request("quests", "canComplete", new { questId = id })?.GetValue<bool>() == true;
@@ -138,7 +141,10 @@ public sealed class Quests(Game game, Paths paths, Func<IScriptInterface> bot) :
     public void EnsureComplete(params int[] ids)
     {
         foreach (var id in ids)
+        {
             EnsureComplete(id);
+            Bot.Sleep(Bot.Options.ActionDelay);
+        }
     }
 
     public bool IsInProgress(int id) => game.Request("quests", "inProgress", new { questId = id })?.GetValue<bool>() == true;
