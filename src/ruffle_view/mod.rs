@@ -77,7 +77,7 @@ pub(crate) use client::{
 };
 pub(crate) use environment::{OpenEnvironment, open as open_environment};
 pub(crate) use game_bar::{
-    EditScriptInputs, GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
+    GameOption, OpenBank, OpenJump, ToggleAutoAttack, ToggleInterfaceRendering,
     ToggleMinimalRendering, ToggleOption, ToggleOptionsMenu, ToggleScript,
 };
 pub(crate) use loader_grabber::{OpenLoaderGrabber, open as open_loader_grabber};
