@@ -38,16 +38,18 @@ use super::{
     client::{CloseSession, drag_area},
     form::{muted, note, row, row_label},
     inputs_form::{self, Edited, FormState, InputsForm, Read, reveal_item},
+    log_page::LogPage,
     package_dialogs::{PackageDialogs, PackageEvent, Pending},
     queue::{self, EntryId, Queue},
     script::failure,
     script_form::{ROOM_NOTE, room_text, rows},
+    script_log::duration,
     script_names,
     shown_tab::{self, ShownTab, Target},
 };
 use crate::{
-    account_settings::{self, Scripts as ScriptOptions},
     accounts::AccountId,
+    characters::{self, Scripts as ScriptOptions},
     domain::rooms::{PrivateRoom, Rooms},
     packages::{self, Manifest, ManifestError, Origin, Status},
     scripting::{self, Declared, Launch, Outcome, Supplied, Values},
@@ -557,6 +559,7 @@ pub(super) struct ScriptsWindow {
     folder_scroll: ScrollHandle,
     package_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
+    log: Entity<LogPage>,
     toasts: Entity<Toaster>,
     _view_changes: Option<Subscription>,
     _subscriptions: [Subscription; 8],
@@ -666,6 +669,7 @@ impl ScriptsWindow {
             folder_scroll: ScrollHandle::new(),
             package_scroll: ScrollHandle::new(),
             package_dialogs,
+            log: cx.new(LogPage::new),
             toasts,
             _view_changes: None,
             _subscriptions: subscriptions,
@@ -698,6 +702,8 @@ impl ScriptsWindow {
         self._view_changes = self
             .view()
             .map(|view| cx.subscribe(&view, |_, _, _: &Changed, cx| cx.notify()));
+        let log = self.view().map(|view| view.read(cx).script_log.clone());
+        self.log.update(cx, |page, cx| page.show(log, cx));
         self.queued = 0;
         self.chosen = None;
         self.show_saved_room(cx);
@@ -767,7 +773,7 @@ impl ScriptsWindow {
 
     fn options(&self, cx: &App) -> Option<ScriptOptions> {
         let account = self.account(cx)?;
-        Some(account_settings::get(&account, cx).scripts)
+        Some(characters::get(&account, cx).scripts)
     }
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
@@ -2258,11 +2264,17 @@ impl Render for ScriptsWindow {
             cx,
         )
         .map(|header| match status {
-            Some(status) => header.child(run_status(
-                status,
-                cx.listener(|this, _, _, cx| this.stop(cx)),
-                &theme,
-            )),
+            Some(status) => {
+                let this = cx.weak_entity();
+                header.child(run_status(
+                    status,
+                    cx.listener(|this, _, _, cx| this.stop(cx)),
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.set_page(Page::Log, cx));
+                    },
+                    &theme,
+                ))
+            }
             None if !has_tab => header.child(
                 div()
                     .id("script-status")
@@ -2398,10 +2410,7 @@ impl Render for ScriptsWindow {
                     .child(theme.column_rule())
                     .child(inspected(detail))
             }
-            Page::Log => body.justify_center().items_center().child(Empty::new(
-                "Script logs",
-                "Coming soon. Until then, script output goes to mira.log.",
-            )),
+            Page::Log => body.child(self.log.clone()),
         }
         .relative()
         .child(Toaster::layer(&self.toasts, window, cx));
@@ -2480,7 +2489,11 @@ impl Render for ScriptsWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                window.focus(&this.search.focus_handle(cx), cx);
+                if this.shown_page(cx) == Page::Log {
+                    this.log.update(cx, |log, cx| log.focus_search(window, cx));
+                } else {
+                    window.focus(&this.search.focus_handle(cx), cx);
+                }
             }))
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
@@ -2520,6 +2533,7 @@ struct Failure {
 fn run_status(
     status: RunStatus,
     stop: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    show_log: impl Fn(&mut Window, &mut App) + 'static,
     theme: &Theme,
 ) -> Div {
     h_flex()
@@ -2535,7 +2549,8 @@ fn run_status(
                         HoverCard::new("script-failure", failure.title)
                             .placement(Placement::new(Side::Bottom, Align::End))
                             .path_row("Script", failure.script)
-                            .body(failure.message),
+                            .body(failure.message)
+                            .action("Show log", show_log),
                     )
                 }),
         )
@@ -2598,15 +2613,6 @@ fn ended(outcome: &Outcome) -> &'static str {
         Outcome::Failed { .. } | Outcome::Killed(_) => "Failed",
         Outcome::Stopped => "Stopped",
         Outcome::Exited { .. } => "Exited",
-    }
-}
-
-fn duration(took: std::time::Duration) -> String {
-    let seconds = took.as_secs();
-    match seconds {
-        0..60 => format!("{seconds}s"),
-        60..3600 => format!("{}m", seconds / 60),
-        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
     }
 }
 
@@ -2907,6 +2913,7 @@ fn sources_story(
 
 #[cfg(test)]
 mod tests {
+    use super::super::script_log::ScriptLog;
     use super::*;
     use crate::{ruffle_view::script_form::Draft, script_inputs};
 
@@ -3774,6 +3781,224 @@ export default function* () {}"#,
         }
     }
 
+    fn fill_log(log: &mut ScriptLog, cx: &mut Context<ScriptLog>) {
+        use super::super::script_log::Event;
+        use crate::scripting::{Level, Limit};
+        let sink = log.sink();
+        fn ended(outcome: &Outcome) -> Event<'_> {
+            Event::Ended {
+                outcome,
+                took: Duration::from_secs(192),
+            }
+        }
+        log.run(
+            "Hunt".into(),
+            Event::Started {
+                place: Some((1, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "hunting Frogzard (#3) in Enter");
+        sink.push(Level::Info, "killed 1/5");
+        for _ in 0..14 {
+            sink.push(
+                Level::Info,
+                "no live Frogzard in the map, waiting for a respawn",
+            );
+        }
+        sink.push(Level::Info, "hunting Frogzard (#2) in Enter");
+        sink.push(
+            Level::Debug,
+            r#"target {"monMapId":2,"name":"Frogzard","cell":"Enter","hp":1250,"maxHp":1250,"state":"alive"}"#,
+        );
+        sink.push(Level::Info, "killed 2/5");
+        sink.push(
+            Level::Warn,
+            "A subscription fell behind and dropped what it was holding.",
+        );
+        for kill in 3..=5 {
+            sink.push(Level::Info, &format!("killed {kill}/5"));
+        }
+        log.run("Hunt".into(), ended(&Outcome::Completed), cx);
+        log.run(
+            "Daily quests".into(),
+            Event::Started {
+                place: Some((2, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "accepting Bounty Hunter's Drone Parts");
+        log.run("Daily quests".into(), Event::Interrupted, cx);
+        log.run(
+            "Daily quests".into(),
+            Event::Started {
+                place: Some((2, 2)),
+            },
+            cx,
+        );
+        sink.push(Level::Info, "accepting Bounty Hunter's Drone Parts");
+        log.run(
+            "Daily quests".into(),
+            ended(&Outcome::Failed {
+                message:
+                    "Couldn't find Ultra Avatar Tyndarius in r4 of ultratyndarius after 30 seconds."
+                        .into(),
+                stack: Some("    at hunt (daily.ts:42:11)\n    at default (daily.ts:88:5)".into()),
+            }),
+            cx,
+        );
+        log.run("Farm".into(), Event::Started { place: None }, cx);
+        sink.push(
+            Level::Error,
+            "Error: no quest 9999\n    at accept (farm.ts:12:3)",
+        );
+        log.run("Farm".into(), ended(&Outcome::Killed(Limit::Turn)), cx);
+    }
+
+    fn show_log(
+        fill: fn(&mut ScriptLog, &mut Context<ScriptLog>),
+    ) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+        move |cx, window| {
+            cx.update_window(window, |root, _, cx| {
+                let scripts = root.downcast::<ScriptsWindow>().unwrap();
+                let log = cx.new(|cx| {
+                    let mut log = ScriptLog::new(cx);
+                    fill(&mut log, cx);
+                    log
+                });
+                scripts.update(cx, |scripts, cx| {
+                    scripts.page = Page::Log;
+                    scripts.log.update(cx, |page, cx| page.show(Some(log), cx));
+                });
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    fn pointer_at(
+        cx: &mut gpui::HeadlessAppContext,
+        window: gpui::AnyWindowHandle,
+        events: Vec<gpui::PlatformInput>,
+    ) {
+        for event in events {
+            cx.update_window(window, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    fn click(x: f32, y: f32, shift: bool) -> Vec<gpui::PlatformInput> {
+        let position = gpui::point(px(x), px(y));
+        let modifiers = gpui::Modifiers {
+            shift,
+            ..Default::default()
+        };
+        vec![
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+                modifiers,
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers,
+            }),
+        ]
+    }
+
+    #[test]
+    fn snapshot_log_scrolled_back() {
+        let show = show_log(fill_log);
+        snapshot_window_with(
+            "scripts-log-scrolled-back",
+            (WIDTH, HEIGHT),
+            "Alt 1",
+            NESTED,
+            |_| {},
+            move |cx, window| {
+                show(cx, window);
+                let scroll = gpui::PlatformInput::Scroll(gpui::ScrollEvent {
+                    position: gpui::point(px(500.0), px(300.0)),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(118.0))),
+                    ..Default::default()
+                });
+                pointer_at(cx, window, vec![scroll]);
+                pointer_at(cx, window, click(500.0, 150.0, false));
+                pointer_at(cx, window, click(500.0, 190.0, true));
+            },
+        );
+    }
+
+    fn fill_midnight(log: &mut ScriptLog, after: u32, cx: &mut Context<ScriptLog>) {
+        use crate::scripting::Level;
+        use chrono::TimeZone as _;
+        let at = |day, hour, minute, second| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 11, day, hour, minute, second)
+                .unwrap()
+        };
+        for (second, kill) in [(31, 37), (38, 38), (44, 39), (52, 40), (58, 41)] {
+            log.record(
+                at(23, 23, 59, second),
+                Level::Info,
+                &format!("killed {kill}/50"),
+                cx,
+            );
+        }
+        log.record(
+            at(24, 0, 0, 1),
+            Level::Warn,
+            "low on potions after 41 kills",
+            cx,
+        );
+        for step in 0..after {
+            let seconds = 4 + step * 7;
+            log.record(
+                at(24, 0, seconds / 60, seconds % 60),
+                Level::Info,
+                &format!("hunting Frogzard (#{}) in Enter", step % 4 + 1),
+                cx,
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_log_across_midnight() {
+        let few: fn(&mut ScriptLog, &mut Context<ScriptLog>) = |log, cx| fill_midnight(log, 4, cx);
+        let many: fn(&mut ScriptLog, &mut Context<ScriptLog>) =
+            |log, cx| fill_midnight(log, 40, cx);
+        for (name, fill) in [
+            ("scripts-log-midnight", few),
+            ("scripts-log-midnight-pinned", many),
+        ] {
+            snapshot_window_with(
+                name,
+                (MIN_WIDTH, MIN_HEIGHT),
+                "Alt 1",
+                NESTED,
+                |_| {},
+                show_log(fill),
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_log() {
+        for (name, size) in [
+            ("scripts-log", (WIDTH, HEIGHT)),
+            ("scripts-log-min", (MIN_WIDTH, MIN_HEIGHT)),
+        ] {
+            snapshot_window_with(name, size, "Alt 1", NESTED, |_| {}, show_log(fill_log));
+        }
+    }
+
     #[test]
     fn snapshot_empty_pages() {
         let pages: [(&str, &[(&str, &str)], fn(&mut ScriptsWindow)); 3] = [
@@ -3781,7 +4006,7 @@ export default function* () {}"#,
             ("scripts-queue-min", NESTED, |scripts| {
                 scripts.page = Page::Queue
             }),
-            ("scripts-log-min", NESTED, |scripts| {
+            ("scripts-log-no-tab-min", NESTED, |scripts| {
                 scripts.page = Page::Log
             }),
         ];
@@ -3828,6 +4053,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
                             failure,
                         },
                         |_, _, _| {},
+                        |_, _| {},
                         &theme,
                     ))
                 }))

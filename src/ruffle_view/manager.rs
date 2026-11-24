@@ -25,11 +25,9 @@ use super::{
 use mira_ui::primitives::{Input, InputEvent, text_field};
 
 use crate::{
-    account_settings,
     accounts::{Account, AccountId, Accounts, Change, Draft, Invalid, SaveError, SetupError},
-    file_panel, net, script_inputs,
+    characters, file_panel, net, script_inputs,
     setups::{Launch, Member, Setup},
-    shared_objects,
 };
 
 actions!(
@@ -1300,8 +1298,7 @@ impl Manager {
         match accounts.save(form.editing.as_ref(), draft) {
             Ok(id) => {
                 if let Some(old) = renamed {
-                    account_settings::rename(old, &id, cx);
-                    shared_objects::rename(old, &id, cx);
+                    characters::rename(old, &id, cx);
                 }
                 if let Some(old) = &form.editing
                     && self.checked.remove(old)
@@ -1335,8 +1332,7 @@ impl Manager {
         }
         match accounts.remove(id) {
             Ok(()) => {
-                account_settings::forget(id, cx);
-                shared_objects::forget(id, cx);
+                characters::forget(id, cx);
                 self.checked.remove(id);
                 if let Some(form) = &mut self.form
                     && form.editing.as_ref() == Some(id)

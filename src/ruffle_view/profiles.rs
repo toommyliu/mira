@@ -103,7 +103,7 @@ pub(crate) fn open(selected: Option<String>, cx: &mut App) {
         ))),
         window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         titlebar: Some(TitlebarOptions {
-            title: Some("Combat Profiles".into()),
+            title: Some("Combat profiles".into()),
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(12.0), px(12.0))),
         }),
@@ -1731,7 +1731,7 @@ impl Render for Editor {
                 self.inspector_scroll.clone(),
             ));
         let bar = window_bar(window, cx)
-            .child(bar_title("Combat Profiles", cx))
+            .child(bar_title("Combat profiles", cx))
             .child(drag_area().flex_1())
             .child(save);
         div()

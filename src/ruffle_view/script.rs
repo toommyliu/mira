@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task};
@@ -9,14 +9,14 @@ use super::{
     RuffleView, ScriptPhase, ScriptState,
     inputs_dialog::{InputsDialog, InputsEvent, Preflight, Purpose, preflight},
     inputs_form::{self, Read},
-    queue::Queue,
+    queue::{self, Queue},
     script_dialog::ScriptDialogs,
+    script_log::Event,
     script_names,
 };
 use crate::{
-    account_settings,
     accounts::AccountId,
-    packages,
+    characters, packages,
     ruffle::{Command, Msg},
     script_inputs,
     scripting::{Declared, Launch, Level, Limit, Limits, Outcome, Run},
@@ -425,6 +425,12 @@ impl RuffleView {
         self.probe_inputs(launch.entry.clone(), cx);
         self.script.leaving = None;
         self.script.restart = None;
+        let entries = self.queue.entries();
+        let place = entries
+            .iter()
+            .position(queue::Entry::running)
+            .map(|at| (at + 1, entries.len()));
+        self.log_run(&launch.entry, Event::Started { place }, cx);
         let character = self.character().map(AccountId::of);
         if !fresh || !self.safe_start_stop(cx) {
             return self.run_script(launch, character, cx);
@@ -450,7 +456,7 @@ impl RuffleView {
     fn safe_start_stop(&self, cx: &App) -> bool {
         self.settings_account
             .as_ref()
-            .map(|account| account_settings::get(account, cx).scripts)
+            .map(|account| characters::get(account, cx).scripts)
             .unwrap_or_default()
             .safe_start_stop
     }
@@ -464,11 +470,26 @@ impl RuffleView {
         self.session.command(Command::Retreat(moved));
         let span = self.span.clone();
         cx.spawn(async move |this, cx| {
-            if let Ok(Err(error)) = arrived.recv().await {
-                span.in_scope(|| tracing::warn!(%error, "couldn't move somewhere safe"));
-            }
-            let _ = this.update(cx, |this, cx| then(this, cx));
+            let failed = match arrived.recv().await {
+                Ok(Err(error)) => {
+                    span.in_scope(|| tracing::warn!(%error, "couldn't move somewhere safe"));
+                    Some(error.to_string())
+                }
+                _ => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let (Some(error), Some(entry)) = (&failed, this.script.entry()) {
+                    this.log_run(entry, Event::RetreatFailed(error), cx);
+                }
+                then(this, cx)
+            });
         })
+    }
+
+    fn log_run(&self, entry: &Path, event: Event, cx: &mut Context<Self>) {
+        let script = script_names::name(entry, cx);
+        self.script_log
+            .update(cx, |log, cx| log.run(script, event, cx));
     }
 
     fn run_script(&mut self, launch: Launch, character: Option<AccountId>, cx: &mut Context<Self>) {
@@ -478,16 +499,20 @@ impl RuffleView {
         let (finished, outcome) = async_channel::bounded(1);
         let (asks, asked) = async_channel::unbounded();
         let installed = packages::packages(cx).read(cx).root().to_owned();
+        let sink = self.script_log.read(cx).sink();
         let started = self.span.in_scope(|| {
             Run::start(
                 launch.clone(),
                 installed,
                 Limits::default(),
-                Box::new(|level, message| match level {
-                    Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
-                    Level::Info => tracing::info!(target: "mira::script", "{message}"),
-                    Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
-                    Level::Error => tracing::error!(target: "mira::script", "{message}"),
+                Box::new(move |level, message| {
+                    match level {
+                        Level::Debug => tracing::debug!(target: "mira::script", "{message}"),
+                        Level::Info => tracing::info!(target: "mira::script", "{message}"),
+                        Level::Warn => tracing::warn!(target: "mira::script", "{message}"),
+                        Level::Error => tracing::error!(target: "mira::script", "{message}"),
+                    }
+                    sink.push(level, message);
                 }),
                 Box::new(move |message| inbox.post(Msg::Script(message))),
                 Box::new(move |message| {
@@ -600,6 +625,17 @@ impl RuffleView {
         let logout = matches!(outcome, Outcome::Exited { logout: true, .. });
         let restart = self.script.restart.take().filter(|_| !logout);
         let interrupted = restart.is_some();
+        if let Some(loaded) = &self.script.loaded {
+            let event = if interrupted {
+                Event::Interrupted
+            } else {
+                Event::Ended {
+                    outcome: &outcome,
+                    took: loaded.since.elapsed(),
+                }
+            };
+            self.log_run(&loaded.launch.entry, event, cx);
+        }
         if let Some(mut restart) = restart {
             restart.queued = self.queue.running().is_some();
             self.script.restart = Some(restart);
@@ -668,6 +704,13 @@ impl RuffleView {
         }) = &self.script.loaded
         {
             self.script.end(Outcome::Stopped, false);
+            if let Some(entry) = self.script.entry() {
+                let ended = Event::Ended {
+                    outcome: &Outcome::Stopped,
+                    took: Duration::ZERO,
+                };
+                self.log_run(entry, ended, cx);
+            }
             if restart.is_some_and(|restart| restart.queued) {
                 self.queue.ended(&Outcome::Stopped, Instant::now());
             }
@@ -708,11 +751,10 @@ impl RuffleView {
                 ..
             })
         );
-        let restarts = self.settings_account.as_ref().is_some_and(|account| {
-            account_settings::get(account, cx)
-                .scripts
-                .restart_after_reconnect
-        });
+        let restarts = self
+            .settings_account
+            .as_ref()
+            .is_some_and(|account| characters::get(account, cx).scripts.restart_after_reconnect);
         let Some(account) = self.linked_account().filter(|_| running && restarts) else {
             return;
         };
@@ -736,6 +778,7 @@ impl RuffleView {
                     "stopped the script because a different character signed in"
                 )
             });
+            self.log_run(entry, Event::CharacterChanged, cx);
         }
         if let Some(Loaded {
             phase: Phase::Running { run, .. },
@@ -761,6 +804,7 @@ impl RuffleView {
         loaded.phase = Phase::Finished(Outcome::Stopped);
         loaded.since = Instant::now();
         if self.linked_account() != Some(restart.account) {
+            self.log_run(&launch.entry, Event::NotRestarted, cx);
             if restart.queued {
                 self.queue.ended(&Outcome::Stopped, Instant::now());
                 self.queue.pause();

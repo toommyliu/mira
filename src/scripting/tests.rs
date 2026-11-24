@@ -120,7 +120,12 @@ fn start_with(
         folder.0.join("packages"),
         limits,
         Box::new(move |level, message| {
-            let prefix = if level == Level::Error { "error: " } else { "" };
+            let prefix = match level {
+                Level::Debug => "debug: ",
+                Level::Info => "",
+                Level::Warn => "warn: ",
+                Level::Error => "error: ",
+            };
             sink.lock().unwrap().push(format!("{prefix}{message}"));
         }),
         player,
@@ -284,6 +289,42 @@ fn plain_javascript_modules_run_as_written() {
     ]);
     assert_eq!(finished.outcome, Outcome::Completed);
     assert_eq!(finished.logs, ["42"]);
+}
+
+#[test]
+fn effect_logs_reach_the_log_at_the_same_levels_as_console_calls() {
+    let finished = run(&[(
+        "main.ts",
+        r#"import { Effect } from "effect";
+
+export default function* () {
+  console.log("plain");
+  console.debug("details");
+  console.warn("careful");
+  yield* Effect.log("from effect");
+  yield* Effect.logDebug("effect details");
+  yield* Effect.logWarning("effect careful", 42);
+  yield* Effect.logError("effect broke");
+  yield* Effect.logTrace("effect trace");
+  yield* Effect.log("annotated").pipe(Effect.annotateLogs({ cell: "Enter" }));
+}
+"#,
+    )]);
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(
+        finished.logs,
+        [
+            "plain",
+            "debug: details",
+            "warn: careful",
+            "from effect",
+            "debug: effect details",
+            "warn: effect careful 42",
+            "error: effect broke",
+            "debug: effect trace",
+            r#"annotated {"cell":"Enter"}"#,
+        ]
+    );
 }
 
 #[test]
@@ -1237,10 +1278,12 @@ fn waiting_until_a_condition_holds_checks_it_right_away_and_then_on_each_interva
 import { Wait } from "mira";
 
 export default function* () {
-  const already = yield* Wait.until(Effect.succeed(true), { interval: "1 hour" });
+  const already = yield* Wait.until(() => Effect.succeed(true), { interval: "1 hour" });
   let checks = 0;
-  const met = yield* Wait.until(Effect.sync(() => ++checks === 3), { interval: "10 millis" });
-  const timedOut = yield* Wait.until(Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
+  const met = yield* Wait.until(function* () {
+    return ++checks === 3;
+  }, { interval: "10 millis" });
+  const timedOut = yield* Wait.until(() => Effect.succeed(false), { interval: "10 millis", timeout: "50 millis" });
   console.log(already, met, checks, timedOut);
 }
 "#,
@@ -1318,7 +1361,7 @@ fn waiting_for_a_packet_subscribes_before_the_trigger_and_returns_the_first_matc
 export default function* () {
   const reply = yield* Wait.forPacket(
     { from: "server", cmd: "loadShop" },
-    { trigger: Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
+    { trigger: () => Packets.sendToServer("%xt%zm%loadShop%1%5%"), timeout: "5 seconds" },
   );
   console.log(JSON.stringify(reply));
 }
@@ -1383,7 +1426,7 @@ export default function* () {
   const str = yield* Wait.forPacket({ from: "server", cmd: "respawnMon" });
   const dropped = yield* Wait.forPacket({ cmd: "ct" });
   const late = yield* Wait.forPacket({ cmd: "ct" }, { timeout: "30 millis" });
-  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: Effect.succeed(false) });
+  const skipped = yield* Wait.forPacket({ cmd: "ct" }, { trigger: () => Effect.succeed(false) });
   console.log(JSON.stringify([client, str, dropped, late, skipped]));
 }
 "#,
@@ -1446,7 +1489,7 @@ export default function* () {
     assert_eq!(
         finished.logs,
         [
-            "A subscription fell behind and dropped what it was holding.",
+            "warn: A subscription fell behind and dropped what it was holding.",
             "ct",
             "ct"
         ]
@@ -1462,8 +1505,8 @@ import { Packets } from "mira";
 
 export default function* () {
   const subscription = yield* Packets.subscribe({ cmd: "ct" });
-  console.log((yield* Effect.timeoutOption(subscription.next, "30 millis"))._tag);
-  console.log((yield* subscription.next).cmd);
+  console.log((yield* Effect.timeoutOption(subscription.next(), "30 millis"))._tag);
+  console.log((yield* subscription.next()).cmd);
 }
 "#,
     )]);
@@ -1510,7 +1553,7 @@ fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
 export default function* () {
   const death = yield* Wait.forEvent(
     { type: "monsterDeath", monMapId: 4 },
-    { trigger: Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
+    { trigger: () => Packets.sendToServer("%xt%zm%aggroMon%1%4%") },
   );
   console.log(JSON.stringify(death));
 }
@@ -3220,7 +3263,7 @@ export default function* () {
     { timeout: "5 seconds" },
   );
   yield* Army.sync("done");
-  yield* taunt.stop;
+  yield* taunt.stop();
   console.log("done");
 }
 "#,
@@ -3536,7 +3579,7 @@ export default function* () {
     },
   });
   yield* Script.sleep("50 millis");
-  yield* rotation.stop;
+  yield* rotation.stop();
   console.log(turns);
 }
 "#,

@@ -1,14 +1,16 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Mira supports macOS only.");
 
-mod account_settings;
 mod accounts;
 mod app_menu;
 mod army;
 mod automation;
 mod beep;
 mod bridge;
+mod characters;
+mod clock;
 mod combat_profiles;
+mod data_file;
 mod domain;
 mod file_panel;
 mod jitter;
@@ -76,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                     settings::init(data.join("settings.json"), settings_changed, cx);
                     shortcuts::apply(cx);
                     cx.on_keyboard_layout_change(settings_changed).detach();
-                    account_settings::init(data.join("account-settings"), cx);
+                    characters::init(data.join("characters"), cx);
                     combat_profiles::init(data.join("combat-profiles.json"), cx);
                     script_inputs::init(data.join("script-inputs.json"), cx);
                     packages::init(installed_packages.clone(), data.join("github-token"), cx);
@@ -107,7 +109,6 @@ fn main() -> anyhow::Result<()> {
                     .detach();
                     app_menu::set_menus(cx);
                     let accounts = data.join("accounts.json");
-                    shared_objects::init(data.join("shared-objects"), &accounts, cx);
                     ruffle_view::init_client(data, accounts.clone(), device.clone(), armies, cx);
                     ruffle_view::open_launch_window(cx);
                     if cx.windows().is_empty() {

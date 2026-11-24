@@ -18,6 +18,7 @@ pub struct ContextMenu {
     items: ItemsBuilder,
     state: Option<Entity<MenuState>>,
     children: Vec<AnyElement>,
+    fill: bool,
 }
 
 impl ContextMenu {
@@ -28,7 +29,13 @@ impl ContextMenu {
             items: Rc::new(|_, _| Vec::new()),
             state: None,
             children: Vec::new(),
+            fill: false,
         }
+    }
+
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
     }
 
     pub fn items(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
@@ -89,6 +96,7 @@ impl RenderOnce for ContextMenu {
                 }
             })
             .relative()
+            .when(self.fill, |area| area.size_full())
             .child(
                 gpui::canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {})
                     .absolute()

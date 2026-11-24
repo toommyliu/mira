@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     accounts::AccountId,
     automation::{auto_relogin, game_settings, settings::Automation},
+    data_file,
     domain::{profiles::same_name, rooms::Rooms},
 };
 
@@ -66,88 +67,94 @@ impl Options {
     }
 }
 
+const SETTINGS: &str = "settings.json";
+
 pub(crate) struct Store {
-    folder: PathBuf,
-    accounts: HashMap<AccountId, AccountSettings>,
+    root: PathBuf,
+    settings: HashMap<AccountId, AccountSettings>,
 }
 
 impl Global for Store {}
 
 impl Store {
-    pub(crate) fn open(folder: PathBuf) -> Self {
-        let entries = match fs::read_dir(&folder) {
+    pub(crate) fn open(root: PathBuf) -> Self {
+        let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(error) => {
                 if error.kind() != io::ErrorKind::NotFound {
-                    tracing::warn!(%error, folder = %folder.display(), "couldn't read account settings");
+                    tracing::warn!(%error, folder = %root.display(), "couldn't read character settings");
                 }
                 return Self {
-                    folder,
-                    accounts: HashMap::new(),
+                    root,
+                    settings: HashMap::new(),
                 };
             }
         };
-        let accounts = entries
+        let settings = entries
             .filter_map(|entry| {
-                let path = entry.ok()?.path();
-                if path.extension()? != "json" {
-                    return None;
-                }
-                let username = path.file_stem()?.to_str()?;
-                Some((AccountId::of(username), load(&path)))
+                let folder = entry.ok()?.path();
+                let path = folder.join(SETTINGS);
+                let name = folder.file_name()?.to_str()?;
+                path.is_file()
+                    .then(|| (AccountId::of(name), data_file::load_json(&path)))
             })
             .collect();
-        Self { folder, accounts }
+        Self { root, settings }
     }
 
-    pub(crate) fn get(&self, account: &AccountId) -> AccountSettings {
-        self.accounts.get(account).cloned().unwrap_or_default()
+    pub(crate) fn get(&self, character: &AccountId) -> AccountSettings {
+        self.settings.get(character).cloned().unwrap_or_default()
     }
 
     pub(crate) fn change(
         &mut self,
-        account: &AccountId,
+        character: &AccountId,
         edit: impl FnOnce(&mut AccountSettings),
     ) -> io::Result<()> {
-        let path = self.path_of(account)?;
-        let settings = self.accounts.entry(account.clone()).or_default();
+        let path = self.folder(character)?.join(SETTINGS);
+        let settings = self.settings.entry(character.clone()).or_default();
         let before = settings.clone();
         edit(settings);
         if *settings == before {
             return Ok(());
         }
-        fs::create_dir_all(&self.folder)?;
-        let temporary = path.with_extension("json.tmp");
-        let mut bytes = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, path)
+        data_file::write_json(&path, settings)
     }
 
     pub(crate) fn rename(&mut self, from: &AccountId, to: &AccountId) -> io::Result<()> {
-        let (old, new) = (self.path_of(from)?, self.path_of(to)?);
-        match fs::rename(old, &new) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => remove_file(&new)?,
-            result => result?,
+        let (old, new) = (self.folder(from)?, self.folder(to)?);
+        if !old.try_exists()? {
+            return Ok(());
         }
-        match self.accounts.remove(from) {
-            Some(settings) => self.accounts.insert(to.clone(), settings),
-            None => self.accounts.remove(to),
-        };
+        remove(&new)?;
+        fs::rename(old, &new)?;
+        if let Some(settings) = self.settings.remove(from) {
+            self.settings.insert(to.clone(), settings);
+        } else {
+            self.settings.remove(to);
+        }
         Ok(())
     }
 
-    pub(crate) fn forget(&mut self, account: &AccountId) -> io::Result<()> {
-        self.accounts.remove(account);
-        let Ok(path) = self.path_of(account) else {
-            return Ok(());
-        };
-        remove_file(&path)
+    pub(crate) fn forget(&mut self, character: &AccountId) -> io::Result<()> {
+        self.settings.remove(character);
+        remove(&self.folder(character)?)
+    }
+
+    pub(crate) fn folder(&self, character: &AccountId) -> io::Result<PathBuf> {
+        let name = character.as_str();
+        if name.is_empty() || name.starts_with('.') || name.contains(['/', '\0']) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name:?} can't name a folder"),
+            ));
+        }
+        Ok(self.root.join(name))
     }
 
     fn move_auto_attack_profile(&mut self, from: &str, to: Option<&str>) -> io::Result<()> {
         let using: Vec<AccountId> = self
-            .accounts
+            .settings
             .iter()
             .filter(|(_, settings)| {
                 settings
@@ -165,36 +172,21 @@ impl Store {
         }
         Ok(())
     }
-
-    fn path_of(&self, account: &AccountId) -> io::Result<PathBuf> {
-        let name = account.as_str();
-        if name.is_empty() || name.contains(['/', '\0']) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{name:?} can't name a settings file"),
-            ));
-        }
-        Ok(self.folder.join(format!("{name}.json")))
-    }
 }
 
-fn remove_file(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
+fn remove(folder: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(folder) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        result => result,
+        removed => removed,
     }
 }
 
-fn load(path: &Path) -> AccountSettings {
-    let loaded = fs::read(path).and_then(|bytes| Ok(serde_json::from_slice(&bytes)?));
-    loaded.unwrap_or_else(|error| {
-        tracing::warn!(%error, path = %path.display(), "couldn't read an account's settings");
-        AccountSettings::default()
-    })
+pub(crate) fn init(root: PathBuf, cx: &mut App) {
+    cx.set_global(Store::open(root));
 }
 
-pub(crate) fn init(folder: PathBuf, cx: &mut App) {
-    cx.set_global(Store::open(folder));
+pub(crate) fn folder(character: &AccountId, cx: &App) -> io::Result<PathBuf> {
+    cx.global::<Store>().folder(character)
 }
 
 pub(crate) fn get(account: &AccountId, cx: &App) -> AccountSettings {
@@ -209,13 +201,13 @@ pub(crate) fn change(account: &AccountId, cx: &mut App, edit: impl FnOnce(&mut A
 
 pub(crate) fn rename(from: &AccountId, to: &AccountId, cx: &mut App) {
     if let Err(error) = cx.global_mut::<Store>().rename(from, to) {
-        tracing::error!(%error, "couldn't move account settings to the new username");
+        tracing::error!(%error, "couldn't move a character's settings and shared objects to the new username");
     }
 }
 
 pub(crate) fn forget(account: &AccountId, cx: &mut App) {
     if let Err(error) = cx.global_mut::<Store>().forget(account) {
-        tracing::error!(%error, "couldn't delete a removed account's settings");
+        tracing::error!(%error, "couldn't delete a removed account's settings and shared objects");
     }
 }
 
@@ -233,10 +225,7 @@ mod tests {
     fn temporary_folder() -> PathBuf {
         let mut random = [0; 8];
         getrandom::getrandom(&mut random).unwrap();
-        std::env::temp_dir().join(format!(
-            "mira-account-settings-{:x}",
-            u64::from_ne_bytes(random)
-        ))
+        std::env::temp_dir().join(format!("mira-characters-{:x}", u64::from_ne_bytes(random)))
     }
 
     fn files(folder: &Path) -> Vec<String> {
@@ -272,11 +261,12 @@ mod tests {
                 settings.options.relogin.delay_seconds = 20;
             })
             .unwrap();
-        assert_eq!(files(&folder), ["alice.json"]);
+        assert_eq!(files(&folder), ["alice"]);
         store
             .change(&bob, |settings| settings.scripts.safe_start_stop = false)
             .unwrap();
-        assert_eq!(files(&folder), ["alice.json", "bob.json"]);
+        assert_eq!(files(&folder), ["alice", "bob"]);
+        assert_eq!(files(&folder.join("alice")), ["settings.json"]);
         let reopened = Store::open(folder.clone());
         let saved = reopened.get(&AccountId::of("ALICE"));
         assert!(saved.scripts.restart_after_reconnect);
@@ -310,20 +300,22 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_file_resets_only_its_account_and_is_kept() {
+    fn a_damaged_file_resets_only_its_account_and_survives_a_save() {
         let folder = temporary_folder();
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(
-            folder.join("alice.json"),
-            r#"{"scripts": {"rooms": {"kind": "private", "room": 1000}}}"#,
-        )
-        .unwrap();
-        fs::write(
-            folder.join("bob.json"),
-            r#"{"scripts": {"safeStartStop": false}, "unknown": 1}"#,
-        )
-        .unwrap();
-        fs::write(folder.join("carol.json"), "{ not json").unwrap();
+        for (name, contents) in [
+            (
+                "alice",
+                r#"{"scripts": {"rooms": {"kind": "private", "room": 1000}}}"#,
+            ),
+            (
+                "bob",
+                r#"{"scripts": {"safeStartStop": false}, "unknown": 1}"#,
+            ),
+            ("carol", "{ not json"),
+        ] {
+            fs::create_dir_all(folder.join(name)).unwrap();
+            fs::write(folder.join(name).join(SETTINGS), contents).unwrap();
+        }
         let store = Store::open(folder.clone());
         assert_eq!(
             store.get(&AccountId::of("alice")),
@@ -334,10 +326,13 @@ mod tests {
             store.get(&AccountId::of("carol")),
             AccountSettings::default()
         );
-        assert_eq!(
-            fs::read_to_string(folder.join("carol.json")).unwrap(),
-            "{ not json"
-        );
+        let mut store = store;
+        store
+            .change(&AccountId::of("carol"), |settings| {
+                settings.scripts.safe_start_stop = false
+            })
+            .unwrap();
+        assert!(data_file::backed_up(&folder.join("carol"), "{ not json"));
         fs::remove_dir_all(folder).unwrap();
     }
 
@@ -355,11 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_follow_a_username_change_and_go_away_with_the_account() {
+    fn a_character_folder_follows_a_username_change_and_goes_away_with_the_account() {
         let folder = temporary_folder();
-        fs::create_dir_all(&folder).unwrap();
+        let shared = folder.join("alice/shared-objects/localhost/AQLite_Data.sol");
+        fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        fs::write(&shared, "alice's own").unwrap();
+        fs::create_dir_all(folder.join("robert")).unwrap();
         fs::write(
-            folder.join("robert.json"),
+            folder.join("robert").join(SETTINGS),
             r#"{"options": {"frameRate": 12}}"#,
         )
         .unwrap();
@@ -376,8 +374,13 @@ mod tests {
         store.rename(&alice, &alicia).unwrap();
         store.rename(&bob, &robert).unwrap();
         assert_eq!(store.get(&alicia).options.frame_rate, Some(30));
-        assert_eq!(store.get(&robert), AccountSettings::default());
-        assert_eq!(files(&folder), ["alicia.json"]);
+        assert_eq!(store.get(&robert).options.frame_rate, Some(12));
+        assert_eq!(files(&folder), ["alicia", "robert"]);
+        assert_eq!(
+            fs::read_to_string(folder.join("alicia/shared-objects/localhost/AQLite_Data.sol"))
+                .unwrap(),
+            "alice's own"
+        );
         assert_eq!(
             Store::open(folder.clone()).get(&alicia).options.frame_rate,
             Some(30)
@@ -385,7 +388,8 @@ mod tests {
         store.forget(&alicia).unwrap();
         store.forget(&alicia).unwrap();
         assert_eq!(store.get(&alicia), AccountSettings::default());
-        assert!(files(&folder).is_empty());
+        assert_eq!(files(&folder), ["robert"]);
+        assert!(store.folder(&AccountId::of("..")).is_err());
         fs::remove_dir_all(folder).unwrap();
     }
 

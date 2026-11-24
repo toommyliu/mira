@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    io::{self, Write as _},
-    os::unix::fs::OpenOptionsExt as _,
-    path::Path,
-};
+use std::{fs, io, path::Path};
 
 pub(crate) fn load(path: &Path) -> io::Result<Option<String>> {
     match fs::read_to_string(path) {
@@ -21,16 +16,7 @@ pub(crate) fn save(path: &Path, token: &str) -> io::Result<()> {
             result => result,
         };
     }
-    let temporary = path.with_extension("tmp");
-    let _ = fs::remove_file(&temporary);
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(token.as_bytes())?;
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    crate::data_file::write_secret(path, token.as_bytes())
 }
 
 #[cfg(test)]
