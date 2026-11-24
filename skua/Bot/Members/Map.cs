@@ -4,8 +4,10 @@ using Skua.Core.Models.Players;
 
 namespace Mira.Skua.Bot.Members;
 
-public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption options, Func<IScriptPlayer> player, Func<IScriptWait> wait) : IScriptMap
+public sealed class Map(Game game, Paths paths, IFlashUtil flash, Func<IScriptInterface> bot) : IScriptMap
 {
+    private IScriptOption Options => bot().Options;
+
     public string LastMap { get; set; } = string.Empty;
     public bool Loading => paths.Get("world.mapLoadInProgress", false);
     public string FilePath { get; set; } = string.Empty;
@@ -20,15 +22,15 @@ public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption 
     public List<string> Cells => flash.SelectArrayObjects<string>("world.map.currentScene.labels", "name");
     public List<string>? PlayerNames => paths.Get<List<string>>("world.areaUsers", []);
     public List<PlayerInfo>? Players => paths.Get<Dictionary<string, PlayerInfo>?>("world.uoTree", null)?.Values.ToList();
-    public List<PlayerInfo>? CellPlayers => Players?.FindAll(other => other.Cell == player().Cell);
+    public List<PlayerInfo>? CellPlayers => Players?.FindAll(other => other.Cell == bot().Player.Cell);
 
     public void Reload() => paths.Call("world.reloadCurrentMap");
 
     public void Join(string map, string cell = "Enter", string pad = "Spawn", bool ignoreCheck = false, bool autoCorrect = true)
     {
         LastMap = Name;
-        if ((options.PrivateRooms && !map.Contains('-')) || map.Contains("-1e9"))
-            map = $"{map.Split('-')[0]}-{(options.PrivateNumber > 0 ? options.PrivateNumber : 100000)}";
+        if ((Options.PrivateRooms && !map.Contains('-')) || map.Contains("-1e9"))
+            map = $"{map.Split('-')[0]}-{(Options.PrivateNumber > 0 ? Options.PrivateNumber : 100000)}";
         game.Request("player", "joinMap", new { map, cell, pad, rooms = new { kind = "public" } });
     }
 
@@ -37,10 +39,14 @@ public sealed class Map(Game game, Paths paths, IFlashUtil flash, IScriptOption 
     public void Jump(string cell, string pad, bool autoCorrect = true, bool clientOnly = false)
     {
         flash.Call("jumpCorrectRoom", cell, pad, autoCorrect, clientOnly);
-        wait().ForCellChange(cell);
+        bot().Wait.ForCellChange(cell);
     }
 
-    public void GetMapItem(int id) => game.Request("world", "mapItem", new { itemId = id });
+    public void GetMapItem(int id)
+    {
+        bot().Sleep(Options.ActionDelay);
+        game.Request("world", "mapItem", new { itemId = id });
+    }
 
     public PlayerInfo? GetPlayer(string username) =>
         Players?.Find(other => string.Equals(other.Name, username, StringComparison.OrdinalIgnoreCase));

@@ -56,6 +56,20 @@ public class BotTests
     }
 
     [Fact]
+    public void A_map_item_waits_the_action_delay_before_it_is_sent()
+    {
+        var clock = new System.Diagnostics.Stopwatch();
+        TimeSpan? sent = null;
+        var bot = new Offline((key, _) => key == "world.mapItem" && (sent = clock.Elapsed) is { } ? true : null).Bot();
+        bot.Options.ActionDelay = 200;
+
+        clock.Start();
+        bot.Map.GetMapItem(14397);
+
+        Assert.True(sent >= TimeSpan.FromMilliseconds(200), $"sent after {sent?.TotalMilliseconds} ms");
+    }
+
+    [Fact]
     public void Drop_options_decide_what_mira_accepts_and_rejects()
     {
         var config = new JsonObject
