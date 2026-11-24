@@ -356,6 +356,7 @@ const PAGES: [Page; 3] = [Page::Library(None), Page::Queue, Page::Log];
 #[derive(Clone)]
 enum SourceState {
     Problem(SharedString),
+    UpToDate,
     UpdateAvailable,
     UpdateFailed(SharedString),
 }
@@ -364,6 +365,7 @@ impl SourceState {
     fn description(&self) -> SharedString {
         match self {
             SourceState::Problem(text) | SourceState::UpdateFailed(text) => text.clone(),
+            SourceState::UpToDate => "Up to date".into(),
             SourceState::UpdateAvailable => "Update available".into(),
         }
     }
@@ -448,7 +450,7 @@ fn source_mark(theme: &Theme, state: &SourceState) -> Option<impl IntoElement> {
     let (glyph, label, tone) = match state {
         SourceState::Problem(_) => (Icon::CircleAlert, "Problem", Tone::Danger),
         SourceState::UpdateFailed(_) => (Icon::TriangleAlert, "Update problem", Tone::Warning),
-        SourceState::UpdateAvailable => return None,
+        SourceState::UpToDate | SourceState::UpdateAvailable => return None,
     };
     Some(
         div()
@@ -1042,6 +1044,7 @@ impl ScriptsWindow {
             };
             let state = match (&source.problem, status) {
                 (Some(problem), _) => Some(SourceState::Problem(problem.clone())),
+                (None, Some(Status::Current)) => Some(SourceState::UpToDate),
                 (None, Some(Status::Available(_))) => Some(SourceState::UpdateAvailable),
                 (None, Some(Status::Failed(message))) => {
                     Some(SourceState::UpdateFailed(message.clone().into()))
@@ -1089,17 +1092,27 @@ impl ScriptsWindow {
             .library
             .as_ref()
             .and_then(|library| library.sources.iter().find(|source| source.root == root));
+        let readable = source.is_none_or(|source| {
+            source.problem.is_none() || matches!(source.kind, SourceKind::Package { .. })
+        });
+        let mut items = Vec::new();
+        if readable {
+            let (this, root) = (this.clone(), root.to_owned());
+            items.push(MenuItem::action("Show in Finder", move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.show_folder(&root, cx));
+            }));
+        }
         let Some(source) = source else {
-            return Vec::new();
+            return items;
         };
         let SourceKind::Package { origin, .. } = &source.kind else {
             let this = this.clone();
             let root = root.to_owned();
-            return vec![MenuItem::action("Remove from library", move |_, cx| {
+            items.push(MenuItem::action("Remove from library", move |_, cx| {
                 let _ = this.update(cx, |this, cx| this.remove_folder(&root, cx));
-            })];
+            }));
+            return items;
         };
-        let mut items = Vec::new();
         if let Some(origin) = origin {
             let url = origin.url.clone();
             items.push(MenuItem::action("Open on GitHub", move |_, cx| {
@@ -1161,16 +1174,43 @@ impl ScriptsWindow {
             .collect()
     }
 
-    fn review_updates(&self, cx: &App) -> Option<HoverCard> {
-        let pending = self.pending_updates(cx);
-        if pending.is_empty() {
-            return None;
-        }
+    fn package_updates(&self, cx: &App) -> Option<AnyElement> {
         let state = packages::packages(cx).read(cx);
         let working = matches!(
             state.activity(),
             Some(packages::Activity::Checking | packages::Activity::Updating(_))
         );
+        let pending = self.pending_updates(cx);
+        if pending.is_empty() {
+            let checkable = self
+                .library
+                .iter()
+                .flat_map(|library| &library.sources)
+                .any(|source| {
+                    matches!(
+                        source.kind,
+                        SourceKind::Package {
+                            origin: Some(_),
+                            ..
+                        }
+                    )
+                });
+            return checkable.then(|| {
+                Button::icon(
+                    "check-package-updates",
+                    Icon::RefreshCw,
+                    "Check for updates",
+                )
+                .size(Size::Small)
+                .busy(working)
+                .disabled(state.activity().is_some())
+                .on_click(|_, _, cx| {
+                    packages::packages(cx)
+                        .update(cx, |packages, cx| packages.check_when_idle(false, cx))
+                })
+                .into_any_element()
+            });
+        }
         let title = match pending.len() {
             1 => SharedString::from("1 update available"),
             count => format!("{count} updates available").into(),
@@ -1199,7 +1239,8 @@ impl ScriptsWindow {
                             dialogs.review_updates(pending.clone(), cx)
                         })
                     }),
-            ),
+            )
+            .into_any_element(),
         )
     }
 
@@ -1318,7 +1359,7 @@ impl ScriptsWindow {
             .child(
                 h_flex()
                     .gap(layout.space(1.0))
-                    .children(self.review_updates(cx))
+                    .children(self.package_updates(cx))
                     .child(
                         Button::icon("install-package", Icon::Plus, "Install package")
                             .size(Size::Small)
@@ -1377,7 +1418,6 @@ impl ScriptsWindow {
             return None;
         };
         let (folders, installed) = self.source_rows(cx);
-        let package = installed.iter().any(|row| row.root == root);
         let row = folders
             .into_iter()
             .chain(installed)
@@ -1386,52 +1426,52 @@ impl ScriptsWindow {
         let dir = dir_name(&row.root);
         let updating = matches!(state.activity(), Some(packages::Activity::Updating(updating)) if *updating == dir);
         let busy = state.activity().is_some();
-        let update = matches!(
-            row.state,
-            Some(SourceState::UpdateAvailable | SourceState::UpdateFailed(_))
-        )
-        .then(|| {
-            let dialogs = self.package_dialogs.clone();
-            let name = row.name.clone();
-            Button::new("source-update", "Update")
-                .size(Size::Small)
-                .busy(updating)
-                .disabled(busy)
-                .on_click(move |_, _, cx| {
-                    dialogs.update(cx, |dialogs, cx| {
-                        dialogs.update(dir.clone(), name.clone(), false, cx)
-                    })
-                })
-        });
-        let readable = package || !matches!(row.state, Some(SourceState::Problem(_)));
-        let show = readable.then(|| {
-            let root = row.root.clone();
-            Button::new("source-show", "Show in Finder")
-                .variant(Variant::Ghost)
-                .size(Size::Small)
-                .on_click(cx.listener(move |this, _, _, cx| this.show_folder(&root, cx)))
-        });
+        let status = match &row.state {
+            Some(SourceState::UpdateAvailable | SourceState::UpdateFailed(_)) => {
+                let dialogs = self.package_dialogs.clone();
+                let name = row.name.clone();
+                Some(
+                    Button::new("source-update", "Update")
+                        .size(Size::Small)
+                        .busy(updating)
+                        .disabled(busy)
+                        .on_click(move |_, _, cx| {
+                            dialogs.update(cx, |dialogs, cx| {
+                                dialogs.update(dir.clone(), name.clone(), false, cx)
+                            })
+                        })
+                        .into_any_element(),
+                )
+            }
+            Some(SourceState::UpToDate) => Some(
+                div()
+                    .flex_none()
+                    .text_caption(typography)
+                    .text_color(theme.muted_foreground)
+                    .child("Up to date")
+                    .into_any_element(),
+            ),
+            _ => None,
+        };
         let this = cx.weak_entity();
         let menu_root = row.root.clone();
-        let menu = (row.root != self.folder).then(|| {
-            DropdownMenu::new("source-actions")
-                .trigger(
-                    Button::icon(
-                        "source-actions-trigger",
-                        Icon::Ellipsis,
-                        format!("More {} actions", row.name),
-                    )
-                    .variant(Variant::Ghost)
-                    .size(Size::Small)
-                    .hide_tooltip(),
+        let menu = DropdownMenu::new("source-actions")
+            .trigger(
+                Button::icon(
+                    "source-actions-trigger",
+                    Icon::Ellipsis,
+                    format!("More {} actions", row.name),
                 )
-                .align(Align::End)
-                .items(move |_, cx| {
-                    this.upgrade()
-                        .map(|scripts| scripts.read(cx).source_actions(&menu_root, &this, cx))
-                        .unwrap_or_default()
-                })
-        });
+                .variant(Variant::Ghost)
+                .size(Size::Small)
+                .hide_tooltip(),
+            )
+            .align(Align::End)
+            .items(move |_, cx| {
+                this.upgrade()
+                    .map(|scripts| scripts.read(cx).source_actions(&menu_root, &this, cx))
+                    .unwrap_or_default()
+            });
         let facts = match &row.release {
             Some((label, value)) => h_flex().child(format!("{label} {value}")),
             None => h_flex()
@@ -1453,14 +1493,13 @@ impl ScriptsWindow {
         Some(
             v_flex()
                 .flex_none()
-                .gap(px(2.0))
                 .pl(layout.space(5.0))
                 .pr(layout.space(3.0))
                 .pt(layout.space(3.0))
                 .pb(layout.space(1.0))
                 .child(
                     h_flex()
-                        .min_h(layout.control_sm)
+                        .h(typography.body_line)
                         .gap(layout.space(2.0))
                         .child(
                             div()
@@ -1473,9 +1512,8 @@ impl ScriptsWindow {
                                 .text_title(typography)
                                 .child(row.name.clone()),
                         )
-                        .children(update)
-                        .children(show)
-                        .children(menu),
+                        .children(status)
+                        .child(menu),
                 )
                 .child(
                     v_flex()
@@ -3222,6 +3260,7 @@ mod tests {
         let receipt = format!(
             r#"{{"repository":1,"owner":"toommyliu","repo":"mira","path":"script-packages/dailies","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
         );
+        let farming = receipt.replace("script-packages/dailies", "script-packages/farming");
         for (file, contents) in [
             ("scripts/hunt.ts", ""),
             ("scripts/bosses/dage.ts", ""),
@@ -3240,6 +3279,7 @@ mod tests {
                 "packages/farming/package.json",
                 r#"{"name":"Farming","version":"1.2.0","description":"Gold, XP and class point farms.","mira":{}}"#,
             ),
+            ("packages/farming/.mira-install.json", farming.as_str()),
             ("packages/farming/scripts/hunt.ts", ""),
             ("packages/farming/scripts/merge/yulgar.ts", ""),
             (
@@ -3266,7 +3306,8 @@ mod tests {
                         crate::packages::Sha::parse(&("9a8b7c6".to_owned() + &"0".repeat(33)))
                             .unwrap(),
                     ),
-                )
+                );
+                packages.mark("farming", Status::Current);
             });
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             crate::shortcuts::apply(cx);
@@ -3295,7 +3336,18 @@ mod tests {
                 });
             })
         };
-        let shots: [(&str, Interaction); 10] = [
+        let all_current = || -> Interaction {
+            let pick = select(temp.join("packages/farming"));
+            Box::new(move |cx, window| {
+                cx.update(|cx| {
+                    crate::packages::packages(cx).update(cx, |packages, _| {
+                        packages.mark("toommyliu-mira-dailies", Status::Current)
+                    })
+                });
+                pick(cx, window);
+            })
+        };
+        let shots: [(&str, Interaction); 11] = [
             (
                 "scripts-sources-collapsed",
                 Box::new(|cx, window| {
@@ -3386,16 +3438,27 @@ mod tests {
                 "scripts-source-problem",
                 select(temp.join("packages/future")),
             ),
-            (
-                "scripts-source-package",
-                select(temp.join("packages/farming")),
-            ),
+            ("scripts-source-package", all_current()),
             (
                 "scripts-source-update",
                 select(temp.join("packages/toommyliu-mira-dailies")),
             ),
             ("scripts-source-folder", select(temp.join("community"))),
             ("scripts-source-default", select(temp.join("scripts"))),
+            (
+                "scripts-source-default-actions",
+                Box::new({
+                    let pick = select(temp.join("scripts"));
+                    let open = pointer(
+                        gpui::point(px(WIDTH - 24.0), px(62.0)),
+                        Some(gpui::MouseButton::Left),
+                    );
+                    move |cx, window| {
+                        pick(cx, window);
+                        open(cx, window);
+                    }
+                }),
+            ),
             (
                 "scripts-updates-card",
                 Box::new(pointer(gpui::point(px(159.0), px(341.0)), None)),
@@ -3407,8 +3470,9 @@ mod tests {
             }
         }
         let smallest = gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT));
-        let shots: [(&str, Interaction); 2] = [
+        let shots: [(&str, Interaction); 3] = [
             ("scripts-sources-min", Box::new(|_, _| {})),
+            ("scripts-source-package-min", all_current()),
             (
                 "scripts-source-update-min",
                 select(temp.join("packages/toommyliu-mira-dailies")),

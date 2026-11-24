@@ -1064,7 +1064,7 @@ impl SettingsWindow {
             Block::Section(
                 Section::titled("Updates").row(Row::new(
                     "Check automatically",
-                    Some("Look for new versions at launch and every 4 hours."),
+                    Some("Look for Mira and package updates at launch and every 4 hours."),
                     Switch::new(
                         "check-updates-automatically",
                         "Check automatically",
