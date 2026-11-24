@@ -9,34 +9,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     accounts::AccountId,
-    automation::{auto_relogin, game_settings, settings::Automation},
+    automation::{auto_relogin, game_settings, scripts, settings::Automation},
     data_file,
-    domain::{profiles::same_name, rooms::Rooms},
+    domain::profiles::same_name,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AccountSettings {
-    pub(crate) scripts: Scripts,
+    pub(crate) scripts: scripts::Settings,
     pub(crate) options: Options,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub(crate) struct Scripts {
-    pub(crate) safe_start_stop: bool,
-    pub(crate) restart_after_reconnect: bool,
-    pub(crate) rooms: Rooms,
-}
-
-impl Default for Scripts {
-    fn default() -> Self {
-        Self {
-            safe_start_stop: true,
-            restart_after_reconnect: false,
-            rooms: Rooms::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,7 +202,10 @@ pub(crate) fn move_auto_attack_profile(from: &str, to: Option<&str>, cx: &mut Ap
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{automation::game_settings::RenderingMode, domain::rooms::PrivateRoom};
+    use crate::{
+        automation::game_settings::RenderingMode,
+        domain::rooms::{PrivateRoom, Rooms},
+    };
 
     fn temporary_folder() -> PathBuf {
         let mut random = [0; 8];
@@ -243,7 +228,7 @@ mod tests {
         let mut store = Store::open(folder.clone());
         let alice = AccountId::of("Alice");
         let bob = AccountId::of("bob");
-        assert_eq!(store.get(&alice).scripts, Scripts::default());
+        assert_eq!(store.get(&alice).scripts, scripts::Settings::default());
         assert!(store.get(&alice).scripts.safe_start_stop);
         assert_eq!(
             store.get(&alice).scripts.rooms,

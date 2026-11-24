@@ -2,7 +2,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 
 use super::calls::Reply;
-use crate::automation::{auto_relogin, game_settings::RenderingMode, settings::Automation};
+use crate::{
+    automation::{auto_relogin, game_settings::RenderingMode, settings::Automation},
+    domain::rooms::Rooms,
+};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(
@@ -55,6 +58,22 @@ pub(crate) enum ReloginRequest {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(
+    tag = "op",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum ScriptOptionsRequest {
+    Get,
+    Update {
+        safe_start_stop: Option<bool>,
+        restart_after_reconnect: Option<bool>,
+        rooms: Option<Rooms>,
+    },
+}
+
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
@@ -81,6 +100,28 @@ pub(super) fn serve_relogin(automation: &Automation, request: ReloginRequest) ->
         }),
     };
     Ok(relogin(&settings))
+}
+
+pub(super) fn serve_script_options(
+    automation: &Automation,
+    request: ScriptOptionsRequest,
+) -> Reply {
+    let options = match request {
+        ScriptOptionsRequest::Get => automation.scripts(),
+        ScriptOptionsRequest::Update {
+            safe_start_stop,
+            restart_after_reconnect,
+            rooms,
+        } => automation.update_scripts(|options| {
+            apply(&mut options.safe_start_stop, safe_start_stop);
+            apply(
+                &mut options.restart_after_reconnect,
+                restart_after_reconnect,
+            );
+            apply(&mut options.rooms, rooms);
+        }),
+    };
+    Ok(json!(options))
 }
 
 pub(super) fn serve_settings(automation: &Automation, request: SettingsRequest) -> Reply {
@@ -240,6 +281,44 @@ mod tests {
             json!(null)
         );
         assert!(automation.game_settings().hide_players);
+    }
+
+    #[test]
+    fn a_script_options_update_changes_only_the_fields_it_names() {
+        let automation = Automation::default();
+        let update = serde_json::from_value(json!({
+            "op": "update",
+            "safeStartStop": false,
+            "rooms": { "kind": "private", "room": 4242 },
+        }))
+        .unwrap();
+        assert_eq!(
+            serve_script_options(&automation, update),
+            Ok(json!({
+                "safeStartStop": false,
+                "restartAfterReconnect": false,
+                "rooms": { "kind": "private", "room": 4242 },
+            }))
+        );
+        let public =
+            serde_json::from_value(json!({ "op": "update", "rooms": { "kind": "public" } }))
+                .unwrap();
+        serve_script_options(&automation, public).unwrap();
+        assert_eq!(automation.scripts().rooms, Rooms::Public);
+        assert!(!automation.scripts().safe_start_stop);
+    }
+
+    #[test]
+    fn a_room_outside_the_private_range_is_rejected() {
+        for room in [1000, 100_000] {
+            assert!(
+                serde_json::from_value::<ScriptOptionsRequest>(json!({
+                    "op": "update",
+                    "rooms": { "kind": "private", "room": room },
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]

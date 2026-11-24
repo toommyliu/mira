@@ -8,6 +8,7 @@ pub(crate) mod drops;
 pub(crate) mod game_settings;
 pub(crate) mod packets;
 pub(crate) mod quests;
+pub(crate) mod scripts;
 pub(crate) mod settings;
 pub(crate) mod sign_in;
 pub(crate) mod spammer;

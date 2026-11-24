@@ -26,6 +26,9 @@ const auth = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const autoRelogin = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "autoRelogin", op, ...args });
 
+const scriptOptions = <A>(op: string, args: object = {}): Effect.Effect<A> =>
+  call<A>({ domain: "scriptOptions", op, ...args });
+
 const player = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "player", op, ...args });
 
@@ -820,7 +823,33 @@ export type PromptOptions = DialogOptions & {
   readonly placeholder?: string;
 };
 
+/** Scripts join private rooms instead of public ones when `kind` is `"private"`. */
+export type Rooms =
+  | { readonly kind: "public" }
+  | {
+      readonly kind: "private";
+      /** 1,001 to 99,999. `null` for a random room on each join. */
+      readonly room: number | null;
+    };
+
+/**
+ * The options in the Scripts window for this tab. A script's changes are saved to the account
+ * only once an option is changed in the window, and are dropped when another account logs in.
+ */
+export type ScriptOptions = {
+  /** Best effort attempt to start or stop the script at your house. */
+  readonly safeStartStop: boolean;
+  /** Restart the script when the same account reconnects. */
+  readonly restartAfterReconnect: boolean;
+  readonly rooms: Rooms;
+};
+
 export const Script = {
+  options: {
+    get: () => scriptOptions<ScriptOptions>("get"),
+    /** Changes only the given fields and returns the options as stored. */
+    update: (patch: Partial<ScriptOptions>) => scriptOptions<ScriptOptions>("update", patch),
+  },
   /** Waits until the user dismisses it. Interrupting the effect closes the dialog. */
   alert: (message: string, { title }: DialogOptions = {}) =>
     ask<null>({ op: "alert", message, title }).pipe(Effect.asVoid),

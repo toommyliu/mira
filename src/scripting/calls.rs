@@ -35,6 +35,7 @@ pub(crate) enum Request {
     Auth(auth::Request),
     AutoRelogin(automation::ReloginRequest),
     Settings(automation::SettingsRequest),
+    ScriptOptions(automation::ScriptOptionsRequest),
     QuestRegistry(environment::QuestRequest),
     DropRegistry(environment::DropRequest),
     BoostRegistry(environment::BoostRequest),
@@ -206,6 +207,7 @@ async fn serve(
         Request::Auth(request) => auth::serve(bridge, logins, request).await,
         Request::AutoRelogin(request) => automation::serve_relogin(automation, request),
         Request::Settings(request) => automation::serve_settings(automation, request),
+        Request::ScriptOptions(request) => automation::serve_script_options(automation, request),
         Request::QuestRegistry(request) => environment::serve_quests(automation, request),
         Request::DropRegistry(request) => environment::serve_drops(automation, request),
         Request::BoostRegistry(request) => environment::serve_boosts(automation, request),
@@ -222,7 +224,7 @@ async fn serve(
             player::serve(
                 bridge,
                 |wants| bridge.subscribe(wants),
-                automation.rooms(),
+                automation.scripts().rooms,
                 request,
             )
             .await

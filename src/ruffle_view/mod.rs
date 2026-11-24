@@ -41,7 +41,10 @@ use std::{
 
 use crate::{
     accounts::AccountId,
-    automation::{auto_attack, auto_relogin, game_settings, settings::Automation},
+    automation::{
+        auto_attack, auto_relogin, game_settings, scripts::Settings as ScriptOptions,
+        settings::Automation,
+    },
     characters::{self, Options},
     ruffle::{
         Msg, Output, Runtime,
@@ -202,6 +205,7 @@ impl RuffleView {
         let quest_changes = automation.watch_quests();
         let drop_changes = automation.watch_drops();
         let boost_changes = automation.watch_boosts();
+        let mut script_option_changes = automation.watch_scripts();
         Ok(cx.new(|cx| {
             notify_on_change(quest_changes, cx);
             notify_on_change(drop_changes, cx);
@@ -209,6 +213,17 @@ impl RuffleView {
             notify_on_change(relogin_changes, cx);
             notify_on_change(game_changes, cx);
             notify_on_change(frame_rate_changes, cx);
+            cx.spawn(async move |this, cx| {
+                while script_option_changes.changed().await.is_ok() {
+                    if this
+                        .update(cx, |this: &mut Self, cx| this.changed(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
             cx.spawn(async move |this, cx| {
                 while stats.changed().await.is_ok() {
                     let report = *stats.borrow_and_update();
@@ -534,7 +549,8 @@ impl RuffleView {
         }
         let settings = characters::get(&account, cx);
         settings.options.apply_to(&self.automation);
-        self.automation.set_rooms(settings.scripts.rooms);
+        self.automation
+            .update_scripts(|scripts| *scripts = settings.scripts);
         self.settings_account = Some(account);
         cx.notify();
     }
@@ -547,13 +563,19 @@ impl RuffleView {
 
     pub(super) fn change_script_options(
         &self,
-        edit: impl FnOnce(&mut characters::Scripts),
+        edit: impl FnOnce(&mut ScriptOptions),
         cx: &mut App,
     ) {
         if let Some(account) = &self.settings_account {
-            characters::change(account, cx, |settings| edit(&mut settings.scripts));
-            self.automation
-                .set_rooms(characters::get(account, cx).scripts.rooms);
+            let mut changed = false;
+            let options = self.automation.update_scripts(|options| {
+                let before = *options;
+                edit(options);
+                changed = *options != before;
+            });
+            if changed {
+                characters::change(account, cx, |settings| settings.scripts = options);
+            }
         }
     }
 
