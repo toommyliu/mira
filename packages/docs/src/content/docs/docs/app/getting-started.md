@@ -17,7 +17,7 @@ Mira can update itself after the first launch. Your Mira files live in `~/Mira`.
 
 Instead of one window per client, Mira puts every client in a tab, and most tool windows follow the selected tab.
 
-- **Scripts**: Browse scripts and packages, and run scripts. See [writing scripts](/docs/scripting/writing/).
+- **Scripts**: Browse scripts and packages, and run scripts. See [writing scripts](/docs/scripting/writing-scripts/basics/).
 - **Manager**: Save accounts and setups.
 - **Combat profiles**: Save [skill rotations](/docs/app/combat-profiles/).
 - **Environment**: Set up drop pickup, quest turn-ins, and boosts for a tab.

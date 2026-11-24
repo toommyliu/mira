@@ -1,5 +1,5 @@
 ---
-title: Writing scripts
+title: Basics
 order: 1
 ---
 
@@ -42,3 +42,4 @@ The **Log** page in **Scripts** shows what scripts on the selected tab print wit
 - Look up calls in the [scripting API reference](/reference/).
 - Define [script inputs](/docs/scripting/inputs/) to pass values into a script from **Scripts**.
 - Share scripts and the code they have in common as [script packages](/docs/scripting/packages/).
+- Read [Advanced](/docs/scripting/writing-scripts/advanced/) for cleanup, missing APIs, and limits.
