@@ -91,10 +91,12 @@ public sealed class Quests(Game game, Paths paths, Func<IScriptInterface> bot) :
     public Quest? EnsureLoad(int id)
     {
         game.Request("quests", "load", new { questId = id });
-        return Tree.Find(quest => quest.ID == id);
+        return Loaded(id);
     }
 
-    public bool TryGetQuest(int id, out Quest? quest) => (quest = Tree.Find(entry => entry.ID == id)) is not null;
+    public bool TryGetQuest(int id, out Quest? quest) => (quest = Loaded(id)) is not null;
+
+    private Quest? Loaded(int id) => paths.Get<Quest?>($"world.questTree.{id}", null);
 
     public bool Accept(int id) => game.Request("quests", "accept", new { questId = id })?.GetValue<bool>() == true || IsInProgress(id);
 

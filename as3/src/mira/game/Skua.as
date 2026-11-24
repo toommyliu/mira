@@ -337,5 +337,37 @@ public class Skua
     {
       return skua.api.Auras.rebuildmonTree(monID);
     }
+
+    [BridgeExport]
+    public static function findItemsByName(path:String, name:String):String
+    {
+      return findItems(path, function(item:Object):Boolean
+      {
+        return String(item.sName).indexOf(name) >= 0;
+      });
+    }
+
+    [BridgeExport]
+    public static function findItemsById(path:String, itemId:int):String
+    {
+      return findItems(path, function(item:Object):Boolean
+      {
+        return int(item.ItemID) == itemId;
+      });
+    }
+
+    [BridgeIgnore]
+    public static function findItems(path:String, matches:Function):String
+    {
+      var found:Array = [];
+      for each (var item:Object in Main.resolvePath(game, path.split("."), true) as Array)
+      {
+        if (matches(item))
+        {
+          found.push(item);
+        }
+      }
+      return JSON.stringify(found);
+    }
   }
 }

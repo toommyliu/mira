@@ -175,6 +175,8 @@ package mira.generated
       external.externalize("skua.connectToServer", Skua.connectToServer);
       external.externalize("skua.disableDeathAd", Skua.disableDeathAd);
       external.externalize("skua.disableFX", Skua.disableFX);
+      external.externalize("skua.findItemsById", Skua.findItemsById);
+      external.externalize("skua.findItemsByName", Skua.findItemsByName);
       external.externalize("skua.gender", Skua.gender);
       external.externalize("skua.GetAuraRuleStacks", Skua.GetAuraRuleStacks);
       external.externalize("skua.GetAuraSnapshots", Skua.GetAuraSnapshots);
