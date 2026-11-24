@@ -4003,7 +4003,7 @@ mod tests {
                 Kind::Boolean { default: false },
             ),
         ]);
-        let size = gpui::size(px(360.0), px(320.0));
+        let size = gpui::size(px(372.0), px(320.0));
         let unread: SharedString = "Object reference not set to an instance of an object. (at CoreBots.CheckInventory(String item, Int32 quant, Boolean toInv) in CoreBots.cs:line 938)".into();
         let scenes = [
             ("scripts-skua-inputs", Some(definition), None),
