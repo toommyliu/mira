@@ -356,6 +356,7 @@ const PAGES: [Page; 3] = [Page::Library(None), Page::Queue, Page::Log];
 #[derive(Clone)]
 enum SourceState {
     Problem(SharedString),
+    UpToDate,
     UpdateAvailable,
     UpdateFailed(SharedString),
 }
@@ -364,6 +365,7 @@ impl SourceState {
     fn description(&self) -> SharedString {
         match self {
             SourceState::Problem(text) | SourceState::UpdateFailed(text) => text.clone(),
+            SourceState::UpToDate => "Up to date".into(),
             SourceState::UpdateAvailable => "Update available".into(),
         }
     }
@@ -448,7 +450,7 @@ fn source_mark(theme: &Theme, state: &SourceState) -> Option<impl IntoElement> {
     let (glyph, label, tone) = match state {
         SourceState::Problem(_) => (Icon::CircleAlert, "Problem", Tone::Danger),
         SourceState::UpdateFailed(_) => (Icon::TriangleAlert, "Update problem", Tone::Warning),
-        SourceState::UpdateAvailable => return None,
+        SourceState::UpToDate | SourceState::UpdateAvailable => return None,
     };
     Some(
         div()
@@ -1042,6 +1044,7 @@ impl ScriptsWindow {
             };
             let state = match (&source.problem, status) {
                 (Some(problem), _) => Some(SourceState::Problem(problem.clone())),
+                (None, Some(Status::Current)) => Some(SourceState::UpToDate),
                 (None, Some(Status::Available(_))) => Some(SourceState::UpdateAvailable),
                 (None, Some(Status::Failed(message))) => {
                     Some(SourceState::UpdateFailed(message.clone().into()))
@@ -1099,8 +1102,16 @@ impl ScriptsWindow {
                 let _ = this.update(cx, |this, cx| this.remove_folder(&root, cx));
             })];
         };
+        let busy = packages::packages(cx).read(cx).activity().is_some();
         let mut items = Vec::new();
         if let Some(origin) = origin {
+            items.push(
+                MenuItem::action("Check for updates", |_, cx| {
+                    packages::packages(cx)
+                        .update(cx, |packages, cx| packages.check_when_idle(false, cx));
+                })
+                .disabled(busy),
+            );
             let url = origin.url.clone();
             items.push(MenuItem::action("Open on GitHub", move |_, cx| {
                 cx.open_url(&url);
@@ -1114,7 +1125,7 @@ impl ScriptsWindow {
                     dialogs.open_uninstall(dir.clone(), name.clone(), cx)
                 });
             })
-            .disabled(packages::packages(cx).read(cx).activity().is_some()),
+            .disabled(busy),
         );
         items
     }
@@ -1432,8 +1443,30 @@ impl ScriptsWindow {
                         .unwrap_or_default()
                 })
         });
+        let from_github = self.library.as_ref().is_some_and(|library| {
+            library.sources.iter().any(|source| {
+                source.root == row.root
+                    && matches!(
+                        source.kind,
+                        SourceKind::Package {
+                            origin: Some(_),
+                            ..
+                        }
+                    )
+            })
+        });
+        let freshness = if from_github && state.activity() == Some(&packages::Activity::Checking) {
+            Some("Checking for updates…")
+        } else if matches!(row.state, Some(SourceState::UpToDate)) {
+            Some("Up to date")
+        } else {
+            None
+        };
         let facts = match &row.release {
-            Some((label, value)) => h_flex().child(format!("{label} {value}")),
+            Some((label, value)) => h_flex().child(match freshness {
+                Some(freshness) => format!("{label} {value} · {freshness}"),
+                None => format!("{label} {value}"),
+            }),
             None => h_flex()
                 .when(row.root == self.folder, |facts| {
                     facts.child(div().flex_none().child("Default folder · "))
@@ -3222,6 +3255,7 @@ mod tests {
         let receipt = format!(
             r#"{{"repository":1,"owner":"toommyliu","repo":"mira","path":"script-packages/dailies","branch":"main","commit":"{commit}","tree":"{commit}","files":{{}}}}"#
         );
+        let farming = receipt.replace("script-packages/dailies", "script-packages/farming");
         for (file, contents) in [
             ("scripts/hunt.ts", ""),
             ("scripts/bosses/dage.ts", ""),
@@ -3240,6 +3274,7 @@ mod tests {
                 "packages/farming/package.json",
                 r#"{"name":"Farming","version":"1.2.0","description":"Gold, XP and class point farms.","mira":{}}"#,
             ),
+            ("packages/farming/.mira-install.json", farming.as_str()),
             ("packages/farming/scripts/hunt.ts", ""),
             ("packages/farming/scripts/merge/yulgar.ts", ""),
             (
@@ -3266,7 +3301,8 @@ mod tests {
                         crate::packages::Sha::parse(&("9a8b7c6".to_owned() + &"0".repeat(33)))
                             .unwrap(),
                     ),
-                )
+                );
+                packages.mark("farming", Status::Current);
             });
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             crate::shortcuts::apply(cx);

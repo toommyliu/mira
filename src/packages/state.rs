@@ -28,6 +28,7 @@ pub(crate) enum Activity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
+    Current,
     Available(Sha),
     Failed(String),
 }
@@ -207,7 +208,7 @@ impl Packages {
                             this.status.insert(dir, Status::Available(head.commit));
                         }
                         Ok(None) => {
-                            this.status.remove(&dir);
+                            this.status.insert(dir, Status::Current);
                         }
                         Err(message) if quiet => {
                             tracing::info!(%dir, error = %message, "couldn't check a package for updates");
@@ -253,17 +254,16 @@ impl Packages {
                 service::update(&github, &store, &target, overwrite_edits).await
             },
         );
-        let settled = self.settle(
-            dir.clone(),
-            work,
-            |updated| !matches!(updated, Updated::Edited(_)),
-            cx,
-        );
         cx.spawn(async move |this, cx| {
-            let result = settled.await;
-            if let Err(message) = &result {
+            let result = work.await;
+            let status = match &result {
+                Ok(Updated::Edited(_)) => None,
+                Ok(Updated::Replaced | Updated::Current) => Some(Status::Current),
+                Err(message) => Some(Status::Failed(message.clone())),
+            };
+            if let Some(status) = status {
                 let _ = this.update(cx, |this, cx| {
-                    this.status.insert(dir, Status::Failed(message.clone()));
+                    this.status.insert(dir, status);
                     cx.notify();
                 });
             }
@@ -286,21 +286,9 @@ impl Packages {
                     .map_err(|error| format!("Couldn't move it to the Trash: {error}."))
             },
         );
-        self.settle(dir, work, |_| true, cx)
-    }
-
-    fn settle<T: 'static>(
-        &mut self,
-        dir: String,
-        work: Task<Result<T, String>>,
-        clears: fn(&T) -> bool,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<T, String>> {
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            if let Ok(value) = &result
-                && clears(value)
-            {
+            if result.is_ok() {
                 let _ = this.update(cx, |this, cx| {
                     this.status.remove(&dir);
                     cx.notify();
@@ -514,6 +502,46 @@ mod tests {
             Ok(Checked::default())
         );
         assert!(fake.requests().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_check_marks_packages_that_are_up_to_date(cx: &mut TestAppContext) {
+        let root = scratch("state");
+        let (_bin, trash) = Bin::new(&root);
+        let store = Store::new(root.join("packages"), trash);
+        let (staged, files) = stage_files(&store, &[("scripts/a.ts", "a")]);
+        store.publish(staged, "o-r", &receipt(files)).unwrap();
+        let fake = Fake::start();
+        fake.route(
+            "/repositories/7",
+            Reply::json(r#"{"id":7,"name":"r","owner":{"login":"o"},"default_branch":"main"}"#),
+        );
+        let branch = |commit: &str, tree: &str| {
+            Reply::json(format!(
+                r#"{{"commit":{{"sha":"{commit}","commit":{{"tree":{{"sha":"{tree}"}}}}}}}}"#
+            ))
+        };
+        let newer = "c".repeat(40);
+        fake.route("/repos/o/r/branches/main", branch(&newer, &newer));
+        let packages = cx.new(|_| Packages::new(fake.url(), store, root.join("token"), None));
+        let check = async |cx: &mut TestAppContext| {
+            packages
+                .update(cx, |packages, cx| packages.check(false, cx))
+                .await
+                .unwrap();
+            packages.read_with(cx, |packages, _| packages.status("o-r").cloned())
+        };
+
+        assert_eq!(
+            check(cx).await,
+            Some(Status::Available(Sha::parse(&newer).unwrap()))
+        );
+        fake.route(
+            "/repos/o/r/branches/main",
+            branch(&"a".repeat(40), &"b".repeat(40)),
+        );
+        assert_eq!(check(cx).await, Some(Status::Current));
         fs::remove_dir_all(root).unwrap();
     }
 
