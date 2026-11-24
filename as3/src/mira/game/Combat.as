@@ -142,7 +142,7 @@ package mira.game {
     public static function useSkill(index:String, selector:Object = null, force:Boolean = false):Boolean {
       var game:Object = Main.Game;
       var skill:Object = game.world.actions.active[parseInt(index)];
-      if (!skill) {
+      if (!skill || !World.hasCellUserData(game.world)) {
         return false;
       }
 
@@ -365,6 +365,10 @@ package mira.game {
         return null;
       }
 
+      if (!World.hasCellUserData(world)) {
+        return null;
+      }
+
       world.setTarget(monster);
       if (world.myAvatar.target !== monster) {
         return null;
@@ -412,7 +416,7 @@ package mira.game {
 
       var game:Object = Main.Game;
       var monster:Object = World.getMonster(selector);
-      if (isMonsterAttackable(monster)) {
+      if (isMonsterAttackable(monster) && World.hasCellUserData(game.world)) {
         game.world.setTarget(monster);
         if (game.world.myAvatar.target !== monster)
           return false;
