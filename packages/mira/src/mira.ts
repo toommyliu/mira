@@ -832,10 +832,7 @@ export type Rooms =
       readonly room: number | null;
     };
 
-/**
- * The options in the Scripts window for this tab. A script's changes are saved to the account
- * only once an option is changed in the window, and are dropped when another account logs in.
- */
+/** The options in the Scripts window, saved for the logged-in character. */
 export type ScriptOptions = {
   /** Best effort attempt to start or stop the script at your house. */
   readonly safeStartStop: boolean;

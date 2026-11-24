@@ -216,7 +216,15 @@ impl RuffleView {
             cx.spawn(async move |this, cx| {
                 while script_option_changes.changed().await.is_ok() {
                     if this
-                        .update(cx, |this: &mut Self, cx| this.changed(cx))
+                        .update(cx, |this: &mut Self, cx| {
+                            if let Some(account) = &this.settings_account {
+                                let options = this.automation.scripts();
+                                characters::change(account, cx, |settings| {
+                                    settings.scripts = options
+                                });
+                            }
+                            this.changed(cx);
+                        })
                         .is_err()
                     {
                         break;
@@ -561,21 +569,9 @@ impl RuffleView {
         }
     }
 
-    pub(super) fn change_script_options(
-        &self,
-        edit: impl FnOnce(&mut ScriptOptions),
-        cx: &mut App,
-    ) {
-        if let Some(account) = &self.settings_account {
-            let mut changed = false;
-            let options = self.automation.update_scripts(|options| {
-                let before = *options;
-                edit(options);
-                changed = *options != before;
-            });
-            if changed {
-                characters::change(account, cx, |settings| settings.scripts = options);
-            }
+    pub(super) fn change_script_options(&self, edit: impl FnOnce(&mut ScriptOptions)) {
+        if self.settings_account.is_some() {
+            self.automation.update_scripts(edit);
         }
     }
 

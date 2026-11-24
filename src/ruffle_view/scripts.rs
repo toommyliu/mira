@@ -797,7 +797,7 @@ impl ScriptsWindow {
 
     fn change_options(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ScriptOptions)) {
         if let Some(view) = self.view() {
-            view.update(cx, |view, cx| view.change_script_options(edit, cx));
+            view.read(cx).change_script_options(edit);
         }
         cx.notify();
     }
