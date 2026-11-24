@@ -493,6 +493,34 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_field_taller_than_the_dialog_opens_at_its_input(cx: &mut TestAppContext) {
+        let folder = scratch("tall");
+        let description = "Long. ".repeat(400);
+        let source = format!(
+            "export const inputs = {{ loot: {{ type: \"boolean\", label: \"Loot\" }}, note: {{ type: \"string\", label: \"Note\", description: \"{description}\" }} }};"
+        );
+        let (cx, host, _) = host(cx, &folder, &source, Purpose::Edit);
+        assert!(focused(&text(&host, 1, cx), cx));
+        let (viewport, row, offset) = host.read_with(cx, |host, cx| {
+            let scroll = &host.dialog.read(cx).scroll;
+            (
+                scroll.bounds(),
+                scroll.bounds_for_item(1).unwrap(),
+                scroll.offset(),
+            )
+        });
+        assert!(
+            row.size.height > viewport.size.height,
+            "{row:?} is taller than {viewport:?}"
+        );
+        assert!(
+            row.top() + offset.y >= viewport.top(),
+            "the input at the top of {row:?} shows in {viewport:?} at {offset:?}"
+        );
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[gpui::test]
     fn escape_closes_and_keeps_what_was_saved(cx: &mut TestAppContext) {
         let folder = scratch("escape");
         fs::write(folder.join("inputs.json"), "{}").unwrap();

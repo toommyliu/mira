@@ -550,7 +550,7 @@ pub(super) fn reveal_item(scroll: &ScrollHandle, index: usize, above: Pixels, be
     if top < viewport.top() + above {
         offset.y += viewport.top() + above - top;
     } else if bottom > viewport.bottom() - below {
-        offset.y -= bottom - (viewport.bottom() - below);
+        offset.y -= (bottom - (viewport.bottom() - below)).min(top - (viewport.top() + above));
     } else {
         return;
     }
