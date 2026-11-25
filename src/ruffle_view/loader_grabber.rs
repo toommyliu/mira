@@ -22,7 +22,7 @@ use mira_ui::{
 
 use super::{
     Client,
-    client::CloseSession,
+    client::{CloseSession, refocus_root_when_lost},
     form::LABEL_WIDTH,
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
@@ -93,7 +93,9 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
     };
     match cx.open_window(options, |window, cx| {
         let grabber = cx.new(|cx| LoaderGrabber::new(client, target, cx));
-        window.focus(&grabber.read(cx).focus.clone(), cx);
+        let root = grabber.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&grabber, root, window, cx);
         grabber
     }) {
         Ok(handle) => cx.set_global(Open(handle)),

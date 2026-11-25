@@ -20,7 +20,7 @@ use mira_ui::{
 
 use super::{
     Client,
-    client::CloseSession,
+    client::{CloseSession, refocus_root_when_lost},
     form::{choices_row, note, row, section},
     shown_tab::{self, ShownTab, Target, watch_changes},
 };
@@ -92,7 +92,9 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
     };
     match cx.open_window(options, |window, cx| {
         let environment = cx.new(|cx| Environment::new(client, target, window, cx));
-        window.focus(&environment.read(cx).focus.clone(), cx);
+        let root = environment.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&environment, root, window, cx);
         environment
     }) {
         Ok(handle) => cx.set_global(Open(handle)),
@@ -2033,5 +2035,34 @@ mod tests {
     fn snapshot_found_boosts() {
         snapshot_boosts("environment-boosts-min", MIN_WIDTH, MIN_HEIGHT);
         snapshot_boosts("environment-boosts", WIDTH, HEIGHT);
+    }
+
+    #[gpui::test]
+    fn cmd_w_closes_the_window_after_the_focused_field_goes_away(cx: &mut TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("mira-environment-{}", std::process::id()));
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            crate::ruffle_view::bind_keys(cx);
+            let client = Client::empty_for_tests(&folder, cx);
+            super::open(client, Target::Selected, cx);
+        });
+        let handle = cx.update(|cx| cx.global::<Open>().0);
+        let environment = handle.root(cx).unwrap();
+        let cx = VisualTestContext::from_window(handle.into(), cx).into_mut();
+        environment.update(cx, |environment, cx| {
+            environment.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        focus(&environment, List::Drops, cx);
+        environment.update(cx, |environment, cx| {
+            environment.shown = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("cmd-w");
+        cx.run_until_parked();
+        assert!(cx.cx.update(|cx| cx.windows().is_empty()));
     }
 }

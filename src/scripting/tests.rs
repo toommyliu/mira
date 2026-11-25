@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{
     Launch, Level, Limit, Limits, Outcome, Run, Supplied, ToPlayer, Values,
     auth::Request as A,
-    automation::{ReloginRequest as AR, SettingsRequest as GS},
+    automation::{ReloginRequest as AR, ScriptOptionsRequest as SO, SettingsRequest as GS},
     bank::Request as B,
     calls::{Call, Reply, Request, RunId},
     combat::Request as C,
@@ -33,7 +33,7 @@ use super::{
 };
 use crate::{
     bridge::{CallError, packets::Sender},
-    domain::events::Kind,
+    domain::{events::Kind, rooms::Rooms},
 };
 
 struct Folder(PathBuf);
@@ -2078,9 +2078,11 @@ export default function* () {
 fn automation_requests_reach_the_player_typed() {
     let folder = Folder::new(&[(
         "main.ts",
-        r#"import { AutoRelogin, Settings } from "mira";
+        r#"import { AutoRelogin, Script, Settings } from "mira";
 
 export default function* () {
+  yield* Script.options.get();
+  yield* Script.options.update({ safeStartStop: false, rooms: { kind: "private", room: 4242 } });
   yield* AutoRelogin.get();
   yield* AutoRelogin.update({ enabled: true, server: null, delaySeconds: 10 });
   yield* Settings.get();
@@ -2108,6 +2110,14 @@ export default function* () {
     assert_eq!(
         requests,
         [
+            Request::ScriptOptions(SO::Get),
+            Request::ScriptOptions(SO::Update {
+                safe_start_stop: Some(false),
+                restart_after_reconnect: None,
+                rooms: Some(Rooms::Private {
+                    room: Some(4242.try_into().unwrap()),
+                }),
+            }),
             Request::AutoRelogin(AR::Get),
             Request::AutoRelogin(AR::Update {
                 enabled: Some(true),

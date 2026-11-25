@@ -11,6 +11,8 @@
 
 ## Download
 
+Requires macOS 26 or later.
+
 > [!NOTE]
 > Mira is early, so expect rough edges. Please open an issue for anything that
 > hasn't been reported yet.

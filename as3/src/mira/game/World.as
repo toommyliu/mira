@@ -64,7 +64,8 @@ public class World
 
     // Players in the cell exist before their retrieveUserDatas reply sets objData, and the
     // game's testAction reads objData from every player in the cell.
-    private static function hasCellUserData(world:Object):Boolean
+    [BridgeIgnore]
+    public static function hasCellUserData(world:Object):Boolean
     {
       var frame:String = world.myAvatar.dataLeaf.strFrame;
       for each (var avatar:Object in world.avatars)

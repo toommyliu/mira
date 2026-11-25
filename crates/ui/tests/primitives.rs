@@ -1684,7 +1684,7 @@ fn numeric_input_takes_digits_and_steps_within_its_range(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn password_input_hides_its_text_until_revealed_and_keeps_it_off_the_clipboard(
+fn password_input_hides_its_text_and_keeps_it_off_the_clipboard_until_revealed(
     cx: &mut TestAppContext,
 ) {
     use gpui::{Bounds, ClipboardItem, EntityInputHandler as _, Modifiers, point, px};
@@ -1712,29 +1712,25 @@ fn password_input_hides_its_text_until_revealed_and_keeps_it_off_the_clipboard(
         point(px(300.0), mira_ui::theme::CONTROL_MD / 2.0),
         Modifiers::none(),
     );
+    let clipboard =
+        |cx: &mut VisualTestContext| cx.read_from_clipboard().and_then(|item| item.text());
     cx.simulate_input("c");
-    press(cx, "shift-left");
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    press(cx, "cmd-a");
     press(cx, "cmd-c");
     press(cx, "cmd-x");
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("unchanged".into())
-    );
-    assert_eq!(
-        input.read_with(cx, |input, _| input.text().to_string()),
-        "ab\u{1F642}c"
-    );
+    assert_eq!(clipboard(cx), Some("unchanged".into()));
+    assert_eq!(text(&input, cx), "ab\u{1F642}c");
 
     cx.update(|_, cx| input.update(cx, |input, cx| input.reveal(true, cx)));
     cx.run_until_parked();
     assert!((caret_x(4, cx) - 3.0 * bullet).abs() > 1.0);
+    press(cx, "cmd-a");
+    press(cx, "cmd-c");
+    assert_eq!(clipboard(cx), Some("ab\u{1F642}c".into()));
     press(cx, "shift-left");
     press(cx, "cmd-c");
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("unchanged".into())
-    );
+    assert_eq!(clipboard(cx), Some("ab\u{1F642}".into()));
 
     press(cx, "home");
     let viewport = cx.update(|window, _| window.viewport_size());

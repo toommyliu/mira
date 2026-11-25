@@ -34,7 +34,7 @@ mod previews;
 use crate::{
     data_file, packages,
     ruffle::extras::Extras,
-    ruffle_view::{CloseSession, bar_title, drag_area, window_bar},
+    ruffle_view::{CloseSession, bar_title, drag_area, refocus_root_when_lost, window_bar},
     shortcuts::{self, Category, Overrides, Shortcut, Taken},
 };
 
@@ -238,7 +238,7 @@ struct Settings {
     start: Start,
     quit_shortcut: QuitShortcut,
     skip_close_confirmation: bool,
-    sidebar: bool,
+    hide_sidebar: bool,
     appearance: Appearance,
     pointer_cursors: bool,
     font_smoothing: bool,
@@ -426,11 +426,11 @@ pub(crate) fn separate_aqw_settings(cx: &App) -> bool {
 }
 
 pub(crate) fn sidebar(cx: &App) -> bool {
-    cx.global::<Store>().settings.sidebar
+    !cx.global::<Store>().settings.hide_sidebar
 }
 
 pub(crate) fn set_sidebar(open: bool, cx: &mut App) {
-    change(cx, |settings| settings.sidebar = open);
+    change(cx, |settings| settings.hide_sidebar = !open);
 }
 
 pub(crate) fn start_replacements(cx: &App) -> bool {
@@ -767,7 +767,9 @@ fn open(cx: &mut App) {
             settings.load_fonts(cx);
             settings
         });
-        window.focus(&view.read(cx).focus.clone(), cx);
+        let root = view.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&view, root, window, cx);
         view
     }) {
         Ok(window) => cx.set_global(Open(window)),
@@ -1064,7 +1066,7 @@ impl SettingsWindow {
             Block::Section(
                 Section::titled("Updates").row(Row::new(
                     "Check automatically",
-                    Some("Look for new versions at launch and every 4 hours."),
+                    Some("Look for Mira and package updates at launch and every 4 hours."),
                     Switch::new(
                         "check-updates-automatically",
                         "Check automatically",
@@ -1565,14 +1567,14 @@ mod tests {
         assert_eq!(Settings::default().start, Start::Client);
         assert_eq!(Settings::default().quit_shortcut, QuitShortcut::Hold);
         assert!(!Settings::default().skip_close_confirmation);
-        assert!(!Settings::default().sidebar);
+        assert!(!Settings::default().hide_sidebar);
         assert!(!Settings::default().skip_update_checks);
         assert!(!Settings::default().separate_aqw_settings);
         let chosen = Settings {
             start: Start::Manager,
             quit_shortcut: QuitShortcut::DoublePress,
             skip_close_confirmation: true,
-            sidebar: true,
+            hide_sidebar: true,
             appearance: Appearance::Dark,
             pointer_cursors: true,
             font_smoothing: true,

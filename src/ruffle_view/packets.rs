@@ -24,7 +24,7 @@ use mira_ui::{
 
 use super::{
     Client, RuffleView,
-    client::CloseSession,
+    client::{CloseSession, refocus_root_when_lost},
     packet_lines::{PacketLines, Row},
     packet_log::{Filter, Line, Packet, PacketLog, Visible},
     shown_tab::{self, ShownTab, watch_changes},
@@ -90,7 +90,9 @@ pub(crate) fn open(client: Entity<Client>, target: shown_tab::Target, cx: &mut A
     };
     match cx.open_window(options, |window, cx| {
         let packets = cx.new(|cx| Packets::new(client, target, window, cx));
-        window.focus(&packets.read(cx).focus.clone(), cx);
+        let root = packets.read(cx).focus.clone();
+        window.focus(&root, cx);
+        refocus_root_when_lost(&packets, root, window, cx);
         packets
     }) {
         Ok(handle) => cx.set_global(Open(handle)),

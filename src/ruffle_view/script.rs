@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     accounts::AccountId,
-    characters, packages,
+    packages,
     ruffle::{Command, Msg},
     script_inputs,
     scripting::{Declared, Launch, Level, Limit, Limits, Outcome, Run, Supplied},
@@ -445,7 +445,7 @@ impl RuffleView {
             .map(|at| (at + 1, entries.len()));
         self.log_run(&launch.entry, Event::Started { place }, cx);
         let character = self.character().map(AccountId::of);
-        if !fresh || !self.safe_start_stop(cx) {
+        if !fresh || !self.automation.scripts().safe_start_stop {
             return self.run_script(launch, character, cx);
         }
         let ready = launch.clone();
@@ -464,14 +464,6 @@ impl RuffleView {
             since: Instant::now(),
         });
         self.changed(cx);
-    }
-
-    fn safe_start_stop(&self, cx: &App) -> bool {
-        self.settings_account
-            .as_ref()
-            .map(|account| characters::get(account, cx).scripts)
-            .unwrap_or_default()
-            .safe_start_stop
     }
 
     fn retreat(
@@ -676,7 +668,7 @@ impl RuffleView {
                 && !logout
                 && self.online()
                 && !self.script.running()
-                && self.safe_start_stop(cx)
+                && self.automation.scripts().safe_start_stop
             {
                 self.script.leaving = Some(self.retreat(cx, |this, cx| {
                     this.script.leaving = None;
@@ -764,10 +756,7 @@ impl RuffleView {
                 ..
             })
         );
-        let restarts = self
-            .settings_account
-            .as_ref()
-            .is_some_and(|account| characters::get(account, cx).scripts.restart_after_reconnect);
+        let restarts = self.automation.scripts().restart_after_reconnect;
         let Some(account) = self.linked_account().filter(|_| running && restarts) else {
             return;
         };
