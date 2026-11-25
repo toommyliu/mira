@@ -64,6 +64,7 @@ package mira.generated
       external.externalize("extras.setDamageTextEnabled", Extras.setDamageTextEnabled);
       external.externalize("extras.setHideMusicButtonEnabled", Extras.setHideMusicButtonEnabled);
       external.externalize("extras.setPercentagesEnabled", Extras.setPercentagesEnabled);
+      external.externalize("extras.setTimersEnabled", Extras.setTimersEnabled);
       external.externalize("flash.callGameFunction", Main.callGameFunction);
       external.externalize("flash.callGameFunction0", Main.callGameFunction0);
       external.externalize("flash.getArrayObject", Main.getArrayObject);

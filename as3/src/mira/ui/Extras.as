@@ -35,5 +35,10 @@ package mira.ui {
     public static function setAuraTextEnabled(enabled:Boolean):void {
       CombatText.setAurasEnabled(enabled);
     }
+
+    [BridgeExport]
+    public static function setTimersEnabled(enabled:Boolean):void {
+      Cooldowns.setEnabled(enabled);
+    }
   }
 }
