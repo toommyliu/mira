@@ -57,9 +57,11 @@ package mira.generated
       external.externalize("drops.isUsingCustomDrops", DropList.isUsingCustomDrops);
       external.externalize("drops.reject", DropList.reject);
       external.externalize("drops.toggleUi", DropList.toggleUi);
+      external.externalize("extras.setAuraTextEnabled", Extras.setAuraTextEnabled);
       external.externalize("extras.setBankSearchEnabled", Extras.setBankSearchEnabled);
       external.externalize("extras.setChatRecallEnabled", Extras.setChatRecallEnabled);
       external.externalize("extras.setCopyMenusEnabled", Extras.setCopyMenusEnabled);
+      external.externalize("extras.setDamageTextEnabled", Extras.setDamageTextEnabled);
       external.externalize("extras.setHideMusicButtonEnabled", Extras.setHideMusicButtonEnabled);
       external.externalize("extras.setPercentagesEnabled", Extras.setPercentagesEnabled);
       external.externalize("flash.callGameFunction", Main.callGameFunction);
