@@ -1,0 +1,32 @@
+---
+import type { Heading } from "../layouts/Layout.astro";
+
+interface Props {
+  headings: readonly Heading[];
+  sticky?: boolean;
+}
+
+const { headings, sticky = false } = Astro.props;
+const sections = headings.filter((heading) => heading.depth === 2).length;
+let section = -1;
+---
+
+<ul class="contents-list">
+  {
+    headings.map((heading) => {
+      if (heading.depth === 2) section += 1;
+      return (
+        <li
+          class={`depth-${heading.depth}`}
+          style={
+            sticky && heading.depth === 2
+              ? `--before: ${section}; --after: ${sections - 1 - section}`
+              : undefined
+          }
+        >
+          <a href={`#${heading.slug}`}>{heading.text}</a>
+        </li>
+      );
+    })
+  }
+</ul>

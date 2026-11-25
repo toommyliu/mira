@@ -1,5 +1,0 @@
-{
-  "entryPoints": ["../mira/src/mira.ts", "../mira/src/http.ts", "../mira/src/schema.ts"],
-  "tsconfig": "../mira/tsconfig.json",
-  "treatValidationWarningsAsErrors": true
-}

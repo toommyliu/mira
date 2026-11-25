@@ -1,0 +1,99 @@
+---
+import Code from "../../components/Code.astro";
+import Comment from "../../components/Comment.astro";
+import DeclarationEntry from "../../components/DeclarationEntry.astro";
+import MemberEntry from "../../components/MemberEntry.astro";
+import TypeCards from "../../components/TypeCards.astro";
+import Layout, { type Heading } from "../../layouts/Layout.astro";
+import { load } from "../../reference/project.ts";
+import type { Token } from "../../reference/tokens.ts";
+
+export async function getStaticPaths() {
+  const { pages } = await load();
+  return pages.map((page) => ({
+    params: { slug: page.slug === "" ? undefined : page.slug },
+    props: { page },
+  }));
+}
+
+const { page } = Astro.props;
+const reference = await load();
+const { links } = reference;
+const binding: Token[] =
+  page.binding?.kind === "named"
+    ? [
+        { text: "{ ", kind: "punctuation" },
+        { text: page.binding.name, kind: "type" },
+        { text: " }", kind: "punctuation" },
+      ]
+    : [
+        { text: "* ", kind: "punctuation" },
+        { text: "as ", kind: "keyword" },
+        { text: page.binding?.name ?? "", kind: "type" },
+      ];
+const importLine: Token[] = [
+  { text: "import ", kind: "keyword" },
+  ...binding,
+  { text: " from ", kind: "keyword" },
+  { text: JSON.stringify(page.specifier), kind: "string" },
+  { text: ";", kind: "punctuation" },
+];
+const membersTitle = page.members.every((member) => member.body.kind === "call") ? "Functions" : "Members";
+const headings: Heading[] = [
+  ...(page.namespaces.length > 0 ? [{ depth: 2, slug: "namespaces", text: "Namespaces" }] : []),
+  ...(page.members.length > 0
+    ? [
+        { depth: 2, slug: "members", text: membersTitle },
+        ...page.members.map((member) => ({ depth: 3, slug: member.anchor, text: member.path })),
+      ]
+    : []),
+  ...(page.types.length > 0
+    ? [
+        { depth: 2, slug: "types", text: "Types" },
+        ...page.types.map((type) => ({ depth: 3, slug: type.anchor, text: type.name })),
+      ]
+    : []),
+];
+---
+
+<Layout title={page.title} headings={headings}>
+  <p class="eyebrow">{page.binding?.kind === "named" ? `Namespace in ${page.specifier}` : "Package"}</p>
+  <h1 class="code-title">{page.title}</h1>
+  {page.binding !== undefined && <Code tokens={importLine} />}
+  <Comment comment={page.comment} links={links} />
+  {
+    page.namespaces.length > 0 && (
+      <>
+        <h2 id="namespaces">Namespaces</h2>
+        <ul class="namespaces">
+          {page.namespaces.map((namespace) => (
+            <li>
+              <a href={`/reference/${namespace.slug}/`}>{namespace.title}</a>
+            </li>
+          ))}
+        </ul>
+      </>
+    )
+  }
+  {
+    page.members.length > 0 && (
+      <>
+        <h2 id="members">{membersTitle}</h2>
+        {page.members.map((member) => (
+          <MemberEntry member={member} owner={page.binding?.name} links={links} />
+        ))}
+      </>
+    )
+  }
+  {
+    page.types.length > 0 && (
+      <>
+        <h2 id="types">Types</h2>
+        {page.types.map((declaration) => (
+          <DeclarationEntry declaration={declaration} links={links} />
+        ))}
+      </>
+    )
+  }
+  <TypeCards reference={reference} from={[page.members, page.types]} />
+</Layout>

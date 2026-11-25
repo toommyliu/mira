@@ -1,9 +1,14 @@
-/** @module mira/http */
+/**
+ * Send HTTP requests from your scripts.
+ *
+ * @module mira/http
+ */
 import * as Data from "effect/Data";
-import * as Duration from "effect/Duration";
+import * as Durations from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import { call } from "./call.ts";
+import type { Duration } from "./mira.ts";
 
 export type Method = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
@@ -15,7 +20,7 @@ export type Options = {
    * Total time through redirects and the response download.
    * @defaultValue 20 seconds
    */
-  readonly timeout?: Duration.Input;
+  readonly timeout?: Duration;
 } & (
   | { readonly body?: string; readonly json?: never }
   | {
@@ -60,9 +65,9 @@ type Reply =
       readonly message: string;
     };
 
-const timeoutMs = (timeout: Duration.Input | undefined): number | undefined => {
+const timeoutMs = (timeout: Duration | undefined): number | undefined => {
   if (timeout === undefined) return undefined;
-  const millis = Duration.toMillis(timeout);
+  const millis = Durations.toMillis(timeout);
   if (millis < 0) throw new Error("the timeout is negative");
   return Math.min(Math.ceil(millis), Number.MAX_SAFE_INTEGER);
 };

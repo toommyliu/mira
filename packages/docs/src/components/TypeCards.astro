@@ -1,0 +1,61 @@
+---
+import { WrapText } from "lucide-static";
+
+import { renderMarkdown } from "../markdown.ts";
+import { commentMarkdown } from "../reference/comment.ts";
+import { type Reference, targets } from "../reference/model.ts";
+import { previewTokens } from "../reference/tokens.ts";
+import Code from "./Code.astro";
+
+interface Props {
+  reference: Reference;
+  from: unknown;
+}
+
+const { reference, from } = Astro.props;
+const shown = new Set<number>();
+const queue = [...targets(from)];
+for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+  const declaration = reference.declarations.get(id);
+  if (shown.has(id) || declaration === undefined) continue;
+  shown.add(id);
+  queue.push(...targets(declaration));
+}
+const cards = await Promise.all(
+  [...shown].map(async (id) => {
+    const declaration = reference.declarations.get(id);
+    const summary =
+      declaration?.comment === undefined
+        ? ""
+        : commentMarkdown({ summary: declaration.comment.summary }, reference.links);
+    return {
+      id,
+      declaration,
+      summary: summary === "" ? "" : await renderMarkdown(summary),
+    };
+  }),
+);
+---
+
+{
+  cards.map(
+    ({ id, declaration, summary }) =>
+      declaration !== undefined && (
+        <template id={`card-${id}`}>
+          <div class="card-head">
+            <a class="card-name" href={reference.links.get(id)}>
+              {declaration.name}
+            </a>
+            <span class="kind">{declaration.keyword}</span>
+            <button class="icon-button card-wrap" type="button" aria-label="Wrap lines" aria-pressed="true">
+              <Fragment set:html={WrapText} />
+            </button>
+          </div>
+          <div class="card-body">
+            <Code tokens={previewTokens(declaration, reference.links)} bare />
+            {summary !== "" && <div class="card-summary" set:html={summary} />}
+          </div>
+        </template>
+      ),
+  )
+}

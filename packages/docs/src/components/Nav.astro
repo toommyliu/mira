@@ -1,0 +1,47 @@
+---
+import { Package } from "lucide-static";
+
+import type { NavSection } from "../nav.ts";
+
+interface Props {
+  sections: readonly NavSection[];
+  current: string;
+}
+
+const { sections, current } = Astro.props;
+---
+
+<nav class="nav" aria-label="Documentation">
+  {
+    sections.map((section) => (
+      <div class="nav-section">
+        {sections.length > 1 && <h2>{section.title}</h2>}
+        <ul>
+          {section.items.map((item) =>
+            item.kind === "group" ? (
+              <li class="group">
+                <span>{item.title}</span>
+                <ul>
+                  {item.items.map((child) => (
+                    <li class="nested">
+                      <a href={child.href} aria-current={child.href === current ? "page" : undefined}>
+                        {child.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ) : (
+              <li class={item.kind === "namespace" ? "namespace nested" : item.kind}>
+                <a href={item.href} aria-current={item.href === current ? "page" : undefined}>
+                  {item.kind === "package" && <Fragment set:html={Package} />}
+                  {item.title}
+                </a>
+              </li>
+            ),
+          )}
+        </ul>
+      </div>
+    ))
+  }
+</nav>

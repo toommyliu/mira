@@ -1,0 +1,69 @@
+---
+import { ArrowRight, ChevronDown, Download } from "lucide-static";
+
+import icon from "../../../../assets/icon.png";
+import Layout from "../layouts/Layout.astro";
+import { home } from "../nav.ts";
+
+const docsHome = await home("docs");
+const download = "https://github.com/toommyliu/mira/releases/latest/download/Mira.dmg";
+
+
+const questions = [
+  {
+    question: "Does Mira run on Windows or Linux?",
+    answer:
+      "No. Mira's Ruffle fork is optimized for Apple silicon Macs. On other systems, use any of the Skua or Grimlite series.",
+  },
+  {
+    question: "Do I need Flash Player?",
+    answer: "No. Mira includes its own Ruffle player.",
+  },
+  {
+    question: "Why does macOS block Mira the first time?",
+    answer:
+      "Releases aren't notarized. Open Mira once. In System Settings, open Privacy & Security and select Open Anyway. After that, Mira updates itself.",
+  },
+];
+---
+
+<Layout title="Mira" bare>
+  <div class="landing">
+    <section class="landing-top">
+      <div class="landing-hero">
+        <h1>
+          <img src={icon.src} alt="" width="44" height="44" />
+          Mira
+        </h1>
+        <p class="landing-intro">An automation client for AdventureQuest Worlds on Apple silicon Macs.</p>
+        <div class="landing-actions">
+          <a class="landing-download" href={download}>
+            <Fragment set:html={Download} />
+            Download for Mac
+          </a>
+          <a class="landing-secondary" href={docsHome}>
+            Read the docs
+            <Fragment set:html={ArrowRight} />
+          </a>
+        </div>
+        <p class="landing-note">Unofficial client. Use at your own risk.</p>
+      </div>
+    </section>
+    <section class="landing-section" aria-labelledby="faq-heading">
+      <h2 id="faq-heading">Questions</h2>
+      <div class="landing-faq">
+        {
+          questions.map((entry) => (
+            <details>
+              <summary>
+                <span>{entry.question}</span>
+                <Fragment set:html={ChevronDown} />
+              </summary>
+              <p>{entry.answer}</p>
+            </details>
+          ))
+        }
+      </div>
+    </section>
+  </div>
+</Layout>

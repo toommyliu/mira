@@ -1,0 +1,38 @@
+/* Generated from crates/ui/src/theme.rs by `cargo test -p mira-ui --test docs_theme`. */
+:root {
+  --background: light-dark(#ffffff, #181818);
+  --foreground: light-dark(#1a1c1f, #dfdfdf);
+  --card: light-dark(#ffffff, #1e1e1e);
+  --card-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --popover: light-dark(#ffffff, #212121);
+  --popover-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --primary: light-dark(#1a1c1f, #e8e8e8);
+  --primary-foreground: light-dark(#ffffff, #181818);
+  --secondary: light-dark(#f0f0f0, #272727);
+  --secondary-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --muted: light-dark(#f0f0f0, #272727);
+  --muted-foreground: light-dark(#5f6062, #a3a3a3);
+  --accent: light-dark(#f0f0f0, #272727);
+  --accent-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --destructive: light-dark(#ba2623, #fa423e);
+  --warning: light-dark(#bb4d00, #ffb900);
+  --border: light-dark(#e7e7e8, rgb(255 255 255 / 0.1));
+  --input: light-dark(#e7e7e8, rgb(255 255 255 / 0.15));
+  --ring: light-dark(#a8a9ab, #767676);
+  --frame: light-dark(#f4f4f4, #121212);
+  --sidebar-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --sidebar-accent: light-dark(#e6e6e6, #212121);
+  --sidebar-accent-foreground: light-dark(#1a1c1f, #dfdfdf);
+  --sidebar-border: light-dark(#e7e7e8, rgb(255 255 255 / 0.1));
+  --sidebar-ring: light-dark(#a8a9ab, #767676);
+  --input-fill: light-dark(rgb(231 231 232 / 0.2), rgb(255 255 255 / 0.045));
+  --ghost-hover: light-dark(#f0f0f0, rgb(39 39 39 / 0.5));
+  --warning-fill: light-dark(rgb(187 77 0 / 0.1), rgb(255 185 0 / 0.2));
+  --surface-edge: light-dark(rgb(26 28 31 / 0.1), rgb(223 223 223 / 0.1));
+  --radius-xs: 2px;
+  --radius-tag: 4px;
+  --radius-small: 6px;
+  --radius-control: 8px;
+  --radius-panel: 10px;
+  --radius-dialog: 14px;
+}

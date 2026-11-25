@@ -1,7 +1,7 @@
 /** @module mira */
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
+import * as Durations from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -83,8 +83,8 @@ const settings = <A>(op: string, args: object = {}): Effect.Effect<A> =>
 const feeds = <A>(op: string, args: object = {}): Effect.Effect<A> =>
   call<A>({ domain: "feeds", op, ...args });
 
-const millis = (duration: Duration.Input | undefined): number | undefined =>
-  duration === undefined ? undefined : Math.ceil(Duration.toMillis(duration));
+const millis = (duration: Duration | undefined): number | undefined =>
+  duration === undefined ? undefined : Math.ceil(Durations.toMillis(duration));
 
 const wireStep = <S extends PriorityStep>(step: S) => ({
   ...step,
@@ -123,6 +123,7 @@ export type ConnectResult =
       readonly message: string;
     };
 
+/** Manage your login and server connection. */
 export const Auth = {
   isLoggedIn: () => auth<boolean>("loggedIn"),
   getUsername: () => auth<string | null>("username"),
@@ -149,6 +150,7 @@ export type AutoReloginSettings = {
   readonly backoffCapSeconds: number;
 };
 
+/** Set up automatic login after a disconnect. */
 export const AutoRelogin = {
   get: () => autoRelogin<AutoReloginSettings>("get"),
   /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
@@ -187,6 +189,7 @@ export type Aura = {
   readonly expiresAt: number | null;
 };
 
+/** Check your character's status and move around the game. */
 export const Player = {
   isReady: () => player<boolean>("ready"),
   getMap: () => player<string | null>("map"),
@@ -273,6 +276,7 @@ export type Drop = {
 };
 export type MonsterOptions = { readonly cell?: string };
 
+/** Inspect the current room and its monsters. */
 export const World = {
   getAreaId: () => world<number>("areaId"),
   getRoomNumber: () => world<number | null>("roomNumber"),
@@ -316,6 +320,21 @@ export type SkillOptions = {
 };
 /** A number is points, and a string like `"60%"` is a percent of the maximum. */
 export type Amount = number | `${number}%`;
+export type TimeUnit =
+  | "milli"
+  | "millis"
+  | "second"
+  | "seconds"
+  | "minute"
+  | "minutes"
+  | "hour"
+  | "hours"
+  | "day"
+  | "days"
+  | "week"
+  | "weeks";
+/** A number is milliseconds, and a string like `"2 seconds"` or `"1.5 minutes"` names its unit. */
+export type Duration = number | `${number} ${TimeUnit}`;
 export type Bound<T> =
   | { readonly atMost: T; readonly atLeast?: never }
   | { readonly atLeast: T; readonly atMost?: never };
@@ -339,7 +358,7 @@ export type PriorityStep = {
   /** Every condition must hold. */
   readonly when?: readonly Condition[];
   /** Holds every skill for this long after this one casts. */
-  readonly pauseAfter?: Duration.Input;
+  readonly pauseAfter?: Duration;
 };
 export type Step = PriorityStep & { readonly onCooldown?: "skip" | "wait" };
 export type Profile = {
@@ -354,7 +373,7 @@ export type Profile = {
 
 export type KillOptions = {
   /** Time between skill attempts. Defaults to 200 ms, and anything under 50 ms counts as 50 ms. */
-  readonly skillInterval?: Duration.Input;
+  readonly skillInterval?: Duration;
   /** Attacked first, in this order, while any is alive in the cell. The kill still ends when its own target dies. */
   readonly targetPriority?: readonly MonsterQuery[];
 } & (
@@ -375,11 +394,13 @@ export type HuntOptions = {
   readonly preferMostMatches?: boolean;
 };
 
+/** Look up players in your room. */
 export const Players = {
   getAll: () => players<readonly RoomPlayer[]>("all"),
   get: (username: string) => players<RoomPlayer | null>("get", { username }),
 };
 
+/** Fight monsters and automate skill use. */
 export const Combat = {
   getTarget: () => combat<Target | null>("target"),
   hasTarget: () => combat<boolean>("hasTarget"),
@@ -465,6 +486,7 @@ export type EnhancementSelector = { readonly enhancement: string; readonly speci
 export type EnhancementSlot = "weapon" | "class" | "helm" | "cape";
 export type EquipEnhancementSelector = EnhancementSelector & { readonly slot?: EnhancementSlot };
 
+/** Manage the items your character carries. */
 export const Inventory = {
   getItems: () => inventory<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => inventory<Item | null>("item", { query }),
@@ -489,6 +511,7 @@ export const Inventory = {
   use: (query: ItemQuery) => inventory<boolean>("use", { query }),
 };
 
+/** Check which temporary items you have. */
 export const TempInventory = {
   getItems: () => tempInventory<readonly TempItem[]>("items"),
   getItem: (query: ItemQuery) => tempInventory<TempItem | null>("item", { query }),
@@ -503,6 +526,7 @@ const moveEach = (op: "deposit" | "withdraw", queries: readonly ItemQuery[]) =>
     return index === 0 ? moved : Effect.andThen(Effect.sleep("150 millis"), moved);
   });
 
+/** Move items in and out of your bank. */
 export const Bank = {
   /** Reads load the bank on first use too. Returns false if it doesn't load. */
   load: () => bank<boolean>("load"),
@@ -526,6 +550,7 @@ export const Bank = {
     bank<boolean>("swap", { inventoryQuery, bankQuery }),
 };
 
+/** Check your housing inventory. */
 export const House = {
   getItems: () => house<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => house<Item | null>("item", { query }),
@@ -575,6 +600,7 @@ export type QuestConfig = {
   readonly acceptRequirements: boolean;
 };
 
+/** Manage quests and automate turn-ins. */
 export const Quests = {
   load: (questId: number, options: QuestLoadOptions = {}) =>
     quests<boolean>("load", { questId, ...options }),
@@ -627,8 +653,9 @@ export type DropConfig = {
   readonly rejectOthers: boolean;
 };
 
-/** Items waiting in the drop list, with `quantity` as the amount waiting. */
+/** Accept or reject item drops. */
 export const Drops = {
+  /** Each item's `quantity` is the amount waiting in the drop list. */
   getItems: () => drops<readonly Item[]>("items"),
   getItem: (query: ItemQuery) => drops<Item | null>("item", { query }),
   contains: (query: ItemQuery, quantity?: number) =>
@@ -679,6 +706,7 @@ export type Shop = {
 };
 export type QuantityOptions = { readonly quantity?: number };
 
+/** Buy, sell, and enhance items. */
 export const Shops = {
   load: (shopId: number) => shops<boolean>("load", { shopId }),
   getCurrent: () => shops<Shop | null>("current"),
@@ -753,6 +781,7 @@ export type SettingsPatch = Partial<Omit<GameSettings, "frameRate">> & {
   readonly frameRate?: number;
 };
 
+/** Read and change client settings. */
 export const Settings = {
   get: () => settings<GameSettings>("get"),
   /** Changes only the given fields and returns the settings as stored, with out-of-range values clamped. */
@@ -841,6 +870,7 @@ export type ScriptOptions = {
   readonly rooms: Rooms;
 };
 
+/** Read inputs and control the current script run. */
 export const Script = {
   options: {
     get: () => scriptOptions<ScriptOptions>("get"),
@@ -860,7 +890,7 @@ export const Script = {
   beep: (times = 1) => call<null>({ domain: "script", op: "beep", times }).pipe(Effect.asVoid),
   /** The values this run started with. Pass `typeof inputs` to type them; Mira checks the values, not the type. */
   inputs: <D extends Inputs = Inputs>(): InputValues<D> => inputs.values as InputValues<D>,
-  sleep: (duration: Duration.Input) => Effect.sleep(duration),
+  sleep: (duration: Duration) => Effect.sleep(duration),
   /** Aborts when the script is stopped or exits, before cleanup runs, or when it ends. */
   signal: stopping.signal,
   /** Ends the script from any fiber. Cleanup runs first, then the logout, then the tab closes a second later. */
@@ -873,9 +903,11 @@ export const Script = {
 
 export type Subscription<A> = { readonly next: () => Effect.Effect<A> };
 
-/** A generator function or a function returning an Effect, like the default export. */
-export type Handler<A> = (value: A) => Effect.Effect<unknown, unknown> | HandlerGenerator;
-export type HandlerGenerator = Generator<Effect.Effect<unknown, unknown>, unknown, never>;
+/** An Effect, or the generator a `function*` returns. */
+export type Work<A> =
+  | Effect.Effect<A, unknown>
+  | Generator<Effect.Effect<unknown, unknown>, A, never>;
+export type Handler<A> = (value: A) => Work<unknown>;
 
 export type ClientPacket = {
   readonly from: "client";
@@ -975,16 +1007,13 @@ const skipLost = <A>({ next }: Subscription<A | Lost>): Subscription<A> => ({
     }),
 });
 
-const run = (
-  result: Effect.Effect<unknown, unknown> | HandlerGenerator,
-): Effect.Effect<unknown, unknown> => (Effect.isEffect(result) ? result : drive(result));
+const run = <A>(work: Work<A>): Effect.Effect<A, unknown> =>
+  Effect.isEffect(work) ? work : drive(work);
 
-export type Body<A> = () =>
-  | Effect.Effect<A, unknown>
-  | Generator<Effect.Effect<unknown, unknown>, A, never>;
+export type Body<A> = () => Work<A>;
 
 const perform = <A>(body: Body<A>): Effect.Effect<A> =>
-  Effect.orDie(Effect.suspend(() => run(body()) as Effect.Effect<A, unknown>));
+  Effect.orDie(Effect.suspend(() => run(body())));
 
 const failingTheScript = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
   Effect.onExit(effect, (exit) =>
@@ -1005,7 +1034,7 @@ const listen = <A>(
 
 export type ForOptions = {
   /** Starts after `trigger` finishes. Waits forever when omitted. */
-  readonly timeout?: Duration.Input;
+  readonly timeout?: Duration;
   /** Runs once the subscription is open. Returning false skips the wait. */
   readonly trigger?: Body<boolean>;
 };
@@ -1076,11 +1105,25 @@ const openPackets = <F extends PacketFilter>(filter: F) => {
   );
 };
 
+/** Read and send raw game packets. */
 export const Packets = {
   subscribe: <const F extends PacketFilter>(
     filter: F = {} as F,
   ): Effect.Effect<Subscription<PacketFor<F>>, never, Scope.Scope> =>
     Effect.map(openPackets(filter), skipLost),
+  /**
+   * @example
+   * ```ts
+   * import { Combat, Packets } from "mira";
+   *
+   * export default function* () {
+   *   yield* Packets.on({ from: "server" }, function* (packet) {
+   *     console.log(packet.cmd);
+   *   });
+   *   while (true) yield* Combat.kill("*");
+   * }
+   * ```
+   */
   on: <const F extends PacketFilter>(
     filter: F,
     handler: Handler<PacketFor<F>>,
@@ -1093,8 +1136,11 @@ export const Packets = {
     packets<boolean>("sendToClient", { data }),
 };
 
+/** @group Events */
 export type GameEvent =
+  /** A monster in your room died. */
   | { readonly type: "monsterDeath"; readonly monMapId: number }
+  /** An item landed in your drops, waiting to be accepted. */
   | {
       readonly type: "itemDrop";
       readonly itemId: number;
@@ -1111,6 +1157,7 @@ export type GameEvent =
     }
   /** `""` is the map's default zone. */
   | { readonly type: "zone"; readonly zone: string }
+  /** You joined a map. */
   | { readonly type: "mapJoined"; readonly map: string }
   /** A player jumped to a cell. Walking within a cell doesn't count. */
   | {
@@ -1122,6 +1169,7 @@ export type GameEvent =
     }
   /** Another player entered the room. */
   | { readonly type: "playerJoined"; readonly username: string; readonly self: boolean }
+  /** A player left the room. */
   | { readonly type: "playerLeft"; readonly username: string; readonly self: boolean }
   /** The connection to the server dropped. */
   | { readonly type: "logout" }
@@ -1132,22 +1180,26 @@ export type GameEvent =
       readonly self: boolean;
       readonly state: State;
     }
+  /** A monster in your room respawned. */
   | { readonly type: "monsterRespawn"; readonly monMapId: number }
-  /** `targetId` is a monster's `monMapId` or a player's `userId`. */
+  /** An aura landed on a monster or player. */
   | {
       readonly type: "auraAdded";
       readonly name: string;
       readonly targetType: "monster" | "player";
+      /** A monster's `monMapId` or a player's `userId`. */
       readonly targetId: number;
       readonly self: boolean;
       /** Seconds. */
       readonly duration: number | null;
       readonly icon: string | null;
     }
+  /** An aura ended on a monster or player. */
   | {
       readonly type: "auraRemoved";
       readonly name: string;
       readonly targetType: "monster" | "player";
+      /** A monster's `monMapId` or a player's `userId`. */
       readonly targetId: number;
       readonly self: boolean;
     }
@@ -1163,9 +1215,15 @@ export type GameEvent =
     }
   /** The server accepted a turn-in, whether from a script or the game's quest window. */
   | { readonly type: "questCompleted"; readonly questId: number; readonly name: string };
+/** @group Events */
 export type EventType = GameEvent["type"];
+/** @group Events */
 export type EventOf<T extends EventType> = Extract<GameEvent, { readonly type: T }>;
-/** `type` picks the event. Other fields must match exactly. */
+/**
+ * `type` picks the event. Other fields must match exactly.
+ *
+ * @group Events
+ */
 export type EventFilter<T extends EventType> = { readonly type: T } & Partial<
   Omit<EventOf<T>, "type">
 >;
@@ -1181,11 +1239,37 @@ const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
         : undefined,
   );
 
+/** React to game events as they happen. */
 export const Events = {
+  /**
+   * @example
+   * ```ts
+   * import { Events } from "mira";
+   *
+   * export default function* () {
+   *   const messages = yield* Events.subscribe({ type: "message" });
+   *   const message = yield* messages.next();
+   *   console.log(message.text);
+   * }
+   * ```
+   */
   subscribe: <const T extends EventType>(
     filter: EventFilter<T>,
   ): Effect.Effect<Subscription<EventOf<T>>, never, Scope.Scope> =>
     Effect.map(openEvents(filter), skipLost),
+  /**
+   * @example
+   * ```ts
+   * import { Combat, Events } from "mira";
+   *
+   * export default function* () {
+   *   yield* Events.on({ type: "itemDrop" }, function* (drop) {
+   *     console.log(`dropped ${drop.quantity} ${drop.name}`);
+   *   });
+   *   while (true) yield* Combat.kill("*");
+   * }
+   * ```
+   */
   on: <const T extends EventType>(
     filter: EventFilter<T>,
     handler: Handler<EventOf<T>>,
@@ -1195,19 +1279,31 @@ export const Events = {
 
 export type UntilOptions = {
   /** Defaults to 100 ms. */
-  readonly interval?: Duration.Input;
+  readonly interval?: Duration;
   /** Waits forever when omitted. */
-  readonly timeout?: Duration.Input;
+  readonly timeout?: Duration;
 };
 
-const poll = (condition: Body<boolean>, interval: Duration.Input) =>
+const poll = (condition: Body<boolean>, interval: Duration) =>
   Effect.gen(function* () {
     while (!(yield* perform(condition))) yield* Effect.sleep(interval);
     return true;
   });
 
+/** Wait for a condition, event, or packet. */
 export const Wait = {
-  /** Checks right away, then every `interval`. False if `timeout` passes first. */
+  /**
+   * Checks right away, then every `interval`. False if `timeout` passes first.
+   *
+   * @example
+   * ```ts
+   * import { Player, Wait } from "mira";
+   *
+   * export default function* () {
+   *   if (!(yield* Wait.until(Player.isReady, { timeout: "30 seconds" }))) return;
+   * }
+   * ```
+   */
   until: (
     condition: Body<boolean>,
     { interval = "100 millis", timeout }: UntilOptions = {},
@@ -1223,6 +1319,16 @@ export const Wait = {
   /**
    * Null if `trigger` returns false, the timeout passes, or the connection drops.
    * A `logout` wait returns the event when the connection drops.
+   *
+   * @example
+   * ```ts
+   * import { Wait } from "mira";
+   *
+   * export default function* () {
+   *   const death = yield* Wait.forEvent({ type: "monsterDeath" }, { timeout: "1 minute" });
+   *   if (death === null) return;
+   * }
+   * ```
    */
   forEvent: <const T extends EventType>(
     filter: EventFilter<T>,
@@ -1249,12 +1355,12 @@ export type ArmyInfo = {
 
 export type ArmyStepOptions = {
   /** If the other players haven't all arrived by then, the army ends. Without it, the step waits forever. */
-  readonly timeout?: Duration.Input | undefined;
+  readonly timeout?: Duration | undefined;
 };
 
 export type ArmyUntilOptions = ArmyStepOptions & {
   /** Rounds of `work` start at least this far apart. Defaults to 500 ms. */
-  readonly interval?: Duration.Input;
+  readonly interval?: Duration;
 };
 
 export type ArmyMapOptions = CellOptions & ArmyStepOptions;
@@ -1318,11 +1424,11 @@ let joined: ArmyInfo | undefined;
 function start(name: string): Effect.Effect<ArmyInfo>;
 function start(
   name: string,
-  options: { readonly timeout: Duration.Input },
+  options: { readonly timeout: Duration },
 ): Effect.Effect<ArmyInfo | null>;
 function start(
   name: string,
-  { timeout }: { readonly timeout?: Duration.Input } = {},
+  { timeout }: { readonly timeout?: Duration } = {},
 ): Effect.Effect<ArmyInfo | null> {
   return army<ArmyInfo | null>("start", { name, timeoutMs: millis(timeout) }).pipe(
     Effect.map((info) => {
@@ -1459,6 +1565,7 @@ const loopTaunt = (
     return { stop: () => Fiber.interrupt(fiber) };
   });
 
+/** Coordinate multiple accounts running the same script. */
 export const Army = {
   /** Reads `~/Mira/armies/<name>.yaml` and waits until every player in it has started. */
   start,

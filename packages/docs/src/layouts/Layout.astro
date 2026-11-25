@@ -1,0 +1,242 @@
+---
+import "../styles/theme.css";
+import "../styles/global.css";
+
+import { ClientRouter } from "astro:transitions";
+import { Check, ChevronDown, ChevronUp, Menu, Monitor, Moon, Search, Sun } from "lucide-static";
+
+import icon from "../../../../assets/icon.png";
+import ContentsList from "../components/ContentsList.astro";
+import Nav from "../components/Nav.astro";
+import { area, home, navigation } from "../nav.ts";
+import { repositoryUrl } from "../repository.ts";
+import { routes } from "../routes.ts";
+import page from "../scripts/page.js?raw";
+
+export type Heading = { readonly depth: number; readonly slug: string; readonly text: string };
+
+interface Props {
+  title: string;
+  description?: string | undefined;
+  headings?: readonly Heading[];
+  bare?: boolean;
+}
+
+const current = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`;
+const currentArea = area(current);
+const sections = currentArea === null ? [] : await navigation(currentArea);
+const docsHome = await home("docs");
+const route = (await routes()).find((candidate) => candidate.href === current);
+const {
+  title,
+  description = route?.description ??
+    "Mira is an automation client for AdventureQuest Worlds on Apple silicon Macs.",
+  headings = [],
+  bare = false,
+} = Astro.props;
+const site = Astro.site;
+const pageTitle = current === "/" ? title : `${title} · Mira`;
+const contents = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+---
+
+<!doctype html>
+<html lang="en" transition:animate="none">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    {route !== undefined && <link rel="alternate" type="text/markdown" href={route.markdown} />}
+    <link rel="sitemap" href="/sitemap.xml" />
+    {
+      site !== undefined && route !== undefined && (
+        <link rel="canonical" href={new URL(route.href, site).href} />
+      )
+    }
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Mira" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    {site !== undefined && <meta property="og:image" content={new URL("/og.png", site).href} />}
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Mira, an automation client for AdventureQuest Worlds on Apple silicon Macs" />
+    {site !== undefined && route !== undefined && <meta property="og:url" content={new URL(route.href, site).href} />}
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href={icon.src} />
+    <script is:inline>
+      document.documentElement.dataset.js = "";
+      try {
+        const theme = localStorage.getItem("theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+        const wrap = localStorage.getItem("code-wrap");
+        if (wrap === "on" || (wrap === null && matchMedia("(max-width: 840px)").matches)) {
+          document.documentElement.dataset.wrap = "";
+        }
+      } catch {}
+      document.addEventListener("astro:before-swap", (event) => {
+        for (const name of ["data-js", "data-theme", "data-wrap"]) {
+          const value = document.documentElement.getAttribute(name);
+          if (value !== null) event.newDocument.documentElement.setAttribute(name, value);
+        }
+      });
+    </script>
+    <ClientRouter fallback="swap" />
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+    <header class="bar">
+      {
+        currentArea !== null && (
+          <button class="icon-button menu-button" type="button" aria-label="Open navigation" data-open-nav>
+            <Fragment set:html={Menu} />
+          </button>
+        )
+      }
+      <a class="brand" href="/">
+        <img src={icon.src} alt="" width="20" height="20" />
+        <span>Mira</span>
+      </a>
+      <nav class="site" aria-label="Site">
+        <a href={docsHome} aria-current={currentArea === "docs" ? "true" : undefined}>Docs</a>
+        <a href="/reference/" aria-current={currentArea === "reference" ? "true" : undefined}>
+          Reference
+        </a>
+      </nav>
+      <div class="bar-end">
+        <button class="search-button" type="button" data-open-search aria-label="Search" aria-keyshortcuts="Meta+K Control+K /">
+          <Fragment set:html={Search} />
+          <span class="search-label">Search</span>
+          <kbd>⌘K</kbd>
+        </button>
+        <a class="icon-button" href={repositoryUrl} aria-label="GitHub repository">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"
+            ></path>
+          </svg>
+        </a>
+        <button
+          class="icon-button theme-button"
+          type="button"
+          popovertarget="theme-menu"
+          aria-haspopup="menu"
+          aria-label="Theme"
+          data-theme-trigger
+        >
+          <span class="theme-system"><Fragment set:html={Monitor} /></span>
+          <span class="theme-light"><Fragment set:html={Sun} /></span>
+          <span class="theme-dark"><Fragment set:html={Moon} /></span>
+        </button>
+        <div id="theme-menu" class="menu" popover role="menu" aria-label="Theme">
+          {
+            [
+              { mode: "system", label: "System", icon: Monitor },
+              { mode: "light", label: "Light", icon: Sun },
+              { mode: "dark", label: "Dark", icon: Moon },
+            ].map((choice) => (
+              <button type="button" role="menuitemradio" aria-checked="false" data-theme-choice={choice.mode}>
+                <Fragment set:html={choice.icon} />
+                <span>{choice.label}</span>
+                <span class="menu-check"><Fragment set:html={Check} /></span>
+              </button>
+            ))
+          }
+        </div>
+      </div>
+    </header>
+    <div class={currentArea === null ? "frame bare" : "frame"} tabindex="-1">
+      {
+        currentArea !== null && (
+          <aside class="sidebar" transition:persist={`sidebar-${currentArea}`}>
+            <Nav sections={sections} current={current} />
+          </aside>
+        )
+      }
+      <main id="content" tabindex="-1">
+        {
+          contents.length > 0 && (
+            <details class="page-contents">
+              <summary>
+                <span>On this page</span>
+                <span class="page-contents-current" data-current />
+                <Fragment set:html={ChevronDown} />
+              </summary>
+              <nav class="page-contents-panel" aria-label="On this page">
+                <ContentsList headings={contents} />
+              </nav>
+            </details>
+          )
+        }
+        {
+          bare ? (
+            <slot />
+          ) : (
+            <article class="prose">
+              <slot />
+            </article>
+          )
+        }
+      </main>
+      {
+        contents.length > 0 && (
+          <aside class="contents" aria-labelledby="contents-title">
+            <h2 id="contents-title">On this page</h2>
+            <div class="contents-body">
+              <div class="contents-scroll">
+                <ContentsList headings={contents} sticky />
+              </div>
+              <div class="contents-fade" data-edge="top" aria-hidden="true"></div>
+              <div class="contents-fade" data-edge="bottom" aria-hidden="true"></div>
+              <button class="contents-jump" type="button" hidden>
+                <span class="contents-jump-up"><Fragment set:html={ChevronUp} /></span>
+                <span class="contents-jump-down"><Fragment set:html={ChevronDown} /></span>
+                <span data-jump-label></span>
+              </button>
+            </div>
+          </aside>
+        )
+      }
+    </div>
+    <dialog class="search" aria-label="Search" transition:persist="search">
+      <div class="search-field">
+        <Fragment set:html={Search} />
+        <input
+          type="search"
+          placeholder="Search docs and API"
+          autocomplete="off"
+          spellcheck="false"
+          role="combobox"
+          aria-controls="search-results"
+          aria-expanded="false"
+          aria-autocomplete="list"
+          aria-label="Search docs and API"
+        />
+        <kbd>Esc</kbd>
+      </div>
+      <div class="search-filters" role="group" aria-label="Show">
+        <button type="button" data-filter="" aria-pressed="true">All</button>
+        <button type="button" data-filter="namespace" aria-pressed="false">Namespaces</button>
+        <button type="button" data-filter="function" aria-pressed="false">Functions</button>
+        <button type="button" data-filter="type" aria-pressed="false">Types</button>
+        <button type="button" data-filter="doc" aria-pressed="false">Docs</button>
+      </div>
+      <ul id="search-results" role="listbox" aria-label="Results"></ul>
+      <p class="search-empty" hidden>No results</p>
+    </dialog>
+    {
+      currentArea !== null && (
+        <dialog class="drawer" aria-label="Navigation">
+          <Nav sections={sections} current={current} />
+        </dialog>
+      )
+    }
+    <script is:inline set:html={page} />
+    <script>
+      import "../scripts/chrome.ts";
+      import "../scripts/cards.ts";
+      import "../scripts/search.ts";
+    </script>
+  </body>
+</html>

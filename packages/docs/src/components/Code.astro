@@ -1,0 +1,31 @@
+---
+import { lines, type Token } from "../reference/tokens.ts";
+import CodeActions from "./CodeActions.astro";
+
+interface Props {
+  tokens: readonly Token[];
+  inline?: boolean;
+  bare?: boolean;
+}
+
+const { tokens, inline = false, bare = false } = Astro.props;
+const classOf = (token: Token) => (token.kind === undefined ? undefined : `t-${token.kind}`);
+const rows = lines(tokens);
+---
+
+{
+  inline ? (
+    <code class="type">{tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}</code>
+  ) : (
+    <Fragment>
+      {bare ? (
+        <pre class="code"><code>{rows.map((row, index) => <span class="line" style={`--indent: ${row.indent}`}>{row.tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}{index < rows.length - 1 ? "\n" : ""}</span>)}</code></pre>
+      ) : (
+        <div class="code-block">
+          <pre class="code"><code>{rows.map((row, index) => <span class="line" style={`--indent: ${row.indent}`}>{row.tokens.map((token) => (token.href ? <a class={classOf(token)} href={token.href} data-card={token.target}>{token.text}</a> : <span class={classOf(token)}>{token.text}</span>))}{index < rows.length - 1 ? "\n" : ""}</span>)}</code></pre>
+          <CodeActions />
+        </div>
+      )}
+    </Fragment>
+  )
+}

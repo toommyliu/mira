@@ -1,0 +1,98 @@
+---
+import type { Declaration } from "../reference/model.ts";
+import { declarationTokens, signatureTokens, typeTokens } from "../reference/tokens.ts";
+import Code from "./Code.astro";
+import Comment from "./Comment.astro";
+
+interface Props {
+  declaration: Declaration;
+  links: ReadonlyMap<number, string>;
+}
+
+const { declaration, links } = Astro.props;
+const body = declaration.body;
+---
+
+<section class="entry" id={declaration.anchor}>
+  <h3>
+    <a href={`#${declaration.anchor}`}>{declaration.name}</a>
+    <span class="kind">{declaration.keyword}</span>
+  </h3>
+  {
+    (body.kind === "alias" || declaration.typeParameters.length > 0) && (
+      <Code tokens={declarationTokens(declaration, links)} />
+    )
+  }
+  <Comment comment={declaration.comment} links={links} />
+  {
+    body.kind === "shape" && body.properties.length > 0 && (
+      <div class="shape" role="group" aria-label={`Fields of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Fields</p>
+        <dl>
+          {body.properties.map((property) =>
+            property.body.kind === "value" ? (
+              <div class="shape-row" id={`${declaration.anchor}.${property.anchor}`}>
+                <dt>
+                  <code>
+                    {property.path}
+                    {property.body.optional ? "?" : ""}
+                  </code>
+                  <Code inline tokens={typeTokens(property.body.type, links)} />
+                </dt>
+                <dd>
+                  <Comment comment={property.comment} links={links} />
+                </dd>
+              </div>
+            ) : null,
+          )}
+        </dl>
+      </div>
+    )
+  }
+  {
+    body.kind === "variants" && (
+      <div class="shape" role="group" aria-label={`Variants of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Variants</p>
+        {body.variants.map((variant) => {
+          const described = variant.properties.filter((property) => property.comment !== undefined);
+          return (
+            <div class="shape-row" id={variant.anchor}>
+              <Code tokens={typeTokens(variant.type, links)} bare />
+              <Comment comment={variant.comment} links={links} />
+              {described.length > 0 && (
+                <dl class="variant-fields">
+                  {described.map((property) => (
+                    <div>
+                      <dt>
+                        <code>{property.path}</code>
+                      </dt>
+                      <dd>
+                        <Comment comment={property.comment} links={links} />
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    )
+  }
+  {
+    body.kind === "shape" && body.methods.length > 0 && (
+      <div class="shape" role="group" aria-label={`Methods of ${declaration.name}`}>
+        <p class="shape-title" aria-hidden="true">Methods</p>
+        {body.methods.map((method) => (
+          <div class="shape-row" id={`${declaration.anchor}.${method.anchor}`}>
+            {method.body.kind === "call" &&
+              method.body.signatures.map((signature) => (
+                <Code tokens={signatureTokens(method.path, signature, links)} bare />
+              ))}
+            <Comment comment={method.comment} links={links} />
+          </div>
+        ))}
+      </div>
+    )
+  }
+</section>
