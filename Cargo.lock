@@ -4007,6 +4007,7 @@ dependencies = [
  "gpui",
  "gpui_apple",
  "gpui_platform",
+ "image",
  "mira-platform",
  "mira-ui",
  "serde",

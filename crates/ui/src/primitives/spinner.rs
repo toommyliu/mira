@@ -75,7 +75,7 @@ impl RenderOnce for Spinner {
                 cx,
             ));
         };
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         if now < until {
             window.request_animation_frame();
         }
