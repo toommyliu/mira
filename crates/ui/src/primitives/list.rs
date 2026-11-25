@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Instant};
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
@@ -132,10 +132,10 @@ impl Options {
             let next = Step::from_key(event, Axis::Vertical)
                 .and_then(|step| nav::step(*selected, *count, step, false, |i| row(i).selectable()))
                 .or_else(|| {
-                    typeahead.update(cx, |typeahead, _| {
+                    typeahead.update(cx, |typeahead, cx| {
                         typeahead.find(
                             &event.keystroke,
-                            Instant::now(),
+                            cx.background_executor().now(),
                             (0..*count)
                                 .map(|i| (i, row(i)))
                                 .filter(|(_, item)| item.selectable())

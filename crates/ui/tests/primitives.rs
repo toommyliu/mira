@@ -1346,7 +1346,8 @@ fn a_select_in_a_popover_picks_options_that_hang_below_the_popover(cx: &mut Test
         select.bottom() + px(4.0 + 4.0 + 28.0 * 8.0 + 14.0),
     );
     cx.simulate_mouse_down(eighth, MouseButton::Left, Modifiers::none());
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(150));
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     cx.simulate_mouse_up(eighth, MouseButton::Left, Modifiers::none());
@@ -2042,7 +2043,7 @@ fn a_replaced_toast_shows_its_final_size_on_the_first_frame(cx: &mut TestAppCont
     };
     let settle = |cx: &mut gpui::VisualTestContext| {
         for _ in 0..3 {
-            std::thread::sleep(mira_ui::motion::GLIDE / 2);
+            cx.executor().advance_clock(mira_ui::motion::GLIDE / 2);
             draw(cx);
         }
     };
@@ -2635,7 +2636,8 @@ fn show(
 fn hold(cx: &mut VisualTestContext, x: f32, y: f32) {
     use gpui::{Modifiers, MouseButton, point, px};
     for _ in 0..8 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
         cx.simulate_mouse_move(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
     }
 }

@@ -1213,8 +1213,8 @@ fn snapshot_progress_arcs() {
             }))
             .into_any_element()
     });
-    scene("progress-arcs-countdown", 260.0, 90.0, |_, _| {
-        let now = std::time::Instant::now();
+    scene("progress-arcs-countdown", 260.0, 90.0, |_, cx| {
+        let now = cx.background_executor().now();
         let second = std::time::Duration::from_secs(1);
         div()
             .flex()

@@ -163,7 +163,7 @@ impl State {
         self.escape = Some(escape);
     }
 
-    fn autoscroll(&mut self, pointer: Point<Pixels>) -> bool {
+    fn autoscroll(&mut self, pointer: Point<Pixels>, now: Instant) -> bool {
         let (Some(drag), Some(scroll)) = (&self.drag, &self.scroll) else {
             self.scrolled_at = None;
             return false;
@@ -182,7 +182,6 @@ impl State {
             f32::from(start),
             f32::from(end),
         );
-        let now = Instant::now();
         let elapsed = self
             .scrolled_at
             .map_or(Duration::ZERO, |then| now - then)
@@ -255,6 +254,7 @@ impl RenderOnce for Sortable {
         let state = window.use_keyed_state((id.clone(), "sortable"), cx, |_, _| State::default());
         let dragging = cx.has_active_drag();
         let pointer = window.mouse_position();
+        let now = cx.background_executor().now();
         let (aim, lost, scrolling) = state.update(cx, |state, _| {
             state.flow = flow;
             state.keys = keys.clone();
@@ -272,7 +272,7 @@ impl RenderOnce for Sortable {
             if lost {
                 state.escape = None;
             }
-            (aim, lost, state.autoscroll(pointer))
+            (aim, lost, state.autoscroll(pointer, now))
         });
         if lost {
             cx.stop_active_drag(window);

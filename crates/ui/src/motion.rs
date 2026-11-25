@@ -192,7 +192,7 @@ fn tween(
     if cx.reduce_motion() {
         return target;
     }
-    let now = Instant::now();
+    let now = cx.background_executor().now();
     let state = window.use_keyed_state(id, cx, |_, _| Tween {
         from: from.unwrap_or(target),
         to: target,

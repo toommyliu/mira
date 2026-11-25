@@ -41,8 +41,8 @@ struct State {
 }
 
 impl State {
-    fn reveal(&self, window: &mut Window) {
-        self.scrolled.set(Some(Instant::now()));
+    fn reveal(&self, window: &mut Window, cx: &App) {
+        self.scrolled.set(Some(cx.background_executor().now()));
         window.refresh();
     }
 
@@ -236,11 +236,11 @@ impl RenderOnce for Scrollbar {
             .w(Self::GUTTER)
             .child(
                 canvas(
-                    move |_, window, _| {
+                    move |_, window, cx| {
                         let now = watched.extent(&wheel).map(|extent| extent.scrolled);
                         let was = wheel.scrolled_to.replace(now);
                         if was.is_some() && was != now && !watched.following() {
-                            wheel.scrolled.set(Some(Instant::now()));
+                            wheel.scrolled.set(Some(cx.background_executor().now()));
                             window.request_animation_frame();
                         }
                     },
@@ -274,9 +274,9 @@ impl RenderOnce for Scrollbar {
                                 dragged.scroll_to(drag.scrolled + moved * per_pixel, bounds);
                                 window.refresh();
                             });
-                            window.on_mouse_event(move |_: &MouseUpEvent, _, window, _| {
+                            window.on_mouse_event(move |_: &MouseUpEvent, _, window, cx| {
                                 release.drag.set(None);
-                                release.reveal(window);
+                                release.reveal(window, cx);
                             });
                         },
                     )
@@ -307,11 +307,11 @@ impl RenderOnce for Scrollbar {
             return strip;
         };
         let hover = state.clone();
-        let strip = strip.on_hover(move |hovered, window, _| {
+        let strip = strip.on_hover(move |hovered, window, cx| {
             hover.hovered.set(*hovered);
-            hover.reveal(window);
+            hover.reveal(window, cx);
         });
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let opacity = if self.persistent {
             1.0
         } else {

@@ -3,7 +3,6 @@ use std::{
     collections::HashMap,
     ops::Range,
     rc::Rc,
-    time::Instant,
 };
 
 use gpui::{
@@ -564,10 +563,10 @@ fn typeahead(
     state: &Entity<MenuState>,
     cx: &mut App,
 ) -> Option<usize> {
-    state.update(cx, |menu, _| {
+    state.update(cx, |menu, cx| {
         menu.typeahead.find(
             &event.keystroke,
-            Instant::now(),
+            cx.background_executor().now(),
             metas
                 .iter()
                 .enumerate()
@@ -602,8 +601,12 @@ fn key_down(
         menu.typeahead.end_unless_typed(&event.keystroke)
     });
     let (highlighted, submenu) = current(metas, state.read(cx));
-    let activates =
-        key == "enter" || (key == "space" && !state.read(cx).typeahead.typing(Instant::now()));
+    let activates = key == "enter"
+        || (key == "space"
+            && !state
+                .read(cx)
+                .typeahead
+                .typing(cx.background_executor().now()));
     if key == "tab" {
         close(state, true, window, cx);
         return;
