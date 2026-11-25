@@ -142,6 +142,7 @@ package mira.generated
       external.externalize("settings.resetCustomName", Settings.resetCustomName);
       external.externalize("settings.setAdsVisible", Settings.setAdsVisible);
       external.externalize("settings.setAnimationsEnabled", Settings.setAnimationsEnabled);
+      external.externalize("settings.setAuraHudsActive", Settings.setAuraHudsActive);
       external.externalize("settings.setCollisionsEnabled", Settings.setCollisionsEnabled);
       external.externalize("settings.setCustomGuild", Settings.setCustomGuild);
       external.externalize("settings.setCustomName", Settings.setCustomName);

@@ -966,6 +966,15 @@ pub(crate) mod settings {
         Ok(decode("settings.setAnimationsEnabled", reply)?)
     }
 
+    pub(crate) fn set_aura_huds_active(
+        loader: &impl Loader,
+        active: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(active)];
+        let reply = loader.call("settings.setAuraHudsActive", call_args)?;
+        Ok(decode("settings.setAuraHudsActive", reply)?)
+    }
+
     pub(crate) fn set_collisions_enabled(
         loader: &impl Loader,
         enabled: bool,
