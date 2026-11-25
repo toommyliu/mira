@@ -10,7 +10,7 @@ use objc2_foundation::{NSPoint, NSRunLoop, NSString};
 
 use crate::ruffle::{
     context_menu::{ContextMenu, MenuSelection},
-    extras::{Extra, Extras},
+    extras::{Extra, Extras, Group},
 };
 
 define_class!(
@@ -69,45 +69,55 @@ fn track(view: &NSView, context: ContextMenu, extras: Extras) -> Option<MenuSele
     if !context.items.is_empty() {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     }
-    let player = [
-        (
-            "Smooth motion",
-            context.smooth_motion,
-            None,
-            MenuSelection::SmoothMotion,
-        ),
-        (
-            "Performance stats",
-            context.stats,
-            None,
-            MenuSelection::Stats,
-        ),
-    ];
-    let as3 = Extra::ALL.map(|extra| {
-        (
-            extra.label(),
-            extras.enabled(extra),
-            Some(extra.tooltip()),
-            MenuSelection::Extra(extra),
-        )
-    });
     let mut mira_items = Vec::new();
-    for (group, items) in [&player[..], &as3[..]].into_iter().enumerate() {
-        if group != 0 {
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let mut add = |menu: &NSMenu,
+                   title: &str,
+                   checked: bool,
+                   tooltip: Option<&str>,
+                   selection: MenuSelection| {
+        let native_item = NSMenuItem::new(mtm);
+        native_item.setTitle(&NSString::from_str(title));
+        native_item.setState(isize::from(checked));
+        native_item.setToolTip(tooltip.map(NSString::from_str).as_deref());
+        native_item.setTag((context.items.len() + mira_items.len()) as isize);
+        unsafe {
+            native_item.setTarget(Some(&target));
+            native_item.setAction(Some(sel!(selectItem:)));
         }
-        for &(title, checked, tooltip, selection) in items {
-            let native_item = NSMenuItem::new(mtm);
-            native_item.setTitle(&NSString::from_str(title));
-            native_item.setState(isize::from(checked));
-            native_item.setToolTip(tooltip.map(NSString::from_str).as_deref());
-            native_item.setTag((context.items.len() + mira_items.len()) as isize);
-            unsafe {
-                native_item.setTarget(Some(&target));
-                native_item.setAction(Some(sel!(selectItem:)));
-            }
-            menu.addItem(&native_item);
-            mira_items.push(selection);
+        menu.addItem(&native_item);
+        mira_items.push(selection);
+    };
+    add(
+        &menu,
+        "Smooth motion",
+        context.smooth_motion,
+        None,
+        MenuSelection::SmoothMotion,
+    );
+    add(
+        &menu,
+        "Performance stats",
+        context.stats,
+        None,
+        MenuSelection::Stats,
+    );
+    for group in Group::ALL {
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        menu.addItem(&NSMenuItem::sectionHeaderWithTitle(
+            &NSString::from_str(group.label()),
+            mtm,
+        ));
+        for extra in Extra::ALL
+            .into_iter()
+            .filter(|extra| extra.group() == group)
+        {
+            add(
+                &menu,
+                extra.label(),
+                extras.enabled(extra),
+                Some(extra.tooltip()),
+                MenuSelection::Extra(extra),
+            );
         }
     }
     let y = if view.isFlipped() {
