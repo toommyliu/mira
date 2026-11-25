@@ -1,8 +1,4 @@
-/**
- * Automate AdventureQuest Worlds with TypeScript.
- *
- * @module mira
- */
+/** @module mira */
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Durations from "effect/Duration";
