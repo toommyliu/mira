@@ -7,6 +7,8 @@ Mira is an automation client for AdventureQuest Worlds on Apple silicon Macs.
 
 ## Install
 
+Mira requires macOS 26 or later.
+
 1. Download `Mira.dmg` from the [latest release](https://github.com/toommyliu/mira/releases/latest).
 2. Drag Mira to **Applications**, then open it. macOS blocks the first launch because releases are not notarized.
 3. Open **System Settings**, then **Privacy & Security**, and select **Open Anyway**.
