@@ -349,6 +349,12 @@ pub(crate) mod extras {
         let reply = loader.call("extras.setPercentagesEnabled", call_args)?;
         Ok(decode("extras.setPercentagesEnabled", reply)?)
     }
+
+    pub(crate) fn set_timers_enabled(loader: &impl Loader, enabled: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setTimersEnabled", call_args)?;
+        Ok(decode("extras.setTimersEnabled", reply)?)
+    }
 }
 
 pub(crate) mod flash {

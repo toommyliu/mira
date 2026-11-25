@@ -12,6 +12,7 @@ pub(crate) enum Extra {
     HideMusicButton,
     DamageText,
     AuraText,
+    Timers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +33,7 @@ impl Group {
 }
 
 impl Extra {
-    pub(crate) const ALL: [Extra; 7] = [
+    pub(crate) const ALL: [Extra; 8] = [
         Extra::CopyMenus,
         Extra::ChatRecall,
         Extra::BankSearch,
@@ -40,6 +41,7 @@ impl Extra {
         Extra::HideMusicButton,
         Extra::DamageText,
         Extra::AuraText,
+        Extra::Timers,
     ];
 
     pub(crate) fn group(self) -> Group {
@@ -49,7 +51,7 @@ impl Extra {
             | Extra::BankSearch
             | Extra::Percentages
             | Extra::HideMusicButton => Group::Interface,
-            Extra::DamageText | Extra::AuraText => Group::Combat,
+            Extra::DamageText | Extra::AuraText | Extra::Timers => Group::Combat,
         }
     }
 
@@ -62,6 +64,7 @@ impl Extra {
             Extra::HideMusicButton => "Hide music button",
             Extra::DamageText => "Damage text",
             Extra::AuraText => "Aura text",
+            Extra::Timers => "Timers",
         }
     }
 
@@ -82,6 +85,9 @@ impl Extra {
             Extra::AuraText => {
                 "Redraws aura popups beside you and your target, without the repeats from refreshes."
             }
+            Extra::Timers => {
+                "Redraws skill cooldowns and the aura HUD with a plain wipe instead of the clock sweep."
+            }
         }
     }
 }
@@ -96,6 +102,7 @@ pub(crate) struct Extras {
     hide_music_button: bool,
     damage_text: bool,
     aura_text: bool,
+    timers: bool,
 }
 
 impl Extras {
@@ -108,6 +115,7 @@ impl Extras {
             Extra::HideMusicButton => self.hide_music_button,
             Extra::DamageText => self.damage_text,
             Extra::AuraText => self.aura_text,
+            Extra::Timers => self.timers,
         }
     }
 
@@ -120,6 +128,7 @@ impl Extras {
             Extra::HideMusicButton => &mut self.hide_music_button,
             Extra::DamageText => &mut self.damage_text,
             Extra::AuraText => &mut self.aura_text,
+            Extra::Timers => &mut self.timers,
         };
         *enabled = !*enabled;
         self
@@ -177,7 +186,8 @@ pub(super) async fn run<L: Loader>(
                 bridge::extras::set_hide_music_button_enabled(&loader, extras.hide_music_button)
             })
             .and_then(|()| bridge::extras::set_damage_text_enabled(&loader, extras.damage_text))
-            .and_then(|()| bridge::extras::set_aura_text_enabled(&loader, extras.aura_text));
+            .and_then(|()| bridge::extras::set_aura_text_enabled(&loader, extras.aura_text))
+            .and_then(|()| bridge::extras::set_timers_enabled(&loader, extras.timers));
         if let Err(error) = applied {
             tracing::debug!(%error, "AS3 extras will apply once the loader is ready");
         }
@@ -249,7 +259,8 @@ mod tests {
                         ("extras.setPercentagesEnabled", false),
                         ("extras.setHideMusicButtonEnabled", false),
                         ("extras.setDamageTextEnabled", false),
-                        ("extras.setAuraTextEnabled", false)
+                        ("extras.setAuraTextEnabled", false),
+                        ("extras.setTimersEnabled", false)
                     ]
                 );
 
@@ -264,7 +275,8 @@ mod tests {
                         ("extras.setPercentagesEnabled", false),
                         ("extras.setHideMusicButtonEnabled", false),
                         ("extras.setDamageTextEnabled", false),
-                        ("extras.setAuraTextEnabled", false)
+                        ("extras.setAuraTextEnabled", false),
+                        ("extras.setTimersEnabled", false)
                     ]
                 );
             })
