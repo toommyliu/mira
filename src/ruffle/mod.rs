@@ -143,7 +143,6 @@ impl Runtime {
         extras: tokio::sync::watch::Receiver<extras::Extras>,
         profiles: tokio::sync::watch::Receiver<Arc<Library>>,
         armies: Armies,
-        display_frames: bool,
         span: tracing::Span,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -169,7 +168,6 @@ impl Runtime {
                     extras,
                     profiles,
                     armies,
-                    display_frames,
                 ) {
                     tracing::error!(%error, "player failed");
                     let _ = failures.try_send(error.to_string());
@@ -231,9 +229,8 @@ fn run(
     extras: tokio::sync::watch::Receiver<extras::Extras>,
     profiles: tokio::sync::watch::Receiver<Arc<Library>>,
     armies: Armies,
-    display_frames: bool,
 ) -> anyhow::Result<()> {
-    let mut pacing = pacing::Pacing::new(display_frames, Instant::now());
+    let mut pacing = pacing::Pacing::new(Instant::now());
     let mut early = Vec::new();
     let mut viewport = loop {
         match rx.recv()? {
@@ -676,7 +673,7 @@ fn run(
             player.render();
         }
         stats.sample(&mut player, viewport.dimensions());
-        wait = pacing.wait(Instant::now(), interpolating, player.time_til_next_frame());
+        wait = player.time_til_next_frame();
     }
     drop(scripts);
     tasks.borrow_mut().clear();

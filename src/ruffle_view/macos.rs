@@ -8,7 +8,7 @@ use gpui::{Bounds, Pixels, Window};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, NSObject, NSObjectProtocol},
+    runtime::{AnyObject, NSObject},
     sel,
 };
 use objc2_app_kit::{
@@ -115,15 +115,7 @@ impl NativeView {
         })
     }
 
-    pub(super) fn supports_display_frames(&self) -> bool {
-        self.view
-            .respondsToSelector(sel!(displayLinkWithTarget:selector:))
-    }
-
     pub(super) fn connect_frames(&mut self, on_frame: impl Fn(Instant) + 'static) {
-        if !self.supports_display_frames() {
-            return;
-        }
         let target = Callback::new(move |sender| {
             if let Some(clock) = sender.downcast_ref::<CADisplayLink>() {
                 let ahead = clock.targetTimestamp() - CACurrentMediaTime();
