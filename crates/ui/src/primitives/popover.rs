@@ -297,7 +297,6 @@ impl RenderOnce for Popover {
                 &state,
                 menu::dismiss(&state),
                 window,
-                cx,
                 |_| panel.into_any_element(),
             )
             .into_any_element(),
