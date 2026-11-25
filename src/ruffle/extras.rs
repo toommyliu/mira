@@ -12,6 +12,21 @@ pub(crate) enum Extra {
     HideMusicButton,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Group {
+    Interface,
+}
+
+impl Group {
+    pub(crate) const ALL: [Group; 1] = [Group::Interface];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Group::Interface => "Interface",
+        }
+    }
+}
+
 impl Extra {
     pub(crate) const ALL: [Extra; 5] = [
         Extra::CopyMenus,
@@ -20,6 +35,16 @@ impl Extra {
         Extra::Percentages,
         Extra::HideMusicButton,
     ];
+
+    pub(crate) fn group(self) -> Group {
+        match self {
+            Extra::CopyMenus
+            | Extra::ChatRecall
+            | Extra::BankSearch
+            | Extra::Percentages
+            | Extra::HideMusicButton => Group::Interface,
+        }
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
