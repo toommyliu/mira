@@ -275,6 +275,96 @@ fn hovered_switch_has_no_edge_line() {
     }
 }
 
+fn click(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
+    use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, point};
+
+    let position = point(px(x), px(y));
+    cx.update_window(owner, |_, window, cx| {
+        for event in [
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                ..Default::default()
+            }),
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                ..Default::default()
+            }),
+        ] {
+            window.dispatch_event(event, cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[test]
+fn a_clicked_switch_animates_for_the_travel_time_then_rests_on() {
+    use mira_ui::{FRAME, motion::TRAVEL};
+    use std::{cell::Cell, rc::Rc};
+
+    let on = Rc::new(Cell::new(false));
+    let recording = mira_ui::record(
+        "switch-toggle",
+        size(px(160.0), px(52.0)),
+        TRAVEL * 2,
+        |window, cx| {
+            Scene::open(
+                move |_, _| {
+                    let toggled = on.clone();
+                    Switch::new("relogin", "Auto relogin", on.get())
+                        .on_toggle(move |value, window, _| {
+                            toggled.set(value);
+                            window.refresh();
+                        })
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            click(cx, owner, 30.0, 30.0);
+            move_pointer(cx, owner, 150.0, 48.0);
+        },
+    );
+    let on = snapshot("switch-on", size(px(160.0), px(52.0)), |window, cx| {
+        Scene::open(
+            |_, _| {
+                Switch::new("relogin", "Auto relogin", true)
+                    .on_toggle(|_, _, _| {})
+                    .into_any_element()
+            },
+            window,
+            cx,
+        )
+    });
+    let settled = recording.frames.last().unwrap();
+    assert!(
+        std::fs::read(&settled.path).unwrap() == std::fs::read(&on[0]).unwrap(),
+        "{} should match the switch drawn on, {}",
+        settled.path.display(),
+        on[0].display()
+    );
+    let summary = std::fs::read_to_string(&recording.summary).unwrap();
+    let moving = recording
+        .frames
+        .iter()
+        .filter(|frame| frame.changed > 0)
+        .count();
+    assert!(
+        moving > 4,
+        "the switch jumped instead of animating\n{summary}"
+    );
+    assert!(
+        (TRAVEL - FRAME..=TRAVEL + FRAME).contains(&recording.settled_at()),
+        "the switch should move for {TRAVEL:?}\n{summary}"
+    );
+}
+
 #[test]
 fn snapshot_controls() {
     scene("controls", 620.0, 340.0, |_, _| {

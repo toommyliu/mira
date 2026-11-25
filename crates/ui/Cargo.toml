@@ -6,12 +6,13 @@ publish = false
 license = "MIT"
 
 [features]
-test-support = ["dep:gpui_apple", "dep:mira-platform", "gpui/test-support"]
+test-support = ["dep:gpui_apple", "dep:image", "dep:mira-platform", "gpui/test-support"]
 
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
 gpui_apple = { workspace = true, optional = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 mira-platform = { workspace = true, optional = true }
 serde = { version = "1", features = ["derive"] }
 unicode-segmentation.workspace = true

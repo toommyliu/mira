@@ -5,11 +5,15 @@ pub mod motion;
 pub mod nav;
 pub mod primitives;
 #[cfg(feature = "test-support")]
+mod recording;
+#[cfg(feature = "test-support")]
 mod snapshot;
 mod style;
 pub mod theme;
 
 pub use assets::Assets;
+#[cfg(feature = "test-support")]
+pub use recording::{FRAME, Frame, Recording, record};
 #[cfg(feature = "test-support")]
 pub use snapshot::{snapshot, snapshot_after, snapshot_with};
 pub use style::{StyledExt, h_flex, v_flex};
