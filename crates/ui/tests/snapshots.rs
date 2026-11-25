@@ -649,25 +649,38 @@ fn snapshot_select_opens_immediately_on_the_side_with_room() {
     use gpui::{MouseButton, MouseDownEvent, PlatformInput};
     use std::time::Duration;
 
+    let options = ["Direct", "Hold", "Double press"];
     // The first trigger has room on both sides, with slightly more room above.
-    for (name, trigger_top, below) in [("select-below", 108, true), ("select-above", 172, false)] {
+    for (name, trigger_top, below, menu) in [
+        ("select-below", 108, true, false),
+        ("select-above", 172, false, false),
+        ("menu-below", 108, true, true),
+        ("menu-above", 172, false, true),
+    ] {
         mira_ui::snapshot_with(
             name,
             size(px(184.0), px(240.0)),
             |window, cx| {
                 Scene::open(
                     move |_, _| {
+                        let trigger = if menu {
+                            DropdownMenu::new("quit")
+                                .width(px(136.0))
+                                .trigger(Button::new("quit-trigger", "Quit shortcut").w(px(136.0)))
+                                .items(move |_, _| {
+                                    options
+                                        .map(|option| MenuItem::action(option, |_, _| {}))
+                                        .into()
+                                })
+                                .into_any_element()
+                        } else {
+                            Select::new("quit", "Quit shortcut", options, Some(2))
+                                .width(px(136.0))
+                                .into_any_element()
+                        };
                         div()
                             .pt(px((trigger_top - 16) as f32))
-                            .child(
-                                Select::new(
-                                    "quit",
-                                    "Quit shortcut",
-                                    ["Direct", "Hold", "Double press"],
-                                    Some(2),
-                                )
-                                .width(px(136.0)),
-                            )
+                            .child(trigger)
                             .into_any_element()
                     },
                     window,

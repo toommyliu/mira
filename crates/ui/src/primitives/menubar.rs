@@ -398,7 +398,6 @@ fn render_entry(
                 &state,
                 on_outside,
                 window,
-                cx,
                 |window| menu::popup(&id, label, items, MENU_MAX_HEIGHT, &state, window, cx),
             )
         }
@@ -418,7 +417,6 @@ fn render_entry(
                 &state,
                 on_outside,
                 window,
-                cx,
                 |_| panel.into_any_element(),
             )
         }
