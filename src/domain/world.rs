@@ -318,6 +318,17 @@ pub(crate) fn monster(
     query: &MonsterQuery,
 ) -> Result<Option<Monster>, CallError> {
     let cell = bridge::player::get_cell(loader)?.unwrap_or_default();
+    Ok(monsters(loader, None)?
+        .into_iter()
+        .filter(|monster| query.matches(monster))
+        .min_by_key(|monster| !monster.cell.eq_ignore_ascii_case(&cell)))
+}
+
+pub(crate) fn monster_here(
+    loader: &impl Loader,
+    query: &MonsterQuery,
+) -> Result<Option<Monster>, CallError> {
+    let cell = bridge::player::get_cell(loader)?.unwrap_or_default();
     Ok(monsters(loader, Some(&cell))?
         .into_iter()
         .find(|monster| query.matches(monster)))
@@ -393,7 +404,7 @@ pub(crate) async fn monster_drops(
     if !wait_until_ready(loader).await? {
         return Ok(None);
     }
-    let Some(monster) = monster(loader, query)? else {
+    let Some(monster) = monster_here(loader, query)? else {
         return Ok(None);
     };
     replies.clear();
@@ -822,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn queries_match_within_the_current_cell() {
+    fn queries_prefer_the_current_cell_and_search_the_whole_map() {
         let (loader, _) = scene(quiet("r2"), Rc::default(), Vec::new());
         let id = |query: MonsterQuery| {
             monster(&loader, &query)
@@ -832,7 +843,14 @@ mod tests {
         assert_eq!(id(MonsterQuery::Name("  FROGZARD ".into())), Some(1.0));
         assert_eq!(id(MonsterQuery::Name("*".into())), Some(1.0));
         assert_eq!(id(MonsterQuery::MonMapId { mon_map_id: 2.0 }), Some(2.0));
-        assert_eq!(id(MonsterQuery::Name("Slime".into())), None);
+        assert_eq!(id(MonsterQuery::MonMapId { mon_map_id: 3.0 }), Some(3.0));
+        assert_eq!(id(MonsterQuery::Name("Slime".into())), Some(3.0));
+        assert_eq!(id(MonsterQuery::Name("Goblin".into())), None);
+        let slime = MonsterQuery::Name("Slime".into());
+        assert_eq!(crate::domain::taunt::sight(&loader, &slime).unwrap(), None);
+        let (elsewhere, _) = scene(quiet("r3"), Rc::default(), Vec::new());
+        let nearest = monster(&elsewhere, &MonsterQuery::Name("*".into())).unwrap();
+        assert_eq!(nearest.map(|monster| monster.mon_map_id), Some(3.0));
         let available = |query: MonsterQuery| monster_available(&loader, &query).unwrap();
         assert!(available(MonsterQuery::Name("frogzard".into())));
         assert!(!available(MonsterQuery::MonMapId { mon_map_id: 2.0 }));
