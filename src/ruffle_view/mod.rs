@@ -62,6 +62,7 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, Theme,
+    components::Empty,
     primitives::{Button, Spinner, button::Variant, text_field},
 };
 use native::NativeView;
@@ -137,6 +138,7 @@ pub struct RuffleView {
     stats: Option<crate::ruffle::stats::Report>,
     stats_placement: stats::Placement,
     player_bounds: Bounds<Pixels>,
+    fits_minimal_description: bool,
     stage: Option<StageFit>,
     native: NativeView,
     focus: FocusHandle,
@@ -492,6 +494,7 @@ impl RuffleView {
                 stats: None,
                 stats_placement: stats::Placement::default(),
                 player_bounds: Bounds::default(),
+                fits_minimal_description: true,
                 stage: None,
                 native,
                 focus,
@@ -785,10 +788,23 @@ fn loading(theme: &Theme, loading: Loading) -> impl IntoElement {
         )
 }
 
-fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
-    let theme = cx.theme();
-    let layout = theme.layout;
-    let typography = theme.typography;
+fn fits_minimal_description(area: gpui::Size<Pixels>) -> bool {
+    area.width >= px(200.0) && area.height >= px(180.0)
+}
+
+fn minimal_rendering(
+    theme: &Theme,
+    described: bool,
+    resume: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let empty = if described {
+        Empty::new(
+            "Minimal rendering",
+            "The game and scripts keep running while using fewer resources.",
+        )
+    } else {
+        Empty::title("Minimal rendering")
+    };
     div()
         .id("minimal-rendering")
         .absolute()
@@ -798,28 +814,13 @@ fn minimal_rendering(cx: &mut Context<RuffleView>) -> impl IntoElement {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(layout.space(1.5))
         .bg(theme.background)
-        .text_size(typography.body)
-        .text_color(theme.foreground)
         .child(
-            div()
-                .text_size(typography.body)
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child("Minimal rendering"),
-        )
-        .child(
-            div()
-                .text_color(theme.muted_foreground)
-                .child("The game and scripts keep running while using fewer resources."),
-        )
-        .child(
-            Button::new("resume-rendering", "Resume rendering")
-                .variant(Variant::Outline)
-                .mt(layout.space(2.0))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.change_game_settings(|settings| settings.rendering.resume(), cx)
-                })),
+            empty.compact().action(
+                Button::new("resume-rendering", "Resume rendering")
+                    .variant(Variant::Outline)
+                    .on_click(resume),
+            ),
         )
 }
 
@@ -829,7 +830,14 @@ impl Render for RuffleView {
         let prepaint = {
             let this = this.clone();
             move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
-                let player = this.update(cx, |this, _| this.layout(bounds, window));
+                let player = this.update(cx, |this, _| {
+                    let fits = fits_minimal_description(bounds.size);
+                    if this.fits_minimal_description != fits {
+                        this.fits_minimal_description = fits;
+                        window.request_animation_frame();
+                    }
+                    this.layout(bounds, window)
+                });
                 window.insert_hitbox(player, HitboxBehavior::Normal)
             }
         };
@@ -868,7 +876,15 @@ impl Render for RuffleView {
             )
             .when(
                 self.automation.game_settings().rendering.minimal(),
-                |view| view.child(minimal_rendering(cx)),
+                |view| {
+                    view.child(minimal_rendering(
+                        cx.theme(),
+                        self.fits_minimal_description,
+                        cx.listener(|this, _, _, cx| {
+                            this.change_game_settings(|settings| settings.rendering.resume(), cx)
+                        }),
+                    ))
+                },
             )
             .when_some(self.stats, |view, stats| {
                 view.child(stats::overlay(
@@ -908,4 +924,38 @@ fn capitalized(text: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{AppContext as _, ParentElement as _, Render, Styled as _, div, px, size};
+    use mira_ui::ActiveTheme as _;
+
+    struct Tile;
+
+    impl Render for Tile {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let described = super::fits_minimal_description(window.viewport_size());
+            div().relative().size_full().child(super::minimal_rendering(
+                cx.theme(),
+                described,
+                |_, _, _| {},
+            ))
+        }
+    }
+
+    #[test]
+    fn snapshot_minimal_rendering_in_grid_tiles() {
+        for (name, width, height) in [("narrow", 236.0, 185.0), ("small", 189.0, 139.0)] {
+            mira_ui::snapshot(
+                &format!("minimal-rendering-tile-{name}"),
+                size(px(width), px(height)),
+                |_, cx| cx.new(|_| Tile),
+            );
+        }
+    }
 }

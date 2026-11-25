@@ -8,7 +8,7 @@ use crate::{ActiveTheme as _, StyledExt as _, h_flex};
 #[derive(IntoElement)]
 pub struct Empty {
     title: SharedString,
-    body: SharedString,
+    body: Option<SharedString>,
     actions: Vec<AnyElement>,
     compact: bool,
 }
@@ -16,8 +16,15 @@ pub struct Empty {
 impl Empty {
     pub fn new(title: impl Into<SharedString>, body: impl Into<SharedString>) -> Self {
         Self {
+            body: Some(body.into()),
+            ..Self::title(title)
+        }
+    }
+
+    pub fn title(title: impl Into<SharedString>) -> Self {
+        Self {
             title: title.into(),
-            body: body.into(),
+            body: None,
             actions: Vec::new(),
             compact: false,
         }
@@ -58,15 +65,15 @@ impl RenderOnce for Empty {
                     .text_color(theme.foreground)
                     .child(self.title),
             )
-            .child(
+            .children(self.body.map(|body| {
                 div()
                     .max_w(px(320.0))
                     .text_center()
                     .text_size(typography.body)
                     .line_height(typography.body_line)
                     .text_color(theme.muted_foreground)
-                    .child(self.body),
-            )
+                    .child(body)
+            }))
             .when(!self.actions.is_empty(), |empty| {
                 empty.child(
                     h_flex()
