@@ -355,10 +355,7 @@ pub(crate) async fn jump(
     if !move_to(loader, cell, pad).await? {
         return Ok(false);
     }
-    if !auto_correct
-        || pad.eq_ignore_ascii_case("none")
-        || !bridge::flash::is_null(loader, &format!("world.map.{pad}"))?
-    {
+    if !auto_correct || pad.eq_ignore_ascii_case("none") {
         return Ok(true);
     }
     match corrected_pad(pad, &world::cell_pads(loader)?) {
@@ -380,11 +377,15 @@ fn known_cell<'a>(cells: &'a [String], cell: &str, ignore_case: bool) -> Option<
 }
 
 fn corrected_pad<'a>(pad: &str, pads: &'a [String]) -> Option<&'a str> {
-    let has = |name: &&str| pads.iter().any(|known| known == name);
-    pads.iter()
-        .map(String::as_str)
-        .find(|known| known.eq_ignore_ascii_case(pad))
-        .or_else(|| std::iter::once("Left").chain(world::PADS).find(has))
+    if pads.iter().any(|known| known == pad) {
+        return None;
+    }
+    let named = |name: &str| {
+        pads.iter()
+            .map(String::as_str)
+            .find(|known| known.eq_ignore_ascii_case(name))
+    };
+    named(pad).or_else(|| std::iter::once("Left").chain(world::PADS).find_map(named))
 }
 
 async fn move_to(loader: &impl Loader, cell: &str, pad: &str) -> Result<bool, CallError> {
@@ -648,14 +649,14 @@ mod tests {
                 "world.getCellPads" => Value::List(
                     children(&place.cell)
                         .into_iter()
-                        .filter(|child| world::PADS.contains(child))
+                        .filter(|child| {
+                            world::PADS
+                                .iter()
+                                .any(|pad| pad.eq_ignore_ascii_case(child))
+                        })
                         .map(|pad| Value::String(pad.into()))
                         .collect(),
                 ),
-                "flash.isNull" => match text(&args[0]).strip_prefix("world.map.") {
-                    Some(child) => Value::Bool(!children(&place.cell).contains(&child)),
-                    None => Value::Bool(false),
-                },
                 "player.isLoaded" => {
                     let loaded = place.loading == 0 && place.art == 0;
                     place.art = place.art.saturating_sub(1);
@@ -703,6 +704,7 @@ mod tests {
                 } else {
                     100.0
                 }),
+                "flash.isNull" => Value::Bool(false),
                 "world.getMonsters" => Value::List(Vec::new()),
                 "combat.cancelAutoAttack" | "combat.cancelTarget" => Value::Null,
                 "player.getPad" => Value::String(place.pad.clone()),
@@ -1048,7 +1050,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_auto_corrected_jump_lands_on_a_cell_and_pad_the_map_has() {
-        let cases: [(&str, Option<&str>, bool, &[[&str; 2]]); 8] = [
+        let cases: [(&str, Option<&str>, bool, &[[&str; 2]]); 9] = [
             ("enter", Some("Right"), true, &[["Enter", "Right"]]),
             (
                 "Room",
@@ -1056,7 +1058,8 @@ mod tests {
                 true,
                 &[["Room", "right"], ["Room", "Right"]],
             ),
-            ("Room", None, true, &[["Room", "Spawn"], ["Room", "Left"]]),
+            ("Room", None, true, &[["Room", "Spawn"], ["Room", "spawn"]]),
+            ("r2", Some("Top"), true, &[["r2", "Top"], ["r2", "Left"]]),
             (
                 "Enter",
                 Some("Top"),

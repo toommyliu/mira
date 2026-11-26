@@ -1044,7 +1044,7 @@ mod tests {
                     "world.isCellReady" => {
                         Value::Bool(args[0] == Value::String(state.borrow().clone()))
                     }
-                    "flash.isNull" => Value::Bool(false),
+                    "world.getCellPads" => Value::List(vec![Value::String("Spawn".into())]),
                     other => panic!("unexpected call {other} {args:?}"),
                 })
             });
