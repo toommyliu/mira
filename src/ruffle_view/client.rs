@@ -67,30 +67,6 @@ const STATUS_LINGER: Duration = Duration::from_millis(1500);
 const STATUS_PADDING: Pixels = px(16.0);
 const TAB_MENU_WIDTH: Pixels = px(304.0);
 
-fn fully_visible(
-    viewport: (f32, f32),
-    scrolled: f32,
-    max_scroll: f32,
-    tabs: &[(f32, f32)],
-) -> Vec<usize> {
-    let scrolled = scrolled.clamp(-max_scroll, 0.0);
-    tabs.iter()
-        .enumerate()
-        .filter(|(_, (top, bottom))| {
-            top + scrolled >= viewport.0 && bottom + scrolled <= viewport.1
-        })
-        .map(|(index, _)| index)
-        .take(9)
-        .collect()
-}
-
-fn shortcut_for(shortcuts: &[usize], index: usize) -> Option<usize> {
-    shortcuts
-        .iter()
-        .position(|&tab| tab == index)
-        .map(|position| position + 1)
-}
-
 pub(crate) fn bind_keys(cx: &mut App) {
     super::script_dialog::bind_keys(cx);
     super::manager::bind_keys(cx);
@@ -187,13 +163,13 @@ struct SessionTab {
     title: SharedString,
     glance: Option<Glance>,
     details: Details,
-    hint: Option<usize>,
+    hint: Option<SharedString>,
 }
 
 impl SessionTab {
     fn tab(&self, theme: &Theme, active: bool) -> TabItem {
         let mut tab = TabItem::new(self.title.clone())
-            .child(tab_title(theme, &self.title, active, self.hint))
+            .child(tab_title(theme, &self.title, active, self.hint.clone()))
             .detail(tab_glance(theme, self.glance.clone()));
         if let Some(glance) = &self.glance {
             tab = tab.description(glance.label.clone());
@@ -1360,23 +1336,6 @@ impl Client {
         }
     }
 
-    fn shortcut_tabs(&self) -> Vec<usize> {
-        if self.sidebar == Sidebar::Hidden {
-            return (0..self.sessions.len().min(9)).collect();
-        }
-        let viewport = self.tab_scroll.bounds();
-        let tabs: Vec<_> = (0..self.sessions.len())
-            .map_while(|index| self.tab_scroll.bounds_for_item(index))
-            .map(|tab| (f32::from(tab.top()), f32::from(tab.bottom())))
-            .collect();
-        fully_visible(
-            (f32::from(viewport.top()), f32::from(viewport.bottom())),
-            f32::from(self.tab_scroll.offset().y),
-            f32::from(self.tab_scroll.max_offset().y),
-            &tabs,
-        )
-    }
-
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
         let count = self.sessions.len() as isize;
         if count > 1 {
@@ -1388,7 +1347,6 @@ impl Client {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let layout = theme.layout;
-        let shortcuts = self.shortcut_tabs();
         let rows: Rc<[SessionTab]> = self
             .sessions
             .iter()
@@ -1403,7 +1361,7 @@ impl Client {
                     details: view.details(cx),
                     hint: self
                         .shortcut_hints
-                        .then(|| shortcut_for(&shortcuts, index))
+                        .then(|| keys_for(&SelectSession(index), cx))
                         .flatten(),
                 }
             })
@@ -1524,7 +1482,6 @@ impl Client {
                     return Vec::new();
                 };
                 let this = this.read(cx);
-                let shortcuts = this.shortcut_tabs();
                 let tabs = this
                     .sessions
                     .iter()
@@ -1533,8 +1490,7 @@ impl Client {
                         title: session.title(cx),
                         glance: session.view.read(cx).glance(cx).map(|glance| glance.label),
                         active: index == this.active,
-                        shortcut: shortcut_for(&shortcuts, index)
-                            .and_then(|number| keys_for(&SelectSession(number - 1), cx)),
+                        shortcut: keys_for(&SelectSession(index), cx),
                     })
                     .collect();
                 tab_items(&client, tabs, this.layout, cx)
@@ -1734,7 +1690,7 @@ fn tab_title(
     theme: &Theme,
     label: &SharedString,
     active: bool,
-    hint: Option<usize>,
+    hint: Option<SharedString>,
 ) -> impl IntoElement {
     let typography = theme.typography;
     div()
@@ -1751,7 +1707,7 @@ fn tab_title(
                 .when(active, |name| name.font_weight(gpui::FontWeight::MEDIUM))
                 .child(label.clone()),
         )
-        .children(hint.map(|number| Kbd::new(format!("⌘{number}"))))
+        .children(hint.map(Kbd::new))
 }
 
 fn tab_glance(theme: &Theme, glance: Option<Glance>) -> impl IntoElement {
@@ -1972,9 +1928,7 @@ impl Client {
                 },
             )
             .on_action(cx.listener(|this, action: &SelectSession, window, cx| {
-                if let Some(&index) = this.shortcut_tabs().get(action.0) {
-                    this.select(index, window, cx)
-                }
+                this.select(action.0, window, cx)
             }))
             .when(self.sidebar == Sidebar::Full, |root| {
                 root.child(self.sidebar(cx))
@@ -2051,23 +2005,6 @@ fn queued_script(script: Option<PathBuf>, cx: &App) -> anyhow::Result<Option<(Pa
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shortcuts_number_only_the_tabs_fully_in_view() {
-        let tabs: Vec<_> = (0..12)
-            .map(|index| (index as f32 * 30.0, index as f32 * 30.0 + 28.0))
-            .collect();
-        assert_eq!(fully_visible((0.0, 130.0), 0.0, 228.0, &tabs), [0, 1, 2, 3]);
-        assert_eq!(fully_visible((0.0, 130.0), -45.0, 228.0, &tabs), [2, 3, 4]);
-        assert_eq!(
-            fully_visible((0.0, 130.0), -1000.0, 228.0, &tabs),
-            [8, 9, 10, 11]
-        );
-        assert_eq!(
-            fully_visible((0.0, 1000.0), 0.0, 0.0, &tabs),
-            (0..9).collect::<Vec<_>>()
-        );
-    }
 
     struct Shown(Entity<Client>);
 
@@ -2457,10 +2394,10 @@ mod tests {
             let theme = cx.theme().clone();
             let view = cx.entity_id();
             let rows: Vec<SessionTab> = [
-                ("The Legendary Hero Of Battleon And Beyond", "Swordhaven (EU) · tercessuinotlim-99999", Tone::Neutral, Some(1)),
-                ("xXx_SuperLongUsernameWithoutAnySpaces_xXx", "legion-revenant-fealty-and-exalted-crown-farm.ts is waiting for you", Tone::Attention, Some(2)),
+                ("The Legendary Hero Of Battleon And Beyond", "Swordhaven (EU) · tercessuinotlim-99999", Tone::Neutral, Some("⌘1".into())),
+                ("xXx_SuperLongUsernameWithoutAnySpaces_xXx", "legion-revenant-fealty-and-exalted-crown-farm.ts is waiting for you", Tone::Attention, Some("⌘2".into())),
                 ("a", "Couldn't join house-73675086, the room is full", Tone::Danger, None),
-                ("Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww", "Logging in, attempt 2 of 3", Tone::Neutral, Some(10)),
+                ("Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww", "Logging in, attempt 2 of 3", Tone::Neutral, Some("⌘10".into())),
             ]
             .into_iter()
             .enumerate()
