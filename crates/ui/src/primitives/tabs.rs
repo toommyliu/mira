@@ -31,6 +31,7 @@ pub struct Tab {
     detail: Option<AnyElement>,
     on_close: Option<Handler>,
     menu: Option<ItemsBuilder>,
+    menu_trigger: bool,
     hover_card: Option<HoverCard>,
 }
 
@@ -45,6 +46,7 @@ impl Tab {
             detail: None,
             on_close: None,
             menu: None,
+            menu_trigger: false,
             hover_card: None,
         }
     }
@@ -76,6 +78,16 @@ impl Tab {
 
     pub fn menu(mut self, f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static) -> Self {
         self.menu = Some(Rc::new(f));
+        self.menu_trigger = true;
+        self
+    }
+
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static,
+    ) -> Self {
+        self.menu = Some(Rc::new(f));
+        self.menu_trigger = false;
         self
     }
 
@@ -237,7 +249,9 @@ impl Render {
         let menu = tab.menu.take().filter(|_| pose != Pose::Lifted);
         let more = menu
             .clone()
-            .filter(|_| self.layout != TabLayout::Horizontal && pose == Pose::Rest)
+            .filter(|_| {
+                tab.menu_trigger && self.layout != TabLayout::Horizontal && pose == Pose::Rest
+            })
             .map(|items| {
                 let id = ElementId::from((self.id.clone(), format!("more-{index}")));
                 let state = menu::state(&id, false, window, cx);
@@ -385,6 +399,7 @@ impl Render {
                         .child(
                             Button::icon(("close", index), Icon::X, "Close")
                                 .size(Size::XSmall)
+                                .icon_size(Size::Small.icon_size())
                                 .on_click(move |_, window, cx| close(window, cx)),
                         ),
                 )

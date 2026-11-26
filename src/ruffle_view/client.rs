@@ -1415,7 +1415,7 @@ impl Client {
         let face_theme = theme.clone();
         let tabs = Tabs::new("sessions", "Tabs", rows.len(), move |index| {
             let row = &rows[index];
-            let tab = row.tab(&face_theme, index == active).menu({
+            let tab = row.tab(&face_theme, index == active).context_menu({
                 let client = client.clone();
                 let (view, title) = (row.view, row.title.clone());
                 move |_, _| tool_menu(&client, view, &title)
@@ -2438,7 +2438,7 @@ mod tests {
                             Tabs::new("sessions", "Tabs", 1, move |_| {
                                 let (view, title) = (row.view, row.title.clone());
                                 row.tab(&theme, true)
-                                    .menu(move |_, _| {
+                                    .context_menu(move |_, _| {
                                         tool_menu(&WeakEntity::new_invalid(), view, &title)
                                     })
                                     .on_close(|_, _| {})
@@ -2490,11 +2490,13 @@ mod tests {
                             Tabs::new("sessions", "Tabs", rows.len(), move |index| {
                                 let row = &rows[index];
                                 let (view, title) = (row.view, row.title.clone());
-                                row.tab(&theme, index == 0)
-                                    .menu(move |_, _| {
-                                        tool_menu(&WeakEntity::new_invalid(), view, &title)
-                                    })
-                                    .on_close(|_, _| {})
+                                let tab = row.tab(&theme, index == 0).context_menu(move |_, _| {
+                                    tool_menu(&WeakEntity::new_invalid(), view, &title)
+                                });
+                                if row.hint.is_some() {
+                                    return tab;
+                                }
+                                tab.on_close(|_, _| {})
                             })
                             .vertical()
                             .on_reorder(|_, _, _, _| {}),
