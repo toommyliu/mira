@@ -486,7 +486,11 @@ impl Theme {
         self.input.opacity(if self.dark_mode { 0.3 } else { 0.0 })
     }
     pub fn ghost_hover(&self) -> Hsla {
-        self.muted.opacity(if self.dark_mode { 0.5 } else { 1.0 })
+        if self.dark_mode {
+            self.foreground.opacity(0.05)
+        } else {
+            self.muted
+        }
     }
     pub fn destructive_fill(&self) -> Hsla {
         self.destructive
