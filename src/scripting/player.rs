@@ -135,7 +135,7 @@ pub(super) async fn serve(
             )
         }
         Request::JumpToCell { cell, pad } => {
-            json!(domain::player::jump(loader, &cell, pad.as_deref()).await?)
+            json!(domain::player::jump(loader, &cell, pad.as_deref(), true).await?)
         }
         Request::GoToPlayer { username } => {
             json!(domain::player::go_to(loader, &subscribe, &username).await? == Arrival::Arrived)

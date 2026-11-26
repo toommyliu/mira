@@ -182,7 +182,7 @@ pub(crate) async fn join(
     let here = bridge::player::get_map(loader)?;
     if here.is_some_and(|here| here.eq_ignore_ascii_case(name)) && in_room(loader, room)? {
         return match cell {
-            Some(cell) => jump(loader, cell, Some(pad)).await,
+            Some(cell) => jump(loader, cell, Some(pad), true).await,
             None => {
                 let Some(here) = bridge::player::get_cell(loader)? else {
                     return Ok(false);
@@ -304,7 +304,7 @@ pub(crate) async fn go_to(
             return Ok(true);
         }
         let pad = (!target.pad.is_empty()).then_some(target.pad.as_str());
-        jump(loader, &target.cell, pad).await
+        jump(loader, &target.cell, pad, true).await
     };
     tokio::select! {
         arrived = arrived => Ok(if arrived? { Arrival::Arrived } else { Arrival::Missed }),
@@ -342,14 +342,52 @@ pub(crate) async fn jump(
     loader: &impl Loader,
     cell: &str,
     pad: Option<&str>,
+    auto_correct: bool,
 ) -> Result<bool, CallError> {
     if !wait_until_ready(loader).await? {
         return Ok(false);
     }
-    if !world::has_cell(loader, cell)? {
+    let cells = world::cells(loader)?;
+    let Some(cell) = known_cell(&cells, cell, auto_correct) else {
+        return Ok(false);
+    };
+    let pad = pad.unwrap_or(DEFAULT_PAD);
+    if !move_to(loader, cell, pad).await? {
         return Ok(false);
     }
-    let pad = pad.unwrap_or(DEFAULT_PAD);
+    if !auto_correct
+        || pad.eq_ignore_ascii_case("none")
+        || !bridge::flash::is_null(loader, &format!("world.map.{pad}"))?
+    {
+        return Ok(true);
+    }
+    match corrected_pad(pad, &world::cell_pads(loader)?) {
+        Some(pad) => move_to(loader, cell, pad).await,
+        None => Ok(true),
+    }
+}
+
+fn known_cell<'a>(cells: &'a [String], cell: &str, ignore_case: bool) -> Option<&'a str> {
+    cells
+        .iter()
+        .find(|known| *known == cell)
+        .or_else(|| {
+            ignore_case
+                .then(|| cells.iter().find(|known| known.eq_ignore_ascii_case(cell)))
+                .flatten()
+        })
+        .map(String::as_str)
+}
+
+fn corrected_pad<'a>(pad: &str, pads: &'a [String]) -> Option<&'a str> {
+    let has = |name: &&str| pads.iter().any(|known| known == name);
+    pads.iter()
+        .map(String::as_str)
+        .find(|known| known.eq_ignore_ascii_case(pad))
+        .or_else(|| std::iter::once("Left").chain(world::PADS).find(has))
+}
+
+async fn move_to(loader: &impl Loader, cell: &str, pad: &str) -> Result<bool, CallError> {
     bridge::player::jump(loader, cell, Some(pad))?;
     let arrived = arrive(loader, JUMP_TIMEOUT, || {
         Ok(bridge::world::is_cell_ready(loader, cell, Some(pad))?.then_some(true))
@@ -574,6 +612,14 @@ mod tests {
         }
     }
 
+    fn children(cell: &str) -> Vec<&'static str> {
+        match cell {
+            "Enter" => vec!["Right", "Spawn"],
+            "r2" => vec!["Spawn", "Left"],
+            _ => vec!["Right", "Left", "spawn"],
+        }
+    }
+
     fn traveller(place: Place) -> (FakeLoader, Rc<RefCell<Place>>) {
         let place = Rc::new(RefCell::new(place));
         let state = place.clone();
@@ -599,6 +645,17 @@ mod tests {
                         .map(|cell| Value::String(cell.into()))
                         .to_vec(),
                 ),
+                "world.getCellPads" => Value::List(
+                    children(&place.cell)
+                        .into_iter()
+                        .filter(|child| world::PADS.contains(child))
+                        .map(|pad| Value::String(pad.into()))
+                        .collect(),
+                ),
+                "flash.isNull" => match text(&args[0]).strip_prefix("world.map.") {
+                    Some(child) => Value::Bool(!children(&place.cell).contains(&child)),
+                    None => Value::Bool(false),
+                },
                 "player.isLoaded" => {
                     let loaded = place.loading == 0 && place.art == 0;
                     place.art = place.art.saturating_sub(1);
@@ -646,7 +703,6 @@ mod tests {
                 } else {
                     100.0
                 }),
-                "flash.isNull" => Value::Bool(false),
                 "world.getMonsters" => Value::List(Vec::new()),
                 "combat.cancelAutoAttack" | "combat.cancelTarget" => Value::Null,
                 "player.getPad" => Value::String(place.pad.clone()),
@@ -973,8 +1029,8 @@ mod tests {
     async fn travel_to_a_cell_the_map_does_not_have_fails_without_waiting() {
         let (loader, place) = traveller(in_map("battleon", "Enter"));
         let started = Instant::now();
-        assert_eq!(jump(&loader, "Nowhere", None).await, Ok(false));
-        assert_eq!(jump(&loader, "enter", None).await, Ok(false));
+        assert_eq!(jump(&loader, "Nowhere", None, true).await, Ok(false));
+        assert_eq!(jump(&loader, "enter", None, false).await, Ok(false));
         assert!(place.borrow().jumps.is_empty());
 
         let events = Events::default();
@@ -991,6 +1047,43 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn an_auto_corrected_jump_lands_on_a_cell_and_pad_the_map_has() {
+        let cases: [(&str, Option<&str>, bool, &[[&str; 2]]); 8] = [
+            ("enter", Some("Right"), true, &[["Enter", "Right"]]),
+            (
+                "Room",
+                Some("right"),
+                true,
+                &[["Room", "right"], ["Room", "Right"]],
+            ),
+            ("Room", None, true, &[["Room", "Spawn"], ["Room", "Left"]]),
+            (
+                "Enter",
+                Some("Top"),
+                true,
+                &[["Enter", "Top"], ["Enter", "Spawn"]],
+            ),
+            ("Room", Some("None"), true, &[["Room", "None"]]),
+            ("Room", Some("spawn"), true, &[["Room", "spawn"]]),
+            ("Room", Some("Top"), false, &[["Room", "Top"]]),
+            ("r2", None, true, &[["r2", "Spawn"]]),
+        ];
+        for (cell, pad, auto_correct, expected) in cases {
+            let (loader, place) = traveller(in_map("battleon", "Enter"));
+            assert_eq!(
+                jump(&loader, cell, pad, auto_correct).await,
+                Ok(true),
+                "{cell} {pad:?}"
+            );
+            let expected: Vec<Vec<Value>> = expected
+                .iter()
+                .map(|jump| jump.map(|text| Value::String(text.into())).to_vec())
+                .collect();
+            assert_eq!(place.borrow().jumps, expected, "{cell} {pad:?}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn travel_fails_when_the_player_is_logged_out() {
         let (loader, place) = traveller(Place {
             logged_in: false,
@@ -1002,7 +1095,7 @@ mod tests {
             join(&loader, &subscribe, "yulgar", None, None).await,
             Ok(false)
         );
-        assert_eq!(jump(&loader, "r2", None).await, Ok(false));
+        assert_eq!(jump(&loader, "r2", None, true).await, Ok(false));
         assert!(place.borrow().joins.is_empty() && place.borrow().jumps.is_empty());
     }
 
@@ -1020,7 +1113,7 @@ mod tests {
             }),
             other => panic!("unexpected call {other}"),
         });
-        assert_eq!(jump(&loader, "r2", None).await, Ok(false));
+        assert_eq!(jump(&loader, "r2", None, true).await, Ok(false));
         assert!(loader.count("flash.getGameObject") > 0);
     }
     #[test]
