@@ -13,7 +13,7 @@ use mira_ui::{
     h_flex,
     primitives::{
         Align, Badge, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input,
-        InputEvent, ListItem, MenuItem, Scrollbar, Select, Spinner, VirtualList,
+        InputEvent, ListItem, MenuItem, Scrollbar, Select, Spinner, VirtualList, VirtualListState,
         button::{Joined, Size, Variant},
     },
     theme::tabular,
@@ -224,14 +224,13 @@ pub(crate) struct LoaderGrabber {
     source: Source,
     snapshot: Option<Snapshot>,
     problem: Option<Problem>,
-    selections: HashMap<(EntityId, SelectionSource), i64>,
+    sources: HashMap<(EntityId, SelectionSource), SourceNavigation>,
     drops: HashMap<i64, Drops>,
     outcome: Option<(i64, Outcome)>,
     reading: Option<Task<()>>,
     acting: Option<(Act, Task<()>)>,
     reading_drops: HashMap<i64, Task<()>>,
     opened: HashSet<i32>,
-    inspector_scroll: ScrollHandle,
     located: Option<Location>,
     taken: Option<Outcome>,
     taking: Option<Task<()>>,
@@ -243,6 +242,13 @@ pub(crate) struct LoaderGrabber {
 enum SelectionSource {
     Items(Source),
     Monsters(String),
+}
+
+#[derive(Default)]
+struct SourceNavigation {
+    selected: Option<i64>,
+    results: VirtualListState,
+    inspector: ScrollHandle,
 }
 
 impl LoaderGrabber {
@@ -272,14 +278,13 @@ impl LoaderGrabber {
             source: Source::Shop,
             snapshot: None,
             problem: None,
-            selections: HashMap::new(),
+            sources: HashMap::new(),
             drops: HashMap::new(),
             outcome: None,
             reading: None,
             acting: None,
             reading_drops: HashMap::new(),
             opened: HashSet::new(),
-            inspector_scroll: ScrollHandle::new(),
             located: None,
             taken: None,
             taking: None,
@@ -408,13 +413,20 @@ impl LoaderGrabber {
     fn take(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
         self.problem = None;
         self.snapshot = Some(snapshot);
-        if let Some(entry) = self.selected().and_then(|key| self.entry(key)).cloned() {
+        let selected = self
+            .selection_key()
+            .and_then(|scope| self.sources.entry(scope).or_default().selected);
+        if let Some(entry) = selected.and_then(|key| self.entry(key)).cloned() {
             self.follow_drops(&entry, cx);
         }
     }
 
     fn selected(&self) -> Option<i64> {
-        self.selections.get(&self.selection_key()?).copied()
+        self.navigation()?.selected
+    }
+
+    fn navigation(&self) -> Option<&SourceNavigation> {
+        self.sources.get(&self.selection_key()?)
     }
 
     fn selection_key(&self) -> Option<(EntityId, SelectionSource)> {
@@ -444,7 +456,9 @@ impl LoaderGrabber {
         let Some(scope) = self.selection_key() else {
             return;
         };
-        if self.selections.insert(scope, key) != Some(key) {
+        let navigation = self.sources.entry(scope).or_default();
+        if navigation.selected.replace(key) != Some(key) {
+            navigation.inspector = ScrollHandle::new();
             self.outcome = None;
             self.opened.clear();
         }
@@ -554,9 +568,15 @@ impl LoaderGrabber {
                 if refresh {
                     if let Some(scope) = this.selection_key() {
                         if let Some(key) = first {
-                            this.selections.insert(scope, key);
+                            this.sources.insert(
+                                scope,
+                                SourceNavigation {
+                                    selected: Some(key),
+                                    ..Default::default()
+                                },
+                            );
                         } else {
-                            this.selections.remove(&scope);
+                            this.sources.remove(&scope);
                         }
                     }
                     this.open_source(source, cx);
@@ -930,7 +950,12 @@ impl LoaderGrabber {
             })
     }
 
-    fn list_column(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn list_column(
+        &self,
+        theme: &Theme,
+        navigation: Option<&SourceNavigation>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let layout = theme.layout;
         let entries = self.shown_entries(cx);
         let body = match (&self.snapshot, &self.problem) {
@@ -954,8 +979,8 @@ impl LoaderGrabber {
             .into_any_element(),
             (Some(_), _) => {
                 let rows: std::rc::Rc<[Entry]> = entries.into();
-                let selected = self
-                    .selected()
+                let selected = navigation
+                    .and_then(|navigation| navigation.selected)
                     .and_then(|key| rows.iter().position(|entry| entry.key == key));
                 let (lookup, keys, row_theme) = (rows.clone(), rows.clone(), theme.clone());
                 let this = cx.weak_entity();
@@ -971,6 +996,9 @@ impl LoaderGrabber {
                             move |index| line(&lookup[index], &row_theme),
                         )
                         .selected(selected)
+                        .when_some(navigation, |list, navigation| {
+                            list.state(&navigation.results)
+                        })
                         .fill()
                         .on_select(move |index, _, cx| {
                             let key = keys[index].key;
@@ -1026,8 +1054,17 @@ impl LoaderGrabber {
             .child(div().flex_none().w(ID).text_right().child(id))
     }
 
-    fn inspector_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn inspector_pane(
+        &self,
+        theme: &Theme,
+        navigation: Option<&SourceNavigation>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let layout = theme.layout;
+        let entry = navigation.and_then(|navigation| self.entry(navigation.selected?));
+        let scroll = entry
+            .and(navigation)
+            .map(|navigation| &navigation.inspector);
         theme
             .inspector_pane()
             .relative()
@@ -1037,20 +1074,24 @@ impl LoaderGrabber {
                     .id("grab-inspector")
                     .size_full()
                     .overflow_y_scroll()
-                    .track_scroll(&self.inspector_scroll)
+                    .when_some(scroll, |pane, scroll| pane.track_scroll(scroll))
                     .p(layout.space(4.0))
-                    .child(self.inspector(theme, cx)),
+                    .child(self.inspector(theme, entry, cx)),
             )
-            .child(Scrollbar::new(
-                "grab-inspector-scrollbar",
-                self.inspector_scroll.clone(),
-            ))
+            .children(
+                scroll.map(|scroll| Scrollbar::new("grab-inspector-scrollbar", scroll.clone())),
+            )
     }
 
-    fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn inspector(
+        &self,
+        theme: &Theme,
+        entry: Option<&Entry>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let layout = theme.layout;
         let typography = theme.typography;
-        let Some(entry) = self.selected().and_then(|key| self.entry(key)).cloned() else {
+        let Some(entry) = entry else {
             let pickable = self
                 .snapshot
                 .as_ref()
@@ -1066,7 +1107,7 @@ impl LoaderGrabber {
                 .into_any_element();
         };
         let listed = self.listed();
-        let more = self.more_menu(&entry, cx);
+        let more = self.more_menu(entry, cx);
         let acting = self.acting.as_ref().map(|(act, _)| act.clone());
         let acts = entry.acts.iter().enumerate().map(|(index, offer)| {
             let act = offer.act.clone();
@@ -1556,6 +1597,7 @@ impl Render for LoaderGrabber {
                 .child(outcome.text.clone())
         }));
         let body = if self.shown.is_some() {
+            let navigation = self.navigation();
             v_flex()
                 .flex_1()
                 .min_h_0()
@@ -1565,8 +1607,8 @@ impl Render for LoaderGrabber {
                         .items_stretch()
                         .flex_1()
                         .min_h_0()
-                        .child(self.list_column(&theme, cx))
-                        .child(self.inspector_pane(&theme, cx)),
+                        .child(self.list_column(&theme, navigation, cx))
+                        .child(self.inspector_pane(&theme, navigation, cx)),
                 )
         } else {
             v_flex().flex_1().child(Empty::new(
@@ -1680,10 +1722,8 @@ mod tests {
         assert_eq!(shop_field(&grabber, cx), ("12a4".into(), None));
     }
 
-    #[gpui::test]
-    fn returning_to_a_source_restores_its_own_record(cx: &mut TestAppContext) {
-        let (grabber, cx) = open(cx);
-        let results = |key, name: &str| Snapshot {
+    fn results(key: i64, name: &str) -> Snapshot {
+        Snapshot {
             heading: None,
             map: None,
             entries: vec![Entry {
@@ -1700,9 +1740,25 @@ mod tests {
                 drops_from: None,
                 json: "{}".into(),
             }],
-        };
+        }
+    }
+
+    fn tall_shop() -> Snapshot {
+        let mut shop = results(12, "Potion");
+        shop.entries[0].facts = (0..140)
+            .map(|i| ("Ingredient", format!("Ingredient {i}")))
+            .collect();
+        shop.entries
+            .extend((13..65).flat_map(|key| results(key, &format!("Item {key}")).entries));
+        shop
+    }
+
+    #[gpui::test]
+    fn returning_to_a_source_restores_its_record_and_scroll_positions(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        let shop = tall_shop();
         grabber.update(cx, |grabber, cx| {
-            grabber.take(results(12, "Potion"), cx);
+            grabber.take(shop.clone(), cx);
             cx.notify();
         });
         cx.run_until_parked();
@@ -1723,6 +1779,22 @@ mod tests {
         };
         pick(cx);
         assert_eq!(shown(cx).as_deref(), Some("Potion"));
+        let position = cx.debug_bounds("row-0").unwrap().center();
+        cx.simulate_event(gpui::ScrollEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-260.0))),
+            ..Default::default()
+        });
+        let offset = gpui::point(px(0.0), px(-120.0));
+        grabber.update(cx, |grabber, cx| {
+            let scroll = &grabber.navigation().unwrap().inspector;
+            assert!(scroll.max_offset().y >= -offset.y);
+            scroll.set_offset(offset);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let place = cx.debug_bounds("row-12").unwrap();
+        assert!(cx.debug_bounds("row-0").is_none());
 
         grabber.update(cx, |grabber, cx| {
             grabber.open_source(Source::Inventory, cx);
@@ -1733,12 +1805,18 @@ mod tests {
         pick(cx);
         assert_eq!(shown(cx).as_deref(), Some("Sword"));
 
+        grabber.update(cx, |grabber, cx| grabber.open_source(Source::Shop, cx));
+        cx.run_until_parked();
         grabber.update(cx, |grabber, cx| {
-            grabber.open_source(Source::Shop, cx);
-            grabber.take(results(12, "Potion"), cx);
+            grabber.take(shop, cx);
+            cx.notify();
         });
         cx.run_until_parked();
         assert_eq!(shown(cx).as_deref(), Some("Potion"));
+        assert_eq!(cx.debug_bounds("row-12"), Some(place));
+        grabber.read_with(cx, |grabber, _| {
+            assert_eq!(grabber.navigation().unwrap().inspector.offset(), offset)
+        });
 
         let location = |map: &str| Location {
             map: map.into(),
@@ -1809,6 +1887,49 @@ mod tests {
         focus_shop_field(&grabber, cx);
         press(cx, "enter");
         assert_eq!(shop_warning(&grabber, cx), None);
+    }
+
+    #[test]
+    fn snapshot_scrolled_source() {
+        let folder = crate::storyboard::scratch("grabber-scrolled");
+        for written in mira_ui::snapshot_with(
+            "grabber-scrolled",
+            gpui::size(px(WIDTH), px(HEIGHT)),
+            |_, cx| {
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+                    grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                    grabber.take(tall_shop(), cx);
+                    grabber.select(12, cx);
+                    grabber
+                })
+            },
+            |cx, window| {
+                cx.update_window(window, |root, window, cx| {
+                    root.downcast::<LoaderGrabber>()
+                        .unwrap()
+                        .update(cx, |grabber, _| {
+                            grabber
+                                .navigation()
+                                .unwrap()
+                                .inspector
+                                .set_offset(gpui::point(px(0.0), px(-120.0)));
+                        });
+                    window.dispatch_event(
+                        gpui::PlatformInput::Scroll(gpui::ScrollEvent {
+                            position: gpui::point(px(100.0), px(180.0)),
+                            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-260.0))),
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                })
+                .unwrap();
+            },
+        ) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
     }
 
     #[test]
