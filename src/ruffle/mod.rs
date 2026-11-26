@@ -711,7 +711,9 @@ async fn run_command(
             }));
             Ok(())
         }
-        Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad)).await.map(drop),
+        Command::Jump { cell, pad } => player::jump(&bridge, &cell, Some(&pad), true)
+            .await
+            .map(drop),
         Command::OpenBank => bank::open(&bridge).await.map(drop),
         Command::SendPacket {
             target,
