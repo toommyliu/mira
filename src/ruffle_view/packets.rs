@@ -19,6 +19,7 @@ use mira_ui::{
         Align, Badge, Button, DropdownMenu, Icon, Input, InputEvent, List, ListItem, MenuItem,
         Numeric, Switch, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
+        text_field::Find,
     },
     v_flex,
 };
@@ -1408,6 +1409,7 @@ impl Render for Packets {
             (Some(automation), Page::Log) => self.log_page(&theme, automation, window, cx),
             (Some(automation), Page::Send) => self.send_page(&theme, automation, cx),
         };
+        let this = cx.weak_entity();
         div()
             .flex()
             .flex_col()
@@ -1417,11 +1419,18 @@ impl Render for Packets {
             .id("packets")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                this.page = Page::Log;
-                window.focus(&this.search.focus_handle(cx), cx);
-                cx.notify();
-            }))
+            .when(automation.is_some() && self.log.is_some(), |root| {
+                root.on_action(Find::route(move |cx| {
+                    this.update(cx, |this, cx| {
+                        if this.page != Page::Log {
+                            this.page = Page::Log;
+                            cx.notify();
+                        }
+                        this.search.clone()
+                    })
+                    .ok()
+                }))
+            })
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
@@ -1633,7 +1642,6 @@ mod tests {
 
     #[gpui::test]
     fn find_shows_the_log_and_types_into_its_search(cx: &mut TestAppContext) {
-        cx.update(crate::app_menu::init);
         let (packets, _, cx) = open(cx);
         let (focus, search) = packets.update(cx, |packets, cx| {
             packets.log = Some(cx.new(|_| PacketLog::default()));
@@ -1644,6 +1652,19 @@ mod tests {
         typed(cx, "join");
         assert!(packets.read_with(cx, |packets, _| packets.page == Page::Log));
         assert_eq!(text(&search, cx), "join");
+
+        packets.update(cx, |packets, cx| {
+            packets.shown = None;
+            packets.log = None;
+            packets.page = Page::Send;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.run_until_parked();
+        assert!(!cx.update(|window, cx| window.is_action_available(&Find, cx)));
+        press(cx, "cmd-f");
+        assert!(packets.read_with(cx, |packets, _| packets.page == Page::Send));
+        assert!(cx.update(|window, _| focus.is_focused(window)));
     }
 
     #[gpui::test]

@@ -22,6 +22,7 @@ use mira_ui::{
         Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
         Scrollbar, Select, Switch, Tab, Tabs,
         button::{Size, Variant as ButtonVariant},
+        text_field::Find,
     },
     theme::Typography,
     theme::{parse_hex, to_hex},
@@ -1478,6 +1479,7 @@ impl Render for SettingsWindow {
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
+            .on_action(Find::in_search(&self.search))
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(reset_dialog)
@@ -2054,17 +2056,39 @@ mod tests {
                 init(dir.join("settings.json"), |_| {}, cx);
                 packages::init(dir.join("packages"), dir.join("token"), cx);
                 let settings = cx.new(SettingsWindow::new);
-                window.focus(&settings.read(cx).search.focus_handle(cx), cx);
+                let focus = settings.read(cx).focus.clone();
+                window.focus(&focus, cx);
                 settings
             },
             |cx, owner| {
-                for key in ["c", "o", "l", "o", "r"] {
-                    cx.update_window(owner, |_, window, cx| {
-                        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                let press = |cx: &mut gpui::HeadlessAppContext, keys: &[&'static str]| {
+                    for key in keys {
+                        cx.update_window(owner, |_, window, cx| {
+                            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                    }
+                };
+                let assert_query = |cx: &mut gpui::HeadlessAppContext, query| {
+                    cx.update_window(owner, |root, window, cx| {
+                        let settings = root.downcast::<SettingsWindow>().unwrap();
+                        let search = settings.read(cx).search.read(cx);
+                        assert!(search.focus_handle(cx).is_focused(window));
+                        assert_eq!(search.text(), query);
                     })
                     .unwrap();
-                }
+                };
+                press(cx, &["cmd-f", "c", "o", "l", "d", "end"]);
+                press(cx, &["cmd-f", "f", "o", "n", "t"]);
+                assert_query(cx, "font");
+
+                cx.update(|cx| cx.dispatch_action(&Find));
                 cx.run_until_parked();
+                press(cx, &["c", "o", "l", "o", "r"]);
+                assert_query(cx, "color");
+                press(cx, &["cmd-f"]);
+
                 let rest = cx.capture_screenshot(owner).unwrap();
                 let scale = rest.width() / SETTINGS_WIDTH as u32;
                 let field = rest.get_pixel(164 * scale, 60 * scale)[0];

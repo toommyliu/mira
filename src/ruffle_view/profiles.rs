@@ -20,6 +20,7 @@ use mira_ui::{
         Align, Button, Dialog, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
         MenuItem, Numeric, Scrollbar, Tab, Tabs, ToggleGroup,
         button::{Size, Variant},
+        text_field::Find,
     },
     v_flex,
 };
@@ -1754,9 +1755,7 @@ impl Render for Editor {
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &SaveProfile, window, cx| this.save(window, cx)))
             .on_action(cx.listener(|this, _: &NewProfile, window, cx| this.new_profile(window, cx)))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                this.search.read(cx).focus_handle(cx).focus(window, cx)
-            }))
+            .on_action(Find::in_search(&self.search))
             .on_action(cx.listener(|this, _: &CloseSession, window, cx| {
                 if this.may_close(cx) {
                     window.remove_window();
@@ -1976,7 +1975,6 @@ mod tests {
         let path = library_file(name);
         cx.update(|cx| {
             mira_ui::init(cx);
-            crate::app_menu::init(cx);
             bind_keys(cx);
             combat_profiles::init(path, cx);
         });

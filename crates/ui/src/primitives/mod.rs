@@ -11,7 +11,7 @@ mod hover_card;
 pub(crate) mod icon;
 pub(crate) mod input;
 pub mod text_field {
-    pub use super::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+    pub use super::input::{Copy, Cut, Find, Paste, Redo, SelectAll, Undo};
 }
 mod kbd;
 pub(crate) mod label;

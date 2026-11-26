@@ -149,11 +149,7 @@ impl Toaster {
                 {
                     return;
                 }
-                if window
-                    .context_stack()
-                    .iter()
-                    .any(|ctx| ctx.contains("Modal"))
-                {
+                if nav::in_modal(window) {
                     return;
                 }
                 let _ = stack.update(cx, |stack, cx| {

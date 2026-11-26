@@ -15,6 +15,7 @@ use mira_ui::{
         Align, Badge, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input,
         InputEvent, ListItem, MenuItem, Scrollbar, Select, Spinner, VirtualList, VirtualListState,
         button::{Joined, Size, Variant},
+        text_field::Find,
     },
     theme::tabular,
     v_flex,
@@ -1596,7 +1597,8 @@ impl Render for LoaderGrabber {
                 .text_color(outcome.color(&theme))
                 .child(outcome.text.clone())
         }));
-        let body = if self.shown.is_some() {
+        let has_tab = self.shown.is_some();
+        let body = if has_tab {
             let navigation = self.navigation();
             v_flex()
                 .flex_1()
@@ -1625,9 +1627,9 @@ impl Render for LoaderGrabber {
             .id("loader-grabber")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                window.focus(&gpui::Focusable::focus_handle(this.search.read(cx), cx), cx)
-            }))
+            .when(has_tab, |root| {
+                root.on_action(Find::in_search(&self.search))
+            })
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
@@ -1859,6 +1861,14 @@ mod tests {
     fn loading_a_shop_warns_until_told_not_to(cx: &mut TestAppContext) {
         let (grabber, cx) = open(cx);
         focus_shop_field(&grabber, cx);
+        press(cx, "cmd-f");
+        typed(cx, "chest");
+        assert_eq!(
+            grabber.read_with(cx, |grabber, cx| grabber.search.read(cx).text().to_owned()),
+            "chest"
+        );
+
+        focus_shop_field(&grabber, cx);
         typed(cx, "1234");
         press(cx, "enter");
         assert_eq!(
@@ -1866,6 +1876,9 @@ mod tests {
             Some(("shop 1234".into(), false))
         );
 
+        let dialog_focus = cx.update(|window, cx| window.focused(cx).unwrap());
+        press(cx, "cmd-f");
+        assert!(cx.update(|window, _| dialog_focus.is_focused(window)));
         press(cx, "escape");
         assert_eq!(shop_warning(&grabber, cx), None);
         assert!(cx.update(|_, cx| settings::shop_warning(cx)));
