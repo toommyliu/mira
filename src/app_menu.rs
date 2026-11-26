@@ -13,8 +13,7 @@ actions!(
         ShowAll,
         Minimize,
         Zoom,
-        ToggleFullScreen,
-        Find
+        ToggleFullScreen
     ]
 );
 
@@ -24,7 +23,6 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
-        KeyBinding::new("cmd-f", Find, None),
     ]);
     cx.on_action(|_: &About, _| show_about());
     cx.on_action(|_: &Hide, cx| cx.hide());
@@ -80,7 +78,7 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::os_action("Paste", text_field::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", text_field::SelectAll, OsAction::SelectAll),
             MenuItem::separator(),
-            MenuItem::action("Find", Find),
+            MenuItem::action("Find", text_field::Find),
         ]),
         Menu::new("View").items([
             settings::appearance_menu(cx),

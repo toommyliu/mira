@@ -28,6 +28,7 @@ actions!(
         SelectLeft,
         SelectRight,
         SelectAll,
+        Find,
         Home,
         End,
         SelectHome,
@@ -64,6 +65,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
+        KeyBinding::new("cmd-f", Find, None),
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
@@ -90,6 +92,25 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-up", IncrementMore, Some(CONTEXT)),
         KeyBinding::new("shift-down", DecrementMore, Some(CONTEXT)),
     ]);
+}
+
+impl Find {
+    pub fn in_search(search: &Entity<Input>) -> impl Fn(&Self, &mut Window, &mut App) + 'static {
+        let search = search.downgrade();
+        Self::route(move |_| search.upgrade())
+    }
+
+    pub fn route(
+        search: impl Fn(&mut App) -> Option<Entity<Input>> + 'static,
+    ) -> impl Fn(&Self, &mut Window, &mut App) + 'static {
+        move |_, window, cx| {
+            if !crate::nav::in_modal(window)
+                && let Some(search) = search(cx)
+            {
+                search.update(cx, |input, cx| input.focus_query(window, cx));
+            }
+        }
+    }
 }
 
 pub enum InputEvent {
@@ -540,8 +561,22 @@ impl Input {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_text();
+        cx.notify();
+    }
+
+    fn select_text(&mut self) {
+        self.selected = 0..self.content.len();
+        self.reversed = false;
+        self.typing = false;
+    }
+
+    fn focus_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search && !self.disabled {
+            window.focus(&self.focus, cx);
+            self.select_text();
+            cx.notify();
+        }
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
@@ -869,9 +904,7 @@ impl Render for Input {
         let typography = theme.typography;
         let focused = !self.disabled && self.focus.is_focused(window);
         if focused && !self.was_focused && crate::nav::keyboard_input(window, cx) {
-            self.selected = 0..self.content.len();
-            self.reversed = false;
-            self.typing = false;
+            self.select_text();
         }
         if !focused || !window.is_window_active() {
             self.drag = None;

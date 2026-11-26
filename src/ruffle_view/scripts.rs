@@ -26,6 +26,7 @@ use mira_ui::{
         VirtualList, VirtualListState,
         button::{Size, Variant},
         icon, small_icon,
+        text_field::Find,
     },
     theme::RING_ROOM,
     v_flex,
@@ -2776,13 +2777,11 @@ impl Render for ScriptsWindow {
                     this.add_to_queue(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                if this.shown_page(cx) == Page::Log {
-                    this.log.update(cx, |log, cx| log.focus_search(window, cx));
-                } else {
-                    window.focus(&this.search.focus_handle(cx), cx);
-                }
-            }))
+            .on_action(if page == Page::Log {
+                Find::in_search(self.log.read(cx).search())
+            } else {
+                Find::in_search(&self.search)
+            })
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
@@ -4943,14 +4942,16 @@ Cells visited: Enter, r1, r2, r3, r4.";
             crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             let client = Client::empty_for_tests(&temp, cx);
-            ScriptsWindow::new(
+            let scripts = ScriptsWindow::new(
                 client,
                 temp.join("scripts"),
                 temp.join("types"),
                 Target::Selected,
                 window,
                 cx,
-            )
+            );
+            window.focus(&scripts.focus, cx);
+            scripts
         });
         cx.run_until_parked();
         let selected = |cx: &mut gpui::VisualTestContext| {
@@ -4967,7 +4968,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert_eq!(selected(cx), Some(dailies.join("scripts/spin.ts")));
 
         let search = scripts.read_with(cx, |scripts, _| scripts.search.clone());
-        search.update(cx, |search, cx| search.set_text("hunt", cx));
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("hunt");
         cx.run_until_parked();
         assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
 
@@ -4987,6 +4989,19 @@ Cells visited: Enter, r1, r2, r3, r4.";
             Page::Library(None)
         );
         assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+
+        let output = scripts.update(cx, |scripts, cx| {
+            scripts.set_page(Page::Log, cx);
+            scripts.log.read(cx).search().clone()
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("error");
+        assert_eq!(
+            output.read_with(cx, |input, _| input.text().to_owned()),
+            "error"
+        );
+        assert!(search.read_with(cx, |input, _| input.text().is_empty()));
         fs::remove_dir_all(temp).unwrap();
     }
 
