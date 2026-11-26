@@ -6,7 +6,7 @@ import flash.display.DisplayObject;
 [BridgeNamespace("world")]
 public class World
   {
-    private static var padNames:RegExp = /(Spawn|Center|Left|Right|Up|Down|Top|Bottom)/i;
+    private static var padNames:RegExp = /^(Spawn|Center|Left|Right|Up|Down|Top|Bottom)$/i;
 
     private static function getStringSelector(selector:Object, key:String):String
     {

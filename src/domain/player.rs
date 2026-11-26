@@ -355,7 +355,10 @@ pub(crate) async fn jump(
     if !move_to(loader, cell, pad).await? {
         return Ok(false);
     }
-    if !auto_correct || pad.eq_ignore_ascii_case("none") {
+    if !auto_correct
+        || pad.eq_ignore_ascii_case("none")
+        || !bridge::flash::is_null(loader, &format!("world.map.{pad}"))?
+    {
         return Ok(true);
     }
     match corrected_pad(pad, &world::cell_pads(loader)?) {
@@ -377,9 +380,6 @@ fn known_cell<'a>(cells: &'a [String], cell: &str, ignore_case: bool) -> Option<
 }
 
 fn corrected_pad<'a>(pad: &str, pads: &'a [String]) -> Option<&'a str> {
-    if pads.iter().any(|known| known == pad) {
-        return None;
-    }
     let named = |name: &str| {
         pads.iter()
             .map(String::as_str)
@@ -617,7 +617,7 @@ mod tests {
         match cell {
             "Enter" => vec!["Right", "Spawn"],
             "r2" => vec!["Spawn", "Left"],
-            _ => vec!["Right", "Left", "spawn"],
+            _ => vec!["Right", "Left", "spawn", "Forge"],
         }
     }
 
@@ -704,7 +704,10 @@ mod tests {
                 } else {
                     100.0
                 }),
-                "flash.isNull" => Value::Bool(false),
+                "flash.isNull" => match text(&args[0]).strip_prefix("world.map.") {
+                    Some(child) => Value::Bool(!children(&place.cell).contains(&child)),
+                    None => Value::Bool(false),
+                },
                 "world.getMonsters" => Value::List(Vec::new()),
                 "combat.cancelAutoAttack" | "combat.cancelTarget" => Value::Null,
                 "player.getPad" => Value::String(place.pad.clone()),
@@ -1050,7 +1053,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_auto_corrected_jump_lands_on_a_cell_and_pad_the_map_has() {
-        let cases: [(&str, Option<&str>, bool, &[[&str; 2]]); 9] = [
+        let cases: [(&str, Option<&str>, bool, &[[&str; 2]]); 10] = [
             ("enter", Some("Right"), true, &[["Enter", "Right"]]),
             (
                 "Room",
@@ -1068,6 +1071,7 @@ mod tests {
             ),
             ("Room", Some("None"), true, &[["Room", "None"]]),
             ("Room", Some("spawn"), true, &[["Room", "spawn"]]),
+            ("Room", Some("Forge"), true, &[["Room", "Forge"]]),
             ("Room", Some("Top"), false, &[["Room", "Top"]]),
             ("r2", None, true, &[["r2", "Spawn"]]),
         ];
