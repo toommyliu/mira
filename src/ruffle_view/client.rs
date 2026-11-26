@@ -2586,6 +2586,39 @@ mod tests {
     }
 
     #[test]
+    fn hovered_close_button_stands_out_from_the_current_row() {
+        mira_ui::snapshot_with(
+            "session-close-hover",
+            gpui::size(px(220.0), px(60.0)),
+            |_, cx| cx.new(|_| SessionRow),
+            |cx, owner| {
+                for nudge in [0.0, 1.0] {
+                    cx.update_window(owner, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: point(px(186.0 + nudge), px(30.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                let image = cx.capture_screenshot(owner).unwrap();
+                let scale = image.width() / 220;
+                let lightness = |x: u32, y: u32| image.get_pixel(x * scale, y * scale).0[0];
+                let (row, button) = (lightness(150, 23), lightness(175, 23));
+                assert!(
+                    row.abs_diff(button) >= 8,
+                    "hover fill {button} is too close to the row fill {row}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn snapshot_session_tool_menu() {
         mira_ui::snapshot_with(
             "session-tool-menu",
