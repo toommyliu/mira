@@ -28,7 +28,7 @@ pub(crate) async fn run(
 ) {
     let mut fighter = Fighter::fixed(Profile::generic()).listening(messages);
     let mut chosen = None;
-    let mut next = Instant::now() + TICK;
+    let mut next = Instant::now();
     loop {
         let Settings { enabled, profile } = settings.borrow_and_update().clone();
         if chosen.as_ref() != Some(&profile) {
@@ -40,7 +40,6 @@ pub(crate) async fn run(
                 if changed.is_err() {
                     return;
                 }
-                next = Instant::now() + TICK;
             }
             () = fighter.listen(&loader) => {}
             () = sleep_until(next), if enabled => {
@@ -200,7 +199,7 @@ mod tests {
                 ticks(5).await;
                 let fight = started.fight.borrow();
                 assert_eq!(fight.targeted, [7.0]);
-                assert_eq!(fight.cast, [1, 2, 3, 4, 1]);
+                assert_eq!(fight.cast, [1, 2, 3, 4, 1, 2]);
             })
             .await;
     }
@@ -220,7 +219,7 @@ mod tests {
                     Library::default(),
                 );
                 ticks(4).await;
-                assert_eq!(started.fight.borrow().cast, [1, 3, 1, 3]);
+                assert_eq!(started.fight.borrow().cast, [1, 3, 1, 3, 1]);
             })
             .await;
     }
@@ -241,7 +240,7 @@ mod tests {
                 );
                 ticks(3).await;
                 assert!(started.fight.borrow().targeted.is_empty());
-                assert_eq!(started.fight.borrow().cast.len(), 3);
+                assert_eq!(started.fight.borrow().cast.len(), 4);
             })
             .await;
     }
@@ -262,7 +261,7 @@ mod tests {
                 ticks(2).await;
                 started.fight.borrow_mut().target = None;
                 ticks(2).await;
-                assert_eq!(started.fight.borrow().cast, [1, 2, 1, 2]);
+                assert_eq!(started.fight.borrow().cast, [1, 2, 3, 1, 2]);
             })
             .await;
     }
@@ -301,7 +300,7 @@ mod tests {
                     assert!(started.fight.borrow().cast.is_empty());
                 }
                 off.settings.send_replace(on(true));
-                ticks(1).await;
+                sleep(TICK / 2).await;
                 assert_eq!(off.fight.borrow().cast, [1]);
             })
             .await;
@@ -337,7 +336,7 @@ mod tests {
                     profile: Some("Missing".into()),
                 });
                 ticks(2).await;
-                assert_eq!(started.fight.borrow().cast, [3, 3, 2, 2, 1, 2]);
+                assert_eq!(started.fight.borrow().cast, [3, 3, 3, 2, 2, 1, 2]);
             })
             .await;
     }
@@ -370,7 +369,7 @@ mod tests {
                     packet: r#"{"type":"json","dataObj":{"cmd":"ct","anims":[{"msg":"The boss prepares a slam!","cInf":"m:7","tInf":"p:1"}]}}"#.into(),
                 });
                 ticks(2).await;
-                assert_eq!(started.fight.borrow().cast, [1, 1, 4, 1]);
+                assert_eq!(started.fight.borrow().cast, [1, 1, 1, 4, 1]);
             })
             .await;
     }
