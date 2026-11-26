@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, EntityId,
+    FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, PointerCursor as _, StyledExt as _, Theme, Tone,
@@ -224,7 +224,7 @@ pub(crate) struct LoaderGrabber {
     source: Source,
     snapshot: Option<Snapshot>,
     problem: Option<Problem>,
-    selected: Option<i64>,
+    selections: HashMap<(EntityId, SelectionSource), i64>,
     drops: HashMap<i64, Drops>,
     outcome: Option<(i64, Outcome)>,
     reading: Option<Task<()>>,
@@ -237,6 +237,12 @@ pub(crate) struct LoaderGrabber {
     taking: Option<Task<()>>,
     shop_warning: Option<ShopWarning>,
     _subscriptions: [Subscription; 2],
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum SelectionSource {
+    Items(Source),
+    Monsters(String),
 }
 
 impl LoaderGrabber {
@@ -266,7 +272,7 @@ impl LoaderGrabber {
             source: Source::Shop,
             snapshot: None,
             problem: None,
-            selected: None,
+            selections: HashMap::new(),
             drops: HashMap::new(),
             outcome: None,
             reading: None,
@@ -316,7 +322,9 @@ impl LoaderGrabber {
             self.taken = None;
             self.taking = None;
             self.shop_warning = None;
-            self.open_source(self.source, None, cx);
+            self.open_source(self.source, cx);
+        } else if new_map && self.source == Source::Monsters {
+            self.open_source(self.source, cx);
         } else if moved && self.source == Source::Monsters {
             self.read(cx);
         }
@@ -356,14 +364,13 @@ impl LoaderGrabber {
         Some(answer)
     }
 
-    fn open_source(&mut self, source: Source, selected: Option<i64>, cx: &mut Context<Self>) {
+    fn open_source(&mut self, source: Source, cx: &mut Context<Self>) {
         if source != self.source {
             self.search.update(cx, |search, cx| search.set_text("", cx));
         }
         self.source = source;
         self.snapshot = None;
         self.problem = None;
-        self.selected = selected;
         self.outcome = None;
         self.taken = None;
         self.opened.clear();
@@ -401,10 +408,28 @@ impl LoaderGrabber {
     fn take(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
         self.problem = None;
         self.snapshot = Some(snapshot);
-        match self.selected.and_then(|key| self.entry(key)).cloned() {
-            Some(entry) => self.follow_drops(&entry, cx),
-            None => self.selected = None,
+        if let Some(entry) = self.selected().and_then(|key| self.entry(key)).cloned() {
+            self.follow_drops(&entry, cx);
         }
+    }
+
+    fn selected(&self) -> Option<i64> {
+        self.selections.get(&self.selection_key()?).copied()
+    }
+
+    fn selection_key(&self) -> Option<(EntityId, SelectionSource)> {
+        let target = self.shown.as_ref()?.id;
+        let source = match self.source {
+            Source::Monsters => {
+                let map = self.snapshot.as_ref()?.map.as_ref()?;
+                if map != &self.located.as_ref()?.map {
+                    return None;
+                }
+                SelectionSource::Monsters(map.clone())
+            }
+            source => SelectionSource::Items(source),
+        };
+        Some((target, source))
     }
 
     fn entry(&self, key: i64) -> Option<&Entry> {
@@ -416,11 +441,13 @@ impl LoaderGrabber {
     }
 
     fn select(&mut self, key: i64, cx: &mut Context<Self>) {
-        if self.selected != Some(key) {
+        let Some(scope) = self.selection_key() else {
+            return;
+        };
+        if self.selections.insert(scope, key) != Some(key) {
             self.outcome = None;
             self.opened.clear();
         }
-        self.selected = Some(key);
         if let Some(entry) = self.entry(key).cloned() {
             self.follow_drops(&entry, cx);
         }
@@ -525,7 +552,14 @@ impl LoaderGrabber {
                     loader.outcome = Some(outcome);
                 }
                 if refresh {
-                    this.open_source(source, first, cx);
+                    if let Some(scope) = this.selection_key() {
+                        if let Some(key) = first {
+                            this.selections.insert(scope, key);
+                        } else {
+                            this.selections.remove(&scope);
+                        }
+                    }
+                    this.open_source(source, cx);
                 }
                 cx.notify();
             });
@@ -561,7 +595,7 @@ impl LoaderGrabber {
             }
             Act::Game(action) => action,
         };
-        let Some(key) = self.selected else {
+        let Some(key) = self.selected().filter(|key| self.entry(*key).is_some()) else {
             return;
         };
         if self.acting.is_some() {
@@ -716,7 +750,7 @@ impl LoaderGrabber {
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| {
                 if this.source != Source::ALL[index] {
-                    this.open_source(Source::ALL[index], None, cx);
+                    this.open_source(Source::ALL[index], cx);
                 }
             });
         });
@@ -921,7 +955,7 @@ impl LoaderGrabber {
             (Some(_), _) => {
                 let rows: std::rc::Rc<[Entry]> = entries.into();
                 let selected = self
-                    .selected
+                    .selected()
                     .and_then(|key| rows.iter().position(|entry| entry.key == key));
                 let (lookup, keys, row_theme) = (rows.clone(), rows.clone(), theme.clone());
                 let this = cx.weak_entity();
@@ -1016,7 +1050,7 @@ impl LoaderGrabber {
     fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let layout = theme.layout;
         let typography = theme.typography;
-        let Some(entry) = self.selected.and_then(|key| self.entry(key)).cloned() else {
+        let Some(entry) = self.selected().and_then(|key| self.entry(key)).cloned() else {
             let pickable = self
                 .snapshot
                 .as_ref()
@@ -1644,6 +1678,103 @@ mod tests {
 
         typed(cx, "4");
         assert_eq!(shop_field(&grabber, cx), ("12a4".into(), None));
+    }
+
+    #[gpui::test]
+    fn returning_to_a_source_restores_its_own_record(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        let results = |key, name: &str| Snapshot {
+            heading: None,
+            map: None,
+            entries: vec![Entry {
+                key,
+                name: name.into(),
+                id_label: "Item ID",
+                id: key.to_string(),
+                meta: String::new(),
+                badges: Vec::new(),
+                facts: Vec::new(),
+                groups: Vec::new(),
+                acts: Vec::new(),
+                here: false,
+                drops_from: None,
+                json: "{}".into(),
+            }],
+        };
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(results(12, "Potion"), cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let pick = |cx: &mut VisualTestContext| {
+            let row = cx
+                .debug_bounds("row-0")
+                .expect("the source shows its record");
+            cx.simulate_click(row.center(), gpui::Modifiers::none());
+            cx.run_until_parked();
+        };
+        let shown = |cx: &mut VisualTestContext| {
+            grabber.read_with(cx, |grabber, _| {
+                grabber
+                    .selected()
+                    .and_then(|key| grabber.entry(key))
+                    .map(|entry| entry.name.clone())
+            })
+        };
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Potion"));
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.open_source(Source::Inventory, cx);
+            grabber.take(results(12, "Sword"), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Sword"));
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.open_source(Source::Shop, cx);
+            grabber.take(results(12, "Potion"), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx).as_deref(), Some("Potion"));
+
+        let location = |map: &str| Location {
+            map: map.into(),
+            room: None,
+            cell: "Enter".into(),
+            pad: "Spawn".into(),
+            cells: Vec::new(),
+            cell_pads: Vec::new(),
+        };
+        grabber.update(cx, |grabber, cx| {
+            grabber.located = Some(location("forest"));
+            grabber.open_source(Source::Monsters, cx);
+            grabber.take(
+                Snapshot {
+                    map: Some("forest".into()),
+                    ..results(12, "Wolf")
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Wolf"));
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(
+                Snapshot {
+                    map: Some("graveyard".into()),
+                    ..results(12, "Skeleton")
+                },
+                cx,
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
     }
 
     #[gpui::test]

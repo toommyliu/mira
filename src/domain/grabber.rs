@@ -43,7 +43,7 @@ pub(crate) enum Job {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Shop,
     Quests,
@@ -313,6 +313,7 @@ pub(crate) struct Entry {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Snapshot {
     pub(crate) heading: Option<String>,
+    pub(crate) map: Option<String>,
     pub(crate) entries: Vec<Entry>,
 }
 
@@ -400,6 +401,7 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
             let held = holdings(loader).await?;
             Snapshot {
                 heading: shop.as_ref().map(shop_heading),
+                map: None,
                 entries: shop.map_or_else(Vec::new, |shop| {
                     shop.items
                         .iter()
@@ -437,11 +439,13 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
             )
         }
         Source::Monsters => {
+            let map = bridge::player::get_map(loader)?;
             let here = bridge::player::get_cell(loader)?.unwrap_or_default();
             let mut monsters = world::monsters(loader, None)?;
             monsters.sort_by_key(|monster| !monster.cell.eq_ignore_ascii_case(&here));
             Snapshot {
                 heading: None,
+                map,
                 entries: monsters
                     .iter()
                     .map(|monster| monster_entry(monster, &here))
@@ -454,6 +458,7 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
 fn listing(entries: impl Iterator<Item = Entry>) -> Snapshot {
     Snapshot {
         heading: None,
+        map: None,
         entries: entries.collect(),
     }
 }
@@ -1137,6 +1142,7 @@ mod tests {
                     { "itemId": 1, "name": "Bone Dust", "quantity": 4, "maxStack": 99 }
                 ])),
                 "player.getCell" => Value::String("Enter".into()),
+                "player.getMap" => Value::String("lair".into()),
                 "flash.getGameObject" if args == [Value::String("world.shopinfo".into())] => {
                     Value::String(
                         json!({ "ShopID": 1234, "sName": "Dragon Merge Shop",
@@ -1215,6 +1221,7 @@ mod tests {
     async fn monsters_in_your_cell_list_first_and_offer_jump_to_only_elsewhere() {
         let loader = game(json!([]));
         let snapshot = read(&loader, Source::Monsters).await.unwrap().unwrap();
+        assert_eq!(snapshot.map.as_deref(), Some("lair"));
         let offers: Vec<_> = snapshot
             .entries
             .iter()

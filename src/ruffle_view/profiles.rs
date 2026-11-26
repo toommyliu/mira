@@ -192,6 +192,7 @@ struct Draft {
     saved: Option<String>,
     name: String,
     form: Form,
+    item: Option<Item>,
 }
 
 impl Draft {
@@ -277,7 +278,6 @@ struct Editor {
     library: Arc<Library>,
     drafts: Vec<Draft>,
     selected: Option<usize>,
-    item: Option<Item>,
     name: Entity<Input>,
     renaming: Option<String>,
     search: Entity<Input>,
@@ -300,6 +300,7 @@ impl Editor {
                 saved: Some(name.to_owned()),
                 name: name.to_owned(),
                 form: Form::of(&library.get(name).expect("a listed profile exists")),
+                item: None,
             })
             .collect();
         let selected = (!drafts.is_empty()).then_some(0);
@@ -338,7 +339,6 @@ impl Editor {
             library,
             drafts,
             selected,
-            item: None,
             name,
             renaming: None,
             search,
@@ -355,6 +355,10 @@ impl Editor {
 
     fn draft(&self) -> Option<&Draft> {
         self.selected.and_then(|index| self.drafts.get(index))
+    }
+
+    fn item(&self) -> Option<Item> {
+        self.draft()?.item
     }
 
     fn form(&self) -> &Form {
@@ -399,7 +403,6 @@ impl Editor {
     fn show(&mut self, selected: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = selected;
         self.reveal(cx);
-        self.item = None;
         self.problem = None;
         self.renaming = None;
         let name = self
@@ -445,7 +448,9 @@ impl Editor {
     }
 
     fn select_item(&mut self, item: Option<Item>, window: &mut Window, cx: &mut Context<Self>) {
-        self.item = item;
+        if let Some(draft) = self.selected.and_then(|index| self.drafts.get_mut(index)) {
+            draft.item = item;
+        }
         self.rebuild_texts(window, cx);
         cx.notify();
     }
@@ -503,7 +508,7 @@ impl Editor {
     }
 
     fn rebuild_texts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let texts: Vec<(Text, &'static str, String)> = match self.item {
+        let texts: Vec<(Text, &'static str, String)> = match self.item() {
             None => Vec::new(),
             Some(Item::Trigger(index)) => match self.form().triggers.get(index) {
                 Some(trigger) => vec![(
@@ -530,7 +535,9 @@ impl Editor {
             },
         };
         if texts.is_empty() {
-            self.item = None;
+            if let Some(draft) = self.selected.and_then(|index| self.drafts.get_mut(index)) {
+                draft.item = None;
+            }
             self.texts = None;
             return;
         }
@@ -577,7 +584,7 @@ impl Editor {
     }
 
     fn edit_step(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut FormStep)) {
-        let Some(Item::Step(lane, index)) = self.item else {
+        let Some(Item::Step(lane, index)) = self.item() else {
             return;
         };
         if let Some(step) = self
@@ -590,7 +597,7 @@ impl Editor {
     }
 
     fn edit_trigger(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut FormTrigger)) {
-        let Some(Item::Trigger(index)) = self.item else {
+        let Some(Item::Trigger(index)) = self.item() else {
             return;
         };
         if let Some(trigger) = self
@@ -612,7 +619,7 @@ impl Editor {
 
     fn set_skill(&mut self, slot: u8, cx: &mut Context<Self>) {
         let skill = Skill::try_from(slot).expect("listed slots are skills");
-        match self.item {
+        match self.item() {
             Some(Item::Trigger(_)) => self.edit_trigger(cx, |trigger| trigger.skill = skill),
             Some(Item::Step(..)) => self.edit_step(cx, |step| step.skill = skill),
             None => {}
@@ -685,7 +692,7 @@ impl Editor {
     }
 
     fn remove_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.item else {
+        let Some(item) = self.item() else {
             return;
         };
         if let Some(form) = self.form_mut() {
@@ -703,7 +710,7 @@ impl Editor {
     }
 
     fn duplicate_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.item else {
+        let Some(item) = self.item() else {
             return;
         };
         let Some(form) = self.form_mut() else {
@@ -774,6 +781,7 @@ impl Editor {
             saved: None,
             name,
             form,
+            item: None,
         });
         self.select(Some(self.drafts.len() - 1), window, cx);
         self.rename(window, cx);
@@ -1100,7 +1108,7 @@ impl Editor {
                 .collect(),
         };
         let selected = self
-            .item
+            .item()
             .map(section_of)
             .filter(|(at, _)| *at == section)
             .map(|(_, index)| index);
@@ -1277,7 +1285,7 @@ impl Editor {
         if self.draft().is_none() {
             return pane;
         }
-        let (Some(item), Some(texts)) = (self.item, &self.texts) else {
+        let (Some(item), Some(texts)) = (self.item(), &self.texts) else {
             return pane.child(form::note(
                 "Select a trigger or a step to edit it.",
                 true,
@@ -2058,7 +2066,8 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let (editor, cx) = open_editor("steps", cx);
-        let item = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| editor.item);
+        let item =
+            |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| editor.item());
         click(cx, profile_row(2));
         let third = cx
             .debug_bounds("row-2")
@@ -2067,6 +2076,8 @@ mod tests {
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 2)));
         press(cx, "up");
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
+        click(cx, profile_row(1));
+        assert_eq!(item(cx), None);
         click(cx, profile_row(2));
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
     }
@@ -2159,7 +2170,7 @@ mod tests {
                 editor.revert(window, cx);
                 assert_eq!(editor.draft().map(|draft| draft.name.as_str()), None);
                 assert_eq!(editor.problem, None);
-                assert_eq!(editor.item, None);
+                assert_eq!(editor.item(), None);
             })
         });
     }
@@ -2218,6 +2229,7 @@ mod tests {
             saved: Some("Generic".into()),
             name: "Generic".into(),
             form: Form::of(&Profile::generic()),
+            item: None,
         };
         draft.form.steps[0].pause = "0".into();
         assert!(!draft.edited(&library));

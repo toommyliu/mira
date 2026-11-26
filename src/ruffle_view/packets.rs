@@ -6,9 +6,10 @@ use std::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
     Focusable as _, FontWeight, Global, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Pixels, Render, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _, px, relative, size,
+    ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TitlebarOptions, WeakEntity,
+    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _,
+    px, relative, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
@@ -25,7 +26,7 @@ use mira_ui::{
 use super::{
     Client, RuffleView,
     client::{CloseSession, refocus_root_when_lost},
-    packet_lines::{PacketLines, Row},
+    packet_lines::{LinesState, PacketLines, Row},
     packet_log::{Filter, Line, Packet, PacketLog, Visible},
     shown_tab::{self, ShownTab, watch_changes},
 };
@@ -130,7 +131,10 @@ pub(crate) struct Packets {
     page: Page,
     filter: Filter,
     visible: Visible,
+    log_lines: Rc<LinesState>,
+    send_scroll: ScrollHandle,
     selected: Option<u64>,
+    inspector_scroll: ScrollHandle,
     times: bool,
     search: Entity<Input>,
     composer: Entity<Input>,
@@ -218,7 +222,10 @@ impl Packets {
             page: Page::Log,
             filter: Filter::default(),
             visible: Visible::default(),
+            log_lines: Rc::default(),
+            send_scroll: ScrollHandle::new(),
             selected: None,
+            inspector_scroll: ScrollHandle::new(),
             times: false,
             search,
             composer,
@@ -269,7 +276,9 @@ impl Packets {
             .as_ref()
             .map(|log| cx.observe(log, |_, _, cx| cx.notify()));
         self.visible = Visible::default();
-        self.selected = None;
+        self.log_lines = Rc::default();
+        self.send_scroll = ScrollHandle::new();
+        self.select(None);
         self.queued = None;
         self.notice = None;
         self.cancel_edit(cx);
@@ -730,7 +739,7 @@ impl Packets {
                                 log.clear();
                                 cx.notify();
                             });
-                            this.selected = None;
+                            this.select(None);
                         })
                     }),
             )
@@ -790,6 +799,7 @@ impl Packets {
         let picks = cx.weak_entity();
         let opens = cx.weak_entity();
         PacketLines::new(
+            self.log_lines.clone(),
             self.visible.len(),
             move |index, cx| {
                 rows.upgrade()
@@ -821,7 +831,7 @@ impl Packets {
         .selected(selected)
         .on_select(move |index, _, cx| {
             let _ = picks.update(cx, |this, cx| {
-                this.selected = this.visible.id(index);
+                this.select(this.visible.id(index));
                 cx.notify();
             });
         })
@@ -834,6 +844,13 @@ impl Packets {
             });
         })
         .into_any_element()
+    }
+
+    fn select(&mut self, packet: Option<u64>) {
+        if self.selected != packet {
+            self.selected = packet;
+            self.inspector_scroll = ScrollHandle::new();
+        }
     }
 
     fn packet_panel(
@@ -905,7 +922,7 @@ impl Packets {
                     .size(Size::Small)
                     .variant(Variant::Ghost)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.selected = None;
+                        this.select(None);
                         cx.notify();
                     })),
             );
@@ -928,6 +945,7 @@ impl Packets {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.inspector_scroll)
                     .px(layout.space(3.0))
                     .py(layout.space(2.0))
                     .font_family(theme.mono_family.clone())
@@ -1072,6 +1090,7 @@ impl Packets {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&self.send_scroll)
                 .p(layout.space(3.0))
                 .gap(layout.space(2.5))
                 .child(list)
@@ -1508,6 +1527,52 @@ mod tests {
 
     fn text(input: &Entity<Input>, cx: &mut VisualTestContext) -> String {
         input.read_with(cx, |input, _| input.text().to_owned())
+    }
+
+    #[gpui::test]
+    fn returning_to_the_log_restores_the_packet_inspector_scroll(cx: &mut TestAppContext) {
+        let (packets, _, cx) = open(cx);
+        packets.update(cx, |packets, cx| {
+            let mut log = PacketLog::default();
+            log.extend(
+                ["line\n".repeat(120), "next\n".repeat(120)]
+                    .into_iter()
+                    .map(|text| crate::automation::packets::Captured::Packet {
+                        at: SystemTime::UNIX_EPOCH,
+                        from: Sender::Server,
+                        text,
+                    })
+                    .collect(),
+            );
+            packets.log = Some(cx.new(|_| log));
+            packets.select(Some(0));
+            packets.page = Page::Log;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let offset = gpui::point(px(0.0), px(-120.0));
+        packets.update(cx, |packets, cx| {
+            assert!(packets.inspector_scroll.max_offset().y >= -offset.y);
+            packets.inspector_scroll.set_offset(offset);
+            packets.page = Page::Send;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        packets.update(cx, |packets, cx| {
+            packets.page = Page::Log;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        packets.update(cx, |packets, cx| {
+            assert_eq!(packets.inspector_scroll.offset(), offset);
+            packets.select(Some(1));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        packets.read_with(cx, |packets, _| {
+            assert!(packets.inspector_scroll.max_offset().y >= -offset.y);
+            assert_eq!(packets.inspector_scroll.offset(), gpui::Point::default());
+        });
     }
 
     #[gpui::test]

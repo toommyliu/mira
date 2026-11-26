@@ -58,7 +58,7 @@ pub use hover_card::HoverCard;
 pub use icon::{Icon, icon, small_icon};
 pub use input::{Input, InputEvent, Numeric};
 pub use kbd::Kbd;
-pub use list::{List, ListItem, VirtualList};
+pub use list::{List, ListItem, VirtualList, VirtualListState};
 pub use menu::{DropdownMenu, MenuItem, MenuList, divider};
 pub use menubar::Menubar;
 pub use placement::{Align, Placement, Side};

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
@@ -7,7 +7,7 @@ use gpui::{
     UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
-use super::{Flow, Pose, Scrollbar, Sortable};
+use super::{Flow, Icon, Pose, Scrollbar, Sortable, icon};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
     nav::{self, Axis, Step, Typeahead},
@@ -36,6 +36,7 @@ pub struct ListItem {
     description: Option<SharedString>,
     children: Vec<AnyElement>,
     disabled: bool,
+    selection_check: bool,
 }
 
 impl ListItem {
@@ -48,6 +49,7 @@ impl ListItem {
             description: None,
             children: Vec::new(),
             disabled: false,
+            selection_check: false,
         }
     }
 
@@ -75,6 +77,11 @@ impl ListItem {
 
     pub fn disabled(mut self) -> Self {
         self.disabled = true;
+        self
+    }
+
+    pub fn selection_check(mut self) -> Self {
+        self.selection_check = true;
         self
     }
 
@@ -282,6 +289,17 @@ impl Options {
                         .child(end),
                 )
             })
+            .when(item.selection_check, |row| {
+                row.child(
+                    h_flex()
+                        .size(layout.space(3.0))
+                        .flex_none()
+                        .justify_center()
+                        .when(current, |mark| {
+                            mark.child(icon(Icon::Check, theme.foreground).size(layout.space(3.0)))
+                        }),
+                )
+            })
     }
 }
 
@@ -338,6 +356,7 @@ pub struct List {
     on_reorder: Option<ReorderHandler>,
     pinned: usize,
     flush: bool,
+    scroll: Option<ScrollHandle>,
 }
 
 impl List {
@@ -359,6 +378,7 @@ impl List {
             on_reorder: None,
             pinned: 0,
             flush: false,
+            scroll: None,
         }
     }
 
@@ -379,6 +399,11 @@ impl List {
 
     pub fn flush(mut self) -> Self {
         self.flush = true;
+        self
+    }
+
+    pub fn track_scroll(mut self, scroll: &ScrollHandle) -> Self {
+        self.scroll = Some(scroll.clone());
         self
     }
 
@@ -406,10 +431,12 @@ impl List {
 impl RenderOnce for List {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let scroll = window
-            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| ScrollHandle::new())
-            .read(cx)
-            .clone();
+        let scroll = self.scroll.unwrap_or_else(|| {
+            window
+                .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| ScrollHandle::new())
+                .read(cx)
+                .clone()
+        });
         let options = Options {
             count: self.count,
             row: self.row,
@@ -481,6 +508,12 @@ impl RenderOnce for List {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct VirtualListState {
+    scroll: UniformListScrollHandle,
+    selected: Rc<Cell<Option<usize>>>,
+}
+
 #[derive(IntoElement)]
 pub struct VirtualList {
     id: ElementId,
@@ -492,6 +525,7 @@ pub struct VirtualList {
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
     flush: bool,
+    state: Option<VirtualListState>,
 }
 
 impl VirtualList {
@@ -511,6 +545,7 @@ impl VirtualList {
             on_select: None,
             on_activate: None,
             flush: false,
+            state: None,
         }
     }
 
@@ -534,6 +569,11 @@ impl VirtualList {
         self
     }
 
+    pub fn state(mut self, state: &VirtualListState) -> Self {
+        self.state = Some(state.clone());
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
@@ -548,12 +588,15 @@ impl VirtualList {
 impl RenderOnce for VirtualList {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let scroll = window
-            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| {
-                UniformListScrollHandle::new()
-            })
-            .read(cx)
-            .clone();
+        let state = self.state.unwrap_or_else(|| {
+            window
+                .use_keyed_state((self.id.clone(), "state"), cx, |_, _| {
+                    VirtualListState::default()
+                })
+                .read(cx)
+                .clone()
+        });
+        let scroll = state.scroll;
         let options = Options {
             count: self.count,
             row: self.row,
@@ -568,12 +611,10 @@ impl RenderOnce for VirtualList {
             uniform: true,
             theme: cx.theme().clone(),
         };
-        let shown = window.use_keyed_state((self.id.clone(), "shown"), cx, |_, _| None);
-        if self.selected.is_some() && *shown.read(cx) != self.selected {
-            shown.update(cx, |shown, _| *shown = self.selected);
-            if let Some(selected) = self.selected {
-                scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
-            }
+        if state.selected.replace(self.selected) != self.selected
+            && let Some(selected) = self.selected
+        {
+            scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
         }
         let reveal = scroll.clone();
         let render_options = options.clone();
