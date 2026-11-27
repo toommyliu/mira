@@ -40,7 +40,7 @@ pub struct ListItem {
     children: Vec<AnyElement>,
     disabled: bool,
     selection_check: bool,
-    menu: Option<ItemsBuilder>,
+    menu: Option<(SharedString, ItemsBuilder)>,
 }
 
 impl ListItem {
@@ -92,9 +92,10 @@ impl ListItem {
 
     pub fn context_menu(
         mut self,
+        record: impl Into<SharedString>,
         f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static,
     ) -> Self {
-        self.menu = Some(Rc::new(f));
+        self.menu = Some((record.into(), Rc::new(f)));
         self
     }
 
@@ -144,7 +145,11 @@ impl Options {
             } = &options;
             let stroke = &event.keystroke;
             if stroke.key == "f10" && stroke.modifiers.shift {
-                if let Some(items) = selected.and_then(|index| row(index).menu) {
+                if let Some((index, (_, items))) = selected
+                    .filter(|index| index < count)
+                    .and_then(|index| Some((index, row(index).menu?)))
+                {
+                    reveal(index);
                     let first = menu::first_navigable(&items(window, cx), false);
                     menu::open(menu, first, None, window, cx);
                     cx.stop_propagation();
@@ -195,10 +200,10 @@ impl Options {
             Kind::Header => self.header(index, item),
             Kind::Row => self.item(index, item, pose),
         };
-        let Some(items) = menu else {
+        let Some((record, items)) = menu else {
             return row.into_any_element();
         };
-        let id = ElementId::from((self.id.clone(), format!("menu-{index}")));
+        let id = ElementId::from((self.id.clone(), format!("menu-{record}")));
         let state = if self.selected == Some(index) {
             self.menu.clone()
         } else {
@@ -344,6 +349,27 @@ impl Options {
     }
 }
 
+fn selected_menu(
+    id: &ElementId,
+    row: &RowBuilder,
+    selected: Option<usize>,
+    count: usize,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<MenuState> {
+    let record = selected
+        .filter(|index| *index < count)
+        .and_then(|index| row(index).menu)
+        .map(|(record, _)| record)
+        .unwrap_or_default();
+    menu::state(
+        &ElementId::from((id.clone(), format!("selected-menu-{record}"))),
+        false,
+        window,
+        cx,
+    )
+}
+
 fn scroll_into_view(scroll: &ScrollHandle, index: usize, inset: Pixels) {
     let Some(item) = scroll.bounds_for_item(index) else {
         return;
@@ -480,12 +506,7 @@ impl RenderOnce for List {
         });
         let options = Options {
             id: self.id.clone(),
-            menu: menu::state(
-                &ElementId::from((self.id.clone(), "menu")),
-                false,
-                window,
-                cx,
-            ),
+            menu: selected_menu(&self.id, &self.row, self.selected, self.count, window, cx),
             count: self.count,
             row: self.row,
             selected: self.selected,
@@ -651,12 +672,7 @@ impl RenderOnce for VirtualList {
         let scroll = state.scroll;
         let options = Options {
             id: self.id.clone(),
-            menu: menu::state(
-                &ElementId::from((self.id.clone(), "menu")),
-                false,
-                window,
-                cx,
-            ),
+            menu: selected_menu(&self.id, &self.row, self.selected, self.count, window, cx),
             count: self.count,
             row: self.row,
             selected: self.selected,

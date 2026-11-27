@@ -801,20 +801,19 @@ impl LoaderGrabber {
     }
 
     fn shown_entries(&self, cx: &App) -> Vec<Entry> {
-        let Some(snapshot) = &self.snapshot else {
-            return Vec::new();
-        };
+        self.listed_entries(cx).cloned().collect()
+    }
+
+    fn listed_entries<'a>(&'a self, cx: &App) -> impl Iterator<Item = &'a Entry> + 'a {
         let query = self.search.read(cx).text().trim().to_lowercase();
-        snapshot
-            .entries
+        self.snapshot
             .iter()
-            .filter(|entry| {
+            .flat_map(|snapshot| &snapshot.entries)
+            .filter(move |entry| {
                 query.is_empty()
                     || entry.name.to_lowercase().contains(&query)
                     || entry.id.contains(&query)
             })
-            .cloned()
-            .collect()
     }
 
     fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
@@ -1016,7 +1015,7 @@ impl LoaderGrabber {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child(Spinner::new("grab-reading").delayed())
+                .child(Spinner::new(("grab-reading", self.source as usize)).delayed())
                 .into_any_element(),
             (Some(snapshot), _) if snapshot.entries.is_empty() => centered(empty_note(self.source)),
             (Some(_), _) if entries.is_empty() => centered(Empty::new(
@@ -1046,7 +1045,8 @@ impl LoaderGrabber {
                             rows.len(),
                             move |index| {
                                 let (rows, this) = (rows.clone(), menu_this.clone());
-                                line(&rows[index], &row_theme).context_menu(move |_, _| {
+                                let record = rows[index].key.to_string();
+                                line(&rows[index], &row_theme).context_menu(record, move |_, _| {
                                     record_menu(&this, &rows[index], source, taking)
                                 })
                             },
@@ -1117,6 +1117,7 @@ impl LoaderGrabber {
             .map(|navigation| &navigation.inspector);
         theme
             .inspector_pane()
+            .debug_selector(|| "grab-inspector".into())
             .relative()
             .h_full()
             .child(
@@ -1236,7 +1237,11 @@ impl LoaderGrabber {
                         self.group(theme, entry.groups.len(), group, &listed, cx)
                     }
                     Drops::Reading => caption(theme, "Drops")
-                        .child(Spinner::new("grab-drops").size(px(14.0)).delayed())
+                        .child(
+                            Spinner::new(SharedString::from(format!("grab-drops-{}", entry.key)))
+                                .size(px(14.0))
+                                .delayed(),
+                        )
                         .into_any_element(),
                     Drops::Unavailable => caption(theme, "Drops")
                         .child(quiet(theme, "Couldn't read this monster's drops."))
@@ -1722,7 +1727,7 @@ impl Render for LoaderGrabber {
         let body = if has_tab {
             let navigation = self.navigation();
             let empty = match &self.snapshot {
-                Some(snapshot) => snapshot.entries.is_empty(),
+                Some(_) => self.listed_entries(cx).next().is_none(),
                 None => self.problem.is_some(),
             };
             v_flex()
@@ -2144,6 +2149,21 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_search_that_lists_nothing_drops_the_inspector(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(blacksmith(), cx);
+            grabber.select(2, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("grab-inspector").is_some());
+        let search = grabber.read_with(cx, |grabber, _| grabber.search.clone());
+        cx.update(|_, cx| search.update(cx, |search, cx| search.set_text("zzz", cx)));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("grab-inspector").is_none());
+    }
+
+    #[gpui::test]
     fn a_record_copies_from_its_row_menu_and_its_facts(cx: &mut TestAppContext) {
         use gpui::{Modifiers, MouseButton};
         let (grabber, cx) = open(cx);
@@ -2512,7 +2532,7 @@ mod tests {
         let recording = mira_ui::record(
             "grabber-spinner",
             gpui::size(px(WIDTH), px(HEIGHT)),
-            ms(1500),
+            ms(2000),
             |window, cx| {
                 cx.new(|cx| {
                     let client = Client::empty_for_tests(&folder, cx);
@@ -2534,6 +2554,9 @@ mod tests {
                                 (300, Step::Open(Source::Bank)),
                                 (900, Step::Rows(results(4, "Bone Dust"))),
                                 (1000, Step::Open(Source::TempInventory)),
+                                (1150, Step::Open(Source::Monsters)),
+                                (1400, Step::Rows(results(3, "Frogzard"))),
+                                (1500, Step::Open(Source::Quests)),
                             ] {
                                 cx.background_executor().timer(ms(when) - at).await;
                                 at = ms(when);
@@ -2560,12 +2583,17 @@ mod tests {
         assert!(still(20, 75), "a quick read drew something while it waited");
         assert!(still(320, 595), "a slow read showed its spinner too soon");
         assert!(spinning(620, 890), "a slow read never showed its spinner");
+        assert!(still(1020, 1145), "a slow read showed its spinner too soon");
         assert!(
-            still(1020, 1295),
+            still(1170, 1395),
+            "switching sources mid-wait kept the old wait's delay"
+        );
+        assert!(
+            still(1520, 1795),
             "the next slow read showed its spinner at once"
         );
         assert!(
-            spinning(1320, 1500),
+            spinning(1820, 2000),
             "the next slow read never showed its spinner"
         );
     }

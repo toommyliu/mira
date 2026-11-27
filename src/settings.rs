@@ -1052,7 +1052,7 @@ impl SettingsWindow {
                     ))
                     .row(Row::new(
                         "Shop load warning",
-                        Some("Ask you to check the map before the loader opens a shop."),
+                        Some("Ask before loading a shop by ID."),
                         Switch::new("shop-warning", "Shop load warning", shop_warning(cx))
                             .hide_label()
                             .on_toggle(|on, _, cx| set_shop_warning(on, cx)),

@@ -107,12 +107,13 @@ impl Source {
 
     fn changed_by(self) -> Option<fn(&Event) -> bool> {
         Some(match self {
-            Source::Shop => |event| changes(event, &["loadShop"]),
+            Source::Shop => |event| changes(event, &["loadShop", "levelUp"]),
             Source::Quests => |event| {
                 changes(
                     event,
                     &[
                         "getQuests",
+                        "getQuests2",
                         "getQuest",
                         "acceptQuest",
                         "updateQuest",
@@ -1299,8 +1300,9 @@ mod tests {
                         tokio::task::yield_now().await;
                     }
                 };
-                let (shop, bank, monsters) = (
+                let (shop, quests, bank, monsters) = (
                     watching(Source::Shop),
+                    watching(Source::Quests),
                     watching(Source::Bank),
                     watching(Source::Monsters),
                 );
@@ -1312,17 +1314,17 @@ mod tests {
                         .collect::<Vec<_>>()
                 };
 
-                events.publish(&packet("loadShop"));
-                settle().await;
-                assert_eq!(heard(&[&shop, &bank]), [true, false]);
-
-                events.publish(&packet("bankToInv"));
-                settle().await;
-                assert_eq!(heard(&[&shop, &bank]), [true, true]);
-
-                events.publish(&packet("ct"));
-                settle().await;
-                assert_eq!(heard(&[&shop, &bank]), [false, false]);
+                for (cmd, expected) in [
+                    ("loadShop", [true, false, false]),
+                    ("levelUp", [true, false, false]),
+                    ("getQuests2", [false, true, false]),
+                    ("bankToInv", [true, true, true]),
+                    ("ct", [false, false, false]),
+                ] {
+                    events.publish(&packet(cmd));
+                    settle().await;
+                    assert_eq!(heard(&[&shop, &quests, &bank]), expected, "{cmd}");
+                }
                 assert!(monsters.recv().await.is_err());
             })
             .await;

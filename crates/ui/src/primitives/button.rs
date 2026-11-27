@@ -629,8 +629,8 @@ impl RenderOnce for Button {
         button.style().refine(&self.style);
         let button = match self.reveal.filter(|_| !ring) {
             Some(group) => button
-                .invisible()
-                .group_hover(group, |button| button.visible()),
+                .opacity(0.0)
+                .group_hover(group, |button| button.opacity(1.0)),
             None => button,
         };
         match tip {
