@@ -3,7 +3,7 @@ title: Basics
 order: 1
 ---
 
-A script is a TypeScript file that controls a game tab with calls from the `mira` module. Save it as a `.ts` file in `~/Mira/scripts` to list it in **Scripts**.
+A script is a TypeScript or JavaScript file that controls a game tab with calls from the `mira` module. Save it in `~/Mira/scripts` as a `.ts`, `.mts`, `.js`, or `.mjs` file to list it in **Scripts**. Scripts are ES modules, so use `import` and `export`, not `require`.
 
 Mira runs the script's default export, a generator function. Put `yield*` before a call to wait for its result. A few calls, such as `Script.inputs`, return their value directly and don't take `yield*`.
 
@@ -13,6 +13,18 @@ import { Player } from "mira";
 export default function* () {
   const map = yield* Player.getMap();
   console.log(map);
+}
+```
+
+## Set up your editor
+
+Mira adds a `tsconfig.json` to `~/Mira/scripts`, each folder you add in **Scripts**, and each installed package. Editors such as VS Code and Zed read it to find the types for `mira`, `effect`, and installed packages. Mira keeps the types in sync with its version and your packages.
+
+If a folder already has a `tsconfig.json`, Mira leaves it alone. To use Mira's types, add `extends` to it:
+
+```json
+{
+  "extends": "/Users/you/Library/Application Support/Mira/types/tsconfig.json"
 }
 ```
 

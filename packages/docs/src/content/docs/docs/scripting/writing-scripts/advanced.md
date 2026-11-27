@@ -67,7 +67,7 @@ Scripts can't import from npm. They can import [`mira`](/reference/), [`mira/htt
 
 ## TypeScript syntax
 
-Mira runs scripts without type-checking. Use `import type` for type-only imports.
+Mira runs scripts without type-checking. [Set up your editor](/docs/scripting/writing-scripts/basics/#set-up-your-editor) to catch type errors as you write. Use `import type` for type-only imports.
 
 Use syntax Mira can erase, such as type annotations and interfaces. Declaring an `enum` or `const enum` can cause load errors or incorrect values. Use an `as const` object for named values.
 
