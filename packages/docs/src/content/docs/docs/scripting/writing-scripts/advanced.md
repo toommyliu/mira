@@ -65,9 +65,16 @@ Scripts don't have these:
 
 Scripts can't import from npm. They can import [`mira`](/reference/), [`mira/http`](/reference/http/), [`mira/schema`](/reference/schema/), `effect` and its top-level modules, [installed packages](/docs/scripting/packages/), and files in their own folder.
 
-## Types aren't checked
+## TypeScript syntax
 
-Mira removes TypeScript types without checking them. A type error shows in your [editor](/docs/scripting/writing-scripts/basics/#set-up-your-editor) but doesn't stop the run.
+Mira runs scripts without type-checking. [Set up your editor](/docs/scripting/writing-scripts/basics/#set-up-your-editor) to catch type errors as you write. Use `import type` for type-only imports.
+
+Use syntax Mira can erase, such as type annotations and interfaces. Declaring an `enum` or `const enum` can cause load errors or incorrect values. Use an `as const` object for named values.
+
+```ts
+const Mode = { Hunt: "hunt", Rest: "rest" } as const;
+type Mode = (typeof Mode)[keyof typeof Mode];
+```
 
 ## Limits
 
