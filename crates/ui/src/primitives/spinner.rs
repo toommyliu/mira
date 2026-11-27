@@ -15,6 +15,7 @@ pub struct Spinner {
     color: Option<Hsla>,
     size: Pixels,
     countdown: Option<(Instant, Instant)>,
+    delayed: bool,
 }
 
 impl Spinner {
@@ -25,7 +26,13 @@ impl Spinner {
             color: None,
             size: px(16.0),
             countdown: None,
+            delayed: false,
         }
+    }
+
+    pub fn delayed(mut self) -> Self {
+        self.delayed = true;
+        self
     }
 
     pub fn countdown(mut self, from: Instant, until: Instant) -> Self {
@@ -51,6 +58,17 @@ impl Spinner {
 
 impl RenderOnce for Spinner {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.delayed {
+            let shown_at = *window
+                .use_keyed_state((self.id.clone(), "shown-at"), cx, |_, cx| {
+                    cx.background_executor().now() + motion::PATIENCE
+                })
+                .read(cx);
+            if cx.background_executor().now() < shown_at {
+                window.request_animation_frame();
+                return div().id(self.id).flex_none().size(self.size);
+            }
+        }
         let color = self.color.unwrap_or(cx.theme().foreground);
         let layer = |path: &'static str, color: Hsla| {
             svg()
