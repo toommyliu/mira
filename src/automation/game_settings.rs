@@ -321,7 +321,10 @@ fn step(loader: &impl Loader, desired: &Settings, applied: &mut Settings, tick: 
         &desired.rendering,
         &mut applied.rendering,
         tick && !desired.rendering.shows_world(),
-        |rendering| settings::set_world_visible(loader, rendering.shows_world()),
+        |rendering| {
+            settings::set_world_visible(loader, rendering.shows_world())?;
+            settings::set_aura_huds_active(loader, !rendering.minimal())
+        },
     );
     sync(
         &desired.walk_speed,
@@ -554,13 +557,22 @@ mod tests {
                 let rate = |fps, by| Some(FrameRate { fps, by });
                 let set = |fps: f64| ("settings.setFrameRate", vec![Value::Number(fps)]);
                 let world = |visible| ("settings.setWorldVisible", vec![Value::Bool(visible)]);
+                let auras = |active| ("settings.setAuraHudsActive", vec![Value::Bool(active)]);
                 frame_rate.send_replace(rate(24, Writer::Game));
                 tokio::task::yield_now().await;
                 settings.send_modify(|settings| settings.rendering.set(RenderingMode::Minimal));
                 ticks(2).await;
                 assert_eq!(
                     drain(&sent),
-                    [world(false), set(2.0), world(false), world(false)]
+                    [
+                        world(false),
+                        auras(false),
+                        set(2.0),
+                        world(false),
+                        auras(false),
+                        world(false),
+                        auras(false)
+                    ]
                 );
                 frame_rate.send_replace(rate(2, Writer::Game));
                 frame_rate.send_replace(rate(30, Writer::Game));
@@ -570,7 +582,7 @@ mod tests {
                 assert_eq!(drain(&sent), [set(2.0)]);
                 settings.send_modify(|settings| settings.rendering.resume());
                 ticks(2).await;
-                assert_eq!(drain(&sent), [world(true), set(48.0)]);
+                assert_eq!(drain(&sent), [world(true), auras(true), set(48.0)]);
             })
             .await;
     }

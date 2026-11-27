@@ -115,6 +115,26 @@ package mira.game {
     }
 
     [BridgeExport]
+    public static function setAuraHudsActive(active:Boolean):void {
+      setAuraHudActive("pAurasUI", active);
+      setAuraHudActive("tAurasUI", active);
+    }
+
+    private static function setAuraHudActive(field:String, active:Boolean):void {
+      var game:* = Main.Game;
+      var hud:* = game[field];
+      if (hud == null || (hud.parent != null) == active) {
+        return;
+      }
+      if (active) {
+        game[field] = new (Object(hud).constructor)(game);
+      }
+      else {
+        hud.cleanup();
+      }
+    }
+
+    [BridgeExport]
     public static function setWorldVisible(visible:Boolean):void {
       worldVisible = visible;
       applyWorldVisibility();

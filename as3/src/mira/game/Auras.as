@@ -2,14 +2,17 @@ package mira.game {
   import flash.utils.getTimer;
 
   public class Auras {
-    private static function applied(leaf:Object, name:String):Object {
+    private static const STALE_MS:int = 10000;
+
+    private static function appliedByName(leaf:Object):Object {
+      var byName:Object = {};
       for each (var aura:Object in leaf.auras) {
-        if (aura != null && aura.nam == name) {
-          return aura;
+        if (aura != null && !byName.hasOwnProperty(aura.nam)) {
+          byName[aura.nam] = aura;
         }
       }
 
-      return null;
+      return byName;
     }
 
     public static function rows(leaf:Object):Array {
@@ -18,15 +21,16 @@ package mira.game {
         return rows;
       }
 
+      var applied:Object = appliedByName(leaf);
       var now:Number = new Date().getTime();
       var clock:int = getTimer();
       for (var name:String in leaf.hudAuras) {
         var hud:Object = leaf.hudAuras[name];
-        if (hud == null) {
+        if (hud == null || (hud.end > 0 && clock > hud.end + STALE_MS)) {
           continue;
         }
 
-        var aura:Object = applied(leaf, name);
+        var aura:Object = applied.hasOwnProperty(name) ? applied[name] : null;
         rows.push({
           seq: hud.seq,
           name: name,
