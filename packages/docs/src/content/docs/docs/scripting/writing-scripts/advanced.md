@@ -67,7 +67,7 @@ Scripts can't import from npm. They can import [`mira`](/reference/), [`mira/htt
 
 ## Types aren't checked
 
-Mira removes TypeScript types without checking them. A type error shows in your editor but doesn't stop the run.
+Mira removes TypeScript types without checking them. A type error shows in your [editor](/docs/scripting/writing-scripts/basics/#set-up-your-editor) but doesn't stop the run.
 
 ## Limits
 
