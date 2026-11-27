@@ -56,7 +56,7 @@ test("the body is the condensed notes, then the full changelog in a disclosure",
   const changes = parseChanges(
     [
       "a1b2c3d4e5\x1ffeat: show updates in the sidebar\x1fLonger body\x1e",
-      "f6e5d4c3b2\x1frelease: Mira 0.1.2\x1f\x1e",
+      "f6e5d4c3b2\x1fchore: release 0.1.2\x1f\x1e",
       "0011223344\x1ffix: stop the spinner outgrowing its icon\x1f\x1e",
     ].join("\n"),
   );
@@ -64,6 +64,7 @@ test("the body is the condensed notes, then the full changelog in a disclosure",
     changes.map((change) => change.subject),
     ["feat: show updates in the sidebar", "fix: stop the spinner outgrowing its icon"],
   );
+  assert.equal(parseChanges("5566778899\x1fchore: release the old updater\x1f\x1e").length, 1);
   assert.equal(
     releaseBody("- **Updates in the sidebar.** Click to download.\n", changes),
     [
@@ -117,11 +118,11 @@ test("notes are a few short highlights and leave the changelog to the script", (
 test("a publish bumps a newer version, resumes its own release commit, and refuses the rest", () => {
   const v = parseVersion;
   assert.equal(plan(v("0.1.8"), v("0.1.7"), "fix: something", "v0.1.7"), "bump");
-  assert.equal(plan(v("0.1.8"), v("0.1.8"), "release: Mira 0.1.8", "v0.1.7"), "resume");
-  assert.equal(plan(v("0.1.8"), v("0.1.8"), "release: Mira 0.1.8", "v0.1.8"), "resume");
+  assert.equal(plan(v("0.1.8"), v("0.1.8"), "chore: release 0.1.8", "v0.1.7"), "resume");
+  assert.equal(plan(v("0.1.8"), v("0.1.8"), "chore: release 0.1.8", "v0.1.8"), "resume");
   assert.equal(plan(v("0.1.0"), v("0.0.9"), "fix: something", null), "bump");
   assert.throws(() => plan(v("0.1.8"), v("0.1.8"), "fix: something", "v0.1.7"));
-  assert.throws(() => plan(v("0.1.7"), v("0.1.7"), "release: Mira 0.1.7", "v0.1.9"));
+  assert.throws(() => plan(v("0.1.7"), v("0.1.7"), "chore: release 0.1.7", "v0.1.9"));
   assert.throws(() => plan(v("0.1.8"), v("0.1.7"), "fix: something", "v0.2.0"));
   assert.throws(() => plan(v("0.1.7"), v("0.1.6"), "fix: something", "v0.1.7"));
 });
