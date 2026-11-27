@@ -75,6 +75,13 @@ pub fn keyboard_input(window: &Window, cx: &App) -> bool {
         .is_some_and(|windows| windows.0.contains(&window.window_handle().window_id()))
 }
 
+pub(crate) fn in_modal(window: &Window) -> bool {
+    window
+        .context_stack()
+        .iter()
+        .any(|ctx| ctx.contains("Modal"))
+}
+
 pub fn pane_start(handle: ScrollHandle) -> impl IntoElement {
     pane_start_above(handle, Pixels::ZERO)
 }

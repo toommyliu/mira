@@ -155,8 +155,8 @@ pub(crate) async fn hunt(
     let Some(prey) = world::hunt_target(loader, &here, query, most_matches)? else {
         return Ok(None);
     };
-    let reached =
-        prey.cell.eq_ignore_ascii_case(&here) || player::jump(loader, &prey.cell, None).await?;
+    let reached = prey.cell.eq_ignore_ascii_case(&here)
+        || player::jump(loader, &prey.cell, None, true).await?;
     Ok(reached.then_some(prey))
 }
 
@@ -177,7 +177,7 @@ pub(crate) async fn exit(loader: &impl Loader) -> Result<bool, CallError> {
         bridge::combat::cancel_auto_attack(loader)?;
         bridge::combat::cancel_target(loader)?;
         let pad = pad.as_deref().filter(|_| cell.eq_ignore_ascii_case(&here));
-        player::jump(loader, cell, pad).await?;
+        player::jump(loader, cell, pad, false).await?;
         if let Some(left) = settle(loader).await? {
             return Ok(left);
         }
@@ -1044,6 +1044,7 @@ mod tests {
                     "world.isCellReady" => {
                         Value::Bool(args[0] == Value::String(state.borrow().clone()))
                     }
+                    "flash.isNull" => Value::Bool(false),
                     other => panic!("unexpected call {other} {args:?}"),
                 })
             });

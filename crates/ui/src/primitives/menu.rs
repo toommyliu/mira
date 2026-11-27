@@ -3,7 +3,6 @@ use std::{
     collections::HashMap,
     ops::Range,
     rc::Rc,
-    time::Instant,
 };
 
 use gpui::{
@@ -246,26 +245,13 @@ pub(crate) fn attach(
     state: &Entity<MenuState>,
     on_outside: PressHandler,
     window: &mut Window,
-    cx: &App,
     panel: impl FnOnce(&mut Window) -> AnyElement,
 ) -> Div {
-    let measured = state.read(cx).panel_size.clone();
-    let (positioner, _) = placement.resolve(anchor, measured.get(), window.viewport_size());
-    let measure = canvas(
-        move |area, window, _| {
-            if measured.replace(area.size) != area.size {
-                window.refresh();
-            }
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .inset_0();
     popup_layer(
-        positioner,
+        placement.anchored_to(anchor),
         state,
         on_outside,
-        [panel(window), measure.into_any_element()],
+        [panel(window)],
     )
 }
 
@@ -309,7 +295,6 @@ pub(crate) struct MenuState {
     hovered: bool,
     row: Option<FocusHandle>,
     trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
-    panel_size: Rc<Cell<gpui::Size<Pixels>>>,
     reveal: Cell<bool>,
     pointer: Option<Point<Pixels>>,
     started: bool,
@@ -348,7 +333,6 @@ impl MenuState {
             hovered: false,
             row: None,
             trigger_bounds: Rc::default(),
-            panel_size: Rc::default(),
             reveal: Cell::new(false),
             pointer: None,
             started: false,
@@ -579,10 +563,10 @@ fn typeahead(
     state: &Entity<MenuState>,
     cx: &mut App,
 ) -> Option<usize> {
-    state.update(cx, |menu, _| {
+    state.update(cx, |menu, cx| {
         menu.typeahead.find(
             &event.keystroke,
-            Instant::now(),
+            cx.background_executor().now(),
             metas
                 .iter()
                 .enumerate()
@@ -617,8 +601,12 @@ fn key_down(
         menu.typeahead.end_unless_typed(&event.keystroke)
     });
     let (highlighted, submenu) = current(metas, state.read(cx));
-    let activates =
-        key == "enter" || (key == "space" && !state.read(cx).typeahead.typing(Instant::now()));
+    let activates = key == "enter"
+        || (key == "space"
+            && !state
+                .read(cx)
+                .typeahead
+                .typing(cx.background_executor().now()));
     if key == "tab" {
         close(state, true, window, cx);
         return;
@@ -1079,8 +1067,8 @@ fn rows(
                                                 .submenu_rows
                                                 .borrow_mut()
                                                 .insert(index, area);
-                                            if previous != Some(area) {
-                                                window.refresh();
+                                            if open && previous != Some(area) {
+                                                window.request_animation_frame();
                                             }
                                         },
                                         |_, _, _, _| {},
@@ -1119,8 +1107,6 @@ impl RenderOnce for OpenSubmenu {
             align_offset: px(-3.0),
             ..Placement::new(super::Side::Right, Align::Start)
         };
-        let (positioner, _) =
-            placement.resolve(self.row, measured.get().size, window.viewport_size());
         let index = self.index;
         let max_height = MENU_MAX_HEIGHT.min(window.viewport_size().height - WINDOW_MARGIN * 2.0);
         let scroll = self.state.read(cx).submenu_scroll.clone();
@@ -1143,16 +1129,9 @@ impl RenderOnce for OpenSubmenu {
             .role(Role::Menu)
             .aria_label(self.label)
             .child(
-                canvas(
-                    move |area, window, _| {
-                        if measured.replace(area).size != area.size {
-                            window.refresh();
-                        }
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
+                canvas(move |area, _, _| measured.set(area), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
             )
             .children(before)
             .child(scrolling(
@@ -1169,7 +1148,7 @@ impl RenderOnce for OpenSubmenu {
             .relative()
             .child(panel)
             .child(theme.surface_ring(theme.radius.panel));
-        deferred(positioner.child(panel)).with_priority(super::layer::POPUP)
+        deferred(placement.anchored_to(self.row).child(panel)).with_priority(super::layer::POPUP)
     }
 }
 
@@ -1759,7 +1738,6 @@ impl RenderOnce for DropdownMenu {
                     &state,
                     on_outside,
                     window,
-                    cx,
                     |window| {
                         let panel = popup(&id, label, items, max_height, &state, window, cx);
                         match width {

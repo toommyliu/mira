@@ -10,16 +10,50 @@ pub(crate) enum Extra {
     BankSearch,
     Percentages,
     HideMusicButton,
+    DamageText,
+    AuraText,
+    Timers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Group {
+    Interface,
+    Combat,
+}
+
+impl Group {
+    pub(crate) const ALL: [Group; 2] = [Group::Interface, Group::Combat];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Group::Interface => "Interface",
+            Group::Combat => "Combat",
+        }
+    }
 }
 
 impl Extra {
-    pub(crate) const ALL: [Extra; 5] = [
+    pub(crate) const ALL: [Extra; 8] = [
         Extra::CopyMenus,
         Extra::ChatRecall,
         Extra::BankSearch,
         Extra::Percentages,
         Extra::HideMusicButton,
+        Extra::DamageText,
+        Extra::AuraText,
+        Extra::Timers,
     ];
+
+    pub(crate) fn group(self) -> Group {
+        match self {
+            Extra::CopyMenus
+            | Extra::ChatRecall
+            | Extra::BankSearch
+            | Extra::Percentages
+            | Extra::HideMusicButton => Group::Interface,
+            Extra::DamageText | Extra::AuraText | Extra::Timers => Group::Combat,
+        }
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -28,6 +62,9 @@ impl Extra {
             Extra::BankSearch => "Bank search",
             Extra::Percentages => "HP and MP percentages",
             Extra::HideMusicButton => "Hide music button",
+            Extra::DamageText => "Damage text",
+            Extra::AuraText => "Aura text",
+            Extra::Timers => "Timers",
         }
     }
 
@@ -44,6 +81,13 @@ impl Extra {
             }
             Extra::Percentages => "Shows percentages on your and your target's HP and MP bars.",
             Extra::HideMusicButton => "Hides the Music On/Off button at the top of some maps.",
+            Extra::DamageText => "Redraws damage numbers as hits land, stacked above each target.",
+            Extra::AuraText => {
+                "Redraws aura popups beside you and your target, without the repeats from refreshes."
+            }
+            Extra::Timers => {
+                "Redraws skill cooldowns and the aura HUD with a plain wipe instead of the clock sweep."
+            }
         }
     }
 }
@@ -56,6 +100,9 @@ pub(crate) struct Extras {
     bank_search: bool,
     percentages: bool,
     hide_music_button: bool,
+    damage_text: bool,
+    aura_text: bool,
+    timers: bool,
 }
 
 impl Extras {
@@ -66,6 +113,9 @@ impl Extras {
             Extra::BankSearch => self.bank_search,
             Extra::Percentages => self.percentages,
             Extra::HideMusicButton => self.hide_music_button,
+            Extra::DamageText => self.damage_text,
+            Extra::AuraText => self.aura_text,
+            Extra::Timers => self.timers,
         }
     }
 
@@ -76,6 +126,9 @@ impl Extras {
             Extra::BankSearch => &mut self.bank_search,
             Extra::Percentages => &mut self.percentages,
             Extra::HideMusicButton => &mut self.hide_music_button,
+            Extra::DamageText => &mut self.damage_text,
+            Extra::AuraText => &mut self.aura_text,
+            Extra::Timers => &mut self.timers,
         };
         *enabled = !*enabled;
         self
@@ -131,7 +184,10 @@ pub(super) async fn run<L: Loader>(
             .and_then(|()| bridge::extras::set_percentages_enabled(&loader, extras.percentages))
             .and_then(|()| {
                 bridge::extras::set_hide_music_button_enabled(&loader, extras.hide_music_button)
-            });
+            })
+            .and_then(|()| bridge::extras::set_damage_text_enabled(&loader, extras.damage_text))
+            .and_then(|()| bridge::extras::set_aura_text_enabled(&loader, extras.aura_text))
+            .and_then(|()| bridge::extras::set_timers_enabled(&loader, extras.timers));
         if let Err(error) = applied {
             tracing::debug!(%error, "AS3 extras will apply once the loader is ready");
         }
@@ -201,7 +257,10 @@ mod tests {
                         ("extras.setChatRecallEnabled", true),
                         ("extras.setBankSearchEnabled", false),
                         ("extras.setPercentagesEnabled", false),
-                        ("extras.setHideMusicButtonEnabled", false)
+                        ("extras.setHideMusicButtonEnabled", false),
+                        ("extras.setDamageTextEnabled", false),
+                        ("extras.setAuraTextEnabled", false),
+                        ("extras.setTimersEnabled", false)
                     ]
                 );
 
@@ -214,7 +273,10 @@ mod tests {
                         ("extras.setChatRecallEnabled", true),
                         ("extras.setBankSearchEnabled", false),
                         ("extras.setPercentagesEnabled", false),
-                        ("extras.setHideMusicButtonEnabled", false)
+                        ("extras.setHideMusicButtonEnabled", false),
+                        ("extras.setDamageTextEnabled", false),
+                        ("extras.setAuraTextEnabled", false),
+                        ("extras.setTimersEnabled", false)
                     ]
                 );
             })

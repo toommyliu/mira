@@ -6,10 +6,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, Focusable as _, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Toggled, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, Context, Div, FontWeight, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Toggled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
@@ -2256,9 +2255,7 @@ impl Render for Manager {
                             this.clear_selection(cx);
                         }
                     }))
-                    .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                        this.search.read(cx).focus_handle(cx).focus(window, cx)
-                    }))
+                    .on_action(text_field::Find::in_search(&self.search))
             })
             .on_key_down(cx.listener(Self::key_down))
             .child(mira_ui::nav::pointer_probe())

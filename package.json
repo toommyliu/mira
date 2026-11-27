@@ -11,7 +11,7 @@
     "icons": "node scripts/sync-icons.ts",
     "build:runtime": "node scripts/build-runtime.ts --outdir target/mira-runtime",
     "docs": "pnpm --filter @mira/docs dev",
-    "test": "node --test scripts/*.test.ts",
+    "test": "node --test scripts/*.test.ts && pnpm -r test",
     "typecheck": "effect-tsgo tsrs --noEmit && pnpm -r typecheck",
     "lint": "oxlint scripts && pnpm -r lint",
     "fmt": "oxfmt scripts package.json pnpm-workspace.yaml tsconfig.json && pnpm -r fmt",

@@ -153,7 +153,16 @@ fn find<'a>(installed: &'a [Installed], name: &str) -> std::result::Result<&'a I
         .filter(|package| package.name == name)
         .collect();
     match named[..] {
-        [] => Err("no installed package has that name; scripts can import mira, mira/http, mira/schema, effect, effect/<Module>, installed packages and their own files".into()),
+        [] => {
+            let mira = MIRA_MODULES
+                .iter()
+                .map(|(specifier, _)| *specifier)
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "no installed package has that name; scripts can import {mira}, effect, effect/<Module>, installed packages and their own files"
+            ))
+        }
         [package] => Ok(package),
         _ => {
             let dirs: Vec<&str> = named.iter().map(|package| package.dir.as_str()).collect();
@@ -369,9 +378,13 @@ fn package_root(folder: &Path) -> std::result::Result<Option<PathBuf>, String> {
 }
 
 fn builtin(name: &str) -> Option<std::result::Result<String, String>> {
+    if let Some((_, path)) = MIRA_MODULES
+        .iter()
+        .find(|(specifier, _)| *specifier == name)
+    {
+        return Some(Ok(format!("{INTERNAL}{path}")));
+    }
     let path = match name {
-        "mira" => "mira/index.js".to_owned(),
-        "mira/http" | "mira/schema" => format!("{name}.js"),
         "effect" => "effect/index.js".to_owned(),
         _ => match name.strip_prefix("effect/") {
             Some(module) if !module.contains('/') => format!("effect/{module}.js"),

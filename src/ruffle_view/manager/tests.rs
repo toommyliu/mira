@@ -5,6 +5,7 @@ use std::{
 };
 
 use gpui::{AppContext as _, Context, Focusable as _, Size, Window, px, size};
+use mira_ui::primitives::text_field::Find;
 use reqwest::header::HeaderValue;
 
 use super::{
@@ -1058,15 +1059,27 @@ fn trying_again_loads_accounts_once_the_file_is_fixed(cx: &mut gpui::TestAppCont
         crate::settings::init(dir.join("settings.json"), |_| {}, cx);
     });
     let (manager, cx) = cx.add_window_view(|window, cx| {
-        Manager::new(path, HeaderValue::from_static("test"), window, cx)
+        let manager = Manager::new(path, HeaderValue::from_static("test"), window, cx);
+        window.focus(&manager.focus, cx);
+        manager
     });
     manager.update(cx, |manager, cx| manager.reload_accounts(cx));
     assert!(manager.read_with(cx, |manager, _| manager.accounts.is_err()));
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.is_action_available(&Find, cx)));
+
     write_accounts(&dir);
     manager.update(cx, |manager, cx| manager.reload_accounts(cx));
     assert_eq!(
         manager.read_with(cx, |manager, _| manager.account_list().len()),
         ROSTER.len()
+    );
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_input("wildfox");
+    assert_eq!(
+        manager.read_with(cx, |manager, cx| manager.search.read(cx).text().to_owned()),
+        "wildfox"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }

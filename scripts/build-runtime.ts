@@ -8,15 +8,11 @@ import { parseArgs, promisify } from "node:util";
 
 import { build } from "esbuild";
 
+import { modules as miraModules } from "../packages/mira/src/modules.ts";
+
 const root = fileURLToPath(new URL("../", import.meta.url));
 const runtime = join(root, "packages", "mira");
 const effect = join(runtime, "node_modules", "effect");
-
-const miraModules = [
-  { specifier: "mira", source: "mira", out: "mira/index" },
-  { specifier: "mira/http", source: "http", out: "mira/http" },
-  { specifier: "mira/schema", source: "schema", out: "mira/schema" },
-] as const;
 
 async function effectModules(): Promise<string[]> {
   const files = await readdir(join(effect, "dist"));
@@ -201,7 +197,14 @@ async function main(): Promise<void> {
   await cp(join(effect, "LICENSE"), join(outdir, "effect", "LICENSE"));
   if (values.table !== undefined) {
     const scripts = (await filesUnder(outdir)).filter((file) => file.endsWith(".js"));
-    await writeFile(resolve(values.table), table("ASSETS", scripts, outdir));
+    const specifiers = miraModules.map(
+      (module) =>
+        `    (${JSON.stringify(module.specifier)}, ${JSON.stringify(`${module.out}.js`)}),`,
+    );
+    await writeFile(
+      resolve(values.table),
+      `${table("ASSETS", scripts, outdir)}pub(super) static MIRA_MODULES: &[(&str, &str)] = &[\n${specifiers.join("\n")}\n];\n`,
+    );
   }
   if (values.types !== undefined) {
     const types = resolve(values.types);

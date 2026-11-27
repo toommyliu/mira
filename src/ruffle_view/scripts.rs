@@ -1,5 +1,6 @@
 use mira_ui::StyledExt as _;
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
     fs, io, iter, mem,
     path::{Path, PathBuf},
@@ -8,12 +9,12 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, TextRun, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle,
-    WindowOptions, actions, div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _,
-    px, size,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, EntityId, FocusHandle,
+    Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, Pixels, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TextRun, TitlebarOptions,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div, linear_color_stop,
+    linear_gradient, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, Theme, Tone,
@@ -22,9 +23,10 @@ use mira_ui::{
     primitives::{
         Activity, Alert, Align, Button, DropdownMenu, HoverCard, Icon, Input, InputEvent, List,
         ListItem, MenuItem, Placement, Popover, Scrollbar, Side, Switch, Tab, Tabs, Toaster,
-        VirtualList,
+        VirtualList, VirtualListState,
         button::{Size, Variant},
         icon, small_icon,
+        text_field::Find,
     },
     theme::RING_ROOM,
     v_flex,
@@ -120,6 +122,18 @@ struct Library {
 }
 
 impl Library {
+    fn scope(&self, root: Option<&Path>, built_in: &Path) -> Option<Scope> {
+        match root {
+            None => Some(Scope::All),
+            Some(root) if root == built_in => Some(Scope::BuiltIn),
+            Some(root) => self
+                .sources
+                .iter()
+                .position(|source| source.root == root)
+                .map(Scope::Source),
+        }
+    }
+
     fn add(&mut self, mut source: Source, scanned: io::Result<Vec<Entry>>) {
         let index = Some(self.sources.len());
         match scanned {
@@ -142,6 +156,13 @@ impl Library {
 enum Row {
     Source(usize),
     Script(Entry),
+}
+
+fn script_paths(rows: &[Row]) -> impl Iterator<Item = &Path> {
+    rows.iter().filter_map(|row| match row {
+        Row::Script(entry) => Some(entry.path.as_path()),
+        Row::Source(_) => None,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -549,17 +570,17 @@ pub(super) struct ScriptsWindow {
     search: Entity<Input>,
     room: Entity<Input>,
     shown_rooms: Option<Rooms>,
-    selected: usize,
+    picks: HashMap<PathBuf, u64>,
+    pick_order: u64,
     page: Page,
-    queued: usize,
-    chosen: Option<PathBuf>,
+    library_views: HashMap<Option<PathBuf>, LibraryNavigation>,
+    search_view: LibraryNavigation,
+    queues: HashMap<EntityId, QueueNavigation>,
+    chosen: Option<(Option<PathBuf>, PathBuf)>,
     forms: HashMap<FormKey, Form>,
     generation: u64,
     loading: HashMap<FormKey, Task<()>>,
     waiting: Option<(PathBuf, Instant, Task<()>)>,
-    displayed: Option<Entry>,
-    detail_scroll: ScrollHandle,
-    error_cursor: Option<usize>,
     folder_scroll: ScrollHandle,
     package_scroll: ScrollHandle,
     package_dialogs: Entity<PackageDialogs>,
@@ -579,6 +600,102 @@ struct Form {
     generation: u64,
     inputs: Entity<InputsForm>,
     _watch: Vec<Subscription>,
+}
+
+#[derive(Default)]
+struct LibraryNavigation {
+    list: VirtualListState,
+    displayed: Option<Entry>,
+    detail: ScrollHandle,
+    error_cursor: Cell<Option<usize>>,
+    fallback: Option<(PathBuf, u64)>,
+}
+
+fn pick_rank(
+    path: &Path,
+    picks: &HashMap<PathBuf, u64>,
+    fallback: Option<&(PathBuf, u64)>,
+) -> Option<u64> {
+    picks.get(path).copied().max(
+        fallback
+            .filter(|(next, _)| next == path)
+            .map(|(_, order)| *order),
+    )
+}
+
+fn remember_neighbor<'a>(
+    navigation: &mut LibraryNavigation,
+    previous: impl Iterator<Item = &'a Path>,
+    picks: &HashMap<PathBuf, u64>,
+    present: &HashSet<&Path>,
+) {
+    let previous: Vec<_> = previous.collect();
+    let Some((index, order)) = previous
+        .iter()
+        .enumerate()
+        .map(|(index, path)| (index, pick_rank(path, picks, navigation.fallback.as_ref())))
+        .max_by_key(|(index, order)| (*order, std::cmp::Reverse(*index)))
+    else {
+        return;
+    };
+    if !present.contains(previous[index]) {
+        navigation.fallback = previous[index + 1..]
+            .iter()
+            .chain(previous[..index].iter().rev())
+            .find(|path| present.contains(*path))
+            .map(|path| (path.to_path_buf(), order.unwrap_or(0)));
+    }
+}
+
+#[derive(Default)]
+struct QueueNavigation {
+    selected: Option<(EntryId, usize)>,
+    list: ScrollHandle,
+    detail: ScrollHandle,
+}
+
+impl QueueNavigation {
+    fn index(&self, queue: &[queue::Entry]) -> Option<usize> {
+        if queue.is_empty() {
+            return None;
+        }
+        Some(self.selected.map_or(0, |(id, previous)| {
+            if queue.get(previous).is_some_and(|entry| entry.id == id) {
+                previous
+            } else {
+                queue
+                    .iter()
+                    .position(|entry| entry.id == id)
+                    .unwrap_or(previous.min(queue.len() - 1))
+            }
+        }))
+    }
+
+    fn pick(&mut self, index: Option<usize>, queue: &[queue::Entry]) {
+        let selection = index.and_then(|index| Some((queue.get(index)?.id, index)));
+        if self.selected.map(|(id, _)| id) != selection.map(|(id, _)| id) {
+            self.detail = ScrollHandle::new();
+        }
+        self.selected = selection;
+    }
+
+    fn after_removal(&mut self, previous: &[EntryId], selected: usize, queue: &[queue::Entry]) {
+        let index = queue
+            .iter()
+            .position(|entry| entry.id == previous[selected])
+            .or_else(|| {
+                let remaining: HashMap<_, _> = queue
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| (entry.id, index))
+                    .collect();
+                previous[selected + 1..]
+                    .iter()
+                    .chain(previous[..selected].iter().rev())
+                    .find_map(|id| remaining.get(id).copied())
+            });
+        self.pick(index, queue);
+    }
 }
 
 impl ScriptsWindow {
@@ -609,8 +726,7 @@ impl ScriptsWindow {
             cx.observe(&client, |this, _, cx| this.show(cx)),
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Changed => {
-                    this.chosen = None;
-                    this.selected = first_script(&this.rows(cx));
+                    this.search_view = LibraryNavigation::default();
                     cx.notify();
                 }
                 InputEvent::Submitted => this.run_selected(cx),
@@ -660,17 +776,17 @@ impl ScriptsWindow {
             search,
             room,
             shown_rooms: None,
-            selected: 0,
+            picks: HashMap::new(),
+            pick_order: 0,
             page: Page::Library(None),
-            queued: 0,
+            library_views: HashMap::new(),
+            search_view: LibraryNavigation::default(),
+            queues: HashMap::new(),
             chosen: None,
             forms: HashMap::new(),
             generation: 0,
             loading: HashMap::new(),
             waiting: None,
-            displayed: None,
-            detail_scroll: ScrollHandle::new(),
-            error_cursor: None,
             folder_scroll: ScrollHandle::new(),
             package_scroll: ScrollHandle::new(),
             package_dialogs,
@@ -712,10 +828,7 @@ impl ScriptsWindow {
         });
         let log = self.view().map(|view| view.read(cx).script_log.clone());
         self.log.update(cx, |page, cx| page.show(log, cx));
-        self.queued = 0;
-        self.chosen = None;
         self.show_saved_room(cx);
-        self.select_last_run(cx);
     }
 
     fn view(&self) -> Option<Entity<RuffleView>> {
@@ -827,11 +940,6 @@ impl ScriptsWindow {
         self.scanning = Some(cx.spawn(async move |this, cx| {
             let scanned = scanned.await;
             let _ = this.update(cx, |this, cx| {
-                let first = this.library.is_none();
-                let kept = match this.rows(cx).get(this.selected) {
-                    Some(Row::Script(entry)) => Some(entry.path.clone()),
-                    _ => None,
-                };
                 script_names::learn(
                     scanned
                         .entries
@@ -839,42 +947,91 @@ impl ScriptsWindow {
                         .map(|entry| (entry.path.clone(), entry.name.clone())),
                     cx,
                 );
-                this.library = Some(scanned);
-                if this.scope(cx).is_none() {
+                if let Some(old) = &this.library {
+                    let present: HashSet<_> = scanned
+                        .entries
+                        .iter()
+                        .map(|entry| entry.path.as_path())
+                        .collect();
+                    for (source, navigation) in &mut this.library_views {
+                        let Some(scope) = old.scope(source.as_deref(), &this.folder) else {
+                            continue;
+                        };
+                        let previous = old.entries.iter().filter(|entry| match scope {
+                            Scope::All => true,
+                            Scope::BuiltIn => entry.source.is_none(),
+                            Scope::Source(index) => entry.source == Some(index),
+                        });
+                        remember_neighbor(
+                            navigation,
+                            previous.map(|entry| entry.path.as_path()),
+                            &this.picks,
+                            &present,
+                        );
+                    }
+                    if this.searching(cx) {
+                        let previous = this.rows(cx);
+                        let query = this.search.read(cx).text().trim().to_lowercase();
+                        let current = library_rows(&scanned, &query, Scope::All);
+                        remember_neighbor(
+                            &mut this.search_view,
+                            script_paths(&previous),
+                            &this.picks,
+                            &script_paths(&current).collect(),
+                        );
+                    }
+                    this.picks
+                        .retain(|path, _| present.contains(path.as_path()));
+                }
+                if let Page::Library(root) = &this.page
+                    && scanned.scope(root.as_deref(), &this.folder).is_none()
+                {
                     this.page = Page::Library(None);
                 }
-                if first {
-                    this.select_last_run(cx);
+                if this.library.is_none()
+                    && let Some(path) = this
+                        .view()
+                        .and_then(|view| view.read(cx).script.entry().cloned())
+                        .filter(|path| scanned.entries.iter().any(|entry| &entry.path == path))
+                {
+                    this.picks.insert(path, 0);
                 }
-                let rows = this.rows(cx);
-                if let Some(index) = kept.and_then(|path| {
-                    rows.iter()
-                        .position(|row| matches!(row, Row::Script(entry) if entry.path == path))
-                }) {
-                    this.selected = index;
-                } else if !matches!(rows.get(this.selected), Some(Row::Script(_))) {
-                    this.selected = first_script(&rows);
-                }
+                this.library = Some(scanned);
                 cx.notify();
             });
         }));
     }
 
-    fn select_last_run(&mut self, cx: &App) {
-        let last = self
-            .view()
-            .and_then(|view| view.read(cx).script.entry().cloned());
-        if let Some(index) = self
-            .rows(cx)
-            .iter()
-            .position(|row| matches!(row, Row::Script(entry) if Some(&entry.path) == last.as_ref()))
-        {
-            self.selected = index;
-        }
+    fn selection(&self, rows: &[Row], cx: &App) -> Option<usize> {
+        let fallback = self
+            .library_navigation(cx)
+            .and_then(|view| view.fallback.as_ref());
+        rows.iter()
+            .enumerate()
+            .filter_map(|(index, row)| match row {
+                Row::Script(entry) => Some((index, pick_rank(&entry.path, &self.picks, fallback))),
+                Row::Source(_) => None,
+            })
+            .max_by_key(|(index, order)| (*order, std::cmp::Reverse(*index)))
+            .map(|(index, _)| index)
+    }
+
+    fn pick(&mut self, path: PathBuf) {
+        self.pick_order += 1;
+        self.picks.insert(path, self.pick_order);
+        self.chosen = None;
     }
 
     fn rows(&self, cx: &App) -> Rc<[Row]> {
-        let (Some(library), Some(scope)) = (&self.library, self.scope(cx)) else {
+        let Some(library) = &self.library else {
+            return Rc::new([]);
+        };
+        let page = self.shown_page(cx);
+        let root = match &page {
+            Page::Library(root) => root.as_deref(),
+            _ => None,
+        };
+        let Some(scope) = library.scope(root, &self.folder) else {
             return Rc::new([]);
         };
         let query = self.search.read(cx).text().trim().to_lowercase();
@@ -893,21 +1050,6 @@ impl ScriptsWindow {
         }
     }
 
-    fn scope(&self, cx: &App) -> Option<Scope> {
-        let Page::Library(Some(root)) = self.shown_page(cx) else {
-            return Some(Scope::All);
-        };
-        if root == self.folder {
-            return Some(Scope::BuiltIn);
-        }
-        self.library
-            .as_ref()?
-            .sources
-            .iter()
-            .position(|source| source.root == root)
-            .map(Scope::Source)
-    }
-
     fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
         let searching = self.searching(cx);
         if page == self.page && !searching {
@@ -917,13 +1059,11 @@ impl ScriptsWindow {
             self.search.update(cx, |search, cx| search.set_text("", cx));
         }
         self.page = page;
-        self.chosen = None;
-        self.selected = first_script(&self.rows(cx));
         cx.notify();
     }
 
     fn run_selected(&mut self, cx: &mut Context<Self>) {
-        if self.running(cx) {
+        if self.running(cx) || !matches!(self.shown_page(cx), Page::Library(_)) {
             return;
         }
         let (Some(view), Some((entry, values))) = (self.view(), self.launch(cx)) else {
@@ -943,16 +1083,20 @@ impl ScriptsWindow {
     }
 
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        if !matches!(self.shown_page(cx), Page::Library(_)) {
+            return;
+        }
         let rows = self.rows(cx);
-        let mut index = self.selected;
+        let Some(mut index) = self.selection(&rows, cx) else {
+            return;
+        };
         while let Some(next) = index
             .checked_add_signed(by)
             .filter(|next| *next < rows.len())
         {
             index = next;
-            if matches!(rows[index], Row::Script(_)) {
-                self.selected = index;
-                self.chosen = None;
+            if let Row::Script(entry) = &rows[index] {
+                self.pick(entry.path.clone());
                 cx.notify();
                 return;
             }
@@ -966,10 +1110,12 @@ impl ScriptsWindow {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                if !matches!(this.page, Page::Library(_)) {
-                    this.set_page(Page::Library(None), cx);
-                }
-                this.chosen = Some(path);
+                let source = match &this.page {
+                    Page::Library(source) => source.clone(),
+                    _ => None,
+                };
+                this.set_page(Page::Library(source.clone()), cx);
+                this.chosen = Some((source, path));
                 cx.notify();
             });
         })
@@ -1592,17 +1738,28 @@ impl ScriptsWindow {
     }
 
     fn target(&self, cx: &App) -> Option<Entry> {
-        if let Some(path) = &self.chosen {
+        self.target_in(&self.rows(cx), cx)
+    }
+
+    fn chosen_file(&self, cx: &App) -> Option<&Path> {
+        let (source, path) = self.chosen.as_ref()?;
+        match &self.page {
+            Page::Library(current) if current == source && !self.searching(cx) => Some(path),
+            _ => None,
+        }
+    }
+
+    fn target_in(&self, rows: &[Row], cx: &App) -> Option<Entry> {
+        if let Some(path) = self.chosen_file(cx) {
             return Some(Entry {
                 name: file_name(path).into(),
-                path: path.clone(),
+                path: path.to_owned(),
                 folder: None,
                 source: None,
             });
         }
-        let rows = self.rows(cx);
-        match rows.get(self.selected.min(rows.len().saturating_sub(1))) {
-            Some(Row::Script(entry)) => Some(entry.clone()),
+        match &rows[self.selection(rows, cx)?] {
+            Row::Script(entry) => Some(entry.clone()),
             _ => None,
         }
     }
@@ -1641,34 +1798,40 @@ impl ScriptsWindow {
         self.loading.insert(key, task);
     }
 
-    fn detail_entry(&mut self, target: Option<Entry>) -> Option<Entry> {
-        let target = target?;
-        if self
-            .forms
-            .contains_key(&FormKey::Script(target.path.clone()))
-        {
-            if self.displayed.as_ref().map(|shown| &shown.path) != Some(&target.path) {
-                self.detail_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
-                self.error_cursor = None;
-                self.displayed = Some(target.clone());
-            }
-            return Some(target);
+    fn library_navigation(&self, cx: &App) -> Option<&LibraryNavigation> {
+        if self.searching(cx) {
+            Some(&self.search_view)
+        } else if let Page::Library(source) = &self.page {
+            self.library_views.get(source)
+        } else {
+            None
         }
-        let patient = self
+    }
+
+    fn detail_entry(&mut self, source: &Option<PathBuf>, searching: bool, target: Entry) -> Entry {
+        let loaded = self
+            .forms
+            .contains_key(&FormKey::Script(target.path.clone()));
+        let waiting = self
             .waiting
             .as_ref()
             .is_some_and(|(path, since, _)| *path == target.path && since.elapsed() < PATIENCE);
-        match &self.displayed {
-            Some(previous)
-                if patient
-                    && self
-                        .forms
-                        .contains_key(&FormKey::Script(previous.path.clone())) =>
-            {
-                Some(previous.clone())
-            }
-            _ => Some(target),
+        let navigation = if searching {
+            &mut self.search_view
+        } else {
+            self.library_views.entry(source.clone()).or_default()
+        };
+        if loaded && navigation.displayed.as_ref().map(|shown| &shown.path) != Some(&target.path) {
+            navigation.detail = ScrollHandle::new();
+            navigation.error_cursor.set(None);
+            navigation.displayed = Some(target.clone());
+        } else if !loaded
+            && waiting
+            && let Some(previous) = &navigation.displayed
+        {
+            return previous.clone();
         }
+        target
     }
 
     fn loaded(&mut self, key: FormKey, generation: u64, read: Read, cx: &mut Context<Self>) {
@@ -1763,6 +1926,24 @@ impl ScriptsWindow {
         cx.notify();
     }
 
+    fn remove_queue_entries(&mut self, cx: &mut Context<Self>, remove: impl FnOnce(&mut Queue)) {
+        let Some(shown) = &self.shown else {
+            return;
+        };
+        let Some(view) = shown.view.upgrade() else {
+            return;
+        };
+        let queue = view.read(cx).queue.entries();
+        let navigation = self.queues.entry(shown.id).or_default();
+        let selected = navigation.index(queue);
+        let previous: Vec<_> = queue.iter().map(|entry| entry.id).collect();
+        view.update(cx, |view, cx| view.edit_queue(cx, remove));
+        if let Some(selected) = selected {
+            navigation.after_removal(&previous, selected, view.read(cx).queue.entries());
+        }
+        cx.notify();
+    }
+
     fn add_to_queue(&mut self, cx: &mut Context<Self>) {
         let Some((script, values)) = self.launch(cx) else {
             return;
@@ -1777,14 +1958,30 @@ impl ScriptsWindow {
             return;
         };
         self.edit_queue(cx, |queue| queue.move_entry(id, to));
-        if let Some(index) = self.queue(cx).0.iter().position(|entry| entry.id == id) {
-            self.queued = index;
+        if let Some(shown) = &self.shown
+            && let Some(view) = shown.view.upgrade()
+        {
+            let queue = view.read(cx).queue.entries();
+            let index = queue.iter().position(|entry| entry.id == id);
+            self.queues.entry(shown.id).or_default().pick(index, queue);
         }
     }
 
     fn remove_queued(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.queued_id(self.queued, cx) {
-            self.edit_queue(cx, |queue| queue.remove(id));
+        let Some(shown) = &self.shown else {
+            return;
+        };
+        let Some(view) = shown.view.upgrade() else {
+            return;
+        };
+        let queue = view.read(cx).queue.entries();
+        if let Some(id) = self
+            .queues
+            .get(&shown.id)
+            .and_then(|navigation| navigation.index(queue))
+            .map(|index| queue[index].id)
+        {
+            self.remove_queue_entries(cx, |queue| queue.remove(id));
         }
     }
 
@@ -1836,26 +2033,33 @@ impl ScriptsWindow {
     }
 
     fn jump_to_error(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.displayed.as_ref().map(|entry| entry.path.clone()) else {
+        let Some(navigation) = self.library_navigation(cx) else {
+            return;
+        };
+        let Some(path) = navigation
+            .displayed
+            .as_ref()
+            .map(|entry| entry.path.clone())
+        else {
             return;
         };
         let Some(form) = self.inputs_form(&FormKey::Script(path)) else {
             return;
         };
         let form = form.read(cx);
-        let Some((next, field)) = form.step(self.error_cursor, by, cx) else {
+        let Some((next, field)) = form.step(navigation.error_cursor.get(), by, cx) else {
             return;
         };
         let item = usize::from(form.meta.description.is_some()) + form.item_of(field, cx);
         let focus = form.focus_handle(field, cx);
-        self.error_cursor = Some(next);
         let theme = cx.theme();
         reveal_item(
-            &self.detail_scroll,
+            &navigation.detail,
             item,
             theme.space(6.0),
             error_bar_clearance(theme),
         );
+        navigation.error_cursor.set(Some(next));
         if let Some(focus) = focus {
             window.focus(&focus, cx);
         }
@@ -1904,10 +2108,11 @@ impl ScriptsWindow {
         &self,
         theme: &Theme,
         queue: &[queue::Entry],
+        selected: Option<usize>,
         cx: &mut Context<Self>,
     ) -> Option<Detail> {
         let layout = theme.layout;
-        let queued = queue.get(self.queued)?;
+        let queued = queue.get(selected?)?;
         let failed = match &queued.state {
             queue::State::Ended { outcome, .. } => failure(outcome),
             _ => None,
@@ -1975,6 +2180,7 @@ impl ScriptsWindow {
         &self,
         theme: &Theme,
         queue: &[queue::Entry],
+        navigation: &QueueNavigation,
         width: Pixels,
         window: &Window,
         cx: &mut Context<Self>,
@@ -2047,13 +2253,21 @@ impl ScriptsWindow {
                 None => item,
             }
         })
-        .selected(Some(self.queued))
+        .selected(navigation.index(queue))
+        .track_scroll(&navigation.list)
         .fill()
         .flush()
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| {
-                this.queued = index;
-                cx.notify();
+                if let Some(shown) = &this.shown
+                    && let Some(view) = shown.view.upgrade()
+                {
+                    this.queues
+                        .entry(shown.id)
+                        .or_default()
+                        .pick(Some(index), view.read(cx).queue.entries());
+                    cx.notify();
+                }
             });
         })
         .on_reorder(move |from, to, _, cx| {
@@ -2140,6 +2354,7 @@ impl ScriptsWindow {
         library: &Library,
         rows: Rc<[Row]>,
         folder_width: Pixels,
+        list: &VirtualListState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (folders, installed) = self.source_rows(cx);
@@ -2154,6 +2369,13 @@ impl ScriptsWindow {
             .map(|source| (source.name.clone(), qualified.get(&source.root).cloned()))
             .collect();
         let count = rows.len();
+        let selected = if self.chosen_file(cx).is_some() {
+            None
+        } else {
+            self.selection(&rows, cx)
+        };
+        let picks = rows.clone();
+        let opens = rows.clone();
         let this = cx.entity().downgrade();
         let that = this.clone();
         VirtualList::new("scripts", "Scripts", count, move |index| {
@@ -2168,42 +2390,42 @@ impl ScriptsWindow {
                     }
                 }
                 Row::Script(entry) => match &entry.folder {
-                    Some(folder) => ListItem::new(entry.name.clone()).end_slot(
-                        div()
-                            .max_w(folder_width)
-                            .truncate()
-                            .text_ellipsis_start()
-                            .child(folder.clone()),
-                    ),
-                    None => ListItem::new(entry.name.clone()),
+                    Some(folder) => ListItem::new(entry.name.clone())
+                        .selection_check()
+                        .end_slot(
+                            div()
+                                .max_w(folder_width)
+                                .truncate()
+                                .text_ellipsis_start()
+                                .child(folder.clone()),
+                        ),
+                    None => ListItem::new(entry.name.clone()).selection_check(),
                 },
             }
         })
-        .selected(Some(self.selected.min(count - 1)))
+        .selected(selected)
+        .state(list)
         .fill()
         .flush()
         .on_select(move |index, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                this.selected = index;
-                this.chosen = None;
-                cx.notify();
-            });
+            if let Row::Script(entry) = &picks[index] {
+                let _ = this.update(cx, |this, cx| {
+                    this.pick(entry.path.clone());
+                    cx.notify();
+                });
+            }
         })
         .on_activate(move |index, _, cx| {
-            let _ = that.update(cx, |this, cx| {
-                this.selected = index;
-                this.chosen = None;
-                this.run_selected(cx);
-            });
+            if let Row::Script(entry) = &opens[index] {
+                let _ = that.update(cx, |this, cx| {
+                    this.pick(entry.path.clone());
+                    this.run_selected(cx);
+                    cx.notify();
+                });
+            }
         })
         .into_any_element()
     }
-}
-
-fn first_script(rows: &[Row]) -> usize {
-    rows.iter()
-        .position(|row| matches!(row, Row::Script(_)))
-        .unwrap_or(0)
 }
 
 fn fit_path(path: &str, fits: impl Fn(&str) -> bool) -> SharedString {
@@ -2266,12 +2488,18 @@ impl Render for ScriptsWindow {
         let layout = theme.layout;
         let typography = theme.typography;
         let has_tab = self.shown.is_some();
-        let rows = self.rows(cx);
-        let chosen = self.target(cx);
-        if let Some(entry) = &chosen {
-            self.load_form(FormKey::Script(entry.path.clone()), &entry.path, cx);
-        }
-        let chosen = self.detail_entry(chosen);
+        let page = self.shown_page(cx);
+        let (rows, chosen) = if let Page::Library(source) = &page {
+            let rows = self.rows(cx);
+            let target = self.target_in(&rows, cx).map(|target| {
+                self.load_form(FormKey::Script(target.path.clone()), &target.path, cx);
+                self.detail_entry(source, self.searching(cx), target)
+            });
+            (rows, target)
+        } else {
+            (Rc::new([]) as Rc<[Row]>, None)
+        };
+        let open_file = self.chosen_file(cx).is_some();
         let (queue, playing) = self.queue(cx);
         let queued: HashSet<EntryId> = self
             .client
@@ -2284,13 +2512,15 @@ impl Render for ScriptsWindow {
             FormKey::Script(_) => true,
             FormKey::Entry(id) => queued.contains(id),
         });
-        let page = self.shown_page(cx);
         if page == Page::Queue {
             for entry in &queue {
                 self.load_form(FormKey::Entry(entry.id), &entry.script, cx);
             }
         }
-        self.queued = self.queued.min(queue.len().saturating_sub(1));
+        if let Some(shown) = &self.shown {
+            let navigation = self.queues.entry(shown.id).or_default();
+            navigation.pick(navigation.index(&queue), &queue);
+        }
         let valid = chosen
             .as_ref()
             .is_some_and(|entry| self.launch_values(&entry.path, cx).is_some());
@@ -2352,12 +2582,12 @@ impl Render for ScriptsWindow {
         );
         let inspector_width = layout.inspector;
         let list_width = window.viewport_size().width - layout.sidebar - inspector_width - px(1.0);
-        let inspected = |detail: Option<Detail>| {
+        let inspected = |detail: Option<Detail>, scroll: &ScrollHandle| {
             let inline = |pane: Div| {
                 pane.pl(theme.space(4.0) + RING_ROOM)
                     .pr(theme.space(4.0) + Scrollbar::GUTTER)
             };
-            let scrolled = self.detail_scroll.offset().y < px(0.0);
+            let scrolled = scroll.offset().y < px(0.0);
             v_flex().flex_none().w(inspector_width).h_full().when_some(
                 detail,
                 |pane, Detail { heading, body, bar }| {
@@ -2375,16 +2605,13 @@ impl Render for ScriptsWindow {
                             .relative()
                             .flex_1()
                             .min_h_0()
-                            .child(mira_ui::nav::pane_start_above(
-                                self.detail_scroll.clone(),
-                                covered,
-                            ))
+                            .child(mira_ui::nav::pane_start_above(scroll.clone(), covered))
                             .child(
                                 inline(div())
                                     .id("detail")
                                     .size_full()
                                     .overflow_y_scroll()
-                                    .track_scroll(&self.detail_scroll)
+                                    .track_scroll(scroll)
                                     .flex()
                                     .flex_col()
                                     .gap(theme.space(2.0))
@@ -2427,10 +2654,7 @@ impl Render for ScriptsWindow {
                                         )),
                                 )
                             })
-                            .child(
-                                Scrollbar::new("detail-scrollbar", self.detail_scroll.clone())
-                                    .persistent(),
-                            ),
+                            .child(Scrollbar::new("detail-scrollbar", scroll.clone()).persistent()),
                     )
                 },
             )
@@ -2438,23 +2662,27 @@ impl Render for ScriptsWindow {
         let body = h_flex().flex_1().min_h_0().items_stretch();
         let source_header = self.source_header(&theme, cx);
         let body = match &page {
-            Page::Library(_) if self.chosen.is_none() && (no_scripts || rows.is_empty()) => body
+            Page::Library(_) if !open_file && (no_scripts || rows.is_empty()) => body
                 .justify_center()
                 .items_center()
                 .children(self.library_empty(no_scripts, cx)),
             Page::Library(_) => {
+                let navigation = self.library_navigation(cx);
                 let list = if rows.is_empty() {
                     self.library_empty(no_scripts, cx)
                         .map(|empty| empty.compact().into_any_element())
                 } else {
                     self.library
                         .as_ref()
-                        .map(|library| self.library(library, rows, list_width * 0.45, cx))
+                        .zip(navigation)
+                        .map(|(library, navigation)| {
+                            self.library(library, rows, list_width * 0.45, &navigation.list, cx)
+                        })
                 };
                 let detail = self.script_detail(&theme, chosen.as_ref(), cx);
                 body.child(v_flex().flex_1().min_w_0().children(list))
                     .child(theme.column_rule())
-                    .child(inspected(detail))
+                    .children(navigation.map(|navigation| inspected(detail, &navigation.detail)))
             }
             Page::Queue if !has_tab => body.justify_center().items_center().child(Empty::new(
                 "No tabs open",
@@ -2464,11 +2692,12 @@ impl Render for ScriptsWindow {
                 Empty::new("Nothing queued", "Pick a script and choose Add to queue."),
             ),
             Page::Queue => {
-                let list = self.queue_list(&theme, &queue, list_width, window, cx);
-                let detail = self.queued_detail(&theme, &queue, cx);
+                let navigation = &self.queues[&self.shown.as_ref().unwrap().id];
+                let list = self.queue_list(&theme, &queue, navigation, list_width, window, cx);
+                let detail = self.queued_detail(&theme, &queue, navigation.index(&queue), cx);
                 body.child(v_flex().flex_1().min_w_0().child(list))
                     .child(theme.column_rule())
-                    .child(inspected(detail))
+                    .child(inspected(detail, &navigation.detail))
             }
             Page::Log => body.child(self.log.clone()),
         }
@@ -2501,7 +2730,7 @@ impl Render for ScriptsWindow {
                                 .variant(Variant::Ghost)
                                 .disabled(!finished)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit_queue(cx, Queue::clear_finished);
+                                    this.remove_queue_entries(cx, Queue::clear_finished);
                                 })),
                         )
                         .child(
@@ -2509,7 +2738,7 @@ impl Render for ScriptsWindow {
                                 .variant(Variant::Ghost)
                                 .disabled(queue.len() == usize::from(skippable))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit_queue(cx, Queue::clear);
+                                    this.remove_queue_entries(cx, Queue::clear);
                                 })),
                         )
                         .child(div().flex_1())
@@ -2548,13 +2777,11 @@ impl Render for ScriptsWindow {
                     this.add_to_queue(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                if this.shown_page(cx) == Page::Log {
-                    this.log.update(cx, |log, cx| log.focus_search(window, cx));
-                } else {
-                    window.focus(&this.search.focus_handle(cx), cx);
-                }
-            }))
+            .on_action(if page == Page::Log {
+                Find::in_search(self.log.read(cx).search())
+            } else {
+                Find::in_search(&self.search)
+            })
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
@@ -3620,6 +3847,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn snapshot_script_selection_after_visiting_log() {
+        snapshot_window_with(
+            "scripts-selection-after-log",
+            (WIDTH, HEIGHT),
+            "Alt 1",
+            &[
+                ("scripts/dailies.ts", ""),
+                (
+                    "scripts/farm/hunt.ts",
+                    r#"export const meta = { name: "Frogzard hunt" };"#,
+                ),
+                ("scripts/wheel.ts", ""),
+            ],
+            |_| {},
+            |cx, window| {
+                pointer(
+                    gpui::point(px(320.0), px(118.0)),
+                    Some(gpui::MouseButton::Left),
+                )(cx, window);
+                update_scripts(cx, window, |scripts, cx| {
+                    assert_eq!(
+                        scripts.target(cx).map(|entry| entry.path),
+                        Some(scripts.folder.join("farm/hunt.ts"))
+                    );
+                });
+                pointer(
+                    gpui::point(px(60.0), px(158.0)),
+                    Some(gpui::MouseButton::Left),
+                )(cx, window);
+                update_scripts(cx, window, |scripts, cx| {
+                    assert_eq!(scripts.shown_page(cx), Page::Log);
+                });
+                pointer(
+                    gpui::point(px(60.0), px(100.0)),
+                    Some(gpui::MouseButton::Left),
+                )(cx, window);
+                update_scripts(cx, window, |scripts, cx| {
+                    assert_eq!(scripts.shown_page(cx), Page::Library(None));
+                    assert_eq!(
+                        scripts.target(cx).map(|entry| entry.path),
+                        Some(scripts.folder.join("farm/hunt.ts"))
+                    );
+                });
+            },
+        );
+    }
+
     const STRESS: &[(&str, &str)] = &[
         (
             "scripts/legion/daily-quests-and-weekly-bosses/ultra-bosses-with-a-very-long-folder-name/legion-revenant-fealty-and-exalted-crown-farm-with-fallbacks.ts",
@@ -3664,7 +3939,11 @@ export default function* () {}"#,
             ("stress-scripts-long", (WIDTH, 900.0)),
             ("stress-scripts-long-min", (MIN_WIDTH, MIN_HEIGHT)),
         ] {
-            snapshot_window(name, size, "Alt 1", STRESS, |scripts| scripts.selected = 2);
+            snapshot_window(name, size, "Alt 1", STRESS, |scripts| {
+                scripts.pick(scripts.folder.join(
+                    "legion/daily-quests-and-weekly-bosses/ultra-bosses-with-a-very-long-folder-name/legion-revenant-fealty-and-exalted-crown-farm-with-fallbacks.ts",
+                ));
+            });
         }
         snapshot_window_with(
             "stress-scripts-package-min",
@@ -3802,18 +4081,41 @@ export default function* () {}"#,
 
     #[test]
     fn snapshot_inputs_scroll_under_a_pinned_heading() {
+        let mut files = INPUTS.to_vec();
+        files.extend([
+            ("packages/alt/package.json", r#"{"name":"Alt","mira":{}}"#),
+            ("packages/alt/scripts/other.ts", ""),
+        ]);
         snapshot_window_with(
             "scripts-inputs-scrolled-min",
             (MIN_WIDTH, MIN_HEIGHT),
             "Alt 1",
-            INPUTS,
+            &files,
             |_| {},
             |cx, window| {
                 update_scripts(cx, window, |scripts, cx| {
                     scripts
-                        .detail_scroll
+                        .library_navigation(cx)
+                        .unwrap()
+                        .detail
                         .set_offset(gpui::point(px(0.0), px(-120.0)));
                     cx.notify();
+                });
+                update_scripts(cx, window, |scripts, cx| {
+                    scripts.set_page(Page::Library(Some(scripts.packages.join("alt"))), cx);
+                });
+                update_scripts(cx, window, |scripts, cx| {
+                    assert_eq!(
+                        scripts.library_navigation(cx).unwrap().detail.offset().y,
+                        px(0.0)
+                    );
+                    scripts.set_page(Page::Library(None), cx);
+                });
+                update_scripts(cx, window, |scripts, cx| {
+                    assert_eq!(
+                        scripts.library_navigation(cx).unwrap().detail.offset().y,
+                        px(-120.0)
+                    );
                 });
             },
         );
@@ -3829,8 +4131,17 @@ export default function* () {}"#,
             |_| {},
             |cx, window| {
                 update_scripts(cx, window, |scripts, cx| {
-                    let end = scripts.detail_scroll.max_offset().y;
-                    scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+                    let end = scripts
+                        .library_navigation(cx)
+                        .unwrap()
+                        .detail
+                        .max_offset()
+                        .y;
+                    scripts
+                        .library_navigation(cx)
+                        .unwrap()
+                        .detail
+                        .set_offset(gpui::point(px(0.0), -end));
                     cx.notify();
                 });
             },
@@ -4236,6 +4547,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
     struct QueuePage {
         scripts: Entity<ScriptsWindow>,
         entries: Vec<queue::Entry>,
+        navigation: QueueNavigation,
     }
 
     impl Render for QueuePage {
@@ -4248,8 +4560,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
                     scripts.load_form(FormKey::Entry(entry.id), &entry.script, cx);
                 }
                 (
-                    scripts.queue_list(&theme, &entries, width, window, cx),
-                    scripts.queued_detail(&theme, &entries, cx),
+                    scripts.queue_list(&theme, &entries, &self.navigation, width, window, cx),
+                    scripts.queued_detail(&theme, &entries, self.navigation.index(&entries), cx),
                 )
             });
             h_flex()
@@ -4269,6 +4581,42 @@ Cells visited: Enter, r1, r2, r3, r4.";
                         })),
                 )
         }
+    }
+
+    #[test]
+    fn queue_selection_follows_the_entry_and_moves_to_its_neighbor_on_removal() {
+        let mut queue = Queue::default();
+        let first = queue.add("first.ts".into(), Values::default());
+        let picked = queue.add("picked.ts".into(), Values::default());
+        let last = queue.add("last.ts".into(), Values::default());
+        let mut navigation = QueueNavigation::default();
+        navigation.pick(Some(1), queue.entries());
+        let selected = |navigation: &QueueNavigation, queue: &Queue| {
+            navigation
+                .index(queue.entries())
+                .map(|index| queue.entries()[index].id)
+        };
+
+        queue.move_entry(first, 2);
+        assert_eq!(selected(&navigation, &queue), Some(picked));
+        navigation.pick(navigation.index(queue.entries()), queue.entries());
+        queue.remove(picked);
+        assert_eq!(selected(&navigation, &queue), Some(last));
+
+        let mut queue = Queue::default();
+        let previous: Vec<_> = ["a.ts", "b.ts", "c.ts", "d.ts"]
+            .map(|path| queue.add(path.into(), Values::new()))
+            .into();
+        let now = Instant::now();
+        queue.play();
+        for _ in 0..2 {
+            queue.start_next(now).unwrap();
+            queue.ended(&Outcome::Completed, now);
+        }
+        navigation.pick(Some(1), queue.entries());
+        queue.clear_finished();
+        navigation.after_removal(&previous, 1, queue.entries());
+        assert_eq!(selected(&navigation, &queue), Some(previous[2]));
     }
 
     #[test]
@@ -4310,19 +4658,23 @@ Cells visited: Enter, r1, r2, r3, r4.";
                 crate::script_inputs::init(temp.join("inputs.json"), cx);
                 let scripts = cx.new(|cx| {
                     let client = Client::empty_for_tests(&temp, cx);
-                    let mut scripts = ScriptsWindow::new(
+                    ScriptsWindow::new(
                         client,
                         temp.join("scripts"),
                         temp.join("types"),
                         Target::Selected,
                         window,
                         cx,
-                    );
-                    scripts.queued = 2;
-                    scripts
+                    )
                 });
                 let entries = entries.clone();
-                cx.new(|_| QueuePage { scripts, entries })
+                let mut navigation = QueueNavigation::default();
+                navigation.pick(Some(2), &entries);
+                cx.new(|_| QueuePage {
+                    scripts,
+                    entries,
+                    navigation,
+                })
             }) {
                 assert!(written.exists(), "{} was not written", written.display());
             }
@@ -4342,7 +4694,22 @@ Cells visited: Enter, r1, r2, r3, r4.";
         };
         write("scripts/hunt.ts", "");
         write("packages/zeta/package.json", r#"{"name":"Zeta","mira":{}}"#);
-        write("packages/zeta/scripts/spin.ts", "");
+        write(
+            "packages/zeta/scripts/earlier.ts",
+            r#"export const meta = { name: "Rotation earlier" };"#,
+        );
+        write(
+            "packages/zeta/scripts/spin.ts",
+            r#"export const meta = { name: "Rotation spin" };"#,
+        );
+        write(
+            "packages/zeta/scripts/weekly.ts",
+            r#"export const meta = { name: "Rotation weekly" };"#,
+        );
+        write(
+            "packages/zeta/scripts/zen.ts",
+            r#"export const meta = { name: "Rotation zen" };"#,
+        );
         cx.update(mira_ui::init);
         let (scripts, cx) = cx.add_window_view(|window, cx| {
             crate::settings::init(temp.join("settings.json"), |_| {}, cx);
@@ -4361,11 +4728,33 @@ Cells visited: Enter, r1, r2, r3, r4.";
         cx.run_until_parked();
         let spin = temp.join("packages/zeta/scripts/spin.ts");
         scripts.update(cx, |scripts, cx| {
-            let rows = scripts.rows(cx);
-            scripts.selected = rows
-                .iter()
-                .position(|row| matches!(row, Row::Script(entry) if entry.path == spin))
-                .unwrap();
+            scripts.pick(spin.clone());
+            cx.notify();
+        });
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_page(Page::Log, cx);
+            scripts.set_page(Page::Library(None), cx);
+        });
+        scripts.read_with(cx, |scripts, cx| {
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(spin.clone())
+            );
+        });
+        let search = scripts.read_with(cx, |scripts, _| scripts.search.clone());
+        search.update(cx, |search, cx| search.set_text("hunt", cx));
+        scripts.read_with(cx, |scripts, cx| {
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(temp.join("scripts/hunt.ts"))
+            );
+        });
+        search.update(cx, |search, cx| search.set_text("", cx));
+        scripts.read_with(cx, |scripts, cx| {
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(spin.clone())
+            );
         });
 
         write(
@@ -4384,7 +4773,42 @@ Cells visited: Enter, r1, r2, r3, r4.";
                     .iter()
                     .any(|row| matches!(row, Row::Script(entry) if entry.path == daily))
             );
-            assert_eq!(scripts.target(cx).map(|entry| entry.path), Some(spin));
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(spin.clone())
+            );
+        });
+        let zeta = temp.join("packages/zeta");
+        for source in [&zeta, &temp.join("scripts")] {
+            scripts.update(cx, |scripts, cx| {
+                scripts.set_page(Page::Library(Some(source.clone())), cx)
+            });
+            cx.run_until_parked();
+        }
+        search.update(cx, |search, cx| search.set_text("rotation", cx));
+        cx.run_until_parked();
+        fs::remove_file(spin).unwrap();
+        write(
+            "packages/zeta/scripts/weekly.ts",
+            r#"export const meta = { name: "Weekly" };"#,
+        );
+        dialogs.update(cx, |_, cx| cx.emit(PackageEvent::Changed));
+        cx.run_until_parked();
+        scripts.read_with(cx, |scripts, cx| {
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(zeta.join("scripts/zen.ts"))
+            );
+        });
+        scripts.update(cx, |scripts, cx| {
+            scripts.set_page(Page::Library(Some(zeta.clone())), cx)
+        });
+        cx.run_until_parked();
+        scripts.read_with(cx, |scripts, cx| {
+            assert_eq!(
+                scripts.target(cx).map(|entry| entry.path),
+                Some(zeta.join("scripts/weekly.ts"))
+            );
         });
         fs::remove_dir_all(temp).unwrap();
     }
@@ -4518,14 +4942,16 @@ Cells visited: Enter, r1, r2, r3, r4.";
             crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
             crate::script_inputs::init(temp.join("inputs.json"), cx);
             let client = Client::empty_for_tests(&temp, cx);
-            ScriptsWindow::new(
+            let scripts = ScriptsWindow::new(
                 client,
                 temp.join("scripts"),
                 temp.join("types"),
                 Target::Selected,
                 window,
                 cx,
-            )
+            );
+            window.focus(&scripts.focus, cx);
+            scripts
         });
         cx.run_until_parked();
         let selected = |cx: &mut gpui::VisualTestContext| {
@@ -4542,7 +4968,8 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert_eq!(selected(cx), Some(dailies.join("scripts/spin.ts")));
 
         let search = scripts.read_with(cx, |scripts, _| scripts.search.clone());
-        search.update(cx, |search, cx| search.set_text("hunt", cx));
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("hunt");
         cx.run_until_parked();
         assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
 
@@ -4562,6 +4989,19 @@ Cells visited: Enter, r1, r2, r3, r4.";
             Page::Library(None)
         );
         assert_eq!(selected(cx), Some(temp.join("scripts/hunt.ts")));
+
+        let output = scripts.update(cx, |scripts, cx| {
+            scripts.set_page(Page::Log, cx);
+            scripts.log.read(cx).search().clone()
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("error");
+        assert_eq!(
+            output.read_with(cx, |input, _| input.text().to_owned()),
+            "error"
+        );
+        assert!(search.read_with(cx, |input, _| input.text().is_empty()));
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -4708,11 +5148,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
         cx.run_until_parked();
         let select = |script: &Path, cx: &mut gpui::VisualTestContext| {
             scripts.update(cx, |scripts, cx| {
-                scripts.selected = scripts
-                    .rows(cx)
-                    .iter()
-                    .position(|row| matches!(row, Row::Script(entry) if entry.path == script))
-                    .unwrap();
+                scripts.pick(script.to_owned());
                 cx.notify();
             });
             cx.run_until_parked();
@@ -4798,7 +5234,7 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert!(focused(&offset, cx), "the first input to fix is Offset");
         jump(1, cx);
         let (viewport, room, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
-            let scroll = &scripts.detail_scroll;
+            let scroll = &scripts.library_navigation(cx).unwrap().detail;
             (
                 scroll.bounds(),
                 scroll.bounds_for_item(9).unwrap(),
@@ -4826,13 +5262,22 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert_eq!(errors(cx), 1);
 
         scripts.update(cx, |scripts, cx| {
-            let end = scripts.detail_scroll.max_offset().y;
-            scripts.detail_scroll.set_offset(gpui::point(px(0.0), -end));
+            let end = scripts
+                .library_navigation(cx)
+                .unwrap()
+                .detail
+                .max_offset()
+                .y;
+            scripts
+                .library_navigation(cx)
+                .unwrap()
+                .detail
+                .set_offset(gpui::point(px(0.0), -end));
             cx.notify();
         });
         cx.run_until_parked();
         let (viewport, buy, scrolled, clearance) = scripts.read_with(cx, |scripts, cx| {
-            let scroll = &scripts.detail_scroll;
+            let scroll = &scripts.library_navigation(cx).unwrap().detail;
             (
                 scroll.bounds(),
                 scroll.bounds_for_item(10).unwrap(),
@@ -4885,7 +5330,9 @@ Cells visited: Enter, r1, r2, r3, r4.";
             cx.run_until_parked();
         }
         assert!(cx.update(|window, cx| offset.focus_handle(cx).is_focused(window)));
-        let at_offset = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
+        let at_offset = scripts.read_with(cx, |scripts, cx| {
+            scripts.library_navigation(cx).unwrap().detail.offset().y
+        });
         assert!(
             at_offset < px(0.0),
             "Offset is below the fold, so tabbing to it scrolls"
@@ -4894,7 +5341,9 @@ Cells visited: Enter, r1, r2, r3, r4.";
             cx.simulate_keystrokes("tab");
             cx.run_until_parked();
         }
-        let at_mode = scripts.read_with(cx, |scripts, _| scripts.detail_scroll.offset().y);
+        let at_mode = scripts.read_with(cx, |scripts, cx| {
+            scripts.library_navigation(cx).unwrap().detail.offset().y
+        });
         assert!(
             at_mode < at_offset,
             "tabbing on to Mode scrolls further, even with Offset still marked invalid"

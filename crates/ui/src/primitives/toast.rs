@@ -149,11 +149,7 @@ impl Toaster {
                 {
                     return;
                 }
-                if window
-                    .context_stack()
-                    .iter()
-                    .any(|ctx| ctx.contains("Modal"))
-                {
+                if nav::in_modal(window) {
                     return;
                 }
                 let _ = stack.update(cx, |stack, cx| {
@@ -249,7 +245,7 @@ impl Toaster {
         let had_focus = self
             .present()
             .any(|shown| shown.id == id && shown.focus.contains_focused(window, cx));
-        self.dismiss(id);
+        self.dismiss(id, cx.background_executor().now());
         if had_focus {
             let next = self.present().next().map(|shown| shown.focus.clone());
             if let Some(next) = next {
@@ -272,7 +268,7 @@ impl Toaster {
     pub fn push(stack: &Entity<Self>, toast: Toast, cx: &mut App) -> ToastId {
         let reduce = cx.reduce_motion();
         stack.update(cx, |toasts, cx| {
-            toasts.prune(reduce);
+            toasts.prune(reduce, cx.background_executor().now());
             let id = toasts.next;
             toasts.next += 1;
             let stays = toast.stays();
@@ -325,7 +321,7 @@ impl Toaster {
             cx.background_executor().timer(after).await;
             toasts
                 .update(cx, |toasts, cx| {
-                    toasts.dismiss(id);
+                    toasts.dismiss(id, cx.background_executor().now());
                     cx.notify();
                 })
                 .ok();
@@ -333,7 +329,7 @@ impl Toaster {
         self.timers.insert(
             id,
             Timer::Running {
-                deadline: Instant::now() + after,
+                deadline: cx.background_executor().now() + after,
                 _task: task,
             },
         );
@@ -344,7 +340,7 @@ impl Toaster {
             return;
         }
         self.paused = paused;
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let timers: Vec<(u64, Duration)> = self
             .timers
             .iter()
@@ -362,12 +358,12 @@ impl Toaster {
         }
     }
 
-    fn prune(&mut self, reduce: bool) {
+    fn prune(&mut self, reduce: bool, now: Instant) {
         let mut heights = self.heights.borrow_mut();
         self.shown.retain(|shown| {
             let keep = shown
                 .left
-                .is_none_or(|left| !reduce && left.at.elapsed() < UNMOUNT);
+                .is_none_or(|left| !reduce && now - left.at < UNMOUNT);
             if !keep {
                 heights.remove(&shown.id);
             }
@@ -379,7 +375,7 @@ impl Toaster {
         self.shown.iter().filter(|shown| shown.left.is_none())
     }
 
-    fn dismiss(&mut self, id: u64) {
+    fn dismiss(&mut self, id: u64, now: Instant) {
         self.timers.remove(&id);
         let present: Vec<u64> = self.present().map(|shown| shown.id).collect();
         let Some(depth) = present.iter().position(|shown| *shown == id) else {
@@ -394,7 +390,7 @@ impl Toaster {
         let behind = !self.expanded && depth > 0;
         if let Some(shown) = self.shown.iter_mut().find(|shown| shown.id == id) {
             shown.left = Some(Leaving {
-                at: Instant::now(),
+                at: now,
                 depth,
                 from,
                 behind,
@@ -407,7 +403,7 @@ impl Toaster {
         let reduce = cx.reduce_motion();
         let focused = focus.contains_focused(window, cx) && nav::keyboard_input(window, cx);
         let (shown, expanded, heights) = stack.update(cx, |toasts, cx| {
-            toasts.prune(reduce);
+            toasts.prune(reduce, cx.background_executor().now());
             if toasts.shown.is_empty() {
                 toasts.hovered = false;
             }
@@ -493,7 +489,8 @@ impl Toaster {
                     } else {
                         (left.from - own, motion::GLIDE)
                     };
-                    let t = left.at.elapsed().as_secs_f32() / fade.as_secs_f32();
+                    let t = (cx.background_executor().now() - left.at).as_secs_f32()
+                        / fade.as_secs_f32();
                     (left.depth, offset, 1.0 - motion::ease(t), left.behind)
                 }
                 (None, Some(&(depth, offset))) => {

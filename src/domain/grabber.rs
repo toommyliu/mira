@@ -13,9 +13,27 @@ use super::{
     shops::{self, Shop, ShopItem, ShopItemQuery},
     world::{self, Drop, Monster, MonsterDropsPacket, MonsterQuery},
 };
-use crate::bridge::{self, CallError, Event, Loader, Packets, Subscription, packets::wire};
+use crate::bridge::{
+    self, CallError, Event, Loader, Packets, Subscription,
+    packets::{self, Format, wire},
+};
 
 const MAX_QUESTS: usize = 100;
+
+const HOLDINGS: [&str; 12] = [
+    "addItems",
+    "forceAddItem",
+    "removeItem",
+    "sellItem",
+    "buyItem",
+    "getDrop",
+    "bankFromInv",
+    "bankToInv",
+    "bankSwapInv",
+    "turnIn",
+    "loadInventoryBig",
+    "loadBank",
+];
 
 pub(crate) type Reply<T> = async_channel::Sender<Result<T, CallError>>;
 
@@ -41,9 +59,13 @@ pub(crate) enum Job {
         source: Source,
         reply: Reply<Option<String>>,
     },
+    Watch {
+        source: Source,
+        changed: async_channel::Sender<()>,
+    },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Shop,
     Quests,
@@ -81,6 +103,41 @@ impl Source {
             Source::Bank => Some("world.bankinfo.BankArray"),
             Source::Monsters => None,
         }
+    }
+
+    fn changed_by(self) -> Option<fn(&Event) -> bool> {
+        Some(match self {
+            Source::Shop => |event| changes(event, &["loadShop"]),
+            Source::Quests => |event| {
+                changes(
+                    event,
+                    &[
+                        "getQuests",
+                        "getQuests2",
+                        "getQuest",
+                        "acceptQuest",
+                        "updateQuest",
+                        "ccqr",
+                    ],
+                )
+            },
+            Source::Inventory => |event| {
+                changes(
+                    event,
+                    &[
+                        "equipItem",
+                        "unequipItem",
+                        "wearLoadout",
+                        "enhanceItemShop",
+                        "enhanceItemLocal",
+                        "updateClass",
+                    ],
+                )
+            },
+            Source::TempInventory => |event| changes(event, &["ccqr"]),
+            Source::Bank => |event| changes(event, &[]),
+            Source::Monsters => return None,
+        })
     }
 
     pub(crate) fn name(self) -> &'static str {
@@ -238,18 +295,6 @@ impl Act {
 }
 
 impl Action {
-    pub(crate) fn done(&self) -> &'static str {
-        match self {
-            Action::Buy { .. } => "Bought",
-            Action::Accept { .. } => "Accepted",
-            Action::FakeComplete { .. } => "Marked done on this client",
-            Action::Equip { .. } => "Equipped",
-            Action::Deposit { .. } => "Moved to the bank",
-            Action::Withdraw { .. } => "Moved to the inventory",
-            Action::Jump { .. } => "Jumped",
-        }
-    }
-
     pub(crate) fn failed(&self) -> &'static str {
         match self {
             Action::Buy { .. } => "Couldn't buy it",
@@ -268,6 +313,7 @@ pub(crate) struct Holding {
     pub(crate) inventory: i32,
     pub(crate) temp: i32,
     pub(crate) bank: i32,
+    pub(crate) rank: Option<i32>,
 }
 
 impl Holding {
@@ -311,8 +357,15 @@ pub(crate) struct Entry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Heading {
+    pub(crate) name: String,
+    pub(crate) facts: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Snapshot {
-    pub(crate) heading: Option<String>,
+    pub(crate) heading: Option<Heading>,
+    pub(crate) map: Option<String>,
     pub(crate) entries: Vec<Entry>,
 }
 
@@ -337,6 +390,37 @@ pub(crate) async fn run(
         }
         Job::Raw { source, reply } => {
             let _ = reply.try_send(raw(loader, source));
+        }
+        Job::Watch { source, changed } => watch(&subscribe, source, &changed).await,
+    }
+}
+
+fn changes(event: &Event, also: &[&str]) -> bool {
+    let Event::ExtensionResponse { packet } = event else {
+        return false;
+    };
+    HOLDINGS
+        .iter()
+        .chain(also)
+        .any(|cmd| packets::names(packet, Format::Json, cmd))
+}
+
+async fn watch(
+    subscribe: &impl Fn(fn(&Event) -> bool) -> Subscription,
+    source: Source,
+    changed: &async_channel::Sender<()>,
+) {
+    let Some(wants) = source.changed_by() else {
+        return;
+    };
+    let events = subscribe(wants);
+    loop {
+        tokio::select! {
+            biased;
+            () = changed.closed() => return,
+            _ = events.next() => {
+                let _ = changed.try_send(());
+            }
         }
     }
 }
@@ -386,7 +470,7 @@ async fn act(
         Action::Withdraw { item_id } => {
             bank::withdraw(loader, subscribe, &ItemQuery::ItemId { item_id }).await
         }
-        Action::Jump { cell } => player::jump(loader, &cell, None).await,
+        Action::Jump { cell } => player::jump(loader, &cell, None, true).await,
     }
 }
 
@@ -400,12 +484,12 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
             let held = holdings(loader).await?;
             Snapshot {
                 heading: shop.as_ref().map(shop_heading),
-                entries: shop.map_or_else(Vec::new, |shop| {
-                    shop.items
-                        .iter()
-                        .map(|item| shop_entry(item, &held))
-                        .collect()
-                }),
+                map: None,
+                entries: shop
+                    .iter()
+                    .flat_map(|shop| &shop.items)
+                    .map(|item| shop_entry(item, &held))
+                    .collect(),
             }
         }
         Source::Quests => {
@@ -437,11 +521,13 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
             )
         }
         Source::Monsters => {
+            let map = bridge::player::get_map(loader)?;
             let here = bridge::player::get_cell(loader)?.unwrap_or_default();
             let mut monsters = world::monsters(loader, None)?;
             monsters.sort_by_key(|monster| !monster.cell.eq_ignore_ascii_case(&here));
             Snapshot {
                 heading: None,
+                map,
                 entries: monsters
                     .iter()
                     .map(|monster| monster_entry(monster, &here))
@@ -454,6 +540,7 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
 fn listing(entries: impl Iterator<Item = Entry>) -> Snapshot {
     Snapshot {
         heading: None,
+        map: None,
         entries: entries.collect(),
     }
 }
@@ -653,21 +740,26 @@ impl Holdings {
     fn add(&mut self, item_id: i32, quantity: i32, slot: fn(&mut Holding) -> &mut i32) {
         *slot(self.0.entry(item_id).or_default()) += quantity;
     }
+
+    fn add_item(&mut self, item: &Item, slot: fn(&mut Holding) -> &mut i32) {
+        self.add(item.item_id, quantity(item), slot);
+        if let Some(rank) = item.class_rank {
+            self.0.entry(item.item_id).or_default().rank = Some(rank);
+        }
+    }
 }
 
 async fn holdings(loader: &impl Loader) -> Result<Holdings, CallError> {
     let mut held = Holdings::default();
     for item in inventory::items(loader)? {
-        held.add(item.item_id, item.quantity, |holding| {
-            &mut holding.inventory
-        });
+        held.add_item(&item, |holding| &mut holding.inventory);
     }
     for item in inventory::temp_items(loader)? {
         held.add(item.item_id, item.quantity, |holding| &mut holding.temp);
     }
     if bridge::bank::is_loaded(loader)? {
         for item in bank::items(loader).await? {
-            held.add(item.item_id, item.quantity, |holding| &mut holding.bank);
+            held.add_item(&item, |holding| &mut holding.bank);
         }
     }
     Ok(held)
@@ -677,7 +769,23 @@ fn json(value: &impl Serialize) -> String {
     serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
-fn grouped(number: i32) -> String {
+const RANKS: [i32; 10] = [
+    0, 900, 3_600, 10_000, 22_500, 44_100, 78_400, 129_600, 202_500, 302_500,
+];
+
+fn reputation(faction: &str, points: i32) -> String {
+    let reached = RANKS
+        .iter()
+        .rposition(|start| points >= *start)
+        .unwrap_or_default();
+    let rank = reached + 1;
+    match points - RANKS[reached] {
+        0 => format!("Rank {rank} {faction}"),
+        extra => format!("Rank {rank} {faction} + {} rep", grouped(extra)),
+    }
+}
+
+pub(crate) fn grouped(number: i32) -> String {
     let digits = number.unsigned_abs().to_string();
     let mut text = String::new();
     for (index, digit) in digits.chars().enumerate() {
@@ -708,21 +816,25 @@ fn needs(requirements: &[ItemCount], held: &Holdings) -> Vec<Line> {
         .collect()
 }
 
-fn shop_heading(shop: &Shop) -> String {
-    let kind = [
+fn shop_heading(shop: &Shop) -> Heading {
+    let items = match shop.items.len() {
+        1 => "1 item".to_owned(),
+        count => format!("{count} items"),
+    };
+    let mut facts = vec![format!("Shop ID {}", shop.id), items];
+    for (on, kind) in [
         (shop.merge, "Merge"),
         (shop.limited, "Limited"),
         (shop.house, "House"),
-    ]
-    .into_iter()
-    .filter_map(|(on, kind)| on.then_some(kind))
-    .collect::<Vec<_>>();
-    let mut heading = format!("{} · {}", shop.name, shop.id);
-    for kind in kind {
-        heading.push_str(" · ");
-        heading.push_str(kind);
+    ] {
+        if on {
+            facts.push(kind.to_owned());
+        }
     }
-    heading
+    Heading {
+        name: shop.name.clone(),
+        facts: facts.join(" · "),
+    }
 }
 
 fn price(item: &ShopItem) -> String {
@@ -736,6 +848,7 @@ fn price(item: &ShopItem) -> String {
 
 fn shop_entry(item: &ShopItem, held: &Holdings) -> Entry {
     let mut facts = vec![
+        ("Item ID", item.item_id.to_string()),
         ("Shop item ID", item.shop_item_id.to_string()),
         ("Category", item.category.clone()),
         ("Price", price(item)),
@@ -747,14 +860,13 @@ fn shop_entry(item: &ShopItem, held: &Holdings) -> Entry {
         facts.push(("Level", item.level.to_string()));
     }
     if let Some(faction) = &item.faction {
-        facts.push((
-            "Reputation",
-            format!("{} · {}", faction.name, grouped(faction.rep)),
-        ));
+        facts.push(("Reputation", reputation(&faction.name, faction.rep)));
     }
-    let owned = held.of(item.item_id).total();
-    if owned > 0 {
-        facts.push(("Owned", grouped(owned)));
+    let owned = held.of(item.item_id);
+    match owned.rank {
+        Some(rank) => facts.push(("Owned", format!("Rank {rank}"))),
+        None if owned.total() > 0 => facts.push(("Owned", grouped(owned.total()))),
+        None => {}
     }
     let groups = if item.requirements.is_empty() {
         Vec::new()
@@ -770,7 +882,7 @@ fn shop_entry(item: &ShopItem, held: &Holdings) -> Entry {
         id_label: "Item ID",
         id: item.item_id.to_string(),
         meta: price(item),
-        badges: flags(item.coins, item.member),
+        badges: item.member.then_some("Member").into_iter().collect(),
         facts,
         groups,
         acts: vec![
@@ -965,12 +1077,6 @@ fn inventory_entry(item: &Item, patterns: &Patterns) -> Entry {
             .into(),
         );
     }
-    acts.push(
-        Act::RegisterDrop {
-            name: item.name().to_owned(),
-        }
-        .into(),
-    );
     Entry {
         key: i64::from(item.item_id),
         name: item.name().to_owned(),
@@ -1002,10 +1108,6 @@ fn bank_entry(item: &Item, patterns: &Patterns) -> Entry {
                 item_id: item.item_id,
             })
             .into(),
-            Act::RegisterDrop {
-                name: item.name().to_owned(),
-            }
-            .into(),
         ],
         here: false,
         drops_from: None,
@@ -1029,12 +1131,7 @@ fn temp_entry(item: &TempItem) -> Entry {
             ),
         ],
         groups: Vec::new(),
-        acts: vec![
-            Act::RegisterDrop {
-                name: item.name.clone(),
-            }
-            .into(),
-        ],
+        acts: Vec::new(),
         here: false,
         drops_from: None,
         json: json(item),
@@ -1137,6 +1234,7 @@ mod tests {
                     { "itemId": 1, "name": "Bone Dust", "quantity": 4, "maxStack": 99 }
                 ])),
                 "player.getCell" => Value::String("Enter".into()),
+                "player.getMap" => Value::String("lair".into()),
                 "flash.getGameObject" if args == [Value::String("world.shopinfo".into())] => {
                     Value::String(
                         json!({ "ShopID": 1234, "sName": "Dragon Merge Shop",
@@ -1172,6 +1270,59 @@ mod tests {
             ],
             "rewards": []
         })
+    }
+
+    #[tokio::test]
+    async fn a_watched_source_hears_only_the_packets_that_change_it() {
+        let events = std::rc::Rc::new(crate::bridge::Events::default());
+        let packet = |cmd: &str| Event::ExtensionResponse {
+            packet: json!({ "type": "json", "dataObj": { "cmd": cmd } }).to_string(),
+        };
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let watching = |source| {
+                    let (changed, changes) = async_channel::bounded(1);
+                    let events = events.clone();
+                    tokio::task::spawn_local(async move {
+                        let loader = FakeLoader::new(|callback, _| panic!("unexpected {callback}"));
+                        let job = Job::Watch { source, changed };
+                        let subscribe = |wants| events.subscribe(wants);
+                        run(&loader, subscribe, &CombatCooldown::default(), job).await;
+                    });
+                    changes
+                };
+                let settle = || async {
+                    for _ in 0..4 {
+                        tokio::task::yield_now().await;
+                    }
+                };
+                let (shop, quests, bank, monsters) = (
+                    watching(Source::Shop),
+                    watching(Source::Quests),
+                    watching(Source::Bank),
+                    watching(Source::Monsters),
+                );
+                settle().await;
+                let heard = |events: &[&async_channel::Receiver<()>]| {
+                    events
+                        .iter()
+                        .map(|changes| changes.try_recv().is_ok())
+                        .collect::<Vec<_>>()
+                };
+
+                for (cmd, expected) in [
+                    ("loadShop", [true, false, false]),
+                    ("getQuests2", [false, true, false]),
+                    ("bankToInv", [true, true, true]),
+                    ("ct", [false, false, false]),
+                ] {
+                    events.publish(&packet(cmd));
+                    settle().await;
+                    assert_eq!(heard(&[&shop, &quests, &bank]), expected, "{cmd}");
+                }
+                assert!(monsters.recv().await.is_err());
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -1215,6 +1366,7 @@ mod tests {
     async fn monsters_in_your_cell_list_first_and_offer_jump_to_only_elsewhere() {
         let loader = game(json!([]));
         let snapshot = read(&loader, Source::Monsters).await.unwrap().unwrap();
+        assert_eq!(snapshot.map.as_deref(), Some("lair"));
         let offers: Vec<_> = snapshot
             .entries
             .iter()
@@ -1236,6 +1388,25 @@ mod tests {
         assert_eq!(
             (burn.name.as_str(), burn.quantity, burn.facts.clone()),
             ("Burn", 2, vec![("Duration", "5s".to_owned())])
+        );
+    }
+
+    #[tokio::test]
+    async fn held_items_offer_moving_them_but_not_picking_them_up() {
+        let loader = game(json!([]));
+        let mut offered = Vec::new();
+        for source in [Source::Inventory, Source::TempInventory, Source::Bank] {
+            let snapshot = read(&loader, source).await.unwrap().unwrap();
+            let labels: Vec<_> = snapshot.entries[0]
+                .acts
+                .iter()
+                .map(|offer| offer.act.label())
+                .collect();
+            offered.push(labels);
+        }
+        assert_eq!(
+            offered,
+            [vec!["Equip", "To bank"], vec![], vec!["To inventory"]]
         );
     }
 
@@ -1276,6 +1447,76 @@ mod tests {
         );
     }
 
+    fn blacksmith() -> FakeLoader {
+        FakeLoader::new(|callback, _| {
+            Ok(match callback {
+                "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
+                "bank.isLoaded" => Value::Bool(false),
+                "inventory.getItems" => value(json!([
+                    { "itemId": 10, "name": "Echo", "quantity": 302500, "maxStack": 1,
+                      "category": "Class", "classRank": 10 }
+                ])),
+                "tempInventory.getItems" => value(json!([])),
+                "shops.getShop" => value(json!({
+                    "id": 1234, "name": "Blacksmith", "items": [
+                        { "shopItemId": 7, "itemId": 70, "name": "Iron Helm", "cost": 10 },
+                        { "shopItemId": 8, "itemId": 80, "name": "Dragon Blade", "cost": 40,
+                          "coins": true, "member": true },
+                        { "shopItemId": 9, "itemId": 10, "name": "Echo", "category": "Class" },
+                        { "shopItemId": 11, "itemId": 90, "name": "Grove Cape",
+                          "faction": { "id": 20, "name": "Arcangrove", "rep": 302500 } },
+                        { "shopItemId": 12, "itemId": 91, "name": "Grove Helm",
+                          "faction": { "id": 20, "name": "Arcangrove", "rep": 50000 } }
+                    ]
+                })),
+                callback => panic!("unexpected call {callback}"),
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn a_shop_item_leaves_its_currency_to_the_price() {
+        let snapshot = read(&blacksmith(), Source::Shop).await.unwrap().unwrap();
+        let dragon_blade = &snapshot.entries[1];
+        assert_eq!(
+            (dragon_blade.meta.as_str(), dragon_blade.badges.as_slice()),
+            ("40 AC", ["Member"].as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shop_counts_class_points_and_reputation_in_ranks() {
+        let snapshot = read(&blacksmith(), Source::Shop).await.unwrap().unwrap();
+        let fact = |index: usize, label: &str| {
+            snapshot.entries[index]
+                .facts
+                .iter()
+                .find(|(named, _)| *named == label)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(fact(2, "Owned").as_deref(), Some("Rank 10"));
+        assert_eq!(fact(3, "Reputation").as_deref(), Some("Rank 10 Arcangrove"));
+        assert_eq!(
+            fact(4, "Reputation").as_deref(),
+            Some("Rank 6 Arcangrove + 5,900 rep")
+        );
+    }
+
+    #[tokio::test]
+    async fn every_shop_listing_offers_buy() {
+        let snapshot = read(&blacksmith(), Source::Shop).await.unwrap().unwrap();
+        let offers: Vec<_> = snapshot
+            .entries
+            .iter()
+            .flat_map(|entry| entry.acts.clone())
+            .collect();
+        assert_eq!(
+            offers,
+            [7, 8, 9, 11, 12]
+                .map(|shop_item_id| Offer::from(Act::Game(Action::Buy { shop_item_id })))
+        );
+    }
+
     #[test]
     fn a_whole_shop_exports_as_the_game_holds_it() {
         let loader = game(json!([]));
@@ -1310,6 +1551,7 @@ mod tests {
                 inventory: 3,
                 temp: 0,
                 bank: 1,
+                ..Default::default()
             },
         );
         assert_eq!(

@@ -15,16 +15,14 @@ pub(crate) enum Category {
     Scripts,
     Game,
     Options,
-    View,
     Windows,
 }
 
 impl Category {
-    pub(crate) const ALL: [Category; 5] = [
+    pub(crate) const ALL: [Category; 4] = [
         Category::Scripts,
         Category::Game,
         Category::Options,
-        Category::View,
         Category::Windows,
     ];
 
@@ -33,7 +31,6 @@ impl Category {
             Category::Scripts => "Scripts",
             Category::Game => "Client",
             Category::Options => "Client options",
-            Category::View => "View",
             Category::Windows => "Windows",
         }
     }
@@ -124,12 +121,15 @@ impl Shortcut {
     pub(crate) fn category(self) -> Category {
         match self {
             Shortcut::LoadScript | Shortcut::StartStopScript => Category::Scripts,
-            Shortcut::AutoAttack | Shortcut::Bank | Shortcut::Jump => Category::Game,
+            Shortcut::AutoAttack
+            | Shortcut::Bank
+            | Shortcut::Jump
+            | Shortcut::Sidebar
+            | Shortcut::GridView => Category::Game,
             Shortcut::OptionsMenu
             | Shortcut::MinimalRendering
             | Shortcut::InterfaceOnlyRendering => Category::Options,
             _ if self.option().is_some() => Category::Options,
-            Shortcut::Sidebar | Shortcut::GridView => Category::View,
             _ => Category::Windows,
         }
     }

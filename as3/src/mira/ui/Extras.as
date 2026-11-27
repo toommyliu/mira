@@ -25,5 +25,20 @@ package mira.ui {
     public static function setHideMusicButtonEnabled(enabled:Boolean):void {
       MusicButton.setEnabled(enabled);
     }
+
+    [BridgeExport]
+    public static function setDamageTextEnabled(enabled:Boolean):void {
+      CombatText.setDamageEnabled(enabled);
+    }
+
+    [BridgeExport]
+    public static function setAuraTextEnabled(enabled:Boolean):void {
+      CombatText.setAurasEnabled(enabled);
+    }
+
+    [BridgeExport]
+    public static function setTimersEnabled(enabled:Boolean):void {
+      Cooldowns.setEnabled(enabled);
+    }
   }
 }

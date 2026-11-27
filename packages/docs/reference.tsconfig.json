@@ -1,0 +1,14 @@
+{
+  "extends": "../mira/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "mira": ["../mira/src/mira.ts"],
+      "mira/http": ["../mira/src/http.ts"],
+      "mira/schema": ["../mira/src/schema.ts"],
+      "effect": ["../mira/node_modules/effect/dist/index.d.ts"],
+      "effect/*": ["../mira/node_modules/effect/dist/*.d.ts"]
+    }
+  },
+  "include": ["../mira/src/**/*.ts", "../../script-packages/*/**/*.ts"],
+  "exclude": ["../../script-packages/*/scripts/**"]
+}

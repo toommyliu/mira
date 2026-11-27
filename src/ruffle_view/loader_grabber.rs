@@ -1,20 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, EntityId,
+    FocusHandle, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle,
+    WindowOptions, actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
-    ActiveTheme as _, FOCUS_SCOPE, PointerCursor as _, StyledExt as _, Theme, Tone,
+    ActiveTheme as _, FOCUS_SCOPE, PointerCursor as _, StyledExt as _, Theme,
     components::Empty,
     h_flex,
     primitives::{
-        Align, Badge, Button, Checkbox, CheckedState, Dialog, DropdownMenu, Icon, Input,
-        InputEvent, ListItem, MenuItem, Scrollbar, Select, Spinner, VirtualList,
+        Align, Badge, Button, Checkbox, CheckedState, ContextMenu, Dialog, DropdownMenu, Icon,
+        Input, InputEvent, ListItem, MenuItem, Scrollbar, Spinner, Tab, Tabs, VirtualList,
+        VirtualListState,
         button::{Joined, Size, Variant},
+        icon,
+        text_field::Find,
     },
     theme::tabular,
     v_flex,
@@ -31,7 +34,8 @@ use crate::{
     bridge::CallError,
     domain::{
         grabber::{
-            Act, Action, Entry, Group, Job, Line, Load, LoadKind, Reply, Snapshot, Source, percent,
+            Act, Action, Entry, Group, Heading, Job, Line, Load, LoadKind, Reply, Snapshot, Source,
+            grouped, percent,
         },
         inventory::ItemQuery,
         world::Location,
@@ -49,10 +53,11 @@ const MIN_WIDTH: f32 = 720.0;
 const MIN_HEIGHT: f32 = 420.0;
 
 const SEARCH: Pixels = px(200.0);
-const SOURCE: Pixels = px(156.0);
 const META: Pixels = px(96.0);
 const ID: Pixels = px(68.0);
 const MAX_SEARCH: usize = 64;
+const LINE: &str = "grab-line";
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
 
 struct Open(WindowHandle<LoaderGrabber>);
 
@@ -92,7 +97,7 @@ pub(crate) fn open(client: Entity<Client>, target: Target, cx: &mut App) {
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
-        let grabber = cx.new(|cx| LoaderGrabber::new(client, target, cx));
+        let grabber = cx.new(|cx| LoaderGrabber::new(client, target, window, cx));
         let root = grabber.read(cx).focus.clone();
         window.focus(&root, cx);
         refocus_root_when_lost(&grabber, root, window, cx);
@@ -139,7 +144,7 @@ impl Outcome {
         if self.failed {
             theme.destructive
         } else {
-            theme.foreground
+            theme.muted_foreground
         }
     }
 }
@@ -147,7 +152,6 @@ impl Outcome {
 struct Loader {
     input: Entity<Input>,
     problem: Option<SharedString>,
-    outcome: Option<Outcome>,
     loading: Option<Task<()>>,
     _events: Subscription,
 }
@@ -159,7 +163,11 @@ impl Loader {
         source: Source,
         cx: &mut Context<LoaderGrabber>,
     ) -> Self {
-        let input = cx.new(|cx| Input::new(label, cx).placeholder(kind.placeholder()));
+        let input = cx.new(|cx| {
+            Input::new(label, cx)
+                .placeholder(kind.placeholder())
+                .small()
+        });
         let events = cx.subscribe(&input, move |this, input, event, cx| match event {
             InputEvent::Changed => {
                 input.update(cx, |input, cx| input.set_invalid(false, cx));
@@ -173,7 +181,6 @@ impl Loader {
         Self {
             input,
             problem: None,
-            outcome: None,
             loading: None,
             _events: events,
         }
@@ -181,7 +188,6 @@ impl Loader {
 
     fn reset(&mut self, cx: &mut App) {
         self.problem = None;
-        self.outcome = None;
         self.loading = None;
         self.input
             .update(cx, |input, cx| input.set_invalid(false, cx));
@@ -223,24 +229,43 @@ pub(crate) struct LoaderGrabber {
     search: Entity<Input>,
     source: Source,
     snapshot: Option<Snapshot>,
+    shelved: HashMap<Source, Snapshot>,
     problem: Option<Problem>,
-    selected: Option<i64>,
+    sources: HashMap<(EntityId, SelectionSource), SourceNavigation>,
     drops: HashMap<i64, Drops>,
-    outcome: Option<(i64, Outcome)>,
+    refusal: Option<(i64, SharedString)>,
     reading: Option<Task<()>>,
+    watching: Option<Task<()>>,
     acting: Option<(Act, Task<()>)>,
     reading_drops: HashMap<i64, Task<()>>,
     opened: HashSet<i32>,
-    inspector_scroll: ScrollHandle,
     located: Option<Location>,
-    taken: Option<Outcome>,
+    status: Option<Outcome>,
     taking: Option<Task<()>>,
     shop_warning: Option<ShopWarning>,
-    _subscriptions: [Subscription; 2],
+    _subscriptions: [Subscription; 3],
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum SelectionSource {
+    Items(Source),
+    Monsters(String),
+}
+
+#[derive(Default)]
+struct SourceNavigation {
+    selected: Option<i64>,
+    results: VirtualListState,
+    inspector: ScrollHandle,
 }
 
 impl LoaderGrabber {
-    fn new(client: Entity<Client>, tab: Target, cx: &mut Context<Self>) -> Self {
+    fn new(
+        client: Entity<Client>,
+        tab: Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search = cx.new(|cx| {
             Input::new("Search", cx)
                 .placeholder("Search names and IDs")
@@ -254,6 +279,11 @@ impl LoaderGrabber {
                 }
             }),
             cx.observe(&client, |this, _, cx| this.show(cx)),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.read(cx);
+                }
+            }),
         ];
         let mut grabber = Self {
             client,
@@ -265,17 +295,18 @@ impl LoaderGrabber {
             search,
             source: Source::Shop,
             snapshot: None,
+            shelved: HashMap::new(),
             problem: None,
-            selected: None,
+            sources: HashMap::new(),
             drops: HashMap::new(),
-            outcome: None,
+            refusal: None,
             reading: None,
+            watching: None,
             acting: None,
             reading_drops: HashMap::new(),
             opened: HashSet::new(),
-            inspector_scroll: ScrollHandle::new(),
             located: None,
-            taken: None,
+            status: None,
             taking: None,
             shop_warning: None,
             _subscriptions: subscriptions,
@@ -303,36 +334,50 @@ impl LoaderGrabber {
             },
             cx,
         );
-        let (moved, new_map) = self.follow_location(cx);
-        if switched || new_map {
+        let location = self
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.view.upgrade())
+            .and_then(|view| view.read(cx).bar.location().cloned());
+        if !switched {
+            self.follow(location, cx);
+            return;
+        }
+        self.located = location;
+        self.shelved.clear();
+        self.drops.clear();
+        self.reading_drops.clear();
+        self.shop.reset(cx);
+        self.quests.reset(cx);
+        self.refusal = None;
+        self.acting = None;
+        self.status = None;
+        self.taking = None;
+        self.shop_warning = None;
+        self.start_over(cx);
+    }
+
+    fn follow(&mut self, location: Option<Location>, cx: &mut Context<Self>) {
+        if location == self.located {
+            return;
+        }
+        let map = |location: &Option<Location>| location.as_ref().map(|at| at.map.clone());
+        let new_map = map(&location) != map(&self.located);
+        let entered_or_left = location.is_some() != self.located.is_some();
+        self.located = location;
+        if new_map {
+            self.shelved.remove(&Source::Monsters);
             self.drops.clear();
             self.reading_drops.clear();
         }
-        if switched {
-            self.shop.reset(cx);
-            self.quests.reset(cx);
-            self.outcome = None;
-            self.acting = None;
-            self.taken = None;
-            self.taking = None;
-            self.shop_warning = None;
-            self.open_source(self.source, None, cx);
-        } else if moved && self.source == Source::Monsters {
+        if entered_or_left {
+            self.shelved.clear();
+        }
+        if entered_or_left || (new_map && self.source == Source::Monsters) {
+            self.start_over(cx);
+        } else if self.source == Source::Monsters {
             self.read(cx);
         }
-    }
-
-    fn follow_location(&mut self, cx: &App) -> (bool, bool) {
-        let view = self.shown.as_ref().and_then(|shown| shown.view.upgrade());
-        let view = view.as_ref().map(|view| view.read(cx));
-        let location = view.and_then(|view| view.bar.location());
-        if location == self.located.as_ref() {
-            return (false, false);
-        }
-        let map = |location: Option<&Location>| location.map(|location| location.map.clone());
-        let new_map = map(location) != map(self.located.as_ref());
-        self.located = location.cloned();
-        (true, new_map)
     }
 
     fn loader_mut(&mut self, source: Source) -> Option<&mut Loader> {
@@ -356,18 +401,48 @@ impl LoaderGrabber {
         Some(answer)
     }
 
-    fn open_source(&mut self, source: Source, selected: Option<i64>, cx: &mut Context<Self>) {
+    fn start_over(&mut self, cx: &mut Context<Self>) {
+        self.snapshot = None;
+        self.open_source(self.source, cx);
+    }
+
+    fn open_source(&mut self, source: Source, cx: &mut Context<Self>) {
         if source != self.source {
             self.search.update(cx, |search, cx| search.set_text("", cx));
+            if let Some(left) = self.snapshot.take() {
+                self.shelved.insert(self.source, left);
+            }
+            self.snapshot = self.shelved.remove(&source);
         }
         self.source = source;
-        self.snapshot = None;
         self.problem = None;
-        self.selected = selected;
-        self.outcome = None;
-        self.taken = None;
+        self.refusal = None;
+        self.status = None;
         self.opened.clear();
         self.read(cx);
+        self.watch(cx);
+    }
+
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        self.watching = None;
+        let Some(view) = self.shown.as_ref().and_then(|shown| shown.view.upgrade()) else {
+            return;
+        };
+        let (changed, changes) = async_channel::bounded(1);
+        let source = self.source;
+        view.update(cx, |view, _| {
+            view.session
+                .command(Command::Grabber(Job::Watch { source, changed }))
+        });
+        self.watching = Some(cx.spawn(async move |this, cx| {
+            while changes.recv().await.is_ok() {
+                cx.background_executor().timer(SETTLE).await;
+                let _ = changes.try_recv();
+                if this.update(cx, |this, cx| this.read(cx)).is_err() {
+                    return;
+                }
+            }
+        }));
     }
 
     fn read(&mut self, cx: &mut Context<Self>) {
@@ -401,10 +476,35 @@ impl LoaderGrabber {
     fn take(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
         self.problem = None;
         self.snapshot = Some(snapshot);
-        match self.selected.and_then(|key| self.entry(key)).cloned() {
-            Some(entry) => self.follow_drops(&entry, cx),
-            None => self.selected = None,
+        let selected = self
+            .selection_key()
+            .and_then(|scope| self.sources.entry(scope).or_default().selected);
+        if let Some(entry) = selected.and_then(|key| self.entry(key)).cloned() {
+            self.follow_drops(&entry, cx);
         }
+    }
+
+    fn selected(&self) -> Option<i64> {
+        self.navigation()?.selected
+    }
+
+    fn navigation(&self) -> Option<&SourceNavigation> {
+        self.sources.get(&self.selection_key()?)
+    }
+
+    fn selection_key(&self) -> Option<(EntityId, SelectionSource)> {
+        let target = self.shown.as_ref()?.id;
+        let source = match self.source {
+            Source::Monsters => {
+                let map = self.snapshot.as_ref()?.map.as_ref()?;
+                if map != &self.located.as_ref()?.map {
+                    return None;
+                }
+                SelectionSource::Monsters(map.clone())
+            }
+            source => SelectionSource::Items(source),
+        };
+        Some((target, source))
     }
 
     fn entry(&self, key: i64) -> Option<&Entry> {
@@ -416,11 +516,15 @@ impl LoaderGrabber {
     }
 
     fn select(&mut self, key: i64, cx: &mut Context<Self>) {
-        if self.selected != Some(key) {
-            self.outcome = None;
+        let Some(scope) = self.selection_key() else {
+            return;
+        };
+        let navigation = self.sources.entry(scope).or_default();
+        if navigation.selected.replace(key) != Some(key) {
+            navigation.inspector = ScrollHandle::new();
+            self.refusal = None;
             self.opened.clear();
         }
-        self.selected = Some(key);
         if let Some(entry) = self.entry(key).cloned() {
             self.follow_drops(&entry, cx);
         }
@@ -476,7 +580,7 @@ impl LoaderGrabber {
                 return;
             }
         };
-        if matches!(load, Load::Shop(_) | Load::HairShop(_)) && settings::shop_warning(cx) {
+        if matches!(load, Load::Shop(_)) && settings::shop_warning(cx) {
             self.shop_warning = Some(ShopWarning { load, quiet: false });
             cx.notify();
             return;
@@ -512,26 +616,38 @@ impl LoaderGrabber {
         let task = cx.spawn(async move |this, cx| {
             let result = answer.recv().await;
             let _ = this.update(cx, |this, cx| {
-                let outcome = match result {
-                    Ok(Ok(true)) if lists => Outcome::done(format!("Loaded {described}")),
-                    Ok(Ok(true)) => Outcome::done(format!("Opened {described}")),
-                    Ok(Ok(false)) => Outcome::failed(format!("Couldn't load {described}")),
-                    Ok(Err(error)) => Outcome::failed(error.to_string()),
-                    Err(_) => Outcome::failed("The tab closed"),
+                let problem = match result {
+                    Ok(Ok(true)) => None,
+                    Ok(Ok(false)) => Some(format!("Couldn't load {described}")),
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(_) => Some("The tab closed".to_owned()),
                 };
-                let refresh = lists && !outcome.failed && this.source == source;
+                let refresh = lists && problem.is_none() && this.source == source;
                 if let Some(loader) = this.loader_mut(source) {
                     loader.loading = None;
-                    loader.outcome = Some(outcome);
+                    loader.problem = problem.map(SharedString::from);
                 }
                 if refresh {
-                    this.open_source(source, first, cx);
+                    if let Some(scope) = this.selection_key() {
+                        if let Some(key) = first {
+                            this.sources.insert(
+                                scope,
+                                SourceNavigation {
+                                    selected: Some(key),
+                                    ..Default::default()
+                                },
+                            );
+                        } else {
+                            this.sources.remove(&scope);
+                        }
+                    }
+                    this.open_source(source, cx);
                 }
                 cx.notify();
             });
         });
         if let Some(loader) = self.loader_mut(source) {
-            loader.outcome = None;
+            loader.problem = None;
             loader.loading = Some(task);
         }
         cx.notify();
@@ -561,7 +677,7 @@ impl LoaderGrabber {
             }
             Act::Game(action) => action,
         };
-        let Some(key) = self.selected else {
+        let Some(key) = self.selected().filter(|key| self.entry(*key).is_some()) else {
             return;
         };
         if self.acting.is_some() {
@@ -577,19 +693,19 @@ impl LoaderGrabber {
         ) else {
             return;
         };
-        self.outcome = None;
-        let done = action.clone();
+        self.refusal = None;
+        let attempted = action.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = answer.recv().await;
             let _ = this.update(cx, |this, cx| {
                 this.acting = None;
-                let outcome = match result {
-                    Ok(Ok(true)) => Outcome::done(done.done()),
-                    Ok(Ok(false)) => Outcome::failed(done.failed()),
-                    Ok(Err(error)) => Outcome::failed(error.to_string()),
-                    Err(_) => Outcome::failed("The tab closed"),
+                let refusal = match result {
+                    Ok(Ok(true)) => None,
+                    Ok(Ok(false)) => Some(attempted.failed().into()),
+                    Ok(Err(error)) => Some(error.to_string().into()),
+                    Err(_) => Some("The tab closed".into()),
                 };
-                this.outcome = Some((key, outcome));
+                this.refusal = refusal.map(|text| (key, text));
                 this.read(cx);
             });
         });
@@ -597,9 +713,9 @@ impl LoaderGrabber {
         cx.notify();
     }
 
-    fn copy(&mut self, key: i64, text: String, cx: &mut Context<Self>) {
+    fn copy(&mut self, text: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.outcome = Some((key, Outcome::done("Copied")));
+        self.status = Some(Outcome::done("Copied"));
         cx.notify();
     }
 
@@ -608,7 +724,7 @@ impl LoaderGrabber {
         let Some(answer) = self.send(|reply| Job::Raw { source, reply }, cx) else {
             return;
         };
-        self.taken = None;
+        self.status = None;
         self.taking = Some(cx.spawn_in(window, async move |this, cx| {
             let text = match answer.recv().await {
                 Ok(Ok(Some(text))) => Ok(text),
@@ -651,7 +767,7 @@ impl LoaderGrabber {
             };
             let _ = this.update(cx, |this, cx| {
                 this.taking = None;
-                this.taken = outcome;
+                this.status = outcome;
                 cx.notify();
             });
         }));
@@ -685,108 +801,110 @@ impl LoaderGrabber {
     }
 
     fn shown_entries(&self, cx: &App) -> Vec<Entry> {
-        let Some(snapshot) = &self.snapshot else {
-            return Vec::new();
-        };
+        self.listed_entries(cx).cloned().collect()
+    }
+
+    fn listed_entries<'a>(&'a self, cx: &App) -> impl Iterator<Item = &'a Entry> + 'a {
         let query = self.search.read(cx).text().trim().to_lowercase();
-        snapshot
-            .entries
+        self.snapshot
             .iter()
-            .filter(|entry| {
+            .flat_map(|snapshot| &snapshot.entries)
+            .filter(move |entry| {
                 query.is_empty()
                     || entry.name.to_lowercase().contains(&query)
                     || entry.id.contains(&query)
             })
-            .cloned()
-            .collect()
     }
 
     fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let typography = theme.typography;
         let this = cx.weak_entity();
-        let sources = Select::new(
-            "grab-source",
-            "Source",
-            Source::ALL
-                .iter()
-                .map(|source| SharedString::from(source.name())),
-            Source::ALL.iter().position(|source| *source == self.source),
-        )
-        .width(SOURCE)
+        let selected = Source::ALL
+            .iter()
+            .position(|source| *source == self.source)
+            .unwrap_or_default();
+        let sources = Tabs::new("grab-sources", "Sources", Source::ALL.len(), |index| {
+            Tab::new(Source::ALL[index].name())
+        })
+        .line()
+        .selected(selected)
         .on_select(move |index, _, cx| {
             let _ = this.update(cx, |this, cx| {
                 if this.source != Source::ALL[index] {
-                    this.open_source(Source::ALL[index], None, cx);
+                    this.open_source(Source::ALL[index], cx);
                 }
             });
         });
-        let loader = match self.source {
-            Source::Shop => Some(&self.shop),
-            Source::Quests => Some(&self.quests),
-            _ => None,
-        };
-        let fields = loader.map(|loader| self.loader_fields(loader, theme, cx));
-        let problem = loader
-            .and_then(|loader| loader.problem.clone())
-            .map(|problem| {
-                div()
-                    .text_caption(typography)
-                    .text_color(theme.destructive)
-                    .child(problem)
-            });
-        let taking = self.taking.is_some();
-        let menu_this = cx.weak_entity();
-        let menu = DropdownMenu::new("grab-source-menu")
-            .trigger(
-                Button::icon("grab-source-menu-trigger", Icon::Ellipsis, "More actions")
-                    .variant(Variant::Ghost)
-                    .hide_tooltip(),
-            )
-            .align(Align::End)
-            .items(move |_, _| {
-                [("Copy all", false), ("Export all…", true)]
-                    .into_iter()
-                    .map(|(label, save)| {
-                        let this = menu_this.clone();
-                        MenuItem::action(label, move |window, cx| {
-                            let _ = this.update(cx, |this, cx| this.take_all(save, window, cx));
-                        })
-                        .disabled(taking)
-                    })
-                    .collect()
-            });
         theme
             .toolbar()
-            .flex_col()
-            .items_stretch()
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(theme.space(2.0))
-                    .child(sources)
-                    .children(fields)
-                    .child(div().flex_1())
-                    .child(div().w(SEARCH).min_w(px(120.0)).child(self.search.clone()))
-                    .child(
-                        Button::icon("grab-refresh", Icon::RotateCcw, "Refresh")
-                            .variant(Variant::Ghost)
-                            .busy(self.reading.is_some())
-                            .hide_tooltip()
-                            .on_click(cx.listener(|this, _, _, cx| this.read(cx))),
-                    )
-                    .child(menu),
-            )
-            .children(problem)
+            .child(div().flex_none().child(sources))
+            .child(div().flex_1())
+            .child(div().w(SEARCH).min_w(px(120.0)).child(self.search.clone()))
+    }
+
+    fn source_header(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+        let loader = match self.source {
+            Source::Shop => &self.shop,
+            Source::Quests => &self.quests,
+            _ => return None,
+        };
+        let layout = theme.layout;
+        let typography = theme.typography;
+        let (name, facts) = match (self.source, &self.snapshot) {
+            (
+                Source::Shop,
+                Some(Snapshot {
+                    heading: Some(Heading { name, facts }),
+                    ..
+                }),
+            ) => (Some(name.clone()), Some(facts.clone())),
+            (Source::Quests, Some(snapshot)) => match snapshot.entries.len() {
+                0 => (None, None),
+                1 => (Some("1 quest".to_owned()), None),
+                count => (Some(format!("{count} quests")), None),
+            },
+            _ => (None, None),
+        };
+        let detail = match &loader.problem {
+            Some(problem) => div().text_color(theme.destructive).child(problem.clone()),
+            None => div()
+                .truncate()
+                .text_color(theme.muted_foreground)
+                .children(facts),
+        };
+        Some(
+            h_flex()
+                .flex_none()
+                .gap(layout.space(2.0))
+                .pl(layout.space(5.0))
+                .pr(layout.space(3.0))
+                .pt(layout.space(3.0))
+                .pb(layout.space(2.0))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .children(name.map(|name| {
+                            div()
+                                .id("grab-source-title")
+                                .role(gpui::Role::Heading)
+                                .aria_level(1)
+                                .truncate()
+                                .text_title(typography)
+                                .child(name)
+                        }))
+                        .child(detail.text_caption(typography)),
+                )
+                .child(self.loader_fields(loader, theme, cx)),
+        )
     }
 
     fn loader_fields(&self, loader: &Loader, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let layout = theme.layout;
-        let typography = theme.typography;
         let source = self.source;
         let busy = loader.loading.is_some();
         let empty = loader.input.read(cx).text().trim().is_empty();
         let load = Button::new(("load", source as usize), "Load")
-            .variant(Variant::Primary)
+            .size(Size::Small)
             .busy(busy)
             .disabled(empty)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -801,13 +919,14 @@ impl LoaderGrabber {
             let more = DropdownMenu::new("load-more")
                 .trigger(
                     Button::icon("load-more-trigger", Icon::ChevronDown, "Other loads")
-                        .variant(Variant::Primary)
+                        .variant(Variant::Secondary)
+                        .size(Size::Small)
                         .joined(Joined::Previous)
                         .disabled(busy)
                         .hide_tooltip(),
                 )
-                .items(move |_, cx| {
-                    let warn = settings::shop_warning(cx);
+                .align(Align::End)
+                .items(move |_, _| {
                     [
                         ("Load as hair shop", LoadKind::HairShop, empty),
                         ("Open armor customizer", LoadKind::ArmorCustomizer, false),
@@ -820,12 +939,6 @@ impl LoaderGrabber {
                         })
                         .disabled(off)
                     })
-                    .chain([
-                        MenuItem::separator(),
-                        MenuItem::switch("Warn before loading", warn, move |_, cx| {
-                            settings::set_shop_warning(!warn, cx)
-                        }),
-                    ])
                     .collect()
                 });
             h_flex()
@@ -836,23 +949,14 @@ impl LoaderGrabber {
             load.into_any_element()
         };
         h_flex()
+            .flex_none()
             .gap(layout.space(2.0))
-            .min_w_0()
             .child(
                 div()
-                    .w(px(if source == Source::Shop { 150.0 } else { 240.0 }))
-                    .min_w(px(120.0))
+                    .w(px(if source == Source::Shop { 120.0 } else { 160.0 }))
                     .child(loader.input.clone()),
             )
             .child(control)
-            .children(loader.outcome.as_ref().map(|outcome| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_caption(typography)
-                    .text_color(outcome.color(theme))
-                    .child(outcome.text.clone())
-            }))
     }
 
     fn shop_warning_dialog(&self, cx: &mut Context<Self>) -> Dialog {
@@ -896,35 +1000,40 @@ impl LoaderGrabber {
             })
     }
 
-    fn list_column(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn list_column(
+        &self,
+        theme: &Theme,
+        navigation: Option<&SourceNavigation>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let layout = theme.layout;
         let entries = self.shown_entries(cx);
         let body = match (&self.snapshot, &self.problem) {
-            (None, Some(problem)) => problem_note(problem).into_any_element(),
+            (None, Some(problem)) => centered(problem_note(problem)),
             (None, None) => div()
                 .flex()
+                .flex_1()
+                .items_center()
                 .justify_center()
-                .py(layout.space(8.0))
-                .child(Spinner::new("grab-reading"))
+                .child(Spinner::new(("grab-reading", self.source as usize)).delayed())
                 .into_any_element(),
-            (Some(snapshot), _) if snapshot.entries.is_empty() => {
-                empty_note(self.source).into_any_element()
-            }
-            (Some(_), _) if entries.is_empty() => Empty::new(
+            (Some(snapshot), _) if snapshot.entries.is_empty() => centered(empty_note(self.source)),
+            (Some(_), _) if entries.is_empty() => centered(Empty::new(
                 "No matches",
                 format!(
                     "Nothing here matches “{}”.",
                     self.search.read(cx).text().trim()
                 ),
-            )
-            .into_any_element(),
+            )),
             (Some(_), _) => {
                 let rows: std::rc::Rc<[Entry]> = entries.into();
-                let selected = self
-                    .selected
+                let selected = navigation
+                    .and_then(|navigation| navigation.selected)
                     .and_then(|key| rows.iter().position(|entry| entry.key == key));
-                let (lookup, keys, row_theme) = (rows.clone(), rows.clone(), theme.clone());
+                let (keys, row_theme) = (rows.clone(), theme.clone());
                 let this = cx.weak_entity();
+                let menu_this = cx.weak_entity();
+                let (source, taking) = (self.source, self.taking.is_some());
                 v_flex()
                     .flex_1()
                     .min_h_0()
@@ -934,9 +1043,19 @@ impl LoaderGrabber {
                             "grab-entries",
                             self.source.name(),
                             rows.len(),
-                            move |index| line(&lookup[index], &row_theme),
+                            move |index| {
+                                let (rows, this) = (rows.clone(), menu_this.clone());
+                                let record = rows[index].key.to_string();
+                                line(&rows[index], &row_theme).context_menu(record, move |_, _| {
+                                    record_menu(&this, &rows[index], source, taking)
+                                })
+                            },
                         )
                         .selected(selected)
+                        .when_some(navigation, |list, navigation| {
+                            list.state(&navigation.results)
+                        })
+                        .flush()
                         .fill()
                         .on_select(move |index, _, cx| {
                             let key = keys[index].key;
@@ -946,38 +1065,31 @@ impl LoaderGrabber {
                     .into_any_element()
             }
         };
+        let header = self.source_header(theme, cx);
         v_flex()
             .flex_1()
             .min_w_0()
-            .px(layout.space(3.0))
-            .pb(layout.space(3.0))
+            .when(header.is_none(), |column| column.pt(layout.space(2.0)))
+            .children(header)
             .child(body)
     }
 
     fn columns(&self, theme: &Theme) -> Div {
         let layout = theme.layout;
         let typography = theme.typography;
-        let (heading, color) = match (&self.problem, &self.snapshot) {
-            (Some(Problem::Failed(error)), _) => (
+        let (heading, color) = match &self.problem {
+            Some(Problem::Failed(error)) => (
                 SharedString::from(format!("Couldn't refresh: {error}")),
                 theme.destructive,
             ),
-            (
-                _,
-                Some(Snapshot {
-                    heading: Some(heading),
-                    ..
-                }),
-            ) => (heading.clone().into(), theme.muted_foreground),
             _ => ("Name".into(), theme.muted_foreground),
         };
         let [meta, id] = self.source.columns();
         h_flex()
             .flex_none()
-            .h(layout.cell_header)
+            .h(layout.space(6.0))
             .gap(layout.space(2.0))
-            .pl(layout.space(3.0) + px(1.0))
-            .pr(layout.space(2.0) + px(1.0) + Scrollbar::GUTTER)
+            .px(layout.space(5.0))
             .text_caption(typography)
             .text_color(theme.muted_foreground)
             .child(
@@ -992,10 +1104,20 @@ impl LoaderGrabber {
             .child(div().flex_none().w(ID).text_right().child(id))
     }
 
-    fn inspector_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn inspector_pane(
+        &self,
+        theme: &Theme,
+        navigation: Option<&SourceNavigation>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let layout = theme.layout;
+        let entry = navigation.and_then(|navigation| self.entry(navigation.selected?));
+        let scroll = entry
+            .and(navigation)
+            .map(|navigation| &navigation.inspector);
         theme
             .inspector_pane()
+            .debug_selector(|| "grab-inspector".into())
             .relative()
             .h_full()
             .child(
@@ -1003,20 +1125,25 @@ impl LoaderGrabber {
                     .id("grab-inspector")
                     .size_full()
                     .overflow_y_scroll()
-                    .track_scroll(&self.inspector_scroll)
+                    .when_some(scroll, |pane, scroll| pane.track_scroll(scroll))
                     .p(layout.space(4.0))
-                    .child(self.inspector(theme, cx)),
+                    .pt(layout.space(3.0))
+                    .child(self.inspector(theme, entry, cx)),
             )
-            .child(Scrollbar::new(
-                "grab-inspector-scrollbar",
-                self.inspector_scroll.clone(),
-            ))
+            .children(
+                scroll.map(|scroll| Scrollbar::new("grab-inspector-scrollbar", scroll.clone())),
+            )
     }
 
-    fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn inspector(
+        &self,
+        theme: &Theme,
+        entry: Option<&Entry>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let layout = theme.layout;
         let typography = theme.typography;
-        let Some(entry) = self.selected.and_then(|key| self.entry(key)).cloned() else {
+        let Some(entry) = entry else {
             let pickable = self
                 .snapshot
                 .as_ref()
@@ -1032,7 +1159,6 @@ impl LoaderGrabber {
                 .into_any_element();
         };
         let listed = self.listed();
-        let more = self.more_menu(&entry, cx);
         let acting = self.acting.as_ref().map(|(act, _)| act.clone());
         let acts = entry.acts.iter().enumerate().map(|(index, offer)| {
             let act = offer.act.clone();
@@ -1050,17 +1176,17 @@ impl LoaderGrabber {
                 .when_some(tooltip(&act), |button, tooltip| button.tooltip(tooltip))
                 .on_click(cx.listener(move |this, _, _, cx| this.act(act.clone(), cx)))
         });
-        let outcome = self
-            .outcome
+        let refusal = self
+            .refusal
             .as_ref()
             .filter(|(key, _)| *key == entry.key)
-            .map(|(_, outcome)| {
+            .map(|(_, text)| {
                 div()
                     .max_w_full()
                     .truncate()
                     .text_caption(typography)
-                    .text_color(outcome.color(theme))
-                    .child(outcome.text.clone())
+                    .text_color(theme.destructive)
+                    .child(text.clone())
             });
         let drops = (self.source == Source::Monsters)
             .then(|| self.drops.get(&entry.key))
@@ -1072,43 +1198,32 @@ impl LoaderGrabber {
                 v_flex()
                     .gap(layout.space(1.5))
                     .child(
-                        h_flex()
-                            .items_start()
-                            .gap(layout.space(2.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .pt(px(1.0))
-                                    .text_size(typography.body)
-                                    .line_height(typography.body_line)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(entry.name.clone()),
-                            )
-                            .child(more),
+                        div()
+                            .text_size(typography.body)
+                            .line_height(typography.body_line)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(entry.name.clone()),
                     )
                     .when(!entry.badges.is_empty(), |header| {
-                        header.child(div().flex().flex_wrap().gap(layout.space(1.0)).children(
-                            entry.badges.iter().map(|badge| {
-                                Badge::new(*badge).tone(match *badge {
-                                    "Equipped" => Tone::Accent,
-                                    "AC" => Tone::Warning,
-                                    _ => Tone::Neutral,
-                                })
-                            }),
-                        ))
+                        header.child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(layout.space(1.0))
+                                .children(entry.badges.iter().map(|badge| Badge::new(*badge))),
+                        )
                     }),
             )
-            .when(!entry.acts.is_empty() || outcome.is_some(), |inspector| {
+            .when(!entry.acts.is_empty() || refusal.is_some(), |inspector| {
                 inspector.child(
                     h_flex()
                         .flex_wrap()
                         .gap(layout.space(1.5))
                         .children(acts)
-                        .children(outcome),
+                        .children(refusal),
                 )
             })
-            .child(facts(theme, &entry.facts))
+            .child(self.facts(theme, "entry", &entry.facts, cx))
             .children(
                 entry
                     .groups
@@ -1122,7 +1237,11 @@ impl LoaderGrabber {
                         self.group(theme, entry.groups.len(), group, &listed, cx)
                     }
                     Drops::Reading => caption(theme, "Drops")
-                        .child(Spinner::new("grab-drops").size(px(14.0)))
+                        .child(
+                            Spinner::new(SharedString::from(format!("grab-drops-{}", entry.key)))
+                                .size(px(14.0))
+                                .delayed(),
+                        )
                         .into_any_element(),
                     Drops::Unavailable => caption(theme, "Drops")
                         .child(quiet(theme, "Couldn't read this monster's drops."))
@@ -1135,33 +1254,64 @@ impl LoaderGrabber {
             .into_any_element()
     }
 
-    fn more_menu(&self, entry: &Entry, cx: &mut Context<Self>) -> DropdownMenu {
-        let this = cx.weak_entity();
-        let key = entry.key;
-        let copies = [
-            ("Copy name".to_owned(), entry.name.clone()),
-            (copy_id(entry.id_label), entry.id.clone()),
-            ("Copy JSON".to_owned(), entry.json.clone()),
-        ];
-        DropdownMenu::new("grab-more")
-            .trigger(
-                Button::icon("grab-more-trigger", Icon::Ellipsis, "More actions")
-                    .size(Size::Small)
-                    .variant(Variant::Ghost)
-                    .hide_tooltip(),
-            )
-            .align(Align::End)
-            .items(move |_, _| {
-                copies
-                    .iter()
-                    .map(|(label, text)| {
-                        let (this, text) = (this.clone(), text.clone());
-                        MenuItem::action(label.clone(), move |_, cx| {
-                            let _ = this.update(cx, |this, cx| this.copy(key, text.clone(), cx));
+    fn facts(
+        &self,
+        theme: &Theme,
+        scope: impl Into<SharedString>,
+        facts: &[(&'static str, String)],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let layout = theme.layout;
+        let typography = theme.typography;
+        let scope = scope.into();
+        let all: std::rc::Rc<str> = facts
+            .iter()
+            .map(|(label, value)| format!("{label}: {value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into();
+        v_flex().children(facts.iter().enumerate().map(|(index, (label, value))| {
+            let selector = format!("{scope}-fact-{index}");
+            let this = cx.weak_entity();
+            let copies = [
+                (format!("Copy {label}"), value.clone()),
+                ("Copy all facts".to_owned(), all.to_string()),
+            ];
+            ContextMenu::new((scope.clone(), index), *label)
+                .items(move |_, _| {
+                    copies
+                        .iter()
+                        .map(|(item, text)| {
+                            let (this, text) = (this.clone(), text.clone());
+                            MenuItem::action(item.clone(), move |_, cx| {
+                                let _ = this.update(cx, |this, cx| this.copy(text.clone(), cx));
+                            })
                         })
-                    })
-                    .collect()
-            })
+                        .collect()
+                })
+                .child(
+                    h_flex()
+                        .debug_selector(move || selector.clone())
+                        .items_start()
+                        .gap(layout.space(3.0))
+                        .py(px(2.0))
+                        .text_body(typography)
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(LABEL_WIDTH)
+                                .text_color(theme.muted_foreground)
+                                .child(*label),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_features(tabular())
+                                .child(value.clone()),
+                        ),
+                )
+        }))
     }
 
     fn detailed_line(
@@ -1169,7 +1319,8 @@ impl LoaderGrabber {
         theme: &Theme,
         id: usize,
         line: &Line,
-        register: Option<Button>,
+        register: Option<AnyElement>,
+        registered: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let layout = theme.layout;
@@ -1186,6 +1337,8 @@ impl LoaderGrabber {
         };
         let row = h_flex()
             .id(("grab-line-row", id))
+            .debug_selector(move || format!("grab-line-{id}"))
+            .group(LINE)
             .gap(layout.space(1.5))
             .h(layout.control)
             .mx(layout.space(-1.0))
@@ -1217,9 +1370,9 @@ impl LoaderGrabber {
                     .child(div().min_w_0().truncate().child(line.name.clone()))
                     .when(line.quantity > 1, |name| {
                         let amount = if line.varies {
-                            format!("×1–{}", line.quantity)
+                            format!("×1–{}", grouped(line.quantity))
                         } else {
-                            format!("×{}", line.quantity)
+                            format!("×{}", grouped(line.quantity))
                         };
                         name.child(small(amount, theme.muted_foreground))
                     }),
@@ -1239,17 +1392,56 @@ impl LoaderGrabber {
             .children(register);
         v_flex()
             .id(("grab-line", id))
-            .child(row)
+            .child(self.line_menu(id, line, registered, row, cx))
             .when(open, |line_view| {
                 line_view.child(
                     div()
                         .pl(px(26.0))
                         .pt(layout.space(0.5))
                         .pb(layout.space(2.0))
-                        .child(facts(theme, &line.facts)),
+                        .child(self.facts(theme, format!("line-{id}"), &line.facts, cx)),
                 )
             })
             .into_any_element()
+    }
+
+    fn line_menu(
+        &self,
+        id: usize,
+        line: &Line,
+        registered: bool,
+        row: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> ContextMenu {
+        let this = cx.weak_entity();
+        let mut copies = vec![("Copy name", line.name.clone())];
+        copies.extend(
+            line.item_id
+                .map(|item_id| ("Copy item ID", item_id.to_string())),
+        );
+        let register = (line.item_id.is_some() && !registered).then(|| Act::RegisterDrop {
+            name: line.name.clone(),
+        });
+        ContextMenu::new(("grab-line-menu", id), line.name.clone())
+            .items(move |_, _| {
+                let copy = copies.iter().map(|(label, text)| {
+                    let (this, text) = (this.clone(), text.clone());
+                    MenuItem::action(*label, move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.copy(text.clone(), cx));
+                    })
+                });
+                let register = register.iter().flat_map(|act| {
+                    let (this, act) = (this.clone(), act.clone());
+                    [
+                        MenuItem::separator(),
+                        MenuItem::action("Register drop", move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.act(act.clone(), cx));
+                        }),
+                    ]
+                });
+                copy.chain(register).collect()
+            })
+            .child(row)
     }
 
     fn group(
@@ -1264,36 +1456,44 @@ impl LoaderGrabber {
         let typography = theme.typography;
         let rows = group.lines.iter().enumerate().map(|(line_index, line)| {
             let id = index * 1000 + line_index;
+            let registered = listed.has_drop(&line.name);
             let register = line.item_id.map(|_| {
-                if listed.has_drop(&line.name) {
-                    Button::icon(
-                        ("grab-line-add", id),
-                        Icon::Check,
-                        format!("{} is a registered drop", line.name),
-                    )
-                    .size(Size::Small)
-                    .disabled(true)
-                    .hide_tooltip()
-                } else {
-                    let act = Act::RegisterDrop {
-                        name: line.name.clone(),
-                    };
+                let slot = h_flex()
+                    .flex_none()
+                    .size(layout.control_xs)
+                    .justify_center();
+                if registered {
+                    return slot
+                        .id(("grab-line-registered", id))
+                        .aria_label(format!("{} is a registered drop", line.name))
+                        .child(icon(Icon::Check, theme.muted_foreground).size(px(12.0)))
+                        .into_any_element();
+                }
+                let act = Act::RegisterDrop {
+                    name: line.name.clone(),
+                };
+                slot.child(
                     Button::icon(
                         ("grab-line-add", id),
                         Icon::Plus,
                         format!("Register {} as a drop", line.name),
                     )
-                    .size(Size::Small)
+                    .size(Size::XSmall)
+                    .icon_size(Size::Small.icon_size())
+                    .revealed_by(LINE)
                     .tooltip("Register drop")
-                    .on_click(cx.listener(move |this, _, _, cx| this.act(act.clone(), cx)))
-                }
+                    .on_click(cx.listener(move |this, _, _, cx| this.act(act.clone(), cx))),
+                )
+                .into_any_element()
             });
             if !line.facts.is_empty() {
-                return self.detailed_line(theme, id, line, register, cx);
+                return self.detailed_line(theme, id, line, register, registered, cx);
             }
             let (amount, color) = amount(theme, line);
-            h_flex()
+            let row = h_flex()
                 .id(("grab-line", id))
+                .debug_selector(move || format!("grab-line-{id}"))
+                .group(LINE)
                 .gap(layout.space(2.0))
                 .h(layout.control)
                 .child(div().flex_1().min_w_0().truncate().child(line.name.clone()))
@@ -1315,7 +1515,8 @@ impl LoaderGrabber {
                         .text_color(color)
                         .child(amount),
                 )
-                .children(register)
+                .children(register);
+            self.line_menu(id, line, registered, row, cx)
                 .into_any_element()
         });
         caption(theme, group.title)
@@ -1336,16 +1537,8 @@ fn describe(load: &Load) -> String {
 
 fn tooltip(act: &Act) -> Option<&'static str> {
     match act {
-        Act::Game(Action::FakeComplete { .. }) => Some(
-            "Make this client treat it as done, so quests and maps that need it open. The server doesn't change.",
-        ),
-        Act::Register { .. } => {
-            Some("Accept and turn it in whenever it's ready, from this tab's environment")
-        }
-        Act::RegisterDrop { .. } => {
-            Some("Pick it up whenever it drops, from this tab's environment")
-        }
-        Act::Game(_) => None,
+        Act::Game(Action::FakeComplete { .. }) => Some("Marks it done on this client only"),
+        Act::Register { .. } | Act::RegisterDrop { .. } | Act::Game(_) => None,
     }
 }
 
@@ -1359,37 +1552,57 @@ fn copy_id(id_label: &str) -> String {
 
 fn line(entry: &Entry, theme: &Theme) -> ListItem {
     let layout = theme.layout;
-    let typography = theme.typography;
-    let tags = entry.badges.join(" · ");
-    ListItem::new(entry.name.clone())
-        .child(
-            h_flex()
-                .gap(layout.space(2.0))
-                .min_w_0()
-                .child(div().min_w_0().truncate().child(entry.name.clone()))
-                .when(!tags.is_empty(), |row| {
-                    row.child(
-                        div()
-                            .flex_none()
-                            .text_caption(typography)
-                            .text_color(theme.muted_foreground)
-                            .child(tags),
-                    )
-                }),
+    ListItem::new(entry.name.clone()).end_slot(
+        h_flex()
+            .gap(layout.space(2.0))
+            .child(
+                div()
+                    .w(META)
+                    .text_right()
+                    .truncate()
+                    .when(entry.here, |meta| meta.text_color(theme.foreground))
+                    .child(entry.meta.clone()),
+            )
+            .child(div().w(ID).text_right().child(entry.id.clone())),
+    )
+}
+
+fn record_menu(
+    this: &WeakEntity<LoaderGrabber>,
+    entry: &Entry,
+    source: Source,
+    taking: bool,
+) -> Vec<MenuItem> {
+    let copies = [
+        ("Copy name".to_owned(), entry.name.clone()),
+        (copy_id(entry.id_label), entry.id.clone()),
+        ("Copy JSON".to_owned(), entry.json.clone()),
+    ];
+    let whole = source.name().to_lowercase();
+    copies
+        .into_iter()
+        .map(|(label, text)| {
+            let this = this.clone();
+            MenuItem::action(label, move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.copy(text.clone(), cx));
+            })
+        })
+        .chain([MenuItem::separator()])
+        .chain(
+            [
+                (format!("Copy {whole} JSON"), false),
+                (format!("Export {whole} JSON…"), true),
+            ]
+            .into_iter()
+            .map(|(label, save)| {
+                let this = this.clone();
+                MenuItem::action(label, move |window, cx| {
+                    let _ = this.update(cx, |this, cx| this.take_all(save, window, cx));
+                })
+                .disabled(taking)
+            }),
         )
-        .end_slot(
-            h_flex()
-                .gap(layout.space(2.0))
-                .child(
-                    div()
-                        .w(META)
-                        .text_right()
-                        .truncate()
-                        .when(entry.here, |meta| meta.text_color(theme.foreground))
-                        .child(entry.meta.clone()),
-                )
-                .child(div().w(ID).text_right().child(entry.id.clone())),
-        )
+        .collect()
 }
 
 fn amount(theme: &Theme, line: &Line) -> (String, Hsla) {
@@ -1400,9 +1613,15 @@ fn amount(theme: &Theme, line: &Line) -> (String, Hsla) {
         } else {
             theme.muted_foreground
         };
-        (format!("{held}/{}", line.quantity), color)
+        (
+            format!("{}/{}", grouped(held), grouped(line.quantity)),
+            color,
+        )
     } else {
-        (format!("×{}", line.quantity), theme.muted_foreground)
+        (
+            format!("×{}", grouped(line.quantity)),
+            theme.muted_foreground,
+        )
     }
 }
 
@@ -1410,7 +1629,7 @@ fn detail(line: &Line) -> Option<String> {
     let mut parts = Vec::new();
     if line.needed {
         if line.held.bank > 0 {
-            parts.push(format!("{} in bank", line.held.bank));
+            parts.push(format!("{} in bank", grouped(line.held.bank)));
         }
     } else {
         if let Some(chance) = line.chance {
@@ -1418,37 +1637,10 @@ fn detail(line: &Line) -> Option<String> {
         }
         let held = line.held.total();
         if held > 0 {
-            parts.push(format!("{held} owned"));
+            parts.push(format!("{} owned", grouped(held)));
         }
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
-fn facts(theme: &Theme, facts: &[(&'static str, String)]) -> Div {
-    let layout = theme.layout;
-    let typography = theme.typography;
-    v_flex()
-        .gap(layout.space(1.0))
-        .children(facts.iter().map(|(label, value)| {
-            h_flex()
-                .items_start()
-                .gap(layout.space(3.0))
-                .text_caption(typography)
-                .child(
-                    div()
-                        .flex_none()
-                        .w(LABEL_WIDTH)
-                        .text_color(theme.muted_foreground)
-                        .child(*label),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_features(tabular())
-                        .child(value.clone()),
-                )
-        }))
 }
 
 fn caption(theme: &Theme, title: &'static str) -> Div {
@@ -1469,6 +1661,16 @@ fn quiet(theme: &Theme, text: &'static str) -> Div {
         .text_caption(typography)
         .text_color(theme.muted_foreground)
         .child(text)
+}
+
+fn centered(empty: Empty) -> AnyElement {
+    div()
+        .flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .child(empty)
+        .into_any_element()
 }
 
 fn problem_note(problem: &Problem) -> Empty {
@@ -1508,7 +1710,7 @@ impl Render for LoaderGrabber {
             window,
             cx,
         )
-        .children(self.taken.as_ref().map(|outcome| {
+        .children(self.status.as_ref().map(|outcome| {
             div()
                 .id("grab-status")
                 .role(gpui::Role::Status)
@@ -1517,11 +1719,17 @@ impl Render for LoaderGrabber {
                 .max_w(px(360.0))
                 .pr(layout.space(4.0))
                 .truncate()
-                .text_caption(typography)
+                .text_body(typography)
                 .text_color(outcome.color(&theme))
                 .child(outcome.text.clone())
         }));
-        let body = if self.shown.is_some() {
+        let has_tab = self.shown.is_some();
+        let body = if has_tab {
+            let navigation = self.navigation();
+            let empty = match &self.snapshot {
+                Some(_) => self.listed_entries(cx).next().is_none(),
+                None => self.problem.is_some(),
+            };
             v_flex()
                 .flex_1()
                 .min_h_0()
@@ -1531,14 +1739,16 @@ impl Render for LoaderGrabber {
                         .items_stretch()
                         .flex_1()
                         .min_h_0()
-                        .child(self.list_column(&theme, cx))
-                        .child(self.inspector_pane(&theme, cx)),
+                        .child(self.list_column(&theme, navigation, cx))
+                        .when(!empty, |panes| {
+                            panes.child(self.inspector_pane(&theme, navigation, cx))
+                        }),
                 )
         } else {
-            v_flex().flex_1().child(Empty::new(
+            v_flex().flex_1().child(centered(Empty::new(
                 "No tabs open",
                 "Open a tab to load and grab from it.",
-            ))
+            )))
         };
         div()
             .flex()
@@ -1549,9 +1759,9 @@ impl Render for LoaderGrabber {
             .id("loader-grabber")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseSession, window, _| window.remove_window()))
-            .on_action(cx.listener(|this, _: &crate::app_menu::Find, window, cx| {
-                window.focus(&gpui::Focusable::focus_handle(this.search.read(cx), cx), cx)
-            }))
+            .when(has_tab, |root| {
+                root.on_action(Find::in_search(&self.search))
+            })
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
@@ -1580,7 +1790,7 @@ mod tests {
         let (grabber, cx) = cx.add_window_view(|window, cx| {
             window.activate_window();
             let client = Client::empty_for_tests(&folder, cx);
-            let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+            let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
             grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
             grabber
         });
@@ -1646,17 +1856,190 @@ mod tests {
         assert_eq!(shop_field(&grabber, cx), ("12a4".into(), None));
     }
 
+    fn results(key: i64, name: &str) -> Snapshot {
+        Snapshot {
+            heading: None,
+            map: None,
+            entries: vec![Entry {
+                key,
+                name: name.into(),
+                id_label: "Item ID",
+                id: key.to_string(),
+                meta: String::new(),
+                badges: Vec::new(),
+                facts: Vec::new(),
+                groups: Vec::new(),
+                acts: Vec::new(),
+                here: false,
+                drops_from: None,
+                json: "{}".into(),
+            }],
+        }
+    }
+
+    fn tall_shop() -> Snapshot {
+        let mut shop = results(12, "Potion");
+        shop.heading = Some(Heading {
+            name: "Blacksmith Shop".into(),
+            facts: "Shop ID 1234 · 53 items · Merge".into(),
+        });
+        shop.entries[0].facts = (0..140)
+            .map(|i| ("Ingredient", format!("Ingredient {i}")))
+            .collect();
+        shop.entries
+            .extend((13..65).flat_map(|key| results(key, &format!("Item {key}")).entries));
+        shop
+    }
+
+    #[gpui::test]
+    fn returning_to_a_source_restores_its_record_and_scroll_positions(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(tall_shop(), cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let pick = |cx: &mut VisualTestContext| {
+            let row = cx
+                .debug_bounds("row-0")
+                .expect("the source shows its record");
+            cx.simulate_click(row.center(), gpui::Modifiers::none());
+            cx.run_until_parked();
+        };
+        let shown = |cx: &mut VisualTestContext| {
+            grabber.read_with(cx, |grabber, _| {
+                grabber
+                    .selected()
+                    .and_then(|key| grabber.entry(key))
+                    .map(|entry| entry.name.clone())
+            })
+        };
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Potion"));
+        let position = cx.debug_bounds("row-0").unwrap().center();
+        cx.simulate_event(gpui::ScrollEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-260.0))),
+            ..Default::default()
+        });
+        let offset = gpui::point(px(0.0), px(-120.0));
+        grabber.update(cx, |grabber, cx| {
+            let scroll = &grabber.navigation().unwrap().inspector;
+            assert!(scroll.max_offset().y >= -offset.y);
+            scroll.set_offset(offset);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let place = cx.debug_bounds("row-12").unwrap();
+        assert!(cx.debug_bounds("row-0").is_none());
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.open_source(Source::Inventory, cx);
+            grabber.take(results(12, "Sword"), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Sword"));
+
+        grabber.update(cx, |grabber, cx| grabber.open_source(Source::Shop, cx));
+        cx.run_until_parked();
+        assert_eq!(shown(cx).as_deref(), Some("Potion"));
+        assert_eq!(cx.debug_bounds("row-12"), Some(place));
+        grabber.read_with(cx, |grabber, _| {
+            assert_eq!(grabber.navigation().unwrap().inspector.offset(), offset)
+        });
+
+        let location = |map: &str| Location {
+            map: map.into(),
+            room: None,
+            cell: "Enter".into(),
+            pad: "Spawn".into(),
+            cells: Vec::new(),
+            cell_pads: Vec::new(),
+        };
+        grabber.update(cx, |grabber, cx| {
+            grabber.located = Some(location("forest"));
+            grabber.open_source(Source::Monsters, cx);
+            grabber.take(
+                Snapshot {
+                    map: Some("forest".into()),
+                    ..results(12, "Wolf")
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        pick(cx);
+        assert_eq!(shown(cx).as_deref(), Some("Wolf"));
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(
+                Snapshot {
+                    map: Some("graveyard".into()),
+                    ..results(12, "Skeleton")
+                },
+                cx,
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
+    }
+
+    fn located(map: &str) -> Location {
+        Location {
+            map: map.into(),
+            room: None,
+            cell: "Enter".into(),
+            pad: "Spawn".into(),
+            cells: Vec::new(),
+            cell_pads: Vec::new(),
+        }
+    }
+
+    #[gpui::test]
+    fn logging_in_or_out_reads_the_shown_source_again(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.problem = Some(Problem::NotInGame);
+            grabber.follow(Some(located("battleon")), cx);
+        });
+        assert!(grabber.read_with(cx, |grabber, _| grabber.problem.is_none()));
+
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(blacksmith(), cx);
+            grabber.follow(None, cx);
+        });
+        assert!(grabber.read_with(cx, |grabber, _| grabber.snapshot.is_none()));
+    }
+
     #[gpui::test]
     fn loading_a_shop_warns_until_told_not_to(cx: &mut TestAppContext) {
         let (grabber, cx) = open(cx);
         focus_shop_field(&grabber, cx);
+        press(cx, "cmd-f");
+        typed(cx, "chest");
+        assert_eq!(
+            grabber.read_with(cx, |grabber, cx| grabber.search.read(cx).text().to_owned()),
+            "chest"
+        );
+
+        focus_shop_field(&grabber, cx);
         typed(cx, "1234");
+        grabber.update(cx, |grabber, cx| {
+            grabber.load(Source::Shop, LoadKind::HairShop, cx)
+        });
+        assert_eq!(shop_warning(&grabber, cx), None);
         press(cx, "enter");
         assert_eq!(
             shop_warning(&grabber, cx),
             Some(("shop 1234".into(), false))
         );
 
+        let dialog_focus = cx.update(|window, cx| window.focused(cx).unwrap());
+        press(cx, "cmd-f");
+        assert!(cx.update(|window, _| dialog_focus.is_focused(window)));
         press(cx, "escape");
         assert_eq!(shop_warning(&grabber, cx), None);
         assert!(cx.update(|_, cx| settings::shop_warning(cx)));
@@ -1681,17 +2064,456 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_scrolled_source() {
+        let folder = crate::storyboard::scratch("grabber-scrolled");
+        for written in mira_ui::snapshot_with(
+            "grabber-scrolled",
+            gpui::size(px(WIDTH), px(HEIGHT)),
+            |window, cx| {
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
+                    grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                    grabber.take(tall_shop(), cx);
+                    grabber.select(12, cx);
+                    grabber
+                })
+            },
+            |cx, window| {
+                cx.update_window(window, |root, window, cx| {
+                    root.downcast::<LoaderGrabber>()
+                        .unwrap()
+                        .update(cx, |grabber, _| {
+                            grabber
+                                .navigation()
+                                .unwrap()
+                                .inspector
+                                .set_offset(gpui::point(px(0.0), px(-120.0)));
+                        });
+                    window.dispatch_event(
+                        gpui::PlatformInput::Scroll(gpui::ScrollEvent {
+                            position: gpui::point(px(100.0), px(180.0)),
+                            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-260.0))),
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                })
+                .unwrap();
+            },
+        ) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    fn blacksmith() -> Snapshot {
+        let item = |key: i32, name: &str, price: &str, badges: Vec<&'static str>| Entry {
+            key: i64::from(key),
+            name: name.into(),
+            id_label: "Item ID",
+            id: (8800 + key).to_string(),
+            meta: price.into(),
+            badges,
+            facts: vec![
+                ("Item ID", (8800 + key).to_string()),
+                ("Shop item ID", (44100 + key).to_string()),
+                ("Category", "Sword".into()),
+                ("Price", price.into()),
+            ],
+            groups: Vec::new(),
+            acts: vec![
+                Act::Game(Action::Buy {
+                    shop_item_id: 44100 + key,
+                })
+                .into(),
+            ],
+            here: false,
+            drops_from: None,
+            json: "{}".into(),
+        };
+        Snapshot {
+            heading: Some(Heading {
+                name: "Blacksmith Shop".into(),
+                facts: "Shop ID 1234 · 6 items · Merge".into(),
+            }),
+            map: None,
+            entries: vec![
+                item(1, "Blade of Awe", "120,000 gold", Vec::new()),
+                item(2, "Dragon Blade", "40 AC", vec!["Member"]),
+                item(3, "Necrotic Sword of Doom", "250 AC", vec!["Member"]),
+                item(4, "Iron Helm", "2,500 gold", Vec::new()),
+                item(5, "Steel Cape", "9,000 gold", Vec::new()),
+                item(6, "Rusty Dagger", "10 gold", Vec::new()),
+            ],
+        }
+    }
+
+    #[gpui::test]
+    fn a_search_that_lists_nothing_drops_the_inspector(cx: &mut TestAppContext) {
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(blacksmith(), cx);
+            grabber.select(2, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("grab-inspector").is_some());
+        let search = grabber.read_with(cx, |grabber, _| grabber.search.clone());
+        cx.update(|_, cx| search.update(cx, |search, cx| search.set_text("zzz", cx)));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("grab-inspector").is_none());
+    }
+
+    #[gpui::test]
+    fn a_record_copies_from_its_row_menu_and_its_facts(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, MouseButton};
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.take(blacksmith(), cx);
+            grabber.select(2, cx);
+        });
+        cx.run_until_parked();
+        let clipboard =
+            |cx: &mut VisualTestContext| cx.read_from_clipboard().and_then(|item| item.text());
+
+        let third = cx.debug_bounds("row-2").unwrap().center();
+        cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        press(cx, "down");
+        press(cx, "down");
+        press(cx, "enter");
+        assert_eq!(clipboard(cx).as_deref(), Some("8803"));
+
+        let fact = cx.debug_bounds("entry-fact-1").unwrap().center();
+        let copy_from_fact = |cx: &mut VisualTestContext, item: usize| {
+            cx.simulate_mouse_down(fact, MouseButton::Right, Modifiers::none());
+            cx.simulate_mouse_up(fact, MouseButton::Right, Modifiers::none());
+            cx.run_until_parked();
+            for _ in 0..=item {
+                press(cx, "down");
+            }
+            press(cx, "enter");
+        };
+        copy_from_fact(cx, 0);
+        assert_eq!(clipboard(cx).as_deref(), Some("44102"));
+        copy_from_fact(cx, 1);
+        assert_eq!(
+            clipboard(cx).as_deref(),
+            Some("Item ID: 8802\nShop item ID: 44102\nCategory: Sword\nPrice: 40 AC")
+        );
+    }
+
+    #[test]
+    fn snapshot_loaded_shop() {
+        let folder = crate::storyboard::scratch("grabber-shop");
+        for written in mira_ui::snapshot_with(
+            "grabber-shop",
+            gpui::size(px(WIDTH), px(HEIGHT)),
+            |window, cx| {
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
+                    grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                    grabber.take(blacksmith(), cx);
+                    grabber.select(2, cx);
+                    grabber
+                })
+            },
+            right_click_at(690.0, 205.0),
+        ) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    fn line(item_id: i32, name: &str, quantity: i32) -> Line {
+        Line {
+            item_id: Some(item_id),
+            name: name.into(),
+            quantity,
+            chance: None,
+            needed: false,
+            held: Default::default(),
+            varies: false,
+            facts: Vec::new(),
+        }
+    }
+
+    fn record(key: i64, name: &str, id_label: &'static str) -> Entry {
+        Entry {
+            id_label,
+            ..results(key, name).entries.remove(0)
+        }
+    }
+
+    fn right_click_at(
+        x: f32,
+        y: f32,
+    ) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+        move |cx, window| {
+            let (position, button) = (gpui::point(px(x), px(y)), gpui::MouseButton::Right);
+            cx.update_window(window, |_, window, cx| {
+                for event in [
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        button,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        button,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                ] {
+                    window.dispatch_event(event, cx);
+                }
+                window.refresh();
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    fn frogzard() -> Entry {
+        Entry {
+            meta: "Enter".into(),
+            here: true,
+            drops_from: Some(3.0),
+            facts: vec![
+                ("MonMapID", "3".into()),
+                ("Monster ID", "2045".into()),
+                ("Cell", "Enter".into()),
+                ("Level", "25".into()),
+            ],
+            ..record(3, "Frogzard", "MonMapID")
+        }
+    }
+
+    fn frogzard_drops() -> Group {
+        Group {
+            title: "Drops",
+            lines: vec![
+                Line {
+                    chance: Some(2.5),
+                    facts: vec![("Category", "Helm".into()), ("Rarity", "Rare".into())],
+                    ..line(12, "Frog Hat", 1)
+                },
+                Line {
+                    chance: Some(50.0),
+                    varies: true,
+                    facts: vec![("Category", "Item".into())],
+                    ..line(13, "Frogzard Scale", 4)
+                },
+            ],
+        }
+    }
+
+    #[gpui::test]
+    fn a_drop_row_copies_and_registers_from_its_menu(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, MouseButton};
+        let (grabber, cx) = open(cx);
+        grabber.update(cx, |grabber, cx| {
+            grabber.source = Source::Monsters;
+            grabber.located = Some(located("battleontown"));
+            grabber.take(
+                Snapshot {
+                    heading: None,
+                    map: Some("battleontown".into()),
+                    entries: vec![frogzard()],
+                },
+                cx,
+            );
+            grabber.select(3, cx);
+            grabber.drops.insert(3, Drops::Ready(frogzard_drops()));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let scale = cx.debug_bounds("grab-line-1").unwrap().center();
+        let pick = |cx: &mut VisualTestContext, item: usize| {
+            cx.simulate_mouse_down(scale, MouseButton::Right, Modifiers::none());
+            cx.simulate_mouse_up(scale, MouseButton::Right, Modifiers::none());
+            cx.run_until_parked();
+            for _ in 0..=item {
+                press(cx, "down");
+            }
+            press(cx, "enter");
+        };
+
+        pick(cx, 1);
+        let copied = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some("13"));
+
+        pick(cx, 2);
+        assert!(grabber.read_with(cx, |grabber, _| grabber.listed().has_drop("Frogzard Scale")));
+    }
+
+    #[test]
+    fn snapshot_quest_and_drops() {
+        const LINE_Y: f32 = 300.0;
+        let folder = crate::storyboard::scratch("grabber-records");
+        let tab = || {
+            let automation = Automation::default();
+            automation.update_drops(|state| {
+                register_items(&mut state.items, vec![ItemQuery::Name("Frog Hat".into())])
+            });
+            ShownTab::fake("Alt 1", automation)
+        };
+        let quest = Entry {
+            meta: "In progress".into(),
+            badges: vec!["Daily"],
+            facts: vec![
+                ("Quest ID", "4570".into()),
+                ("Status", "In progress".into()),
+            ],
+            groups: vec![
+                Group {
+                    title: "Requirements",
+                    lines: vec![
+                        Line {
+                            needed: true,
+                            held: crate::domain::grabber::Holding {
+                                inventory: 3,
+                                temp: 0,
+                                bank: 4,
+                                ..Default::default()
+                            },
+                            ..line(1, "Bone Dust", 10)
+                        },
+                        Line {
+                            needed: true,
+                            held: crate::domain::grabber::Holding {
+                                inventory: 0,
+                                temp: 5,
+                                bank: 0,
+                                ..Default::default()
+                            },
+                            ..line(2, "Slime Sample", 5)
+                        },
+                    ],
+                },
+                Group {
+                    title: "Rewards",
+                    lines: vec![
+                        Line {
+                            chance: Some(25.0),
+                            ..line(11, "Dragon Blade", 1)
+                        },
+                        line(12, "Frog Hat", 1),
+                    ],
+                },
+            ],
+            acts: vec![
+                Act::Register { quest_id: 4570 }.into(),
+                Act::Game(Action::FakeComplete { quest_id: 4570 }).into(),
+            ],
+            ..record(4570, "Gather Bone Dust", "Quest ID")
+        };
+        let (monster, drops) = (frogzard(), frogzard_drops());
+        let size = gpui::size(px(WIDTH), px(HEIGHT));
+        let hover_line = |cx: &mut gpui::HeadlessAppContext, window: gpui::AnyWindowHandle| {
+            for nudge in [0.0, 1.0] {
+                cx.update_window(window, |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position: gpui::point(px(640.0 + nudge), px(LINE_Y)),
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.refresh();
+                })
+                .unwrap();
+                cx.run_until_parked();
+            }
+        };
+        for written in mira_ui::snapshot_with(
+            "grabber-quest",
+            size,
+            |window, cx| {
+                let quest = quest.clone();
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
+                    grabber.shown = Some(tab());
+                    grabber.source = Source::Quests;
+                    grabber.take(
+                        Snapshot {
+                            heading: None,
+                            map: None,
+                            entries: vec![quest],
+                        },
+                        cx,
+                    );
+                    grabber.select(4570, cx);
+                    grabber
+                })
+            },
+            hover_line,
+        )
+        .into_iter()
+        .chain(mira_ui::snapshot_with(
+            "grabber-drops",
+            size,
+            |window, cx| {
+                let (monster, drops) = (monster.clone(), drops.clone());
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
+                    grabber.shown = Some(tab());
+                    grabber.source = Source::Monsters;
+                    grabber.located = Some(located("battleontown"));
+                    grabber.take(
+                        Snapshot {
+                            heading: None,
+                            map: Some("battleontown".into()),
+                            entries: vec![monster],
+                        },
+                        cx,
+                    );
+                    grabber.select(3, cx);
+                    grabber.drops.insert(3, Drops::Ready(drops));
+                    grabber.opened.insert(12);
+                    grabber
+                })
+            },
+            right_click_at(700.0, 359.0),
+        )) {
+            assert!(written.exists(), "{} was not written", written.display());
+        }
+    }
+
+    #[test]
     fn snapshot_narrow_toolbar() {
         let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let size = gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT));
-        for written in mira_ui::snapshot("grabber-narrow", size, move |_, cx| {
+        for written in mira_ui::snapshot("grabber-narrow", size, move |window, cx| {
             cx.new(|cx| {
                 let client = Client::empty_for_tests(&folder, cx);
-                let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+                let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
                 grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
                 grabber.source = Source::Quests;
-                grabber.taken = Some(Outcome {
+                let quest = |key: i64, name: &str, status: &str| Entry {
+                    id_label: "Quest ID",
+                    meta: status.into(),
+                    ..results(key, name).entries.remove(0)
+                };
+                grabber.take(
+                    Snapshot {
+                        heading: None,
+                        map: None,
+                        entries: vec![
+                            quest(4567, "The Dragon's Hoard of Unreasonably Long Names", ""),
+                            quest(4570, "Gather Bone Dust", "In progress"),
+                            quest(4571, "Slay the Lich", "Done"),
+                        ],
+                    },
+                    cx,
+                );
+                grabber.select(4570, cx);
+                grabber.quests.problem = Some("IDs are whole numbers above 0".into());
+                grabber.status = Some(Outcome {
                     text: "Couldn't save: the volume is read-only".into(),
                     failed: true,
                 });
@@ -1703,15 +2525,102 @@ mod tests {
     }
 
     #[test]
+    fn a_quick_read_shows_no_spinner_and_a_slow_one_waits_before_showing_it() {
+        use std::time::Duration;
+        let ms = Duration::from_millis;
+        let folder = crate::storyboard::scratch("grabber-spinner");
+        let recording = mira_ui::record(
+            "grabber-spinner",
+            gpui::size(px(WIDTH), px(HEIGHT)),
+            ms(2000),
+            |window, cx| {
+                cx.new(|cx| {
+                    let client = Client::empty_for_tests(&folder, cx);
+                    let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
+                    grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                    grabber.take(blacksmith(), cx);
+                    grabber
+                })
+            },
+            |cx, window| {
+                cx.update_window(window, |root, _, cx| {
+                    let grabber = root.downcast::<LoaderGrabber>().unwrap();
+                    grabber.update(cx, |grabber, cx| {
+                        grabber.open_source(Source::Inventory, cx);
+                        cx.spawn(async move |this, cx| {
+                            let mut at = Duration::ZERO;
+                            for (when, step) in [
+                                (80, Step::Rows(results(1, "Bone Dust"))),
+                                (300, Step::Open(Source::Bank)),
+                                (900, Step::Rows(results(4, "Bone Dust"))),
+                                (1000, Step::Open(Source::TempInventory)),
+                                (1150, Step::Open(Source::Monsters)),
+                                (1400, Step::Rows(results(3, "Frogzard"))),
+                                (1500, Step::Open(Source::Quests)),
+                            ] {
+                                cx.background_executor().timer(ms(when) - at).await;
+                                at = ms(when);
+                                let _ = this.update(cx, |grabber, cx| match step {
+                                    Step::Rows(rows) => grabber.take(rows, cx),
+                                    Step::Open(source) => grabber.open_source(source, cx),
+                                });
+                            }
+                        })
+                        .detach();
+                    });
+                })
+                .unwrap();
+            },
+        );
+        let between = |from: u64, to: u64| {
+            recording
+                .frames
+                .iter()
+                .filter(move |frame| frame.at > ms(from) && frame.at < ms(to))
+        };
+        let still = |from, to| between(from, to).all(|frame| frame.changed == 0);
+        let spinning = |from, to| between(from, to).all(|frame| frame.changed > 0);
+        assert!(still(20, 75), "a quick read drew something while it waited");
+        assert!(still(320, 595), "a slow read showed its spinner too soon");
+        assert!(spinning(620, 890), "a slow read never showed its spinner");
+        assert!(still(1020, 1145), "a slow read showed its spinner too soon");
+        assert!(
+            still(1170, 1395),
+            "switching sources mid-wait kept the old wait's delay"
+        );
+        assert!(
+            still(1520, 1795),
+            "the next slow read showed its spinner at once"
+        );
+        assert!(
+            spinning(1820, 2000),
+            "the next slow read never showed its spinner"
+        );
+    }
+
+    enum Step {
+        Rows(Snapshot),
+        Open(Source),
+    }
+
+    #[test]
     fn snapshot_shop_warning() {
         let folder = std::env::temp_dir().join(format!("mira-grabber-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let size = gpui::size(px(WIDTH), px(HEIGHT));
-        for written in mira_ui::snapshot("grabber-shop-warning", size, move |_, cx| {
+        for written in mira_ui::snapshot("grabber-shop-warning", size, move |window, cx| {
             cx.new(|cx| {
                 let client = Client::empty_for_tests(&folder, cx);
-                let mut grabber = LoaderGrabber::new(client, Target::Selected, cx);
+                let mut grabber = LoaderGrabber::new(client, Target::Selected, window, cx);
                 grabber.shown = Some(ShownTab::fake("Alt 1", Automation::default()));
+                grabber.take(
+                    Snapshot {
+                        heading: None,
+                        map: None,
+                        entries: Vec::new(),
+                    },
+                    cx,
+                );
                 grabber.shop_warning = Some(ShopWarning {
                     load: Load::Shop(1234),
                     quiet: false,

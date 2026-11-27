@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
@@ -34,6 +34,7 @@ type Handler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub(super) struct PacketLines {
+    state: Rc<LinesState>,
     count: usize,
     dropped: u64,
     selected: Option<usize>,
@@ -45,11 +46,13 @@ pub(super) struct PacketLines {
 
 impl PacketLines {
     pub(super) fn new(
+        state: Rc<LinesState>,
         count: usize,
         row: impl Fn(usize, &mut App) -> Row + 'static,
         menu: impl Fn(usize, &mut App) -> Vec<MenuItem> + 'static,
     ) -> Self {
         Self {
+            state,
             count,
             dropped: 0,
             selected: None,
@@ -91,20 +94,18 @@ struct Shown {
     left_at: Option<u64>,
 }
 
+#[derive(Default)]
+pub(super) struct LinesState {
+    scroll: UniformListScrollHandle,
+    shown: Cell<Shown>,
+}
+
 impl RenderOnce for PacketLines {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let layout = cx.theme().layout;
         let typography = cx.theme().typography;
-        let scroll = window
-            .use_keyed_state(key("scroll"), cx, |_, _| UniformListScrollHandle::new())
-            .read(cx)
-            .clone();
-        let shown = window.use_keyed_state(key("shown"), cx, |_, _| Shown {
-            dropped: self.dropped,
-            selected: None,
-            left_at: None,
-        });
-        let before = *shown.read(cx);
+        let scroll = self.state.scroll.clone();
+        let before = self.state.shown.get();
         let selected_line = self.selected.map(|index| self.dropped + index as u64);
         let base = scroll.0.borrow().base_handle.clone();
         let offset = base.offset();
@@ -112,12 +113,10 @@ impl RenderOnce for PacketLines {
         let total = self.dropped + self.count as u64;
         let left_at =
             (!following).then(|| before.left_at.filter(|at| *at <= total).unwrap_or(total));
-        shown.update(cx, |shown, _| {
-            *shown = Shown {
-                dropped: self.dropped,
-                selected: selected_line,
-                left_at,
-            }
+        self.state.shown.set(Shown {
+            dropped: self.dropped,
+            selected: selected_line,
+            left_at,
         });
         if following && self.count > 0 {
             scroll.scroll_to_bottom();
@@ -146,6 +145,7 @@ impl RenderOnce for PacketLines {
             scroll.clone(),
         );
         let PacketLines {
+            state: _,
             count,
             dropped,
             selected,
@@ -337,32 +337,36 @@ mod tests {
     use super::*;
 
     struct Feed {
+        open: bool,
         dropped: u64,
         lines: Vec<String>,
         selected: Option<usize>,
     }
 
-    struct Lines(Rc<RefCell<Feed>>);
+    struct Lines(Rc<RefCell<Feed>>, Rc<LinesState>);
 
     impl Render for Lines {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let feed = self.0.borrow();
             let lines = feed.lines.clone();
-            div().w(px(300.0)).h(px(120.0)).child(
-                PacketLines::new(
-                    lines.len(),
-                    move |index, _| Row {
-                        time: None,
-                        tag: "in",
-                        tone: Tone::Neutral,
-                        text: lines[index].clone().into(),
-                        actions: false,
-                    },
-                    |_, _| Vec::new(),
+            div().w(px(300.0)).h(px(120.0)).when(feed.open, |view| {
+                view.child(
+                    PacketLines::new(
+                        self.1.clone(),
+                        lines.len(),
+                        move |index, _| Row {
+                            time: None,
+                            tag: "in",
+                            tone: Tone::Neutral,
+                            text: lines[index].clone().into(),
+                            actions: false,
+                        },
+                        |_, _| Vec::new(),
+                    )
+                    .dropped(feed.dropped)
+                    .selected(feed.selected),
                 )
-                .dropped(feed.dropped)
-                .selected(feed.selected),
-            )
+            })
         }
     }
 
@@ -372,11 +376,12 @@ mod tests {
     ) {
         cx.update(mira_ui::init);
         let feed = Rc::new(RefCell::new(Feed {
+            open: true,
             dropped: 0,
             lines: (0..40).map(|line| format!("line {line}")).collect(),
             selected: Some(39),
         }));
-        let (view, cx) = cx.add_window_view(|_, _| Lines(Rc::clone(&feed)));
+        let (view, cx) = cx.add_window_view(|_, _| Lines(Rc::clone(&feed), Rc::default()));
         let log = |change: &dyn Fn(&mut Feed), cx: &mut VisualTestContext| {
             change(&mut feed.borrow_mut());
             view.update(cx, |_, cx| cx.notify());
@@ -401,8 +406,11 @@ mod tests {
         let place = shown(cx, top + 2);
         assert!(top > 3 && shown(cx, 40).is_none());
 
+        log(&|feed| feed.open = false, cx);
+        assert!(shown(cx, top + 2).is_none());
         log(
             &|feed| {
+                feed.open = true;
                 feed.lines.drain(..3);
                 feed.dropped += 3;
                 feed.selected = Some(36);

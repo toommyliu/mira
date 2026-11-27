@@ -10,6 +10,7 @@ pub const LEAVE: Duration = Duration::from_millis(100);
 pub const TRAVEL: Duration = Duration::from_millis(150);
 pub const GLIDE: Duration = Duration::from_millis(400);
 pub const SETTLE: Duration = Duration::from_millis(200);
+pub const PATIENCE: Duration = Duration::from_millis(300);
 const SWEEP: Duration = Duration::from_millis(1400);
 const SPIN: Duration = Duration::from_millis(1000);
 const ARRIVE_DISTANCE: f32 = 8.0;
@@ -192,7 +193,7 @@ fn tween(
     if cx.reduce_motion() {
         return target;
     }
-    let now = Instant::now();
+    let now = cx.background_executor().now();
     let state = window.use_keyed_state(id, cx, |_, _| Tween {
         from: from.unwrap_or(target),
         to: target,

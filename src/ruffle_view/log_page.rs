@@ -2,8 +2,8 @@ use std::{ops::Range, rc::Rc};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, Focusable as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, px,
+    AppContext as _, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Subscription, Window, div, px,
 };
 use mira_ui::{
     ActiveTheme as _,
@@ -146,8 +146,8 @@ impl LogPage {
         self.rebuild(cx);
     }
 
-    pub(super) fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.search.focus_handle(cx), cx);
+    pub(super) fn search(&self) -> &Entity<Input> {
+        &self.search
     }
 
     fn query(&self, cx: &Context<Self>) -> String {

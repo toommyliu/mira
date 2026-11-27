@@ -275,6 +275,96 @@ fn hovered_switch_has_no_edge_line() {
     }
 }
 
+fn click(cx: &mut gpui::HeadlessAppContext, owner: gpui::AnyWindowHandle, x: f32, y: f32) {
+    use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, point};
+
+    let position = point(px(x), px(y));
+    cx.update_window(owner, |_, window, cx| {
+        for event in [
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                ..Default::default()
+            }),
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                click_count: 1,
+                ..Default::default()
+            }),
+        ] {
+            window.dispatch_event(event, cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[test]
+fn a_clicked_switch_animates_for_the_travel_time_then_rests_on() {
+    use mira_ui::{FRAME, motion::TRAVEL};
+    use std::{cell::Cell, rc::Rc};
+
+    let on = Rc::new(Cell::new(false));
+    let recording = mira_ui::record(
+        "switch-toggle",
+        size(px(160.0), px(52.0)),
+        TRAVEL * 2,
+        |window, cx| {
+            Scene::open(
+                move |_, _| {
+                    let toggled = on.clone();
+                    Switch::new("relogin", "Auto relogin", on.get())
+                        .on_toggle(move |value, window, _| {
+                            toggled.set(value);
+                            window.refresh();
+                        })
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| {
+            click(cx, owner, 30.0, 30.0);
+            move_pointer(cx, owner, 150.0, 48.0);
+        },
+    );
+    let on = snapshot("switch-on", size(px(160.0), px(52.0)), |window, cx| {
+        Scene::open(
+            |_, _| {
+                Switch::new("relogin", "Auto relogin", true)
+                    .on_toggle(|_, _, _| {})
+                    .into_any_element()
+            },
+            window,
+            cx,
+        )
+    });
+    let settled = recording.frames.last().unwrap();
+    assert!(
+        std::fs::read(&settled.path).unwrap() == std::fs::read(&on[0]).unwrap(),
+        "{} should match the switch drawn on, {}",
+        settled.path.display(),
+        on[0].display()
+    );
+    let summary = std::fs::read_to_string(&recording.summary).unwrap();
+    let moving = recording
+        .frames
+        .iter()
+        .filter(|frame| frame.changed > 0)
+        .count();
+    assert!(
+        moving > 4,
+        "the switch jumped instead of animating\n{summary}"
+    );
+    assert!(
+        (TRAVEL - FRAME..=TRAVEL + FRAME).contains(&recording.settled_at()),
+        "the switch should move for {TRAVEL:?}\n{summary}"
+    );
+}
+
 #[test]
 fn snapshot_controls() {
     scene("controls", 620.0, 340.0, |_, _| {
@@ -649,25 +739,38 @@ fn snapshot_select_opens_immediately_on_the_side_with_room() {
     use gpui::{MouseButton, MouseDownEvent, PlatformInput};
     use std::time::Duration;
 
+    let options = ["Direct", "Hold", "Double press"];
     // The first trigger has room on both sides, with slightly more room above.
-    for (name, trigger_top, below) in [("select-below", 108, true), ("select-above", 172, false)] {
+    for (name, trigger_top, below, menu) in [
+        ("select-below", 108, true, false),
+        ("select-above", 172, false, false),
+        ("menu-below", 108, true, true),
+        ("menu-above", 172, false, true),
+    ] {
         mira_ui::snapshot_with(
             name,
             size(px(184.0), px(240.0)),
             |window, cx| {
                 Scene::open(
                     move |_, _| {
+                        let trigger = if menu {
+                            DropdownMenu::new("quit")
+                                .width(px(136.0))
+                                .trigger(Button::new("quit-trigger", "Quit shortcut").w(px(136.0)))
+                                .items(move |_, _| {
+                                    options
+                                        .map(|option| MenuItem::action(option, |_, _| {}))
+                                        .into()
+                                })
+                                .into_any_element()
+                        } else {
+                            Select::new("quit", "Quit shortcut", options, Some(2))
+                                .width(px(136.0))
+                                .into_any_element()
+                        };
                         div()
                             .pt(px((trigger_top - 16) as f32))
-                            .child(
-                                Select::new(
-                                    "quit",
-                                    "Quit shortcut",
-                                    ["Direct", "Hold", "Double press"],
-                                    Some(2),
-                                )
-                                .width(px(136.0)),
-                            )
+                            .child(trigger)
                             .into_any_element()
                     },
                     window,
@@ -1200,8 +1303,8 @@ fn snapshot_progress_arcs() {
             }))
             .into_any_element()
     });
-    scene("progress-arcs-countdown", 260.0, 90.0, |_, _| {
-        let now = std::time::Instant::now();
+    scene("progress-arcs-countdown", 260.0, 90.0, |_, cx| {
+        let now = cx.background_executor().now();
         let second = std::time::Duration::from_secs(1);
         div()
             .flex()

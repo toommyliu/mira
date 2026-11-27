@@ -33,7 +33,7 @@ pub(crate) fn sight(
     loader: &impl Loader,
     query: &MonsterQuery,
 ) -> Result<Option<Sighted>, CallError> {
-    Ok(world::monster(loader, query)?.and_then(|monster| {
+    Ok(world::monster_here(loader, query)?.and_then(|monster| {
         Some(Sighted {
             mon_map_id: wire::whole(monster.mon_map_id)?,
             alive: monster.state != Some(State::Dead),

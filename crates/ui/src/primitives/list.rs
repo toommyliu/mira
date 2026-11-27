@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Instant};
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
@@ -7,7 +7,10 @@ use gpui::{
     UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
-use super::{Flow, Pose, Scrollbar, Sortable};
+use super::{
+    ContextMenu, Flow, Icon, MenuItem, Pose, Scrollbar, Sortable, icon,
+    menu::{self, ItemsBuilder, MenuState},
+};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
     nav::{self, Axis, Step, Typeahead},
@@ -36,6 +39,8 @@ pub struct ListItem {
     description: Option<SharedString>,
     children: Vec<AnyElement>,
     disabled: bool,
+    selection_check: bool,
+    menu: Option<(SharedString, ItemsBuilder)>,
 }
 
 impl ListItem {
@@ -48,6 +53,8 @@ impl ListItem {
             description: None,
             children: Vec::new(),
             disabled: false,
+            selection_check: false,
+            menu: None,
         }
     }
 
@@ -78,6 +85,20 @@ impl ListItem {
         self
     }
 
+    pub fn selection_check(mut self) -> Self {
+        self.selection_check = true;
+        self
+    }
+
+    pub fn context_menu(
+        mut self,
+        record: impl Into<SharedString>,
+        f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static,
+    ) -> Self {
+        self.menu = Some((record.into(), Rc::new(f)));
+        self
+    }
+
     fn selectable(&self) -> bool {
         self.kind == Kind::Row && !self.disabled
     }
@@ -91,6 +112,8 @@ impl ParentElement for ListItem {
 
 #[derive(Clone)]
 struct Options {
+    id: ElementId,
+    menu: Entity<MenuState>,
     count: usize,
     row: RowBuilder,
     selected: Option<usize>,
@@ -111,6 +134,7 @@ impl Options {
         let options = self.clone();
         move |event, window, cx| {
             let Options {
+                menu,
                 count,
                 row,
                 selected,
@@ -119,6 +143,19 @@ impl Options {
                 on_activate,
                 ..
             } = &options;
+            let stroke = &event.keystroke;
+            if stroke.key == "f10" && stroke.modifiers.shift {
+                if let Some((index, (_, items))) = selected
+                    .filter(|index| index < count)
+                    .and_then(|index| Some((index, row(index).menu?)))
+                {
+                    reveal(index);
+                    let first = menu::first_navigable(&items(window, cx), false);
+                    menu::open(menu, first, None, window, cx);
+                    cx.stop_propagation();
+                }
+                return;
+            }
             typeahead.update(cx, |typeahead, _| {
                 typeahead.end_unless_typed(&event.keystroke)
             });
@@ -132,10 +169,10 @@ impl Options {
             let next = Step::from_key(event, Axis::Vertical)
                 .and_then(|step| nav::step(*selected, *count, step, false, |i| row(i).selectable()))
                 .or_else(|| {
-                    typeahead.update(cx, |typeahead, _| {
+                    typeahead.update(cx, |typeahead, cx| {
                         typeahead.find(
                             &event.keystroke,
-                            Instant::now(),
+                            cx.background_executor().now(),
                             (0..*count)
                                 .map(|i| (i, row(i)))
                                 .filter(|(_, item)| item.selectable())
@@ -155,12 +192,28 @@ impl Options {
         }
     }
 
-    fn render(&self, index: usize, pose: Pose) -> Stateful<Div> {
-        let item = (self.row)(index);
-        match item.kind {
+    fn render(&self, index: usize, pose: Pose, window: &mut Window, cx: &mut App) -> AnyElement {
+        let mut item = (self.row)(index);
+        let menu = item.menu.take().filter(|_| pose == Pose::Rest);
+        let label = item.label.clone();
+        let row = match item.kind {
             Kind::Header => self.header(index, item),
             Kind::Row => self.item(index, item, pose),
-        }
+        };
+        let Some((record, items)) = menu else {
+            return row.into_any_element();
+        };
+        let id = ElementId::from((self.id.clone(), format!("menu-{record}")));
+        let state = if self.selected == Some(index) {
+            self.menu.clone()
+        } else {
+            menu::state(&id, false, window, cx)
+        };
+        ContextMenu::new(id, label)
+            .state(state)
+            .items(move |window, cx| items(window, cx))
+            .child(row)
+            .into_any_element()
     }
 
     fn header(&self, index: usize, item: ListItem) -> Stateful<Div> {
@@ -282,7 +335,39 @@ impl Options {
                         .child(end),
                 )
             })
+            .when(item.selection_check, |row| {
+                row.child(
+                    h_flex()
+                        .size(layout.space(3.0))
+                        .flex_none()
+                        .justify_center()
+                        .when(current, |mark| {
+                            mark.child(icon(Icon::Check, theme.foreground).size(layout.space(3.0)))
+                        }),
+                )
+            })
     }
+}
+
+fn selected_menu(
+    id: &ElementId,
+    row: &RowBuilder,
+    selected: Option<usize>,
+    count: usize,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<MenuState> {
+    let record = selected
+        .filter(|index| *index < count)
+        .and_then(|index| row(index).menu)
+        .map(|(record, _)| record)
+        .unwrap_or_default();
+    menu::state(
+        &ElementId::from((id.clone(), format!("selected-menu-{record}"))),
+        false,
+        window,
+        cx,
+    )
 }
 
 fn scroll_into_view(scroll: &ScrollHandle, index: usize, inset: Pixels) {
@@ -338,6 +423,7 @@ pub struct List {
     on_reorder: Option<ReorderHandler>,
     pinned: usize,
     flush: bool,
+    scroll: Option<ScrollHandle>,
 }
 
 impl List {
@@ -359,6 +445,7 @@ impl List {
             on_reorder: None,
             pinned: 0,
             flush: false,
+            scroll: None,
         }
     }
 
@@ -379,6 +466,11 @@ impl List {
 
     pub fn flush(mut self) -> Self {
         self.flush = true;
+        self
+    }
+
+    pub fn track_scroll(mut self, scroll: &ScrollHandle) -> Self {
+        self.scroll = Some(scroll.clone());
         self
     }
 
@@ -406,11 +498,15 @@ impl List {
 impl RenderOnce for List {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let scroll = window
-            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| ScrollHandle::new())
-            .read(cx)
-            .clone();
+        let scroll = self.scroll.unwrap_or_else(|| {
+            window
+                .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| ScrollHandle::new())
+                .read(cx)
+                .clone()
+        });
         let options = Options {
+            id: self.id.clone(),
+            menu: selected_menu(&self.id, &self.row, self.selected, self.count, window, cx),
             count: self.count,
             row: self.row,
             selected: self.selected,
@@ -456,7 +552,7 @@ impl RenderOnce for List {
                 list,
                 Flow::Column,
                 0..count,
-                move |(index, pose), _, _| options.render(index, pose).into_any_element(),
+                move |(index, pose), window, cx| options.render(index, pose, window, cx),
                 move |from, to, window, cx| reorder(from, to, window, cx),
             )
             .scrolls(&scroll)
@@ -465,7 +561,11 @@ impl RenderOnce for List {
             None => list
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .children((0..count).map(|index| options.render(index, Pose::Rest)))
+                .children(
+                    (0..count)
+                        .map(|index| options.render(index, Pose::Rest, window, cx))
+                        .collect::<Vec<_>>(),
+                )
                 .into_any_element(),
         };
         div()
@@ -481,6 +581,12 @@ impl RenderOnce for List {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct VirtualListState {
+    scroll: UniformListScrollHandle,
+    selected: Rc<Cell<Option<usize>>>,
+}
+
 #[derive(IntoElement)]
 pub struct VirtualList {
     id: ElementId,
@@ -492,6 +598,7 @@ pub struct VirtualList {
     on_select: Option<IndexHandler>,
     on_activate: Option<IndexHandler>,
     flush: bool,
+    state: Option<VirtualListState>,
 }
 
 impl VirtualList {
@@ -511,6 +618,7 @@ impl VirtualList {
             on_select: None,
             on_activate: None,
             flush: false,
+            state: None,
         }
     }
 
@@ -534,6 +642,11 @@ impl VirtualList {
         self
     }
 
+    pub fn state(mut self, state: &VirtualListState) -> Self {
+        self.state = Some(state.clone());
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
@@ -548,13 +661,18 @@ impl VirtualList {
 impl RenderOnce for VirtualList {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
-        let scroll = window
-            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| {
-                UniformListScrollHandle::new()
-            })
-            .read(cx)
-            .clone();
+        let state = self.state.unwrap_or_else(|| {
+            window
+                .use_keyed_state((self.id.clone(), "state"), cx, |_, _| {
+                    VirtualListState::default()
+                })
+                .read(cx)
+                .clone()
+        });
+        let scroll = state.scroll;
         let options = Options {
+            id: self.id.clone(),
+            menu: selected_menu(&self.id, &self.row, self.selected, self.count, window, cx),
             count: self.count,
             row: self.row,
             selected: self.selected,
@@ -568,12 +686,10 @@ impl RenderOnce for VirtualList {
             uniform: true,
             theme: cx.theme().clone(),
         };
-        let shown = window.use_keyed_state((self.id.clone(), "shown"), cx, |_, _| None);
-        if self.selected.is_some() && *shown.read(cx) != self.selected {
-            shown.update(cx, |shown, _| *shown = self.selected);
-            if let Some(selected) = self.selected {
-                scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
-            }
+        if state.selected.replace(self.selected) != self.selected
+            && let Some(selected) = self.selected
+        {
+            scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
         }
         let reveal = scroll.clone();
         let render_options = options.clone();
@@ -593,12 +709,15 @@ impl RenderOnce for VirtualList {
                 Height::Content | Height::Fill => list.flex_1().min_h_0(),
             })
             .child(
-                uniform_list((self.id, "rows"), self.count, move |range, _, _| {
+                uniform_list((self.id, "rows"), self.count, move |range, window, cx| {
                     range
                         .map(|index| {
-                            div()
-                                .pb(px(1.0))
-                                .child(render_options.render(index, Pose::Rest))
+                            div().pb(px(1.0)).child(render_options.render(
+                                index,
+                                Pose::Rest,
+                                window,
+                                cx,
+                            ))
                         })
                         .collect()
                 })

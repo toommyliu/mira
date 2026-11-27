@@ -22,6 +22,7 @@ use mira_ui::{
         Button, ColorPicker, Dialog, Icon, Input, InputEvent, Numeric, Radio, RadioGroup,
         Scrollbar, Select, Switch, Tab, Tabs,
         button::{Size, Variant as ButtonVariant},
+        text_field::Find,
     },
     theme::Typography,
     theme::{parse_hex, to_hex},
@@ -887,7 +888,8 @@ fn contains(text: &str, query: &str) -> bool {
 
 struct SettingsWindow {
     focus: FocusHandle,
-    scroll: ScrollHandle,
+    page_scrolls: [ScrollHandle; Pane::ALL.len()],
+    search_scroll: ScrollHandle,
     pane: Pane,
     advanced: bool,
     search: Entity<Input>,
@@ -947,13 +949,14 @@ impl SettingsWindow {
         );
         let search_changes = cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, InputEvent::Changed) {
-                this.scroll.set_offset(point(px(0.0), px(0.0)));
+                this.search_scroll.set_offset(point(px(0.0), px(0.0)));
                 cx.notify();
             }
         });
         Self {
             focus: cx.focus_handle(),
-            scroll: ScrollHandle::new(),
+            page_scrolls: std::array::from_fn(|_| ScrollHandle::new()),
+            search_scroll: ScrollHandle::new(),
             pane: Pane::General,
             advanced: false,
             resetting: None,
@@ -1046,6 +1049,13 @@ impl SettingsWindow {
                         )
                         .hide_label()
                         .on_toggle(|on, _, cx| set_confirm_close(on, cx)),
+                    ))
+                    .row(Row::new(
+                        "Shop load warning",
+                        Some("Ask before loading a shop by ID."),
+                        Switch::new("shop-warning", "Shop load warning", shop_warning(cx))
+                            .hide_label()
+                            .on_toggle(|on, _, cx| set_shop_warning(on, cx)),
                     )),
             ),
             Block::Section(
@@ -1385,7 +1395,6 @@ impl SettingsWindow {
         });
         if self.pane != pane {
             self.pane = pane;
-            self.scroll.set_offset(point(px(0.0), px(0.0)));
             cx.notify();
         }
     }
@@ -1394,8 +1403,13 @@ impl SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = cx.theme().layout;
-        mira_ui::nav::set_scroll_root(&self.scroll, window, cx);
         let query = self.search.read(cx).text().trim().to_lowercase();
+        let scroll = if query.is_empty() {
+            &self.page_scrolls[self.pane as usize]
+        } else {
+            &self.search_scroll
+        };
+        mira_ui::nav::set_scroll_root(scroll, window, cx);
         let groups: Vec<AnyElement> = if query.is_empty() {
             self.blocks(self.pane, self.advanced, cx)
                 .into_iter()
@@ -1472,6 +1486,7 @@ impl Render for SettingsWindow {
             .key_context(FOCUS_SCOPE)
             .track_focus(&self.focus)
             .on_action(|_: &CloseSession, window, _| window.remove_window())
+            .on_action(Find::in_search(&self.search))
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(reset_dialog)
@@ -1512,7 +1527,7 @@ impl Render for SettingsWindow {
                                         .max_w(px(600.0))
                                         .mx_auto()
                                         .overflow_y_scroll()
-                                        .track_scroll(&self.scroll)
+                                        .track_scroll(scroll)
                                         .flex()
                                         .flex_col()
                                         .gap(layout.space(4.0))
@@ -1521,7 +1536,7 @@ impl Render for SettingsWindow {
                                         .pb(layout.space(4.0))
                                         .children(groups),
                                 )
-                                .when(self.scroll.offset().y < px(0.0), |pane| {
+                                .when(scroll.offset().y < px(0.0), |pane| {
                                     pane.child(
                                         div()
                                             .absolute()
@@ -1539,7 +1554,7 @@ impl Render for SettingsWindow {
                                             )),
                                     )
                                 })
-                                .child(Scrollbar::new("settings-scrollbar", self.scroll.clone())),
+                                .child(Scrollbar::new("settings-scrollbar", scroll.clone())),
                         ),
                     ),
             )
@@ -1708,6 +1723,47 @@ mod tests {
         assert_eq!(size(cx), TextSize::default());
         assert_eq!(cx.update(|_, cx| input.read(cx).text().to_owned()), "13");
         fs::remove_file(path).ok();
+    }
+
+    #[gpui::test]
+    fn returning_to_a_settings_page_restores_its_scroll_position(cx: &mut gpui::TestAppContext) {
+        let dir = crate::storyboard::scratch("settings-page-scroll");
+        cx.update(|cx| {
+            mira_ui::init(cx);
+            init(dir.join("settings.json"), |_| {}, cx);
+            packages::init(dir.join("packages"), dir.join("github-token"), cx);
+        });
+        let (settings, cx) = cx.add_window_view(|window, cx| {
+            window.activate_window();
+            SettingsWindow::new(cx)
+        });
+        settings.update(cx, |settings, cx| {
+            settings.show(Pane::Shortcuts, cx);
+            settings.page_scrolls[Pane::Shortcuts as usize].set_offset(point(px(0.0), px(-180.0)));
+        });
+        cx.run_until_parked();
+        let offset = |cx: &mut gpui::VisualTestContext| {
+            settings.read_with(cx, |settings, _| {
+                settings.page_scrolls[settings.pane as usize].offset().y
+            })
+        };
+        let scrolled = offset(cx);
+        assert!(scrolled < px(0.0));
+
+        settings.update(cx, |settings, cx| settings.show(Pane::General, cx));
+        cx.run_until_parked();
+        assert_eq!(offset(cx), px(0.0));
+        settings.update(cx, |settings, cx| settings.show(Pane::Shortcuts, cx));
+        cx.run_until_parked();
+        assert_eq!(offset(cx), scrolled);
+
+        let search = settings.read_with(cx, |settings, _| settings.search.clone());
+        for query in ["font", ""] {
+            search.update(cx, |input, cx| input.set_text(query, cx));
+            cx.run_until_parked();
+        }
+        assert_eq!(offset(cx), scrolled);
+        fs::remove_dir_all(dir).ok();
     }
 
     #[gpui::test]
@@ -2007,17 +2063,39 @@ mod tests {
                 init(dir.join("settings.json"), |_| {}, cx);
                 packages::init(dir.join("packages"), dir.join("token"), cx);
                 let settings = cx.new(SettingsWindow::new);
-                window.focus(&settings.read(cx).search.focus_handle(cx), cx);
+                let focus = settings.read(cx).focus.clone();
+                window.focus(&focus, cx);
                 settings
             },
             |cx, owner| {
-                for key in ["c", "o", "l", "o", "r"] {
-                    cx.update_window(owner, |_, window, cx| {
-                        window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                let press = |cx: &mut gpui::HeadlessAppContext, keys: &[&'static str]| {
+                    for key in keys {
+                        cx.update_window(owner, |_, window, cx| {
+                            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                    }
+                };
+                let assert_query = |cx: &mut gpui::HeadlessAppContext, query| {
+                    cx.update_window(owner, |root, window, cx| {
+                        let settings = root.downcast::<SettingsWindow>().unwrap();
+                        let search = settings.read(cx).search.read(cx);
+                        assert!(search.focus_handle(cx).is_focused(window));
+                        assert_eq!(search.text(), query);
                     })
                     .unwrap();
-                }
+                };
+                press(cx, &["cmd-f", "c", "o", "l", "d", "end"]);
+                press(cx, &["cmd-f", "f", "o", "n", "t"]);
+                assert_query(cx, "font");
+
+                cx.update(|cx| cx.dispatch_action(&Find));
                 cx.run_until_parked();
+                press(cx, &["c", "o", "l", "o", "r"]);
+                assert_query(cx, "color");
+                press(cx, &["cmd-f"]);
+
                 let rest = cx.capture_screenshot(owner).unwrap();
                 let scale = rest.width() / SETTINGS_WIDTH as u32;
                 let field = rest.get_pixel(164 * scale, 60 * scale)[0];
@@ -2172,7 +2250,8 @@ mod tests {
                             pane == Pane::Appearance && name != "settings-appearance-light";
                         settings.resetting = (name == "settings-reset").then_some(pane);
                         if name == "settings-shortcuts-scrolled" {
-                            settings.scroll.set_offset(point(px(0.0), px(-40.0)));
+                            settings.page_scrolls[pane as usize]
+                                .set_offset(point(px(0.0), px(-40.0)));
                         }
                         if !query.is_empty() {
                             settings

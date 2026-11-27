@@ -1,0 +1,25 @@
+---
+import { codeActions, svgAttributes } from "../icons.ts";
+---
+
+<div class="code-actions">
+  {
+    codeActions.map((action) => (
+      <button
+        class="icon-button"
+        type="button"
+        data-code-action={action.kind}
+        aria-label={action.label}
+        aria-pressed={action.kind === "wrap" ? "false" : undefined}
+      >
+        {action.icons.map((nodes) => (
+          <svg {...svgAttributes}>
+            {nodes.map(({ tag: Tag, attributes }) => (
+              <Tag {...attributes} />
+            ))}
+          </svg>
+        ))}
+      </button>
+    ))
+  }
+</div>

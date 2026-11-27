@@ -287,6 +287,15 @@ pub(crate) mod drops {
 pub(crate) mod extras {
     use crate::bridge::{CallError, Loader, Value, decode};
 
+    pub(crate) fn set_aura_text_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setAuraTextEnabled", call_args)?;
+        Ok(decode("extras.setAuraTextEnabled", reply)?)
+    }
+
     pub(crate) fn set_bank_search_enabled(
         loader: &impl Loader,
         enabled: bool,
@@ -314,6 +323,15 @@ pub(crate) mod extras {
         Ok(decode("extras.setCopyMenusEnabled", reply)?)
     }
 
+    pub(crate) fn set_damage_text_enabled(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setDamageTextEnabled", call_args)?;
+        Ok(decode("extras.setDamageTextEnabled", reply)?)
+    }
+
     pub(crate) fn set_hide_music_button_enabled(
         loader: &impl Loader,
         enabled: bool,
@@ -330,6 +348,12 @@ pub(crate) mod extras {
         let call_args = vec![Value::Bool(enabled)];
         let reply = loader.call("extras.setPercentagesEnabled", call_args)?;
         Ok(decode("extras.setPercentagesEnabled", reply)?)
+    }
+
+    pub(crate) fn set_timers_enabled(loader: &impl Loader, enabled: bool) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("extras.setTimersEnabled", call_args)?;
+        Ok(decode("extras.setTimersEnabled", reply)?)
     }
 }
 

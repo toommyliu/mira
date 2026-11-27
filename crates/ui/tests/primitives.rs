@@ -1346,7 +1346,8 @@ fn a_select_in_a_popover_picks_options_that_hang_below_the_popover(cx: &mut Test
         select.bottom() + px(4.0 + 4.0 + 28.0 * 8.0 + 14.0),
     );
     cx.simulate_mouse_down(eighth, MouseButton::Left, Modifiers::none());
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(150));
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     cx.simulate_mouse_up(eighth, MouseButton::Left, Modifiers::none());
@@ -2042,7 +2043,7 @@ fn a_replaced_toast_shows_its_final_size_on_the_first_frame(cx: &mut TestAppCont
     };
     let settle = |cx: &mut gpui::VisualTestContext| {
         for _ in 0..3 {
-            std::thread::sleep(mira_ui::motion::GLIDE / 2);
+            cx.executor().advance_clock(mira_ui::motion::GLIDE / 2);
             draw(cx);
         }
     };
@@ -2635,7 +2636,8 @@ fn show(
 fn hold(cx: &mut VisualTestContext, x: f32, y: f32) {
     use gpui::{Modifiers, MouseButton, point, px};
     for _ in 0..8 {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
         cx.simulate_mouse_move(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
     }
 }
@@ -3404,6 +3406,133 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
     press(cx, "down");
     press(cx, "enter");
     assert_eq!(*chosen.borrow(), ["rename 1", "rename 2"]);
+}
+
+struct Shelf {
+    focus: FocusHandle,
+    rows: Vec<&'static str>,
+    selected: Option<usize>,
+    chosen: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl Render for Shelf {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{ListItem, MenuItem, VirtualList};
+        let (chosen, rows) = (self.chosen.clone(), self.rows.clone());
+        let this = cx.weak_entity();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                VirtualList::new("items", "Items", rows.len(), move |index| {
+                    let chosen = chosen.clone();
+                    let name = rows[index];
+                    ListItem::new(name).context_menu(name, move |_, _| {
+                        let chosen = chosen.clone();
+                        vec![MenuItem::action("Copy ID", move |_, _| {
+                            chosen.borrow_mut().push(format!("copy {name}"))
+                        })]
+                    })
+                })
+                .height(gpui::px(200.0))
+                .selected(self.selected)
+                .on_select(move |index, _, cx| {
+                    this.update(cx, |view, cx| {
+                        view.selected = Some(index);
+                        cx.notify();
+                    })
+                    .ok();
+                }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_row_menu_opens_for_the_selected_row_from_the_keyboard(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    cx.update(mira_ui::init);
+    let chosen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (shelf, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Shelf {
+            focus,
+            rows: vec!["Sword", "Helm", "Cape"],
+            selected: Some(1),
+            chosen: chosen.clone(),
+        }
+    });
+    cx.run_until_parked();
+
+    press(cx, "tab");
+    press(cx, "shift-f10");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["copy Helm"]);
+
+    let third = cx.debug_bounds("row-2").unwrap().center();
+    cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    press(cx, "down");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["copy Helm", "copy Cape"]);
+    assert_eq!(shelf.read_with(cx, |shelf, _| shelf.selected), Some(1));
+
+    press(cx, "shift-f10");
+    shelf.update(cx, |shelf, cx| {
+        shelf.rows.remove(1);
+        shelf.selected = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let cape = cx.debug_bounds("row-1").unwrap().center();
+    cx.simulate_click(cape, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("menu-panel").is_none());
+}
+
+struct Reveal {
+    focus: FocusHandle,
+    pressed: Rc<Cell<usize>>,
+}
+
+impl Render for Reveal {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let pressed = self.pressed.clone();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                mira_ui::h_flex().group("row").child("Bone Dust").child(
+                    Button::new("register", "Register drop")
+                        .revealed_by("row")
+                        .on_click(move |_, _, _| pressed.set(pressed.get() + 1)),
+                ),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_button_revealed_by_its_row_is_still_reached_by_tab(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let pressed = Rc::new(Cell::new(0));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Reveal {
+            focus,
+            pressed: pressed.clone(),
+        }
+    });
+    cx.run_until_parked();
+
+    press(cx, "tab");
+    press(cx, "space");
+    assert_eq!(pressed.get(), 1);
 }
 
 struct Skills {
