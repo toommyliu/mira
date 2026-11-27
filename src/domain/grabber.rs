@@ -107,7 +107,7 @@ impl Source {
 
     fn changed_by(self) -> Option<fn(&Event) -> bool> {
         Some(match self {
-            Source::Shop => |event| changes(event, &["loadShop", "levelUp"]),
+            Source::Shop => |event| changes(event, &["loadShop"]),
             Source::Quests => |event| {
                 changes(
                     event,
@@ -482,18 +482,14 @@ async fn read(loader: &impl Loader, source: Source) -> Result<Option<Snapshot>, 
         Source::Shop => {
             let shop = shops::current(loader)?;
             let held = holdings(loader).await?;
-            let mut entries = Vec::new();
-            for item in shop.iter().flat_map(|shop| &shop.items) {
-                let listing = ShopItemQuery::ShopItemId {
-                    shop_item_id: item.shop_item_id,
-                };
-                let buyable = shops::can_buy(loader, &listing, 1)?;
-                entries.push(shop_entry(item, &held, buyable));
-            }
             Snapshot {
                 heading: shop.as_ref().map(shop_heading),
                 map: None,
-                entries,
+                entries: shop
+                    .iter()
+                    .flat_map(|shop| &shop.items)
+                    .map(|item| shop_entry(item, &held))
+                    .collect(),
             }
         }
         Source::Quests => {
@@ -850,7 +846,7 @@ fn price(item: &ShopItem) -> String {
     }
 }
 
-fn shop_entry(item: &ShopItem, held: &Holdings, buyable: bool) -> Entry {
+fn shop_entry(item: &ShopItem, held: &Holdings) -> Entry {
     let mut facts = vec![
         ("Item ID", item.item_id.to_string()),
         ("Shop item ID", item.shop_item_id.to_string()),
@@ -889,12 +885,12 @@ fn shop_entry(item: &ShopItem, held: &Holdings, buyable: bool) -> Entry {
         badges: item.member.then_some("Member").into_iter().collect(),
         facts,
         groups,
-        acts: vec![Offer {
-            act: Act::Game(Action::Buy {
+        acts: vec![
+            Act::Game(Action::Buy {
                 shop_item_id: item.shop_item_id,
-            }),
-            enabled: buyable,
-        }],
+            })
+            .into(),
+        ],
         here: false,
         drops_from: None,
         json: json(item),
@@ -1316,7 +1312,6 @@ mod tests {
 
                 for (cmd, expected) in [
                     ("loadShop", [true, false, false]),
-                    ("levelUp", [true, false, false]),
                     ("getQuests2", [false, true, false]),
                     ("bankToInv", [true, true, true]),
                     ("ct", [false, false, false]),
@@ -1453,7 +1448,7 @@ mod tests {
     }
 
     fn blacksmith() -> FakeLoader {
-        FakeLoader::new(|callback, args| {
+        FakeLoader::new(|callback, _| {
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
                 "bank.isLoaded" => Value::Bool(false),
@@ -1474,9 +1469,6 @@ mod tests {
                           "faction": { "id": 20, "name": "Arcangrove", "rep": 50000 } }
                     ]
                 })),
-                "shops.canBuyItem" => Value::Bool(
-                    args[0] == value(json!({ "shopItemId": 7 })) && args[1] == Value::Number(1.0),
-                ),
                 callback => panic!("unexpected call {callback}"),
             })
         })
@@ -1511,14 +1503,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buy_is_offered_only_for_what_the_game_would_sell() {
+    async fn every_shop_listing_offers_buy() {
         let snapshot = read(&blacksmith(), Source::Shop).await.unwrap().unwrap();
         let offers: Vec<_> = snapshot
             .entries
             .iter()
-            .map(|entry| (entry.name.as_str(), entry.acts[0].enabled))
+            .flat_map(|entry| entry.acts.clone())
             .collect();
-        assert_eq!(offers[..2], [("Iron Helm", true), ("Dragon Blade", false)]);
+        assert_eq!(
+            offers,
+            [7, 8, 9, 11, 12]
+                .map(|shop_item_id| Offer::from(Act::Game(Action::Buy { shop_item_id })))
+        );
     }
 
     #[test]
