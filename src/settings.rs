@@ -1049,6 +1049,13 @@ impl SettingsWindow {
                         )
                         .hide_label()
                         .on_toggle(|on, _, cx| set_confirm_close(on, cx)),
+                    ))
+                    .row(Row::new(
+                        "Shop load warning",
+                        Some("Ask you to check the map before the loader opens a shop."),
+                        Switch::new("shop-warning", "Shop load warning", shop_warning(cx))
+                            .hide_label()
+                            .on_toggle(|on, _, cx| set_shop_warning(on, cx)),
                     )),
             ),
             Block::Section(

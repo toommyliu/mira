@@ -141,6 +141,7 @@ pub struct Button {
     joined: Option<Joined>,
     swatch: bool,
     shows_value: bool,
+    reveal: Option<SharedString>,
     style: StyleRefinement,
 }
 
@@ -174,6 +175,7 @@ impl Button {
             joined: None,
             swatch: false,
             shows_value: false,
+            reveal: None,
             style: StyleRefinement::default(),
         }
     }
@@ -244,6 +246,11 @@ impl Button {
 
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn revealed_by(mut self, group: impl Into<SharedString>) -> Self {
+        self.reveal = Some(group.into());
         self
     }
 
@@ -620,6 +627,12 @@ impl RenderOnce for Button {
                 button.child(corners(paint, radius + px(2.0), self.joined))
             });
         button.style().refine(&self.style);
+        let button = match self.reveal.filter(|_| !ring) {
+            Some(group) => button
+                .invisible()
+                .group_hover(group, |button| button.visible()),
+            None => button,
+        };
         match tip {
             Some(tip) => tooltip::attach(button, (self.id, "tooltip"), tip, ring, window, cx),
             None => button,

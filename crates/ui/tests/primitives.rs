@@ -3408,6 +3408,76 @@ fn a_tab_menu_opens_for_the_selected_tab_from_the_keyboard(cx: &mut TestAppConte
     assert_eq!(*chosen.borrow(), ["rename 1", "rename 2"]);
 }
 
+struct Shelf {
+    focus: FocusHandle,
+    selected: Option<usize>,
+    chosen: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl Render for Shelf {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use mira_ui::primitives::{ListItem, MenuItem, VirtualList};
+        let chosen = self.chosen.clone();
+        let this = cx.weak_entity();
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .child(
+                VirtualList::new("items", "Items", 3, move |index| {
+                    let chosen = chosen.clone();
+                    ListItem::new(["Sword", "Helm", "Cape"][index]).context_menu(move |_, _| {
+                        let chosen = chosen.clone();
+                        vec![MenuItem::action("Copy ID", move |_, _| {
+                            chosen.borrow_mut().push(format!("copy {index}"))
+                        })]
+                    })
+                })
+                .height(gpui::px(200.0))
+                .selected(self.selected)
+                .on_select(move |index, _, cx| {
+                    this.update(cx, |view, cx| {
+                        view.selected = Some(index);
+                        cx.notify();
+                    })
+                    .ok();
+                }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_row_menu_opens_for_the_selected_row_from_the_keyboard(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    cx.update(mira_ui::init);
+    let chosen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (shelf, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        Shelf {
+            focus,
+            selected: Some(1),
+            chosen: chosen.clone(),
+        }
+    });
+    cx.run_until_parked();
+
+    press(cx, "tab");
+    press(cx, "shift-f10");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["copy 1"]);
+
+    let third = cx.debug_bounds("row-2").unwrap().center();
+    cx.simulate_mouse_down(third, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(third, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    press(cx, "down");
+    press(cx, "enter");
+    assert_eq!(*chosen.borrow(), ["copy 1", "copy 2"]);
+    assert_eq!(shelf.read_with(cx, |shelf, _| shelf.selected), Some(1));
+}
+
 struct Skills {
     focus: FocusHandle,
     chosen: Rc<Cell<Option<usize>>>,

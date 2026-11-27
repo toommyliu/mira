@@ -7,7 +7,10 @@ use gpui::{
     UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
-use super::{Flow, Icon, Pose, Scrollbar, Sortable, icon};
+use super::{
+    ContextMenu, Flow, Icon, MenuItem, Pose, Scrollbar, Sortable, icon,
+    menu::{self, ItemsBuilder, MenuState},
+};
 use crate::{
     ActiveTheme as _, IndexHandler, PointerCursor as _, StyledExt as _, Theme, h_flex,
     nav::{self, Axis, Step, Typeahead},
@@ -37,6 +40,7 @@ pub struct ListItem {
     children: Vec<AnyElement>,
     disabled: bool,
     selection_check: bool,
+    menu: Option<ItemsBuilder>,
 }
 
 impl ListItem {
@@ -50,6 +54,7 @@ impl ListItem {
             children: Vec::new(),
             disabled: false,
             selection_check: false,
+            menu: None,
         }
     }
 
@@ -85,6 +90,14 @@ impl ListItem {
         self
     }
 
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(&mut Window, &mut App) -> Vec<MenuItem> + 'static,
+    ) -> Self {
+        self.menu = Some(Rc::new(f));
+        self
+    }
+
     fn selectable(&self) -> bool {
         self.kind == Kind::Row && !self.disabled
     }
@@ -98,6 +111,8 @@ impl ParentElement for ListItem {
 
 #[derive(Clone)]
 struct Options {
+    id: ElementId,
+    menu: Entity<MenuState>,
     count: usize,
     row: RowBuilder,
     selected: Option<usize>,
@@ -118,6 +133,7 @@ impl Options {
         let options = self.clone();
         move |event, window, cx| {
             let Options {
+                menu,
                 count,
                 row,
                 selected,
@@ -126,6 +142,15 @@ impl Options {
                 on_activate,
                 ..
             } = &options;
+            let stroke = &event.keystroke;
+            if stroke.key == "f10" && stroke.modifiers.shift {
+                if let Some(items) = selected.and_then(|index| row(index).menu) {
+                    let first = menu::first_navigable(&items(window, cx), false);
+                    menu::open(menu, first, None, window, cx);
+                    cx.stop_propagation();
+                }
+                return;
+            }
             typeahead.update(cx, |typeahead, _| {
                 typeahead.end_unless_typed(&event.keystroke)
             });
@@ -162,12 +187,28 @@ impl Options {
         }
     }
 
-    fn render(&self, index: usize, pose: Pose) -> Stateful<Div> {
-        let item = (self.row)(index);
-        match item.kind {
+    fn render(&self, index: usize, pose: Pose, window: &mut Window, cx: &mut App) -> AnyElement {
+        let mut item = (self.row)(index);
+        let menu = item.menu.take().filter(|_| pose == Pose::Rest);
+        let label = item.label.clone();
+        let row = match item.kind {
             Kind::Header => self.header(index, item),
             Kind::Row => self.item(index, item, pose),
-        }
+        };
+        let Some(items) = menu else {
+            return row.into_any_element();
+        };
+        let id = ElementId::from((self.id.clone(), format!("menu-{index}")));
+        let state = if self.selected == Some(index) {
+            self.menu.clone()
+        } else {
+            menu::state(&id, false, window, cx)
+        };
+        ContextMenu::new(id, label)
+            .state(state)
+            .items(move |window, cx| items(window, cx))
+            .child(row)
+            .into_any_element()
     }
 
     fn header(&self, index: usize, item: ListItem) -> Stateful<Div> {
@@ -438,6 +479,13 @@ impl RenderOnce for List {
                 .clone()
         });
         let options = Options {
+            id: self.id.clone(),
+            menu: menu::state(
+                &ElementId::from((self.id.clone(), "menu")),
+                false,
+                window,
+                cx,
+            ),
             count: self.count,
             row: self.row,
             selected: self.selected,
@@ -483,7 +531,7 @@ impl RenderOnce for List {
                 list,
                 Flow::Column,
                 0..count,
-                move |(index, pose), _, _| options.render(index, pose).into_any_element(),
+                move |(index, pose), window, cx| options.render(index, pose, window, cx),
                 move |from, to, window, cx| reorder(from, to, window, cx),
             )
             .scrolls(&scroll)
@@ -492,7 +540,11 @@ impl RenderOnce for List {
             None => list
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .children((0..count).map(|index| options.render(index, Pose::Rest)))
+                .children(
+                    (0..count)
+                        .map(|index| options.render(index, Pose::Rest, window, cx))
+                        .collect::<Vec<_>>(),
+                )
                 .into_any_element(),
         };
         div()
@@ -598,6 +650,13 @@ impl RenderOnce for VirtualList {
         });
         let scroll = state.scroll;
         let options = Options {
+            id: self.id.clone(),
+            menu: menu::state(
+                &ElementId::from((self.id.clone(), "menu")),
+                false,
+                window,
+                cx,
+            ),
             count: self.count,
             row: self.row,
             selected: self.selected,
@@ -634,12 +693,15 @@ impl RenderOnce for VirtualList {
                 Height::Content | Height::Fill => list.flex_1().min_h_0(),
             })
             .child(
-                uniform_list((self.id, "rows"), self.count, move |range, _, _| {
+                uniform_list((self.id, "rows"), self.count, move |range, window, cx| {
                     range
                         .map(|index| {
-                            div()
-                                .pb(px(1.0))
-                                .child(render_options.render(index, Pose::Rest))
+                            div().pb(px(1.0)).child(render_options.render(
+                                index,
+                                Pose::Rest,
+                                window,
+                                cx,
+                            ))
                         })
                         .collect()
                 })
