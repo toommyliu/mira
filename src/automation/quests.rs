@@ -91,25 +91,15 @@ impl State {
             accept_requirements,
             ..
         } = self.config;
-        let mut names = Vec::new();
         if self.quests.is_empty() || (!accept_rewards && !accept_requirements) {
-            return Ok((names, true));
+            return Ok((Vec::new(), true));
         }
-        let loaded = quests::load_batch(loader, &self.quest_ids(), true)
+        let quest_ids = self.quest_ids();
+        let loaded = quests::load_batch(loader, &quest_ids, true)
             .await?
             .into_iter()
             .all(|loaded| loaded);
-        for registered in &self.quests {
-            let Some(quest) = quests::quest(loader, registered.quest_id)? else {
-                continue;
-            };
-            if accept_rewards {
-                names.extend(quest.reward_names().map(str::to_owned));
-            }
-            if accept_requirements {
-                names.extend(quest.requirement_names().map(str::to_owned));
-            }
-        }
+        let names = quests::drop_names(loader, &quest_ids, accept_rewards, accept_requirements)?;
         Ok((names, loaded))
     }
 }
@@ -224,9 +214,7 @@ async fn advance(
         if !bridge::quests::can_complete(loader, quest_id)? {
             continue;
         }
-        if reward_item_id.is_none()
-            && quests::quest(loader, quest_id)?.is_some_and(|quest| quest.needs_reward_choice())
-        {
+        if reward_item_id.is_none() && bridge::quests::needs_reward_choice(loader, quest_id)? {
             if !memory.warned.contains(&quest_id) {
                 memory.warned.push(quest_id);
                 tracing::warn!(
@@ -290,33 +278,6 @@ mod tests {
         }
     }
 
-    fn quest_row(choice: bool) -> Value {
-        let reward = Value::Object(
-            [
-                ("itemId", Value::Number(50.0)),
-                ("name", Value::String("Prize".into())),
-                ("quantity", Value::Number(1.0)),
-                (
-                    "kind",
-                    Value::String(if choice { "choice" } else { "guaranteed" }.into()),
-                ),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value))
-            .collect(),
-        );
-        Value::Object(
-            [
-                ("id", Value::Number(7.0)),
-                ("name", Value::String("Quest".into())),
-                ("rewards", Value::List(vec![reward])),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value))
-            .collect(),
-        )
-    }
-
     fn start(log: Log) -> (Rc<RefCell<Log>>, Rc<Events>, Rc<watch::Sender<State>>) {
         let log = Rc::new(RefCell::new(log));
         let events = Rc::new(Events::default());
@@ -328,7 +289,8 @@ mod tests {
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
                 "world.isActionAvailable" => Value::Bool(!log.action_blocked),
-                "quests.get" => quest_row(log.choice),
+                "quests.getPresence" => Value::List(vec![Value::Bool(true)]),
+                "quests.needsRewardChoice" => Value::Bool(log.choice),
                 "quests.isInProgress" => Value::Bool(log.in_progress),
                 "quests.isAvailable" => Value::Bool(true),
                 "quests.canComplete" => Value::Bool(log.in_progress && log.has_items),

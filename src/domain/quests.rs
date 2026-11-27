@@ -62,22 +62,6 @@ pub(crate) enum QuestStatus {
     Locked,
 }
 
-impl Quest {
-    pub(crate) fn needs_reward_choice(&self) -> bool {
-        self.rewards
-            .iter()
-            .any(|reward| reward.kind == RewardKind::Choice)
-    }
-
-    pub(crate) fn reward_names(&self) -> impl Iterator<Item = &str> {
-        self.rewards.iter().map(|reward| reward.item.name())
-    }
-
-    pub(crate) fn requirement_names(&self) -> impl Iterator<Item = &str> {
-        self.requirements.iter().map(ItemCount::name)
-    }
-}
-
 fn reward_from(value: Value) -> Option<QuestReward> {
     let row = row(value)?;
     Some(QuestReward {
@@ -125,6 +109,24 @@ pub(crate) fn quest(loader: &impl Loader, quest_id: i32) -> Result<Option<Quest>
     Ok(quest_from(bridge::quests::get(loader, quest_id)?))
 }
 
+pub(crate) fn drop_names(
+    loader: &impl Loader,
+    quest_ids: &[i32],
+    include_rewards: bool,
+    include_requirements: bool,
+) -> Result<Vec<String>, CallError> {
+    let names = bridge::quests::get_drop_names(
+        loader,
+        id_list(quest_ids),
+        include_rewards,
+        include_requirements,
+    )?;
+    Ok(rows(names, |value| match value {
+        Value::String(name) => Some(name),
+        _ => None,
+    }))
+}
+
 pub(crate) fn accepted(loader: &impl Loader) -> Result<Vec<Quest>, CallError> {
     Ok(rows(bridge::quests::get_accepted(loader)?, quest_from))
 }
@@ -154,17 +156,26 @@ pub(crate) async fn fake_complete(loader: &impl Loader, quest_id: i32) -> Result
     bridge::quests::fake_complete(loader, quest_id)
 }
 
-fn loaded(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
-    Ok(bridge::quests::get(loader, quest_id)? != Value::Null)
+fn id_list(quest_ids: &[i32]) -> Value {
+    Value::List(
+        quest_ids
+            .iter()
+            .map(|&id| Value::Number(f64::from(id)))
+            .collect(),
+    )
+}
+
+fn presence(loader: &impl Loader, quest_ids: &[i32]) -> Result<Vec<bool>, CallError> {
+    let flags = bridge::quests::get_presence(loader, id_list(quest_ids))?;
+    let mut present = rows(flags, |flag| Some(flag == Value::Bool(true)));
+    present.resize(quest_ids.len(), false);
+    Ok(present)
 }
 
 fn all_loaded(loader: &impl Loader, quest_ids: &[i32]) -> Result<bool, CallError> {
-    for &quest_id in quest_ids {
-        if !loaded(loader, quest_id)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Ok(presence(loader, quest_ids)?
+        .into_iter()
+        .all(|present| present))
 }
 
 pub(crate) async fn load_batch(
@@ -175,11 +186,18 @@ pub(crate) async fn load_batch(
     if !wait_until_ready(loader).await? {
         return Ok(vec![false; quest_ids.len()]);
     }
+    if quest_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let present = presence(loader, quest_ids)?;
     let mut missing = Vec::new();
-    for &quest_id in quest_ids {
-        if !missing.contains(&quest_id) && !loaded(loader, quest_id)? {
+    for (&quest_id, &present) in quest_ids.iter().zip(&present) {
+        if !present && !missing.contains(&quest_id) {
             missing.push(quest_id);
         }
+    }
+    if missing.is_empty() {
+        return Ok(present);
     }
     for batch in missing.chunks(BATCH) {
         let list = batch
@@ -207,10 +225,7 @@ pub(crate) async fn load_batch(
             .await?;
         }
     }
-    quest_ids
-        .iter()
-        .map(|&quest_id| loaded(loader, quest_id))
-        .collect()
+    presence(loader, quest_ids)
 }
 
 pub(crate) async fn load(
@@ -382,6 +397,21 @@ mod tests {
                 | "world.isActionAvailable" => Value::Bool(true),
                 "quests.get" if log.loaded.contains(&id) => quest_row(id),
                 "quests.get" => Value::Null,
+                "quests.getPresence" => {
+                    let [Value::List(ids)] = args else {
+                        panic!("presence needs quest IDs: {args:?}");
+                    };
+                    Value::List(
+                        ids.iter()
+                            .map(|id| {
+                                let Value::Number(id) = id else {
+                                    panic!("quest ID must be a number: {id:?}");
+                                };
+                                Value::Bool(log.loaded.contains(&(*id as i32)))
+                            })
+                            .collect(),
+                    )
+                }
                 "quests.isInProgress" => Value::Bool(log.in_progress.contains(&id)),
                 "quests.load" if log.blocked => Value::String("blocked".into()),
                 "quests.load"
@@ -506,6 +536,7 @@ mod tests {
         let wanted: Vec<i32> = (1..=35).chain([3, 40]).collect();
         let (loader, _, log) = quest_log(vec![40], Vec::new(), Vec::new());
         assert_eq!(load_batch(&loader, &wanted, true).await, Ok(vec![true; 37]));
+        assert_eq!(loader.count("quests.get"), 0);
         let first: Vec<String> = (1..=30).map(|id| id.to_string()).collect();
         assert_eq!(
             log.borrow().sent,
@@ -553,10 +584,13 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_blocked_quest_log_fails_without_waiting() {
-        let (loader, _, log) = quest_log(Vec::new(), Vec::new(), Vec::new());
+        let (loader, _, log) = quest_log(vec![7], Vec::new(), Vec::new());
         log.borrow_mut().blocked = true;
         let started = tokio::time::Instant::now();
-        assert_eq!(load(&loader, 5, false).await, Ok(false));
+        assert_eq!(
+            load_batch(&loader, &[7, 5, 5, 7], false).await,
+            Ok(vec![true, false, false, true])
+        );
         assert_eq!(started.elapsed(), Duration::ZERO);
     }
 

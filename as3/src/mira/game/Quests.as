@@ -137,6 +137,65 @@ package mira.game {
     }
 
     [BridgeExport]
+    public static function getPresence(questIds:Array):Array {
+      var tree:Object = Main.Game.world.questTree;
+      var present:Array = [];
+      for (var index:int = 0; index < questIds.length; index++) {
+        present.push(Boolean(tree[questIds[index]]));
+      }
+      return present;
+    }
+
+    private static function hasPositiveId(id:*):Boolean {
+      return id is Number && id > 0 && id == int(id);
+    }
+
+    [BridgeExport]
+    public static function getDropNames(questIds:Array, includeRewards:Boolean, includeRequirements:Boolean):Array {
+      var names:Array = [];
+      var name:*;
+      for (var index:int = 0; index < questIds.length; index++) {
+        var quest:Object = find(questIds[index]);
+        if (!quest || !hasPositiveId(quest.QuestID)) {
+          continue;
+        }
+        if (includeRewards && quest.oRewards) {
+          for (var group:int = 0; group < REWARD_GROUPS.length; group++) {
+            for each (var reward:Object in quest.oRewards[REWARD_GROUPS[group]]) {
+              if (hasPositiveId(reward.ItemID)) {
+                name = reward.sName;
+                names.push(name is String ? name : "");
+              }
+            }
+          }
+        }
+        if (includeRequirements) {
+          for each (var need:Object in quest.turnin) {
+            if (hasPositiveId(need.ItemID)) {
+              var item:Object = quest.oItems ? quest.oItems[need.ItemID] : null;
+              name = item ? item.sName : null;
+              names.push(name is String ? name : "");
+            }
+          }
+        }
+      }
+      return names;
+    }
+
+    [BridgeExport]
+    public static function needsRewardChoice(questId:int):Boolean {
+      var quest:Object = find(questId);
+      if (quest && hasPositiveId(quest.QuestID) && quest.oRewards) {
+        for each (var item:Object in quest.oRewards.itemsC) {
+          if (hasPositiveId(item.ItemID)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    [BridgeExport]
     public static function getAccepted():Array {
       var rows:Array = [];
       for each (var quest:Object in Main.Game.world.questTree) {

@@ -269,12 +269,6 @@ pub(crate) struct ItemCount {
     pub(super) quantity: i32,
 }
 
-impl ItemCount {
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-}
-
 pub(super) struct Row(pub(super) BTreeMap<String, Value>);
 
 impl Row {

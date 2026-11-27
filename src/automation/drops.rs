@@ -421,12 +421,11 @@ mod tests {
                     }
                     None => Value::Bool(false),
                 },
-                "quests.get" if list.quest_loaded => object(vec![
-                    ("id", Value::Number(7.0)),
-                    ("name", Value::String("Quest".into())),
-                    ("rewards", Value::List(vec![row(&PRIZE)])),
-                ]),
-                "quests.get" => Value::Null,
+                "quests.getPresence" => Value::List(vec![Value::Bool(list.quest_loaded)]),
+                "quests.getDropNames" if list.quest_loaded && args[1] == Value::Bool(true) => {
+                    Value::List(vec![Value::String(PRIZE.name.into())])
+                }
+                "quests.getDropNames" => Value::List(Vec::new()),
                 "quests.load" => {
                     list.quest_loaded = true;
                     Value::String("sent".into())
@@ -695,6 +694,7 @@ mod tests {
 
         let waiting = newly_taken(&loader, &drops, &before, &after).await;
         assert_eq!(waiting.map(names), Ok(vec!["Prize".to_owned()]));
+        assert_eq!(loader.count("quests.get"), 0);
         let waiting = newly_taken(&loader, &drops, &after, &after).await;
         assert_eq!(waiting.map(names), Ok(Vec::new()), "already picked up");
 

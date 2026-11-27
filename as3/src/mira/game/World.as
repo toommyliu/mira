@@ -47,7 +47,8 @@ public class World
 
       try
       {
-        if (!world.map.currentScene || !world.map.currentScene.labels)
+        var scene:Object = world.map.currentScene;
+        if (!scene || !scene.labels)
         {
           return false;
         }

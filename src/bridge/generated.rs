@@ -907,6 +907,21 @@ pub(crate) mod quests {
         Ok(decode("quests.getAccepted", reply)?)
     }
 
+    pub(crate) fn get_drop_names(
+        loader: &impl Loader,
+        quest_ids: Value,
+        include_rewards: bool,
+        include_requirements: bool,
+    ) -> Result<Value, CallError> {
+        let call_args = vec![
+            quest_ids,
+            Value::Bool(include_rewards),
+            Value::Bool(include_requirements),
+        ];
+        let reply = loader.call("quests.getDropNames", call_args)?;
+        Ok(decode("quests.getDropNames", reply)?)
+    }
+
     pub(crate) fn get_loaded(loader: &impl Loader) -> Result<Value, CallError> {
         let call_args = vec![];
         let reply = loader.call("quests.getLoaded", call_args)?;
@@ -917,6 +932,12 @@ pub(crate) mod quests {
         let call_args = vec![Value::Number(f64::from(quest_id))];
         let reply = loader.call("quests.getMaxTurnIns", call_args)?;
         Ok(decode("quests.getMaxTurnIns", reply)?)
+    }
+
+    pub(crate) fn get_presence(loader: &impl Loader, quest_ids: Value) -> Result<Value, CallError> {
+        let call_args = vec![quest_ids];
+        let reply = loader.call("quests.getPresence", call_args)?;
+        Ok(decode("quests.getPresence", reply)?)
     }
 
     pub(crate) fn is_available(loader: &impl Loader, quest_id: i32) -> Result<bool, CallError> {
@@ -939,6 +960,15 @@ pub(crate) mod quests {
         let call_args = vec![Value::String(quest_ids.to_owned()), Value::Bool(silent)];
         let reply = loader.call("quests.load", call_args)?;
         Ok(decode("quests.load", reply)?)
+    }
+
+    pub(crate) fn needs_reward_choice(
+        loader: &impl Loader,
+        quest_id: i32,
+    ) -> Result<bool, CallError> {
+        let call_args = vec![Value::Number(f64::from(quest_id))];
+        let reply = loader.call("quests.needsRewardChoice", call_args)?;
+        Ok(decode("quests.needsRewardChoice", reply)?)
     }
 }
 
