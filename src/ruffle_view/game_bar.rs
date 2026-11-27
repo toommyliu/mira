@@ -848,10 +848,6 @@ fn menubar(bar: Bar, this: WeakEntity<RuffleView>, cx: &App) -> Menubar {
         .menu(trigger("windows", "Windows", None, None, cx), |_, cx| {
             windows_menu(cx)
         })
-        .button(
-            bar_button("scripts", "Scripts")
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(super::OpenScripts), cx)),
-        )
         .popover(trigger("options", "Options", None, None, cx), {
             let this = this.clone();
             move |close, window, cx| match this.read_with(cx, |view, _| view.options()) {
@@ -989,6 +985,7 @@ fn windows_menu(cx: &App) -> Vec<MenuItem> {
         open("Manager", Box::new(super::OpenManager)),
         open("Combat profiles", Box::new(super::OpenCombatProfiles)),
         MenuItem::separator(),
+        open("Scripts", Box::new(super::OpenScripts)),
         open("Environment", Box::new(super::OpenEnvironment)),
         open("Loader/grabber", Box::new(super::OpenLoaderGrabber)),
         open("Packets", Box::new(super::OpenPackets)),
