@@ -124,7 +124,16 @@ package mira {
 		}
 
 		private function onExtensionResponse(packet:*):void {
-			this.emitExtensionResponse(JSON.stringify(packet.params));
+			var params:Object = packet.params;
+			var format:String = params.type;
+			var body:* = params.dataObj;
+			var command:*;
+			if (format == "str" && body is Array) {
+				command = body[0];
+			} else if (format == "json" && body != null && body.hasOwnProperty("cmd")) {
+				command = body.cmd;
+			}
+			this.emitExtensionResponse([format, command is String ? command : null, JSON.stringify(params)]);
 		}
 
 		private function onDebugMessage(packet:*):void {
@@ -147,7 +156,8 @@ package mira {
 		}
 
 		[BridgeEvent("onExtensionResponse")]
-		public function emitExtensionResponse(packet:String):void {
+		[BridgeRustType("packet: Response")]
+		public function emitExtensionResponse(packet:Array):void {
 			this.external.call("onExtensionResponse", packet);
 		}
 

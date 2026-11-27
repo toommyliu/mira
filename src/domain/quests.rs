@@ -356,7 +356,9 @@ mod tests {
 
     fn packet(data: serde_json::Value) -> Event {
         Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": data }).to_string(),
+            packet: json!({ "type": "json", "dataObj": data })
+                .to_string()
+                .into(),
         }
     }
 

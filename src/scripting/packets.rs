@@ -7,8 +7,8 @@ use super::{
 };
 use crate::{
     bridge::{
-        Event, Format, Loader, Subscription,
-        packets::{Sender, disconnected, names, raw},
+        Event, Loader, Subscription,
+        packets::{Sender, disconnected, raw},
     },
     domain::packets,
 };
@@ -67,9 +67,9 @@ fn wants(from: Option<Sender>, cmds: Option<Vec<String>>) -> impl Fn(&Event) -> 
         Event::ExtensionResponse { packet } => {
             from != Some(Sender::Client)
                 && cmds.as_ref().is_none_or(|cmds| {
-                    cmds.iter().any(|cmd| {
-                        names(packet, Format::Json, cmd) || names(packet, Format::Str, cmd)
-                    })
+                    packet
+                        .command()
+                        .is_some_and(|command| cmds.iter().any(|cmd| cmd == command))
                 })
         }
         event => disconnected(event),
@@ -81,7 +81,9 @@ fn read(event: Event) -> Option<Value> {
         Event::SmartFoxDebug { .. } => raw(&event)
             .filter(|packet| packet.from == Sender::Client)
             .map(|packet| json!({ "from": "client", "packet": packet.text })),
-        Event::ExtensionResponse { packet } => Some(json!({ "from": "server", "packet": packet })),
+        Event::ExtensionResponse { packet } => {
+            Some(json!({ "from": "server", "packet": packet.text() }))
+        }
         event if disconnected(&event) => Some(json!({ "lost": true })),
         _ => None,
     }

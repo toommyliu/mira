@@ -1,18 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::inventory::{row, rows};
-use crate::bridge::{self, CallError, Format, Loader, Packet, Value, packets::wire};
-
-#[derive(Deserialize)]
-pub(crate) struct FightAurasPacket {
-    #[serde(rename = "a", default)]
-    pub(crate) changes: Vec<Option<AuraChange>>,
-}
-
-impl Packet for FightAurasPacket {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "ct";
-}
+use crate::bridge::{self, CallError, Loader, Value, packets::wire};
 
 #[derive(Deserialize)]
 pub(crate) struct AuraChange {

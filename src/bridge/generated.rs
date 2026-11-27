@@ -7,7 +7,7 @@ use super::{DecodeError, Value, arg, decode};
 pub(crate) enum Event {
     Connection { status: String },
     Debug { message: String },
-    ExtensionResponse { packet: String },
+    ExtensionResponse { packet: crate::bridge::Response },
     Loaded,
     Progress { percent: i32 },
     SmartFoxDebug { line: String },

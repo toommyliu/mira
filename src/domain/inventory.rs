@@ -533,7 +533,7 @@ impl TurnInPacket {
 
 pub(super) async fn reply<T: Packet>(
     replies: &Packets<T>,
-    answer: impl FnMut(T) -> Option<bool>,
+    answer: impl FnMut(&T) -> Option<bool>,
 ) -> bool {
     replies.answer(REPLY_TIMEOUT, answer).await.unwrap_or(false)
 }
@@ -653,7 +653,7 @@ async fn equip_consumable(
             return Ok(false);
         }
         let loaded = reply(&replies, |packet| {
-            (packet.o?.id == Some(action)).then_some(packet.accepted)
+            (packet.o.as_ref()?.id == Some(action)).then_some(packet.accepted)
         })
         .await;
         // seia carries only the action id, which items with the same sMeta share.
@@ -818,7 +818,9 @@ mod tests {
     fn packet(data: serde_json::Value) -> Event {
         let format = if data.is_array() { "str" } else { "json" };
         Event::ExtensionResponse {
-            packet: json!({ "type": format, "dataObj": data }).to_string(),
+            packet: json!({ "type": format, "dataObj": data })
+                .to_string()
+                .into(),
         }
     }
 

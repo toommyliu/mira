@@ -569,7 +569,8 @@ mod tests {
                                 packet: json!({ "type": "json", "dataObj": {
                                     "cmd": "wearLoadout", "uid": uid, "success": success, "msg": ""
                                 }})
-                                .to_string(),
+                                .to_string()
+                                .into(),
                             });
                         }
                     });
@@ -603,7 +604,8 @@ mod tests {
                                 packet: json!({ "type": "json", "dataObj": {
                                     "cmd": "wearLoadout", "uid": 1, "success": true
                                 }})
-                                .to_string(),
+                                .to_string()
+                                .into(),
                             });
                         }
                         replies
