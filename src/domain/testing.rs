@@ -28,6 +28,10 @@ impl FakeLoader {
             .filter(|called| **called == callback)
             .count()
     }
+
+    pub(crate) fn total_calls(&self) -> usize {
+        self.calls.borrow().len()
+    }
 }
 
 pub(crate) use crate::bridge::from_json as value;

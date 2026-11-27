@@ -23,6 +23,6 @@ export default function* () {
     return;
   }
   while (!Script.signal.aborted) {
-    yield* Combat.kill("Tainted Elemental");
+    if (!(yield* Combat.kill("Tainted Elemental"))) return;
   }
 }

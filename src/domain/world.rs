@@ -29,7 +29,7 @@ pub(crate) enum MonsterQuery {
 }
 
 impl MonsterQuery {
-    fn matches(&self, monster: &Monster) -> bool {
+    pub(super) fn matches(&self, monster: &Monster) -> bool {
         match self {
             MonsterQuery::Name(name) => {
                 let name = name.trim();
@@ -54,7 +54,7 @@ pub(crate) struct Monster {
     pub(super) state: Option<State>,
     pub(super) auras: Vec<Aura>,
     #[serde(skip)]
-    available: bool,
+    pub(super) available: bool,
     pub(crate) aggressive: bool,
 }
 
@@ -217,6 +217,14 @@ fn own_move(loader: &impl Loader, next: Result<Event, Lagged>) -> Option<Settle>
     })
 }
 
+pub(super) fn left_cell(loader: &impl Loader, event: Event, here: &str) -> bool {
+    match own_move(loader, Ok(event)) {
+        Some(Settle::Left | Settle::Anywhere) => true,
+        Some(Settle::At { cell, .. }) => !cell.eq_ignore_ascii_case(here),
+        None => false,
+    }
+}
+
 fn shows(loader: &impl Loader, at: Option<(&str, &str)>) -> Result<bool, CallError> {
     let flag = |path| {
         Ok::<_, CallError>(bridge::flash::get_game_object(loader, path)?.as_deref() == Some("true"))
@@ -366,34 +374,26 @@ pub(crate) fn first_available_mon_map_id(
     }))
 }
 
-pub(crate) fn hunt_target(
-    loader: &impl Loader,
+pub(super) fn hunt_target<'a>(
+    alive: impl Iterator<Item = &'a Monster>,
     here: &str,
-    query: &MonsterQuery,
     most_matches: bool,
-) -> Result<Option<Monster>, CallError> {
-    let mut alive: Vec<Monster> = monsters(loader, None)?
-        .into_iter()
-        .filter(|monster| {
-            !monster.cell.is_empty()
-                && matches!(monster.state, Some(State::Idle | State::Combat))
-                && query.matches(monster)
-        })
-        .collect();
-    alive.sort_by_key(|monster| !monster.cell.eq_ignore_ascii_case(here));
+) -> Option<&'a Monster> {
+    let elsewhere = |monster: &Monster| !monster.cell.eq_ignore_ascii_case(here);
     if !most_matches {
-        return Ok(alive.into_iter().next());
+        return alive.min_by_key(|monster| elsewhere(monster));
     }
+    let alive: Vec<_> = alive.collect();
     let crowd = |cell: &str| {
         alive
             .iter()
             .filter(|monster| monster.cell.eq_ignore_ascii_case(cell))
             .count()
     };
-    Ok(alive
+    alive
         .iter()
-        .min_by_key(|monster| Reverse(crowd(&monster.cell)))
-        .cloned())
+        .copied()
+        .min_by_key(|monster| (Reverse(crowd(&monster.cell)), elsewhere(monster)))
 }
 
 pub(crate) async fn monster_drops(
@@ -549,6 +549,31 @@ pub(crate) struct RespawnMonLine {
 impl Packet for RespawnMonLine {
     const FORMAT: Format = Format::Str;
     const CMD: &'static str = "respawnMon";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MonsterStateLine {
+    _cmd: String,
+    _room: serde::de::IgnoredAny,
+    #[serde(deserialize_with = "wire::number")]
+    pub(crate) id: Option<f64>,
+    _state: serde::de::IgnoredAny,
+}
+
+impl Packet for MonsterStateLine {
+    const FORMAT: Format = Format::Str;
+    const CMD: &'static str = "mtls";
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MonsterStatePacket {
+    #[serde(default, deserialize_with = "wire::number")]
+    pub(crate) id: Option<f64>,
+}
+
+impl Packet for MonsterStatePacket {
+    const FORMAT: Format = Format::Json;
+    const CMD: &'static str = "mtls";
 }
 
 fn id_list<'de, D: Deserializer<'de>>(input: D) -> Result<Vec<i32>, D::Error> {

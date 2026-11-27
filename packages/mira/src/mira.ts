@@ -413,6 +413,10 @@ export const Combat = {
   cancelTarget: () => combat<void>("cancelTarget"),
   cancelAutoAttack: () => combat<void>("cancelAutoAttack"),
   exit: () => combat<boolean>("exit"),
+  /**
+   * Waits for a matching monster in the current cell to become attackable, then fights until it dies.
+   * Returns `true` on the kill and `false` if the cell has no match, you leave the cell or map, or you are out of game.
+   */
   kill: (query: MonsterQuery, { skillInterval, profile, ...options }: KillOptions = {}) =>
     combat<boolean>("kill", {
       query,
@@ -420,6 +424,10 @@ export const Combat = {
       skillIntervalMs: millis(skillInterval),
       profile: typeof profile === "object" ? wireProfile(profile) : profile,
     }),
+  /**
+   * Finds a live match on the map and moves to its cell. Waits for a respawn when all matches are dead.
+   * Returns `null` if the map has no match, you leave the cell or map during the wait, you are out of game, or the move fails.
+   */
   hunt: (query: MonsterQuery, options: HuntOptions = {}) =>
     combat<Monster | null>("hunt", { query, ...options }),
 };
@@ -1120,7 +1128,9 @@ export const Packets = {
    *   yield* Packets.on({ from: "server" }, function* (packet) {
    *     console.log(packet.cmd);
    *   });
-   *   while (true) yield* Combat.kill("*");
+   *   while (true) {
+   *     if (!(yield* Combat.kill("*"))) return;
+   *   }
    * }
    * ```
    */
@@ -1266,7 +1276,9 @@ export const Events = {
    *   yield* Events.on({ type: "itemDrop" }, function* (drop) {
    *     console.log(`dropped ${drop.quantity} ${drop.name}`);
    *   });
-   *   while (true) yield* Combat.kill("*");
+   *   while (true) {
+   *     if (!(yield* Combat.kill("*"))) return;
+   *   }
    * }
    * ```
    */

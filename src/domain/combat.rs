@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use serde::{Deserialize, Serialize};
 use tokio::{
     pin, select,
-    time::{Instant, sleep},
+    time::{Instant, sleep, timeout_at},
 };
 
 use super::{
@@ -15,10 +15,11 @@ use super::{
     players::{self, RoomPlayer},
     poll,
     rotation::Fighter,
-    world::{self, Monster, MonsterQuery},
+    world::{self, Monster, MonsterQuery, MonsterStateLine, MonsterStatePacket, RespawnMonLine},
 };
 use crate::bridge::{
-    self, CallError, Format, Interruption, Loader, Packet, Packets, Value, packets::wire,
+    self, CallError, Event, Format, Interruption, Loader, Packet, Packets, Subscription, Value,
+    packets::{self, wire},
 };
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
@@ -148,16 +149,146 @@ pub(super) fn attack_id(loader: &impl Loader, id: f64) -> Result<bool, CallError
 
 pub(crate) async fn hunt(
     loader: &impl Loader,
+    subscribe: impl FnOnce(fn(&Event) -> bool) -> Subscription,
     query: &MonsterQuery,
     most_matches: bool,
 ) -> Result<Option<Monster>, CallError> {
-    let here = bridge::player::get_cell(loader)?.unwrap_or_default();
-    let Some(prey) = world::hunt_target(loader, &here, query, most_matches)? else {
+    let Some((here, prey)) = wait_for_target(
+        loader,
+        subscribe(target_changes),
+        query,
+        TargetSearch::Map { most_matches },
+    )
+    .await?
+    else {
         return Ok(None);
     };
     let reached = prey.cell.eq_ignore_ascii_case(&here)
         || player::jump(loader, &prey.cell, None, true).await?;
     Ok(reached.then_some(prey))
+}
+
+enum TargetSearch {
+    Cell,
+    Map { most_matches: bool },
+}
+
+fn target_changes(event: &Event) -> bool {
+    Packets::<RespawnMonLine>::wants(event)
+        || Packets::<MonsterStateLine>::wants(event)
+        || Packets::<MonsterStatePacket>::wants(event)
+        || Packets::<CtPacket>::wants(event)
+        || world::moves(event)
+}
+
+async fn wait_for_target(
+    loader: &impl Loader,
+    changes: Subscription,
+    query: &MonsterQuery,
+    search: TargetSearch,
+) -> Result<Option<(String, Monster)>, CallError> {
+    if !auth::in_game(loader)? {
+        return Ok(None);
+    }
+    let Some(here) = bridge::player::get_cell(loader)? else {
+        return Ok(None);
+    };
+    let cell = match search {
+        TargetSearch::Cell => Some(here.as_str()),
+        TargetSearch::Map { .. } => None,
+    };
+    loop {
+        let mut matches = world::monsters(loader, cell)?;
+        matches.retain(|monster| !monster.cell.is_empty() && query.matches(monster));
+        if matches.is_empty() {
+            return Ok(None);
+        }
+        let mut alive = matches.iter().filter(|monster| {
+            if monster.cell.eq_ignore_ascii_case(&here) {
+                monster.available
+            } else {
+                matches!(monster.state, Some(State::Idle | State::Combat))
+            }
+        });
+        let prey = match search {
+            TargetSearch::Cell => alive.next(),
+            TargetSearch::Map { most_matches } => world::hunt_target(alive, &here, most_matches),
+        };
+        if let Some(prey) = prey {
+            return Ok(Some((here, prey.clone())));
+        }
+        let rescan = matches
+            .iter()
+            .any(|monster| {
+                monster.cell.eq_ignore_ascii_case(&here)
+                    && !monster.available
+                    && matches!(monster.state, Some(State::Idle | State::Combat))
+            })
+            .then(|| Instant::now() + TICK);
+        loop {
+            let batch = match rescan {
+                Some(deadline) => match timeout_at(deadline, changes.drain()).await {
+                    Ok(batch) => batch,
+                    Err(_) => break,
+                },
+                None => changes.drain().await,
+            };
+            let mut recheck = batch.lagged;
+            for event in batch.events {
+                if world::moves(&event) {
+                    if world::left_cell(loader, event, &here) {
+                        return Ok(None);
+                    }
+                } else if !recheck {
+                    recheck = monster_returned(&event, &matches);
+                }
+            }
+            if recheck {
+                break;
+            }
+        }
+        if !auth::in_game(loader)?
+            || !bridge::player::get_cell(loader)?
+                .is_some_and(|cell| cell.eq_ignore_ascii_case(&here))
+        {
+            return Ok(None);
+        }
+    }
+}
+
+fn monster_returned(event: &Event, matches: &[Monster]) -> bool {
+    let matching = |id: f64| matches.iter().any(|monster| monster.mon_map_id == id);
+    let Event::ExtensionResponse { packet } = event else {
+        return false;
+    };
+    if Packets::<RespawnMonLine>::wants(event) {
+        return packets::decode::<RespawnMonLine>(packet)
+            .ok()
+            .flatten()
+            .is_some_and(|respawn| respawn.ids.into_iter().map(f64::from).any(matching));
+    }
+    if Packets::<MonsterStateLine>::wants(event) {
+        return packets::decode::<MonsterStateLine>(packet)
+            .ok()
+            .flatten()
+            .and_then(|line| line.id)
+            .is_some_and(matching);
+    }
+    if Packets::<MonsterStatePacket>::wants(event) {
+        return packets::decode::<MonsterStatePacket>(packet)
+            .ok()
+            .flatten()
+            .and_then(|update| update.id)
+            .is_some_and(matching);
+    }
+    packets::decode::<CtPacket>(packet)
+        .ok()
+        .flatten()
+        .is_some_and(|packet| {
+            packet.monsters.iter().any(|(id, monster)| {
+                monster.state.is_some_and(|state| state > 0.0) && id.parse().is_ok_and(matching)
+            })
+        })
 }
 
 pub(crate) async fn exit(loader: &impl Loader) -> Result<bool, CallError> {
@@ -368,31 +499,26 @@ impl CtPacket {
 
 pub(crate) async fn kill(
     loader: &impl Loader,
-    fights: Packets<CtPacket>,
+    subscribe: impl Fn(fn(&Event) -> bool) -> Subscription,
     counter_attacks: &CounterAttacks,
     query: &MonsterQuery,
-    mut fighter: Fighter,
+    fighter: Fighter,
     interval: Duration,
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
-    if !auth::in_game(loader)? {
-        return Ok(false);
-    }
-    let Some(id) = world::available_mon_map_id(loader, query)? else {
+    let Some((_, prey)) =
+        wait_for_target(loader, subscribe(target_changes), query, TargetSearch::Cell).await?
+    else {
         return Ok(false);
     };
-    fights.clear();
-    if let Some(first) = wanted(loader, counter_attacks, id, priority)?
-        && !attack_id(loader, first)?
-    {
-        return Ok(false);
-    }
+    let fights = Packets::subscribe(&subscribe);
+    let mut fighter = fighter.listening(subscribe(super::rotation::wants));
     let engaged = Engaged(loader);
     let killed = fight(
         loader,
         &fights,
         counter_attacks,
-        id,
+        prey.mon_map_id,
         &mut fighter,
         interval,
         priority,
@@ -426,16 +552,18 @@ async fn fight(
     priority: &[MonsterQuery],
 ) -> Result<bool, CallError> {
     let cell = bridge::player::get_cell(loader)?;
+    let mut first_attack = true;
     loop {
         if !auth::in_game(loader)? || bridge::player::get_cell(loader)? != cell {
             return Ok(false);
         }
         if let Some(wanted) = wanted(loader, counter_attacks, id, priority)? {
-            if !matches!(target(loader)?, Some(Target::Monster(monster)) if monster.mon_map_id == wanted)
-            {
-                attack_id(loader, wanted)?;
-            }
-            if !counter_attacks.holds_skills(loader)? {
+            let targeted = if std::mem::take(&mut first_attack) || !targeting(loader, wanted)? {
+                attack_id(loader, wanted)?
+            } else {
+                true
+            };
+            if targeted && !counter_attacks.holds_skills(loader)? {
                 fighter.act(loader)?;
             }
         }
@@ -494,6 +622,7 @@ mod tests {
     struct Fight {
         cell: &'static str,
         monsters: Vec<Monster>,
+        unloaded_clip: Option<f64>,
         target: Option<f64>,
         in_game_until: Option<Instant>,
         cooling_until: Option<Instant>,
@@ -550,6 +679,12 @@ mod tests {
         }
     }
 
+    fn respawned(id: u32) -> Event {
+        Event::ExtensionResponse {
+            packet: format!(r#"{{"type":"str","dataObj":["respawnMon","-1","{id}"]}}"#),
+        }
+    }
+
     fn fighting(fight: Fight) -> (FakeLoader, Rc<RefCell<Fight>>, Rc<Events>) {
         let fight = Rc::new(RefCell::new(fight));
         let events = Rc::new(Events::default());
@@ -572,7 +707,12 @@ mod tests {
                                 ("cell", Value::String("r2".into())),
                                 ("hp", number(f64::from(monster.hp))),
                                 ("state", number(if monster.hp > 0 { 1.0 } else { 0.0 })),
-                                ("available", Value::Bool(monster.hp > 0)),
+                                (
+                                    "available",
+                                    Value::Bool(
+                                        monster.hp > 0 && fight.unloaded_clip != Some(monster.id),
+                                    ),
+                                ),
                             ])
                         })
                         .collect(),
@@ -699,7 +839,7 @@ mod tests {
         assert_eq!(
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &CounterAttacks::default(),
                 &named("frogzard"),
                 Fighter::fixed(Profile::generic()),
@@ -728,7 +868,7 @@ mod tests {
         assert_eq!(
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &CounterAttacks::default(),
                 &named("Frogzard"),
                 Fighter::fixed(Profile::from_skills(&[Skill(3), Skill(1)])),
@@ -758,7 +898,7 @@ mod tests {
             Duration::from_secs(5),
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &counter_attacks,
                 &frogzard,
                 Fighter::fixed(Profile::generic()),
@@ -771,18 +911,18 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn kill_fails_when_no_monster_of_that_name_is_alive() {
+    async fn kill_fails_immediately_when_no_match_exists_in_the_cell() {
         let (loader, fight, events) = fighting(Fight {
-            cell: "r2",
+            cell: "Enter",
             monsters: frogzards(),
             ..Fight::default()
         });
         assert_eq!(
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &CounterAttacks::default(),
-                &named("Dragon"),
+                &named("Frogzard"),
                 Fighter::fixed(Profile::generic()),
                 TICK,
                 &[],
@@ -791,6 +931,152 @@ mod tests {
             Ok(false)
         );
         assert!(fight.borrow().cast.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_waits_without_loader_calls_until_the_match_is_attackable() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            unloaded_clip: Some(1.0),
+            ..Fight::default()
+        });
+        let counter_attacks = CounterAttacks::default();
+        let prey = MonsterQuery::MonMapId { mon_map_id: 1.0 };
+        let kill = kill(
+            &loader,
+            |wants| events.subscribe(wants),
+            &counter_attacks,
+            &prey,
+            Fighter::fixed(Profile::generic()),
+            TICK,
+            &[],
+        );
+        pin!(kill);
+        assert!(timeout(TICK, &mut kill).await.is_err());
+        let calls = loader.total_calls();
+        events.publish(&respawned(2));
+        events.publish(&struck(2.0, 1));
+        assert!(timeout(Duration::from_secs(10), &mut kill).await.is_err());
+        assert_eq!(loader.total_calls(), calls);
+        assert!(fight.borrow().attacked.is_empty());
+
+        fight.borrow_mut().monsters[0].hp = 1;
+        events.publish(&respawned(1));
+        assert!(timeout(TICK, &mut kill).await.is_err());
+        assert!(fight.borrow().attacked.is_empty());
+
+        fight.borrow_mut().unloaded_clip = None;
+        events.publish(&Event::ExtensionResponse {
+            packet: r#"{"type":"str","dataObj":["mtls","-1","1","intState:1"]}"#.into(),
+        });
+        assert_eq!(timeout(TICK / 4, &mut kill).await.unwrap(), Ok(true));
+        assert_eq!(fight.borrow().attacked, [1.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_attacks_once_a_live_match_finishes_loading_its_clip() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            unloaded_clip: Some(2.0),
+            ..Fight::default()
+        });
+        let counter_attacks = CounterAttacks::default();
+        let prey = MonsterQuery::MonMapId { mon_map_id: 2.0 };
+        let kill = kill(
+            &loader,
+            |wants| events.subscribe(wants),
+            &counter_attacks,
+            &prey,
+            Fighter::fixed(Profile::generic()),
+            TICK,
+            &[],
+        );
+        pin!(kill);
+        for _ in 0..6 {
+            assert!(timeout(TICK / 2, &mut kill).await.is_err());
+            events.publish(&struck(3.0, 1));
+        }
+        assert!(fight.borrow().attacked.is_empty());
+
+        fight.borrow_mut().unloaded_clip = None;
+        let mut killed = None;
+        for _ in 0..12 {
+            if let Ok(result) = timeout(TICK / 2, &mut kill).await {
+                killed = Some(result);
+                break;
+            }
+            events.publish(&struck(3.0, 1));
+        }
+        assert_eq!(killed, Some(Ok(true)));
+        assert_eq!(fight.borrow().attacked, [2.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kill_ends_its_respawn_wait_on_cell_change_or_logout() {
+        for event in [
+            Event::Connection {
+                status: "OnConnectionLost".into(),
+            },
+            Event::SmartFoxDebug {
+                line: "[Sending - STR]: %xt%zm%moveToCell%1%Enter%Spawn%".into(),
+            },
+        ] {
+            let (loader, fight, events) = fighting(Fight {
+                cell: "r2",
+                monsters: frogzards(),
+                ..Fight::default()
+            });
+            let counter_attacks = CounterAttacks::default();
+            let prey = MonsterQuery::MonMapId { mon_map_id: 1.0 };
+            let kill = kill(
+                &loader,
+                |wants| events.subscribe(wants),
+                &counter_attacks,
+                &prey,
+                Fighter::fixed(Profile::generic()),
+                TICK,
+                &[],
+            );
+            pin!(kill);
+            assert!(timeout(TICK, &mut kill).await.is_err());
+
+            match event {
+                Event::Connection { .. } => fight.borrow_mut().in_game_until = Some(Instant::now()),
+                _ => fight.borrow_mut().cell = "Enter",
+            }
+            events.publish(&event);
+            assert_eq!(timeout(TICK, &mut kill).await.unwrap(), Ok(false));
+            assert!(fight.borrow().attacked.is_empty());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hunt_rechecks_for_a_dead_match_after_feed_lag() {
+        let (loader, fight, events) = fighting(Fight {
+            cell: "r2",
+            monsters: frogzards(),
+            ..Fight::default()
+        });
+        let prey = MonsterQuery::MonMapId { mon_map_id: 1.0 };
+        let hunt = hunt(&loader, |wants| events.subscribe(wants), &prey, true);
+        pin!(hunt);
+        assert!(timeout(TICK, &mut hunt).await.is_err());
+
+        fight.borrow_mut().monsters[0].hp = 1;
+        for _ in 0..300 {
+            events.publish(&respawned(2));
+        }
+        assert_eq!(
+            timeout(TICK, &mut hunt)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .mon_map_id,
+            1.0
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -804,7 +1090,7 @@ mod tests {
         assert_eq!(
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &CounterAttacks::default(),
                 &named("Frogzard"),
                 Fighter::fixed(Profile::generic()),
@@ -829,7 +1115,7 @@ mod tests {
             TICK,
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &counter_attacks,
                 &MonsterQuery::MonMapId { mon_map_id: 3.0 },
                 Fighter::fixed(Profile::generic()),
@@ -1002,12 +1288,6 @@ mod tests {
             ("r3", named("Frogzard"), true, Some(("r4", 4.0))),
             ("r4", named("*"), true, Some(("r4", 4.0))),
             ("r3", named("*"), true, Some(("r3", 3.0))),
-            (
-                "r2",
-                MonsterQuery::MonMapId { mon_map_id: 1.0 },
-                false,
-                None,
-            ),
             ("r2", named("Dragon"), true, None),
         ] {
             let here = Rc::new(RefCell::new(cell.to_owned()));
@@ -1024,12 +1304,16 @@ mod tests {
                     "world.getMonsters" => Value::List(
                         lair.iter()
                             .zip(1..)
-                            .map(|((name, cell, state), id)| {
+                            .map(|((name, cell, hp_state), id)| {
                                 row(&[
                                     ("monMapId", number(f64::from(id))),
                                     ("name", Value::String((*name).into())),
                                     ("cell", Value::String((*cell).into())),
-                                    ("state", number(*state)),
+                                    ("state", number(*hp_state)),
+                                    (
+                                        "available",
+                                        Value::Bool(*hp_state > 0.0 && *cell == *state.borrow()),
+                                    ),
                                 ])
                             })
                             .collect(),
@@ -1048,7 +1332,15 @@ mod tests {
                     other => panic!("unexpected call {other} {args:?}"),
                 })
             });
-            let hunted = hunt(&loader, &query, most_matches).await.unwrap();
+            let events = Events::default();
+            let hunted = hunt(
+                &loader,
+                |wants| events.subscribe(wants),
+                &query,
+                most_matches,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 hunted.map(|monster| (here.borrow().clone(), monster.mon_map_id)),
                 expected.map(|(cell, id)| (cell.to_owned(), id)),
@@ -1251,7 +1543,7 @@ mod tests {
         assert_eq!(
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &countering(&[3]),
                 &named("Frogzard"),
                 Fighter::fixed(Profile::generic()),
@@ -1278,7 +1570,7 @@ mod tests {
         let kill = || {
             kill(
                 &loader,
-                Packets::subscribe(|wants| events.subscribe(wants)),
+                |wants| events.subscribe(wants),
                 &counter_attacks,
                 &frogzard,
                 Fighter::fixed(Profile::generic()),

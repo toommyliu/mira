@@ -12,7 +12,7 @@ use crate::{
         combat::{self, Skill},
         counter_attack::CounterAttacks,
         profiles::{Library, Profile, ProfileChoice, ProfileError},
-        rotation::{self, Fighter},
+        rotation::Fighter,
         world::MonsterQuery,
     },
 };
@@ -110,10 +110,10 @@ pub(super) async fn serve(
         } => json!(
             combat::kill(
                 loader,
-                Packets::subscribe(&subscribe),
+                &subscribe,
                 counter_attacks,
                 &query,
-                fighter(skills, profile, profiles)?.listening(subscribe(rotation::wants)),
+                fighter(skills, profile, profiles)?,
                 skill_interval_ms.map_or(combat::TICK, |ms| {
                     Duration::from_millis(ms).max(combat::MIN_SKILL_INTERVAL)
                 }),
@@ -121,11 +121,19 @@ pub(super) async fn serve(
             )
             .await?
         ),
-        request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Hunt {
             query,
             prefer_most_matches,
-        } => json!(combat::hunt(loader, &query, prefer_most_matches.unwrap_or(false)).await?),
+        } => json!(
+            combat::hunt(
+                loader,
+                &subscribe,
+                &query,
+                prefer_most_matches.unwrap_or(false)
+            )
+            .await?
+        ),
+        request if !domain::has_avatar(loader)? => request.without_avatar(),
         Request::Exit => json!(combat::exit(loader).await?),
         Request::Target => json!(combat::target(loader)?),
         Request::HasTarget => json!(bridge::combat::has_target(loader)?),
