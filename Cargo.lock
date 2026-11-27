@@ -287,7 +287,7 @@ dependencies = [
 [[package]]
 name = "asc"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "anyhow",
 ]
@@ -723,7 +723,7 @@ dependencies = [
 [[package]]
 name = "build_playerglobal"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "asc",
  "clap",
@@ -732,7 +732,7 @@ dependencies = [
  "quote",
  "rascal",
  "regex",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "walkdir",
 ]
 
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "flv-rs"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "bitflags 2.13.2",
  "thiserror 2.0.18",
@@ -3968,7 +3968,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4058,7 +4058,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.1"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -4083,7 +4083,7 @@ dependencies = [
 [[package]]
 name = "naga-agal"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "bitflags 2.13.2",
  "naga 30.0.1",
@@ -4094,7 +4094,7 @@ dependencies = [
 [[package]]
 name = "naga-pixelbender"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "anyhow",
  "naga 30.0.1",
@@ -5482,7 +5482,7 @@ dependencies = [
 [[package]]
 name = "pixel_bender"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "byteorder",
  "num-derive",
@@ -6334,7 +6334,7 @@ dependencies = [
 [[package]]
 name = "ruffle_common"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "fnv",
  "gc-arena",
@@ -6343,7 +6343,7 @@ dependencies = [
  "regress",
  "ruffle_macros",
  "ruffle_wstr",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "thiserror 2.0.18",
  "tracing",
  "url",
@@ -6352,7 +6352,7 @@ dependencies = [
 [[package]]
 name = "ruffle_core"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "async-channel",
  "bitflags 2.13.2",
@@ -6400,7 +6400,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "symphonia",
  "thiserror 2.0.18",
  "tracing",
@@ -6415,7 +6415,7 @@ dependencies = [
 [[package]]
 name = "ruffle_frontend_utils"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -6435,7 +6435,7 @@ dependencies = [
 [[package]]
 name = "ruffle_macros"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6445,7 +6445,7 @@ dependencies = [
 [[package]]
 name = "ruffle_render"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "byteorder",
  "enum-map",
@@ -6465,7 +6465,7 @@ dependencies = [
  "png 0.18.1",
  "ruffle_wstr",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "thiserror 2.0.18",
  "tracing",
  "wgpu 30.0.1",
@@ -6474,7 +6474,7 @@ dependencies = [
 [[package]]
 name = "ruffle_render_wgpu"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "bytemuck",
  "enum-map",
@@ -6489,7 +6489,7 @@ dependencies = [
  "naga-pixelbender",
  "ruffle_render",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "tracing",
  "web-sys",
  "wgpu 30.0.1",
@@ -6499,18 +6499,18 @@ dependencies = [
 [[package]]
 name = "ruffle_video"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "ruffle_render",
  "slotmap",
- "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5)",
+ "swf 0.3.0 (git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7)",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "ruffle_wstr"
 version = "0.6.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 
 [[package]]
 name = "rustc-demangle"
@@ -7225,7 +7225,7 @@ dependencies = [
 [[package]]
 name = "swf"
 version = "0.3.0"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "bitflags 2.13.2",
  "bitstream-io",
@@ -8430,7 +8430,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.1"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -8582,7 +8582,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -8696,7 +8696,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "30.0.1"
-source = "git+https://github.com/toommyliu/ruffle?rev=a12c64fb36fe72d7f71ce3620386e459e7a3fcd5#a12c64fb36fe72d7f71ce3620386e459e7a3fcd5"
+source = "git+https://github.com/toommyliu/ruffle?rev=173bff2b1b634832b16326d7cb83af7bfb2decd7#173bff2b1b634832b16326d7cb83af7bfb2decd7"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
