@@ -126,6 +126,10 @@ export function releaseBody(notes: string, changes: readonly Change[]): string {
 
 export type Plan = "bump" | "resume";
 
+export function releaseSubject(version: Version): string {
+  return `chore: release ${formatVersion(version)}`;
+}
+
 export function plan(
   version: Version,
   current: Version,
@@ -133,7 +137,7 @@ export function plan(
   latest: string | null,
 ): Plan {
   const name = formatVersion(version);
-  const resumable = name === formatVersion(current) && head === `release: Mira ${name}`;
+  const resumable = name === formatVersion(current) && head === releaseSubject(version);
   if (latest === `v${name}`) {
     if (resumable) return "resume";
     throw new Error(`${name} is already published`);
@@ -155,7 +159,7 @@ export function parseChanges(log: string): Change[] {
       const [sha = "", subject = "", body = ""] = record.split("\x1f");
       return { sha, subject, body: body.trim() };
     })
-    .filter((change) => !change.subject.startsWith("release:"));
+    .filter((change) => !/^chore: release \d+\.\d+\.\d+$/.test(change.subject));
 }
 
 function run(command: string, args: readonly string[], inherit = false): string {
@@ -305,7 +309,7 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
       "commit",
       "--quiet",
       "-m",
-      `release: Mira ${formatVersion(version)}`,
+      releaseSubject(version),
       "--",
       "Cargo.toml",
       "Cargo.lock",
