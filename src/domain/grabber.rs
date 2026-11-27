@@ -469,7 +469,7 @@ async fn act(
         Action::Withdraw { item_id } => {
             bank::withdraw(loader, subscribe, &ItemQuery::ItemId { item_id }).await
         }
-        Action::Jump { cell } => player::jump(loader, &cell, None).await,
+        Action::Jump { cell } => player::jump(loader, &cell, None, true).await,
     }
 }
 
