@@ -8,7 +8,7 @@ fi
 scripts/build-app --release
 app=target/Mira.app
 node scripts/licenses.ts "$app/Contents/Resources/THIRD_PARTY_LICENSES.md"
-version=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
+version=$(plutil -extract MiraReleaseVersion raw -o - "$app/Contents/Info.plist")
 out="target/releases/$version"
 rm -rf "$out"
 mkdir -p "$out"

@@ -60,10 +60,10 @@ export function manifestRepository(manifest: string): Repository {
   return { owner: match[1], name: match[2] };
 }
 
-export function withVersion(manifest: string, version: Version): string {
+export function withVersion(manifest: string, version: string): string {
   const { start, end } = packageSection(manifest);
   const section = manifest.slice(start, end);
-  const bumped = section.replace(/^version = "[^"]+"$/m, `version = "${formatVersion(version)}"`);
+  const bumped = section.replace(/^version = "[^"]+"$/m, `version = "${version}"`);
   return manifest.slice(0, start) + bumped + manifest.slice(end);
 }
 
@@ -106,14 +106,20 @@ export function releaseBody(notes: string, changes: readonly Change[]): string {
   const highlights = checkNotes(notes);
   const fixes = changes.filter((change) => /^(fix|perf)(\(.+\))?!?: /.test(change.subject));
   const more = fixes.length - highlights.split("\n").length;
-  const log = changes.map((change) => `- ${change.subject} (${change.sha.slice(0, 8)})`);
-  const count = `${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
   return [
     highlights,
     "",
     ...(more > 0
       ? [`Plus ${more} more ${more === 1 ? "fix or improvement" : "fixes and improvements"}.`, ""]
       : []),
+    changelog(changes),
+  ].join("\n");
+}
+
+export function changelog(changes: readonly Change[]): string {
+  const log = changes.map((change) => `- ${change.subject} (${change.sha.slice(0, 8)})`);
+  const count = `${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
+  return [
     "<details>",
     `<summary>Full changelog (${count})</summary>`,
     "",
@@ -125,6 +131,8 @@ export function releaseBody(notes: string, changes: readonly Change[]): string {
 }
 
 export type Plan = "bump" | "resume";
+
+export const releaseCommit = /^chore: release \d+\.\d+\.\d+$/;
 
 export function releaseSubject(version: Version): string {
   return `chore: release ${formatVersion(version)}`;
@@ -159,10 +167,10 @@ export function parseChanges(log: string): Change[] {
       const [sha = "", subject = "", body = ""] = record.split("\x1f");
       return { sha, subject, body: body.trim() };
     })
-    .filter((change) => !/^chore: release \d+\.\d+\.\d+$/.test(change.subject));
+    .filter((change) => !releaseCommit.test(change.subject));
 }
 
-function run(command: string, args: readonly string[], inherit = false): string {
+export function run(command: string, args: readonly string[], inherit = false): string {
   return execFileSync(command, args, {
     cwd: root,
     encoding: "utf8",
@@ -185,21 +193,41 @@ function latestTag(repository: Repository): string | null {
   }
 }
 
-type Published = { readonly draft: boolean; readonly assets: readonly string[] };
+type Published = {
+  readonly draft: boolean;
+  readonly prerelease: boolean;
+  readonly target: string;
+  readonly assets: readonly string[];
+};
 
-function published(slug: string, name: string): Published | null {
+export function published(slug: string, name: string): Published | null {
   try {
     const view = execFileSync(
       "gh",
-      ["release", "view", name, "--repo", slug, "--json", "isDraft,assets"],
+      [
+        "release",
+        "view",
+        name,
+        "--repo",
+        slug,
+        "--json",
+        "isDraft,isPrerelease,targetCommitish,assets",
+      ],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     const release = JSON.parse(view) as {
       isDraft: boolean;
+      isPrerelease: boolean;
+      targetCommitish: string;
       assets: readonly { name: string; state: string }[];
     };
     const uploaded = release.assets.filter((asset) => asset.state === "uploaded");
-    return { draft: release.isDraft, assets: uploaded.map((asset) => asset.name) };
+    return {
+      draft: release.isDraft,
+      prerelease: release.isPrerelease,
+      target: release.targetCommitish,
+      assets: uploaded.map((asset) => asset.name),
+    };
   } catch (error) {
     const stderr = String((error as { stderr?: unknown }).stderr ?? "");
     if (stderr.includes("release not found")) return null;
@@ -294,8 +322,10 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
   if (process.env["GITHUB_ACTIONS"] !== "true") {
     throw new Error("Releases run in the Release workflow. Start one with pnpm release publish");
   }
-  const { manifest, slug, remote, branch, tip, version, name, step, existing, body } =
-    await prepare(versionText, notesPath);
+  const { manifest, slug, remote, branch, tip, version, step, existing, body } = await prepare(
+    versionText,
+    notesPath,
+  );
   if (run("git", ["rev-parse", "HEAD"]).trim() !== tip) {
     throw new Error(`HEAD isn't the tip of ${remote}/${branch}`);
   }
@@ -303,7 +333,7 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
     throw new Error("The checkout has uncommitted changes");
   }
   if (step === "bump") {
-    await writeFile(manifestPath, withVersion(manifest, version));
+    await writeFile(manifestPath, withVersion(manifest, formatVersion(version)));
     run("cargo", ["update", "--workspace", "--offline", "--quiet"]);
     run("git", [
       "commit",
@@ -318,7 +348,20 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
   const sha = run("git", ["rev-parse", "HEAD"]).trim();
   run("scripts/package-app", [], true);
   run("git", ["push", "--quiet", remote, `HEAD:refs/heads/${branch}`], true);
-  const out = join(root, "target", "releases", formatVersion(version));
+  await publishAssets(slug, sha, formatVersion(version), body, existing, false);
+}
+
+export async function publishAssets(
+  slug: string,
+  sha: string,
+  version: string,
+  body: string,
+  existing: Published | null,
+  nightly: boolean,
+): Promise<void> {
+  const name = `v${version}`;
+  const flags = nightly ? ["--prerelease", "--latest=false"] : ["--latest"];
+  const out = join(root, "target", "releases", version);
   const assets = ["Mira.dmg", "Mira.zip"];
   if (existing) {
     const missing = assets.filter((asset) => !existing.assets.includes(asset));
@@ -327,7 +370,7 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
       run("gh", ["release", "upload", name, "--repo", slug, "--clobber", ...files], true);
     }
     if (existing.draft) {
-      run("gh", ["release", "edit", name, "--repo", slug, "--draft=false", "--latest"], true);
+      run("gh", ["release", "edit", name, "--repo", slug, "--draft=false", ...flags], true);
     }
     return;
   }
@@ -346,10 +389,10 @@ async function ci(versionText: string, notesPath: string): Promise<void> {
         "--target",
         sha,
         "--title",
-        `Mira ${formatVersion(version)}`,
+        `Mira ${version}`,
         "--notes-file",
         notes,
-        "--latest",
+        ...flags,
         ...assets.map((asset) => join(out, asset)),
       ],
       true,

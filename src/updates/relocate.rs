@@ -134,10 +134,7 @@ impl Existing {
         if bundle::info(target, "CFBundleIdentifier").ok().as_deref() != Some(bundle::ID) {
             return Self::Other;
         }
-        match bundle::info(target, "CFBundleShortVersionString")
-            .ok()
-            .and_then(|version| Version::parse(&version).ok())
-        {
+        match bundle::release_version(target).ok() {
             Some(version) if version >= *super::CURRENT => Self::Current(version),
             _ => Self::Older,
         }

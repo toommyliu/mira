@@ -328,6 +328,19 @@ impl GitHub {
         Self::save_response(response, to, max, |_| {}).await
     }
 
+    pub(crate) async fn releases<T: serde::de::DeserializeOwned>(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<Vec<T>, GitHubError> {
+        self.json(
+            &["repos", owner, repo, "releases"],
+            Some(("page", &page.to_string())),
+        )
+        .await
+    }
+
     pub(crate) async fn latest_release<T: serde::de::DeserializeOwned>(
         &self,
         owner: &str,

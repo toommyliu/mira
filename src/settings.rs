@@ -37,6 +37,7 @@ use crate::{
     ruffle::extras::Extras,
     ruffle_view::{CloseSession, bar_title, drag_area, refocus_root_when_lost, window_bar},
     shortcuts::{self, Category, Overrides, Shortcut, Taken},
+    updates::Channel,
 };
 
 actions!(
@@ -251,6 +252,7 @@ struct Settings {
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
     skip_update_checks: bool,
+    update_channel: Channel,
     separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
     start_replacements: bool,
@@ -416,6 +418,10 @@ pub(crate) fn confirm_close(cx: &App) -> bool {
 
 pub(crate) fn set_confirm_close(on: bool, cx: &mut App) {
     change(cx, |settings| settings.skip_close_confirmation = !on);
+}
+
+pub(crate) fn update_channel(cx: &App) -> Channel {
+    cx.global::<Store>().settings.update_channel
 }
 
 pub(crate) fn check_updates(cx: &App) -> bool {
@@ -1074,24 +1080,49 @@ impl SettingsWindow {
                 )),
             ),
             Block::Section(
-                Section::titled("Updates").row(Row::new(
-                    "Check automatically",
-                    Some("Look for Mira and package updates at launch and every 4 hours."),
-                    Switch::new(
-                        "check-updates-automatically",
+                Section::titled("Updates")
+                    .row(Row::new(
                         "Check automatically",
-                        !settings.skip_update_checks,
-                    )
-                    .hide_label()
-                    .on_toggle(|on, _, cx| {
-                        change(cx, |settings| settings.skip_update_checks = !on);
-                        if on {
-                            crate::updates::Updates::check(false, cx).detach();
-                            crate::packages::packages(cx)
-                                .update(cx, |packages, cx| packages.check_when_idle(true, cx));
-                        }
-                    }),
-                )),
+                        Some("Look for Mira and package updates at launch and every 4 hours."),
+                        Switch::new(
+                            "check-updates-automatically",
+                            "Check automatically",
+                            !settings.skip_update_checks,
+                        )
+                        .hide_label()
+                        .on_toggle(|on, _, cx| {
+                            change(cx, |settings| settings.skip_update_checks = !on);
+                            if on {
+                                crate::updates::Updates::check(false, cx).detach();
+                                crate::packages::packages(cx)
+                                    .update(cx, |packages, cx| packages.check_when_idle(true, cx));
+                            }
+                        }),
+                    ))
+                    .row(Row::new(
+                        "Channel",
+                        Some(settings.update_channel.description()),
+                        Select::new(
+                            "update-channel",
+                            "Update channel",
+                            Channel::ALL.map(Channel::label),
+                            Channel::ALL
+                                .iter()
+                                .position(|&channel| channel == settings.update_channel),
+                        )
+                        .width(px(136.0))
+                        .disabled(matches!(
+                            cx.try_global::<crate::updates::Updates>(),
+                            Some(crate::updates::Updates::Restarting(_))
+                        ))
+                        .on_select(|index, _, cx| {
+                            let channel = Channel::ALL[index];
+                            if update_channel(cx) != channel {
+                                change(cx, |settings| settings.update_channel = channel);
+                                crate::updates::Updates::channel_changed(cx);
+                            }
+                        }),
+                    )),
             ),
             Block::Section(Section::titled("GitHub").row(Row::new(
                 "Token",
@@ -1604,6 +1635,7 @@ mod tests {
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
             skip_update_checks: true,
+            update_channel: Channel::Nightly,
             separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             start_replacements: true,
@@ -2205,6 +2237,16 @@ mod tests {
                 Pane::Appearance,
                 Settings::default(),
                 "",
+            ),
+            (
+                "settings-nightly",
+                SETTINGS_HEIGHT,
+                Pane::General,
+                Settings {
+                    update_channel: Channel::Nightly,
+                    ..Settings::default()
+                },
+                "channel",
             ),
             (
                 "settings-search",
