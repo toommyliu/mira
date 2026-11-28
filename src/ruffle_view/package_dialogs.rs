@@ -1,14 +1,14 @@
 use std::collections::VecDeque;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
+    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, IntoElement,
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use mira_ui::{
     ActiveTheme as _, StyledExt as _, Tone, h_flex,
     primitives::{
-        Alert, Button, Dialog, Input, InputEvent, Toast, ToastId, Toaster,
+        Alert, Button, Dialog, Field, Input, InputEvent, Toast, ToastId, Toaster,
         button::{Size, Variant},
     },
     v_flex,
@@ -331,24 +331,12 @@ impl Render for PackageDialogs {
                     .child(text)
             };
             v_flex()
-                .gap(layout.space(3.0))
+                .gap(layout.space(4.0))
                 .child(
-                    v_flex()
-                        .gap(layout.space(1.0))
-                        .child(label("GitHub link"))
-                        .child(install.link.clone())
-                        .child(note(
-                            "Its package.json needs a \u{201c}mira\u{201d} field.",
-                            true,
-                            &theme,
-                        )),
+                    Field::new("GitHub link", install.link.clone())
+                        .description("Its package.json needs a \u{201c}mira\u{201d} field."),
                 )
-                .child(
-                    v_flex()
-                        .gap(layout.space(1.0))
-                        .child(label("Branch"))
-                        .child(install.branch.clone()),
-                )
+                .child(Field::new("Branch", install.branch.clone()))
                 .when_some(install.error.clone(), |body, error| {
                     body.child(
                         Alert::new("install-error", Tone::Danger, "Couldn't install").body(error),
@@ -371,7 +359,7 @@ impl Render for PackageDialogs {
                                                 .min_w_0()
                                                 .child(
                                                     div()
-                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_title(typography)
                                                         .child(recommended.name.clone()),
                                                 )
                                                 .when_some(

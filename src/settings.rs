@@ -1507,6 +1507,7 @@ impl Render for SettingsWindow {
                     Button::new("reset-page", "Reset to defaults…")
                         .variant(ButtonVariant::Ghost)
                         .size(Size::Small)
+                        .mr(-layout.space(2.0))
                         .disabled(!changed)
                         .on_click(confirm_reset),
                 )
