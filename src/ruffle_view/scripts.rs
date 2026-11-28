@@ -74,7 +74,6 @@ const WIDTH: f32 = 880.0;
 const HEIGHT: f32 = 560.0;
 const MIN_WIDTH: f32 = 800.0;
 const MIN_HEIGHT: f32 = 400.0;
-const PADDING: Pixels = px(16.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
 const PATIENCE: Duration = Duration::from_millis(150);
 
@@ -1365,7 +1364,7 @@ impl ScriptsWindow {
         };
         let card = pending.iter().fold(
             HoverCard::new("updates-card", title)
-                .placement(Placement::new(Side::Right, Align::Start)),
+                .placement(Placement::new(Side::Bottom, Align::Start)),
             |card, pending| {
                 card.row(
                     pending.name.clone(),
@@ -1707,7 +1706,13 @@ impl ScriptsWindow {
                 h_flex()
                     .min_w_0()
                     .gap(marks.space(1.5))
-                    .child(div().min_w_0().truncate().child(row.name.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w_full()
+                            .truncate()
+                            .child(row.name.clone()),
+                    )
                     .children(row.qualifier.clone().map(|qualifier| {
                         div()
                             .min_w_0()
@@ -2397,6 +2402,7 @@ impl ScriptsWindow {
                                 .max_w(folder_width)
                                 .truncate()
                                 .text_ellipsis_start()
+                                .text_right()
                                 .child(folder.clone()),
                         ),
                     None => ListItem::new(entry.name.clone()).selection_check(),
@@ -2486,7 +2492,6 @@ impl Render for ScriptsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let layout = theme.layout;
-        let typography = theme.typography;
         let has_tab = self.shown.is_some();
         let page = self.shown_page(cx);
         let (rows, chosen) = if let Page::Library(source) = &page {
@@ -2569,8 +2574,7 @@ impl Render for ScriptsWindow {
                     .id("script-status")
                     .role(gpui::Role::Status)
                     .aria_label("No tabs open")
-                    .pr(PADDING)
-                    .text_size(typography.secondary)
+                    .pr(theme.space(3.0))
                     .text_color(theme.muted_foreground)
                     .child("No tabs open"),
             ),
@@ -2869,23 +2873,29 @@ fn heading(
 ) -> impl IntoElement {
     let layout = theme.layout;
     let typography = theme.typography;
-    h_flex()
-        .items_start()
-        .gap(layout.space(2.0))
+    v_flex()
+        .min_w_0()
         .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
+            h_flex()
+                .h(typography.body_line)
+                .gap(layout.space(2.0))
                 .child(
                     div()
-                        .text_size(typography.secondary)
-                        .line_height(typography.secondary_line)
-                        .text_color(theme.muted_foreground)
-                        .child(detail),
-                ),
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(name),
+                )
+                .children(action),
         )
-        .children(action)
+        .child(
+            div()
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
+                .text_color(theme.muted_foreground)
+                .child(detail),
+        )
 }
 
 struct QueueRow {
