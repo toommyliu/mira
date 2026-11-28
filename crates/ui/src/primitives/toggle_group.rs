@@ -10,6 +10,8 @@ use crate::{
     nav::{self, Axis, Step},
 };
 
+const INSET: gpui::Pixels = px(2.0);
+
 pub struct ToggleItem {
     label: SharedString,
     start: Option<AnyElement>,
@@ -101,16 +103,25 @@ impl ToggleGroup {
 
 impl RenderOnce for ToggleGroup {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let layout = cx.theme().layout;
-        let typography = cx.theme().typography;
+        let theme = cx.theme().clone();
+        let layout = theme.layout;
+        let typography = theme.typography;
         let focus = nav::focus_handle((self.id.clone(), "focus"), window, cx);
         let ring = nav::keyboard_focused(&focus, window, cx);
         let count = self.options.len().max(1);
-        let theme = cx.theme().clone();
         let selected = self.selected;
         let on_key = self.on_select.clone();
         let full_width = self.full_width;
-        let small = self.small;
+        let (height, text, line) = if self.small {
+            (
+                layout.control_sm,
+                typography.secondary,
+                typography.secondary_line,
+            )
+        } else {
+            (layout.control, typography.body, typography.body_line)
+        };
+        let (plate, plate_edge) = theme.plate();
         let group = div()
             .id(self.id.clone())
             .role(Role::RadioGroup)
@@ -128,14 +139,12 @@ impl RenderOnce for ToggleGroup {
                 }
                 cx.stop_propagation();
             })
-            .relative()
             .flex()
-            .h(if small {
-                layout.control_sm
-            } else {
-                layout.control
-            })
-            .when(self.full_width, |group| group.w_full())
+            .h(height)
+            .p(INSET)
+            .rounded(theme.radius.control)
+            .bg(theme.muted)
+            .when(full_width, |group| group.w_full())
             .children(self.options.into_iter().enumerate().map(|(index, option)| {
                 let checked = index == selected;
                 let on_select = self.on_select.clone();
@@ -155,53 +164,41 @@ impl RenderOnce for ToggleGroup {
                     .relative()
                     .flex()
                     .map(|segment| {
-                        if self.full_width {
-                            segment
-                                .flex_1()
-                                .flex_basis(px(0.0))
-                                .min_w_0()
-                                .px(layout.space(1.5))
+                        if full_width {
+                            segment.flex_1().flex_basis(px(0.0)).min_w_0()
                         } else {
-                            segment.flex_none().px(theme.space(2.0))
+                            segment.flex_none()
                         }
                     })
+                    .px(layout.space(2.0))
                     .items_center()
                     .justify_center()
+                    .gap(layout.space(1.0))
                     .h_full()
-                    .rounded(theme.radius.control)
-                    .when(index > 0, |segment| segment.rounded_l(px(0.0)).ml(px(-1.0)))
-                    .when(index + 1 < count, |segment| segment.rounded_r(px(0.0)))
+                    .rounded(theme.radius.small)
                     .border_1()
-                    .border_color(if checked && ring {
-                        theme.ring
-                    } else {
-                        theme.border
+                    .border_color(gpui::transparent_black())
+                    .when(checked, |segment| {
+                        segment.bg(plate).border_color(plate_edge)
                     })
-                    .when(checked, |segment| segment.bg(theme.muted))
-                    .hover(|style| style.bg(theme.ghost_hover()).text_color(theme.foreground))
                     .when(checked && ring, |segment| {
-                        segment.child(theme.halo(
+                        segment.border_color(theme.ring).child(theme.halo(
                             theme.ring.opacity(0.5),
-                            theme.radius.control,
+                            theme.radius.small,
                             px(1.0),
                             px(3.0),
                         ))
                     })
-                    .text_size(if small {
-                        typography.secondary
-                    } else {
-                        typography.body
-                    })
-                    .line_height(if small {
-                        typography.secondary_line
-                    } else {
-                        typography.body_line
-                    })
+                    .text_size(text)
+                    .line_height(line)
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(if checked {
                         theme.foreground
                     } else {
                         theme.muted_foreground
+                    })
+                    .when(!checked, |segment| {
+                        segment.hover(|style| style.text_color(theme.foreground))
                     })
                     .pointer_cursor(&theme)
                     .when_some(on_select, |segment, on_select| {
@@ -210,16 +207,9 @@ impl RenderOnce for ToggleGroup {
                             on_select(index, window, cx);
                         })
                     })
-                    .gap(layout.space(1.0))
                     .children(option.start)
                     .child(div().truncate().child(option.label))
                     .children(option.end)
-                    .child(div().flex_none().w(px(10.0)).when(checked, |slot| {
-                        slot.child(super::icon::small_icon(
-                            super::Icon::Check,
-                            theme.foreground,
-                        ))
-                    }))
             }));
         div()
             .flex()

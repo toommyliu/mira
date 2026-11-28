@@ -12,7 +12,7 @@ pub use disclosure::Disclosure;
 pub use empty::Empty;
 pub use group::{FieldRow, Group};
 pub(crate) use log_view::bind_keys as log_view_keys;
-pub use log_view::{LogBody, LogLevel, LogRow, LogState, LogView};
+pub use log_view::{LogBody, LogLevel, LogLine, LogRow, LogState, LogView, jump_to_latest};
 pub use shortcut_field::{ShortcutField, ShortcutRefusal, format_keystroke};
 pub use shortcut_hint::shortcut_hint;
 pub use status_label::StatusLabel;
