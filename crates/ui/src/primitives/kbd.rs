@@ -22,7 +22,7 @@ impl Kbd {
         }
     }
 
-    pub(crate) fn lit(mut self, lit: bool) -> Self {
+    pub fn lit(mut self, lit: bool) -> Self {
         self.lit = lit;
         self
     }

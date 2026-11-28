@@ -17,7 +17,7 @@ use mira_ui::{
     h_flex,
     primitives::{
         Align, Badge, Button, DropdownMenu, Icon, Input, InputEvent, List, ListItem, MenuItem,
-        Numeric, Select, Tab, Tabs,
+        Numeric, Scrollbar, Select, Tab, Tabs,
         button::{Size, Variant},
         text_field::Find,
     },
@@ -962,17 +962,29 @@ impl Packets {
             .child(header)
             .child(
                 div()
-                    .id("packet-text")
+                    .relative()
+                    .flex()
+                    .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.inspector_scroll)
-                    .px(layout.space(3.0))
-                    .py(layout.space(2.0))
-                    .font_family(theme.mono_family.clone())
-                    .text_size(typography.mono)
-                    .line_height(px(17.0))
-                    .child(text),
+                    .child(
+                        div()
+                            .id("packet-text")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.inspector_scroll)
+                            .px(layout.space(3.0))
+                            .py(layout.space(2.0))
+                            .font_family(theme.mono_family.clone())
+                            .text_size(typography.mono)
+                            .line_height(px(17.0))
+                            .child(text),
+                    )
+                    .child(
+                        Scrollbar::new("packet-text-scrollbar", self.inspector_scroll.clone())
+                            .persistent(),
+                    ),
             )
     }
 
@@ -1451,10 +1463,14 @@ impl Render for Packets {
         )
         .children(pages);
         let body = match (&automation, self.page) {
-            (None, _) => v_flex().flex_1().child(Empty::new(
-                "No tabs open",
-                "Open a tab to log and send its packets.",
-            )),
+            (None, _) => v_flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .child(Empty::new(
+                    "No tabs open",
+                    "Open a tab to log and send its packets.",
+                )),
             (Some(automation), Page::Log) => self.log_page(&theme, automation, window, cx),
             (Some(automation), Page::Send) => self.send_page(&theme, automation, cx),
         };

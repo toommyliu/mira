@@ -377,7 +377,9 @@ pub(crate) fn check_name(
         .into_iter()
         .any(|other| same_name(other.as_ref(), name))
     {
-        return Err(format!("Another profile is already named \"{name}\"."));
+        return Err(format!(
+            "Another profile is already named \u{201c}{name}\u{201d}."
+        ));
     }
     Ok(name.to_owned())
 }
