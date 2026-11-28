@@ -23,6 +23,11 @@ pub(crate) async fn run(
                 return;
             },
             event = events.next() => if let Ok(event) = event {
+                let enabled = settings.borrow().anti_counter;
+                attacks.set_enabled(enabled);
+                if !enabled {
+                    continue;
+                }
                 for signal in counter_attack::signals(&event, &Myself(&loader)) {
                     if let Some(id) = attacks.apply(signal)
                         && let Err(error) = stop_attacking(&loader, id)
@@ -86,6 +91,7 @@ mod tests {
                     Value::Null
                 }
                 "combat.cancelAutoAttack" => Value::Null,
+                "player.getUserId" => Value::Number(1.0),
                 other => panic!("unexpected call {other}"),
             })
         }));
@@ -119,7 +125,7 @@ mod tests {
         publish(
             events,
             Event::ExtensionResponse {
-                packet: packet.to_string(),
+                packet: packet.to_string().into(),
             },
         )
         .await;
@@ -171,8 +177,23 @@ mod tests {
                 sleep(Duration::from_millis(10)).await;
                 assert!(!running.attacks.any());
                 warn(&running.events, 2).await;
+                let fade = Event::ExtensionResponse {
+                    packet: r#"{"type":"json","dataObj":{"cmd":"ct","a":[{"cmd":"aura-","tInf":"p:1","aura":{"nam":"Sun's Heat"}}]}}"#.into(),
+                };
+                publish(&running.events, fade.clone()).await;
                 assert_eq!(*running.target.borrow(), Some(2.0));
                 assert!(!running.attacks.any());
+                assert_eq!(running.loader.count("player.getUserId"), 0);
+
+                running
+                    .settings
+                    .send_modify(|settings| settings.anti_counter = true);
+                warn(&running.events, 2).await;
+                assert_eq!(*running.target.borrow(), None);
+                assert!(running.attacks.countering(2.0));
+                let lookups = running.loader.count("player.getUserId");
+                publish(&running.events, fade).await;
+                assert_eq!(running.loader.count("player.getUserId"), lookups + 1);
             })
             .await;
     }

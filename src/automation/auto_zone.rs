@@ -7,10 +7,7 @@ use tokio::{
 
 use super::game_settings;
 use crate::bridge::{self, CallError, Loader, Packets};
-use crate::domain::{
-    auras, player,
-    world::{EventArgs, EventPacket},
-};
+use crate::domain::{auras, player, world::EventPacket};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Room {
@@ -141,11 +138,12 @@ pub(crate) async fn run(
         let due = pending.as_ref().map(|pending| pending.at);
         tokio::select! {
             event = zones.next() => match event {
-                Ok(EventPacket { args: EventArgs { zone_set: zone } }) if enabled => {
+                Ok(event) if enabled => {
+                    let zone = &event.args.zone_set;
                     match current_room(&loader) {
                         Ok(Some(room)) => {
                             tracing::debug!(?room, zone, "auto zone received an event packet");
-                            pending = Some(Pending { room, zone, at: Instant::now() + room.settle() });
+                            pending = Some(Pending { room, zone: zone.clone(), at: Instant::now() + room.settle() });
                         }
                         Ok(None) => {}
                         Err(error) => tracing::warn!(%error, "auto zone couldn't read the map"),
@@ -311,7 +309,8 @@ mod tests {
             self.events.publish(&Event::ExtensionResponse {
                 packet: format!(
                     r#"{{"type":"json","dataObj":{{"cmd":"event","args":{{{args}}}}}}}"#
-                ),
+                )
+                .into(),
             });
         }
 

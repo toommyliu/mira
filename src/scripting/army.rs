@@ -347,7 +347,9 @@ mod tests {
 
     fn server(packet: serde_json::Value) -> Event {
         Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": packet }).to_string(),
+            packet: json!({ "type": "json", "dataObj": packet })
+                .to_string()
+                .into(),
         }
     }
 
@@ -453,7 +455,9 @@ mod tests {
             json!({ "cmd": "ct", "m": { "7": { "intState": 0 } } }),
         ));
         players[0].1.publish(&Event::ExtensionResponse {
-            packet: json!({ "type": "str", "dataObj": ["respawnMon", "-1", "7"] }).to_string(),
+            packet: json!({ "type": "str", "dataObj": ["respawnMon", "-1", "7"] })
+                .to_string()
+                .into(),
         });
         let (early, late) = tokio::join!(early, serve(1, taunt_the_boss(on)));
         early.unwrap();

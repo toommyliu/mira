@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     State,
-    combat::{self, Target},
+    combat::{self, CtPacket, Target},
     events::{self, TargetType},
     has_avatar, inventory, player,
     world::{self, MonsterQuery},
 };
-use crate::bridge::{self, CallError, Format, Loader, Packet, Packets, Value, packets::wire};
+use crate::bridge::{self, CallError, Loader, Packets, Value, packets::wire};
 
 const SCROLL_OF_ENRAGE: i32 = 12_917;
 const SCROLL_SLOT: i32 = 5;
@@ -74,7 +74,7 @@ pub(crate) fn readiness(loader: &impl Loader) -> Result<Readiness, CallError> {
 
 pub(crate) async fn cast(
     loader: &impl Loader,
-    actions: Packets<ActionsPacket>,
+    actions: Packets<CtPacket>,
     mon_map_id: i32,
 ) -> Result<bool, CallError> {
     let me = bridge::player::get_user_id(loader)?;
@@ -105,22 +105,9 @@ pub(crate) async fn cast(
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ActionsPacket {
-    #[serde(default)]
-    sara: Vec<Option<Acknowledged>>,
-    #[serde(default)]
-    sarsa: Vec<Option<Applied>>,
-}
-
-impl Packet for ActionsPacket {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "ct";
-}
-
-#[derive(Deserialize)]
-struct Acknowledged {
+pub(super) struct Acknowledged {
     #[serde(rename = "actionResult", default)]
-    result: Option<ActionResult>,
+    pub(super) result: Option<ActionResult>,
     #[serde(rename = "actID", default, deserialize_with = "wire::integer")]
     action: Option<i64>,
     #[serde(rename = "iRes", default, deserialize_with = "wire::integer")]
@@ -128,15 +115,17 @@ struct Acknowledged {
 }
 
 #[derive(Deserialize)]
-struct ActionResult {
+pub(super) struct ActionResult {
     #[serde(rename = "actID", default, deserialize_with = "wire::integer")]
     action: Option<i64>,
     #[serde(rename = "cInf", default, deserialize_with = "wire::text")]
-    caster: String,
+    pub(super) caster: String,
+    #[serde(rename = "ct", default, deserialize_with = "wire::number")]
+    pub(super) milliseconds: Option<f64>,
 }
 
 #[derive(Deserialize)]
-struct Applied {
+pub(super) struct Applied {
     #[serde(rename = "actID", default, deserialize_with = "wire::integer")]
     action: Option<i64>,
     #[serde(rename = "cInf", default, deserialize_with = "wire::text")]
@@ -145,7 +134,7 @@ struct Applied {
     outcome: Option<i64>,
 }
 
-impl ActionsPacket {
+impl CtPacket {
     fn landed(&self, action: i64, me: i32) -> Option<bool> {
         let single = self.sara.iter().flatten().find_map(|entry| {
             let result = entry.result.as_ref()?;
@@ -184,12 +173,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::bridge::packets;
+    use crate::bridge::Response;
 
     fn landed(packet: serde_json::Value, action: i64) -> Option<bool> {
-        packets::decode::<ActionsPacket>(&json!({ "type": "json", "dataObj": packet }).to_string())
-            .unwrap()
-            .unwrap()
+        Response::from(json!({ "type": "json", "dataObj": packet }).to_string())
+            .read::<CtPacket>()?
             .landed(action, 28552)
     }
 

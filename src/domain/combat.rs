@@ -7,19 +7,22 @@ use tokio::{
 };
 
 use super::{
-    POLL, State, auth,
+    POLL, State,
+    auras::AuraChange,
+    auth,
     counter_attack::CounterAttacks,
     has_avatar,
     inventory::{self, TurnInPacket},
     player,
-    players::{self, RoomPlayer},
+    players::{self, FightPlayer, RoomPlayer},
     poll,
     rotation::Fighter,
+    taunt::{Acknowledged, Applied},
     world::{self, Monster, MonsterQuery, MonsterStateLine, MonsterStatePacket, RespawnMonLine},
 };
 use crate::bridge::{
     self, CallError, Event, Format, Interruption, Loader, Packet, Packets, Subscription, Value,
-    packets::{self, wire},
+    packets::wire,
 };
 
 pub(crate) const TICK: Duration = Duration::from_millis(200);
@@ -261,34 +264,20 @@ fn monster_returned(event: &Event, matches: &[Monster]) -> bool {
     let Event::ExtensionResponse { packet } = event else {
         return false;
     };
-    if Packets::<RespawnMonLine>::wants(event) {
-        return packets::decode::<RespawnMonLine>(packet)
-            .ok()
-            .flatten()
-            .is_some_and(|respawn| respawn.ids.into_iter().map(f64::from).any(matching));
+    if let Some(respawn) = packet.read::<RespawnMonLine>() {
+        return respawn.ids.iter().copied().map(f64::from).any(matching);
     }
-    if Packets::<MonsterStateLine>::wants(event) {
-        return packets::decode::<MonsterStateLine>(packet)
-            .ok()
-            .flatten()
-            .and_then(|line| line.id)
-            .is_some_and(matching);
+    if let Some(line) = packet.read::<MonsterStateLine>() {
+        return line.id.is_some_and(matching);
     }
-    if Packets::<MonsterStatePacket>::wants(event) {
-        return packets::decode::<MonsterStatePacket>(packet)
-            .ok()
-            .flatten()
-            .and_then(|update| update.id)
-            .is_some_and(matching);
+    if let Some(update) = packet.read::<MonsterStatePacket>() {
+        return update.id.is_some_and(matching);
     }
-    packets::decode::<CtPacket>(packet)
-        .ok()
-        .flatten()
-        .is_some_and(|packet| {
-            packet.monsters.iter().any(|(id, monster)| {
-                monster.state.is_some_and(|state| state > 0.0) && id.parse().is_ok_and(matching)
-            })
+    packet.read::<CtPacket>().is_some_and(|packet| {
+        packet.monsters.iter().any(|(id, monster)| {
+            monster.state.is_some_and(|state| state > 0.0) && id.parse().is_ok_and(matching)
         })
+    })
 }
 
 pub(crate) async fn exit(loader: &impl Loader) -> Result<bool, CallError> {
@@ -419,8 +408,18 @@ async fn ready(loader: &impl Loader, skill: Skill) -> Result<bool, CallError> {
 
 #[derive(Deserialize)]
 pub(crate) struct CtPacket {
-    #[serde(rename = "m", default)]
+    #[serde(rename = "m", default, deserialize_with = "section")]
     monsters: HashMap<String, MonsterState>,
+    #[serde(default, deserialize_with = "section")]
+    pub(super) anims: Vec<Option<Animation>>,
+    #[serde(rename = "a", default, deserialize_with = "section")]
+    pub(super) changes: Vec<Option<AuraChange>>,
+    #[serde(rename = "p", default, deserialize_with = "section")]
+    pub(super) players: HashMap<String, Option<FightPlayer>>,
+    #[serde(default, deserialize_with = "section")]
+    pub(super) sara: Vec<Option<Acknowledged>>,
+    #[serde(default, deserialize_with = "section")]
+    pub(super) sarsa: Vec<Option<Applied>>,
 }
 
 #[derive(Deserialize)]
@@ -434,15 +433,20 @@ impl Packet for CtPacket {
     const CMD: &'static str = "ct";
 }
 
-#[derive(Deserialize)]
-pub(crate) struct FightMessagesPacket {
-    #[serde(default)]
-    pub(crate) anims: Vec<Option<Animation>>,
-}
+fn section<'de, D: serde::Deserializer<'de>, T: Deserialize<'de> + Default>(
+    input: D,
+) -> Result<T, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Section<T> {
+        Valid(T),
+        Invalid(serde::de::IgnoredAny),
+    }
 
-impl Packet for FightMessagesPacket {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "ct";
+    Ok(match Section::deserialize(input)? {
+        Section::Valid(section) => section,
+        Section::Invalid(_) => T::default(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -675,13 +679,13 @@ mod tests {
         Event::ExtensionResponse {
             packet: format!(
                 r#"{{"type":"json","dataObj":{{"cmd":"ct","m":{{"{id}":{{"intState":{state}}}}}}}}}"#
-            ),
+            ).into(),
         }
     }
 
     fn respawned(id: u32) -> Event {
         Event::ExtensionResponse {
-            packet: format!(r#"{{"type":"str","dataObj":["respawnMon","-1","{id}"]}}"#),
+            packet: format!(r#"{{"type":"str","dataObj":["respawnMon","-1","{id}"]}}"#).into(),
         }
     }
 
@@ -771,7 +775,7 @@ mod tests {
                         publisher.publish(&Event::ExtensionResponse {
                             packet: format!(
                                 r#"{{"type":"json","dataObj":{{"cmd":"turnIn","sItems":"{items}"}}}}"#
-                            ),
+                            ).into(),
                         });
                     }
                     publisher.publish(&struck(1.0, 0));

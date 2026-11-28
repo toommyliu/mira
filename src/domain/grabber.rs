@@ -15,7 +15,7 @@ use super::{
 };
 use crate::bridge::{
     self, CallError, Event, Loader, Packets, Subscription,
-    packets::{self, Format, wire},
+    packets::{Format, wire},
 };
 
 const MAX_QUESTS: usize = 100;
@@ -402,7 +402,7 @@ fn changes(event: &Event, also: &[&str]) -> bool {
     HOLDINGS
         .iter()
         .chain(also)
-        .any(|cmd| packets::names(packet, Format::Json, cmd))
+        .any(|cmd| packet.matches(Format::Json, cmd))
 }
 
 async fn watch(
@@ -1276,7 +1276,9 @@ mod tests {
     async fn a_watched_source_hears_only_the_packets_that_change_it() {
         let events = std::rc::Rc::new(crate::bridge::Events::default());
         let packet = |cmd: &str| Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": { "cmd": cmd } }).to_string(),
+            packet: json!({ "type": "json", "dataObj": { "cmd": cmd } })
+                .to_string()
+                .into(),
         };
         tokio::task::LocalSet::new()
             .run_until(async {

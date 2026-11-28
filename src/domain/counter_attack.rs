@@ -6,28 +6,23 @@ use std::{
 };
 
 use regex::Regex;
-use serde::Deserialize;
 use tokio::time::Instant;
 
 use super::{
     auras,
+    combat::CtPacket,
     events::{GameEvent, Kind, Me, TargetType, targets},
 };
-use crate::bridge::{
-    CallError, Event, Format, Loader, Packet,
-    packets::{self, wire},
-};
+use crate::bridge::{CallError, Event, Loader};
 
 const GRACE: Duration = Duration::from_secs(7);
 const LONGEST: Duration = Duration::from_secs(30);
 
-const KINDS: [Kind; 6] = [
+const FIGHT_KINDS: [Kind; 4] = [
     Kind::Message,
     Kind::AuraAdded,
     Kind::AuraRemoved,
     Kind::MonsterDeath,
-    Kind::MonsterRespawn,
-    Kind::MapJoined,
 ];
 
 struct Triggers {
@@ -63,7 +58,15 @@ pub(crate) enum Signal {
 }
 
 pub(crate) fn wants(event: &Event) -> bool {
-    matches!(event, Event::Connection { .. }) || KINDS.iter().any(|kind| kind.wants(event))
+    match event {
+        Event::Connection { .. } => true,
+        Event::ExtensionResponse { packet } => {
+            packet.is::<CtPacket>()
+                || Kind::MonsterRespawn.wants(event)
+                || Kind::MapJoined.wants(event)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn signals(event: &Event, me: &impl Me) -> Vec<Signal> {
@@ -74,19 +77,24 @@ pub(crate) fn signals(event: &Event, me: &impl Me) -> Vec<Signal> {
         };
     };
     let mut read = Vec::new();
-    for kind in KINDS {
-        kind.read(event, me, &mut read);
+    let fight = packet.read::<CtPacket>();
+    if let Some(fight) = &fight {
+        for kind in FIGHT_KINDS {
+            kind.read_fight(fight, me, &mut read);
+        }
+    } else {
+        Kind::MonsterRespawn.read(event, me, &mut read);
+        Kind::MapJoined.read(event, me, &mut read);
     }
-    let mut casts = None;
     read.into_iter()
         .filter_map(|event| match event {
             GameEvent::Message {
                 text,
                 mon_map_id: Some(mon_map_id),
             } if matches(&TRIGGERS.warnings, &text) => {
-                let cast = casts
-                    .get_or_insert_with(|| Casts::read(packet))
-                    .of(mon_map_id);
+                let cast = fight
+                    .as_ref()
+                    .map_or(Duration::ZERO, |fight| cast_time(fight, mon_map_id));
                 Some(Signal::Begin {
                     mon_map_id,
                     lasts: cast + GRACE,
@@ -132,52 +140,18 @@ fn seconds(value: Option<f64>) -> Duration {
         })
 }
 
-#[derive(Deserialize)]
-struct Casts {
-    #[serde(default)]
-    sara: Vec<Option<Cast>>,
-}
-
-#[derive(Deserialize)]
-struct Cast {
-    #[serde(rename = "actionResult")]
-    result: Option<CastResult>,
-}
-
-#[derive(Deserialize)]
-struct CastResult {
-    #[serde(rename = "cInf", default, deserialize_with = "wire::text")]
-    caster: String,
-    #[serde(rename = "ct", default, deserialize_with = "wire::number")]
-    milliseconds: Option<f64>,
-}
-
-impl Packet for Casts {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "ct";
-}
-
-impl Casts {
-    fn read(packet: &str) -> Self {
-        packets::decode(packet)
-            .ok()
-            .flatten()
-            .unwrap_or(Casts { sara: Vec::new() })
-    }
-
-    fn of(&self, mon_map_id: i32) -> Duration {
-        let longest = self
-            .sara
-            .iter()
-            .flatten()
-            .filter_map(|cast| cast.result.as_ref())
-            .filter(|result| {
-                targets(&result.caster).any(|target| target == (TargetType::Monster, mon_map_id))
-            })
-            .filter_map(|result| result.milliseconds)
-            .fold(0.0, f64::max);
-        seconds(Some(longest / 1000.0))
-    }
+fn cast_time(fight: &CtPacket, mon_map_id: i32) -> Duration {
+    let longest = fight
+        .sara
+        .iter()
+        .flatten()
+        .filter_map(|cast| cast.result.as_ref())
+        .filter(|result| {
+            targets(&result.caster).any(|target| target == (TargetType::Monster, mon_map_id))
+        })
+        .filter_map(|result| result.milliseconds)
+        .fold(0.0, f64::max);
+    seconds(Some(longest / 1000.0))
 }
 
 #[derive(Clone)]
@@ -317,7 +291,9 @@ mod tests {
 
     fn server(packet: serde_json::Value) -> Event {
         Event::ExtensionResponse {
-            packet: json!({ "type": "json", "dataObj": packet }).to_string(),
+            packet: json!({ "type": "json", "dataObj": packet })
+                .to_string()
+                .into(),
         }
     }
 
@@ -386,7 +362,9 @@ mod tests {
         );
         assert_eq!(
             read(&Event::ExtensionResponse {
-                packet: json!({ "type": "str", "dataObj": ["respawnMon", "-1", "2"] }).to_string()
+                packet: json!({ "type": "str", "dataObj": ["respawnMon", "-1", "2"] })
+                    .to_string()
+                    .into()
             }),
             [Signal::End { mon_map_id: 2 }]
         );

@@ -1,23 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    State,
-    auras::FightAurasPacket,
-    auth,
-    combat::{CtPacket, FightMessagesPacket, UserMessagePacket},
+    State, auth,
+    combat::{CtPacket, UserMessagePacket},
     drops::DropItemPacket,
     inventory::AddItemsPacket,
     player::MoveToAreaPacket,
-    players::{
-        ExitAreaLine, FightPlayersPacket, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket,
-    },
+    players::{ExitAreaLine, PlayerUpdate, PlayerUpdateLine, PlayerUpdatePacket},
     quests::CompleteQuestPacket,
     world::{EventPacket, RespawnMonLine},
 };
-use crate::bridge::{
-    self, Event, Loader, Packet,
-    packets::{self, disconnected, names},
-};
+use crate::bridge::{self, Event, Loader, Response, packets::disconnected};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,41 +154,25 @@ impl Kind {
             return disconnected(event);
         };
         match self {
-            Kind::MonsterDeath => names(packet, CtPacket::FORMAT, CtPacket::CMD),
-            Kind::ItemDrop => names(packet, DropItemPacket::FORMAT, DropItemPacket::CMD),
+            Kind::MonsterDeath | Kind::AuraAdded | Kind::AuraRemoved => packet.is::<CtPacket>(),
+            Kind::ItemDrop => packet.is::<DropItemPacket>(),
             Kind::Afk | Kind::CellChanged => {
-                names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
-                    || names(packet, PlayerUpdateLine::FORMAT, PlayerUpdateLine::CMD)
+                packet.is::<PlayerUpdatePacket>() || packet.is::<PlayerUpdateLine>()
             }
-            Kind::PlayerJoined => {
-                names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
-            }
-            Kind::Zone => names(packet, EventPacket::FORMAT, EventPacket::CMD),
-            Kind::MapJoined => names(packet, MoveToAreaPacket::FORMAT, MoveToAreaPacket::CMD),
-            Kind::PlayerLeft => names(packet, ExitAreaLine::FORMAT, ExitAreaLine::CMD),
+            Kind::PlayerJoined => packet.is::<PlayerUpdatePacket>(),
+            Kind::Zone => packet.is::<EventPacket>(),
+            Kind::MapJoined => packet.is::<MoveToAreaPacket>(),
+            Kind::PlayerLeft => packet.is::<ExitAreaLine>(),
             Kind::Logout => false,
             Kind::PlayerState => {
-                names(packet, FightPlayersPacket::FORMAT, FightPlayersPacket::CMD)
-                    || names(packet, PlayerUpdatePacket::FORMAT, PlayerUpdatePacket::CMD)
-                    || names(packet, PlayerUpdateLine::FORMAT, PlayerUpdateLine::CMD)
+                packet.is::<CtPacket>()
+                    || packet.is::<PlayerUpdatePacket>()
+                    || packet.is::<PlayerUpdateLine>()
             }
-            Kind::MonsterRespawn => names(packet, RespawnMonLine::FORMAT, RespawnMonLine::CMD),
-            Kind::AuraAdded | Kind::AuraRemoved => {
-                names(packet, FightAurasPacket::FORMAT, FightAurasPacket::CMD)
-            }
-            Kind::Message => {
-                names(
-                    packet,
-                    FightMessagesPacket::FORMAT,
-                    FightMessagesPacket::CMD,
-                ) || names(packet, UserMessagePacket::FORMAT, UserMessagePacket::CMD)
-            }
-            Kind::ItemAdded => names(packet, AddItemsPacket::FORMAT, AddItemsPacket::CMD),
-            Kind::QuestCompleted => names(
-                packet,
-                CompleteQuestPacket::FORMAT,
-                CompleteQuestPacket::CMD,
-            ),
+            Kind::MonsterRespawn => packet.is::<RespawnMonLine>(),
+            Kind::Message => packet.is::<CtPacket>() || packet.is::<UserMessagePacket>(),
+            Kind::ItemAdded => packet.is::<AddItemsPacket>(),
+            Kind::QuestCompleted => packet.is::<CompleteQuestPacket>(),
         }
     }
 
@@ -211,21 +188,17 @@ impl Kind {
             return;
         };
         match self {
-            Kind::MonsterDeath => {
-                if let Some(ct) = decode::<CtPacket>(packet) {
-                    events.extend(
-                        ct.deaths()
-                            .into_iter()
-                            .map(|mon_map_id| GameEvent::MonsterDeath { mon_map_id }),
-                    );
+            Kind::MonsterDeath | Kind::AuraAdded | Kind::AuraRemoved => {
+                if let Some(fight) = packet.read::<CtPacket>() {
+                    self.read_fight(&fight, me, events);
                 }
             }
             Kind::ItemDrop => {
-                if let Some(dropped) = decode::<DropItemPacket>(packet) {
-                    events.extend(dropped.items.into_iter().filter_map(|item| {
+                if let Some(dropped) = packet.read::<DropItemPacket>() {
+                    events.extend(dropped.items.iter().filter_map(|item| {
                         Some(GameEvent::ItemDrop {
                             item_id: item.item_id.filter(|id| *id > 0)?,
-                            name: item.name,
+                            name: item.name.clone(),
                             quantity: item.quantity.unwrap_or(1),
                         })
                     }));
@@ -266,7 +239,9 @@ impl Kind {
                     username,
                     joined: true,
                     ..
-                }) = decode::<PlayerUpdatePacket>(packet).map(PlayerUpdate::from)
+                }) = packet
+                    .read::<PlayerUpdatePacket>()
+                    .map(|packet| PlayerUpdate::from(packet.as_ref()))
                 {
                     events.push(GameEvent::PlayerJoined {
                         is_self: is_me(me, &username),
@@ -275,7 +250,8 @@ impl Kind {
                 }
             }
             Kind::PlayerLeft => {
-                if let Some(ExitAreaLine { username, .. }) = decode::<ExitAreaLine>(packet) {
+                if let Some(left) = packet.read::<ExitAreaLine>() {
+                    let username = left.username.clone();
                     events.push(GameEvent::PlayerLeft {
                         is_self: is_me(me, &username),
                         username,
@@ -283,30 +259,18 @@ impl Kind {
                 }
             }
             Kind::MapJoined => {
-                if let Some(MoveToAreaPacket { map }) = decode::<MoveToAreaPacket>(packet)
-                    && !map.is_empty()
+                if let Some(joined) = packet.read::<MoveToAreaPacket>()
+                    && !joined.map.is_empty()
                 {
-                    events.push(GameEvent::MapJoined { map });
+                    events.push(GameEvent::MapJoined {
+                        map: joined.map.clone(),
+                    });
                 }
             }
             Kind::Logout => {}
             Kind::PlayerState => {
-                if let Some(fight) = decode::<FightPlayersPacket>(packet) {
-                    let mut players: Vec<_> = fight
-                        .players
-                        .into_iter()
-                        .filter_map(|(username, player)| {
-                            Some((username, State::from_game(player?.state?)?))
-                        })
-                        .collect();
-                    players.sort_by(|(left, _), (right, _)| left.cmp(right));
-                    for (username, state) in players {
-                        events.push(GameEvent::PlayerState {
-                            is_self: is_me(me, &username),
-                            username,
-                            state,
-                        });
-                    }
+                if let Some(fight) = packet.read::<CtPacket>() {
+                    self.read_fight(&fight, me, events);
                 } else if let Some(PlayerUpdate {
                     username,
                     state: Some(state),
@@ -321,20 +285,71 @@ impl Kind {
                 }
             }
             Kind::MonsterRespawn => {
-                if let Some(respawned) = decode::<RespawnMonLine>(packet) {
+                if let Some(respawned) = packet.read::<RespawnMonLine>() {
                     events.extend(
                         respawned
                             .ids
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .map(|mon_map_id| GameEvent::MonsterRespawn { mon_map_id }),
                     );
                 }
             }
+            Kind::Message => {
+                if let Some(fight) = packet.read::<CtPacket>() {
+                    self.read_fight(&fight, me, events);
+                } else if let Some(message) = packet.read::<UserMessagePacket>()
+                    && !message.text.is_empty()
+                {
+                    events.push(GameEvent::Message {
+                        text: message.text.clone(),
+                        mon_map_id: None,
+                    });
+                }
+            }
+            Kind::ItemAdded => {
+                if let Some(added) = packet.read::<AddItemsPacket>() {
+                    events.extend(added.items.iter().filter_map(|item| {
+                        Some(GameEvent::ItemAdded {
+                            item_id: item.item_id.filter(|id| *id > 0)?,
+                            name: item.name.clone(),
+                            quantity: item.quantity.unwrap_or(1),
+                            temp: item.temp,
+                        })
+                    }));
+                }
+            }
+            Kind::QuestCompleted => {
+                if let Some(completed) = packet.read::<CompleteQuestPacket>()
+                    && completed.success
+                    && let Some(quest_id) = completed.quest_id
+                {
+                    events.push(GameEvent::QuestCompleted {
+                        quest_id,
+                        name: completed.name.clone(),
+                    });
+                }
+            }
+            Kind::Zone => {
+                if let Some(event) = packet.read::<EventPacket>() {
+                    events.push(GameEvent::Zone {
+                        zone: event.args.zone_set.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn read_fight(self, fight: &CtPacket, me: &impl Me, events: &mut Vec<GameEvent>) {
+        match self {
+            Kind::MonsterDeath => events.extend(
+                fight
+                    .deaths()
+                    .into_iter()
+                    .map(|mon_map_id| GameEvent::MonsterDeath { mon_map_id }),
+            ),
             Kind::AuraAdded | Kind::AuraRemoved => {
-                let Some(fight) = decode::<FightAurasPacket>(packet) else {
-                    return;
-                };
-                for change in fight.changes.into_iter().flatten() {
+                for change in fight.changes.iter().flatten() {
                     let added = match change.cmd.as_str() {
                         "aura+" | "aura++" => true,
                         "aura-" | "aura--" => false,
@@ -372,67 +387,52 @@ impl Kind {
                     }
                 }
             }
+            Kind::PlayerState => {
+                let mut players: Vec<_> = fight
+                    .players
+                    .iter()
+                    .filter_map(|(username, player)| {
+                        Some((username, State::from_game(player.as_ref()?.state?)?))
+                    })
+                    .collect();
+                players.sort_by_key(|(username, _)| *username);
+                for (username, state) in players {
+                    events.push(GameEvent::PlayerState {
+                        is_self: is_me(me, username),
+                        username: username.clone(),
+                        state,
+                    });
+                }
+            }
             Kind::Message => {
-                if let Some(fight) = decode::<FightMessagesPacket>(packet) {
-                    for animation in fight.anims.into_iter().flatten() {
-                        if animation.msg.is_empty() {
-                            continue;
-                        }
-                        let mon_map_id = targets(&animation.caster)
-                            .chain(targets(&animation.target))
-                            .find(|(target_type, _)| *target_type == TargetType::Monster)
-                            .map(|(_, id)| id);
-                        events.push(GameEvent::Message {
-                            text: animation.msg,
-                            mon_map_id,
-                        });
+                for animation in fight.anims.iter().flatten() {
+                    if animation.msg.is_empty() {
+                        continue;
                     }
-                } else if let Some(message) = decode::<UserMessagePacket>(packet)
-                    && !message.text.is_empty()
-                {
+                    let mon_map_id = targets(&animation.caster)
+                        .chain(targets(&animation.target))
+                        .find(|(target_type, _)| *target_type == TargetType::Monster)
+                        .map(|(_, id)| id);
                     events.push(GameEvent::Message {
-                        text: message.text,
-                        mon_map_id: None,
+                        text: animation.msg.clone(),
+                        mon_map_id,
                     });
                 }
             }
-            Kind::ItemAdded => {
-                if let Some(added) = decode::<AddItemsPacket>(packet) {
-                    events.extend(added.items.into_iter().filter_map(|item| {
-                        Some(GameEvent::ItemAdded {
-                            item_id: item.item_id.filter(|id| *id > 0)?,
-                            name: item.name,
-                            quantity: item.quantity.unwrap_or(1),
-                            temp: item.temp,
-                        })
-                    }));
-                }
-            }
-            Kind::QuestCompleted => {
-                if let Some(CompleteQuestPacket {
-                    quest_id: Some(quest_id),
-                    name,
-                    success: true,
-                }) = decode::<CompleteQuestPacket>(packet)
-                {
-                    events.push(GameEvent::QuestCompleted { quest_id, name });
-                }
-            }
-            Kind::Zone => {
-                if let Some(event) = decode::<EventPacket>(packet) {
-                    events.push(GameEvent::Zone {
-                        zone: event.args.zone_set,
-                    });
-                }
-            }
+            _ => {}
         }
     }
 }
 
-fn player_update(packet: &str) -> Option<PlayerUpdate> {
-    decode::<PlayerUpdatePacket>(packet)
-        .map(PlayerUpdate::from)
-        .or_else(|| decode::<PlayerUpdateLine>(packet).map(PlayerUpdate::from))
+fn player_update(packet: &Response) -> Option<PlayerUpdate> {
+    packet
+        .read::<PlayerUpdatePacket>()
+        .map(|packet| PlayerUpdate::from(packet.as_ref()))
+        .or_else(|| {
+            packet
+                .read::<PlayerUpdateLine>()
+                .map(|packet| PlayerUpdate::from(packet.as_ref()))
+        })
 }
 
 pub(crate) fn targets(references: &str) -> impl Iterator<Item = (TargetType, i32)> + '_ {
@@ -450,13 +450,6 @@ pub(crate) fn targets(references: &str) -> impl Iterator<Item = (TargetType, i32
 fn is_me(me: &impl Me, username: &str) -> bool {
     me.username()
         .is_some_and(|me| me.eq_ignore_ascii_case(username))
-}
-
-fn decode<T: Packet>(packet: &str) -> Option<T> {
-    packets::decode(packet).unwrap_or_else(|error| {
-        tracing::debug!(cmd = T::CMD, %error, "skipped an unreadable packet");
-        None
-    })
 }
 
 #[cfg(test)]
@@ -479,7 +472,7 @@ mod tests {
 
     fn server(packet: serde_json::Value) -> Event {
         Event::ExtensionResponse {
-            packet: packet.to_string(),
+            packet: packet.to_string().into(),
         }
     }
 
@@ -512,7 +505,7 @@ mod tests {
 
     #[test]
     fn a_fight_update_reports_each_monster_that_died() {
-        let packet = json!({ "type": "json", "dataObj": { "cmd": "ct", "m": {
+        let packet = json!({ "type": "json", "dataObj": { "cmd": "ct", "a": false, "m": {
             "7": { "intState": 0, "intHP": 0 },
             "2": { "intState": "0" },
             "3": { "intState": 2, "intHP": 50 },

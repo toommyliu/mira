@@ -413,13 +413,8 @@ pub(crate) async fn monster_drops(
     }
     Ok(replies
         .answer(DROPS_TIMEOUT, |packet| {
-            (packet.mon_map_id == Some(monster.mon_map_id)).then(|| {
-                packet
-                    .items
-                    .into_iter()
-                    .filter_map(DropItem::into_drop)
-                    .collect()
-            })
+            (packet.mon_map_id == Some(monster.mon_map_id))
+                .then(|| packet.items.iter().filter_map(DropItem::as_drop).collect())
         })
         .await)
 }
@@ -651,7 +646,7 @@ fn names<'de, D: Deserializer<'de>>(input: D) -> Result<Vec<String>, D::Error> {
 }
 
 impl DropItem {
-    fn into_drop(self) -> Option<Drop> {
+    fn as_drop(&self) -> Option<Drop> {
         let item_id = self.item_id.filter(|id| *id > 0)?;
         let quantity = self.quantity.unwrap_or(1);
         let divisor = if self.varies {
@@ -670,7 +665,7 @@ impl DropItem {
         }
         Some(Drop {
             item_id,
-            name: self.name,
+            name: self.name.clone(),
             quantity,
             rate: self.rate.map(|rate| (rate / divisor).min(100.0)),
             boosted_rate: self.boosted_rate.map(|rate| (rate / divisor).min(100.0)),
@@ -679,14 +674,14 @@ impl DropItem {
                 || !self.gating_quests.is_empty()
                 || !required_quest_ids.is_empty(),
             required_quest_ids,
-            category: self.category,
+            category: self.category.clone(),
             member: self.member,
             coins: self.coins,
             rarity: self.rarity.filter(|rarity| *rarity > 0),
             max_stack: self.max_stack.filter(|stack| *stack > 0),
             varies: self.varies,
-            gating_quests: self.gating_quests,
-            objective_of: self.objective_of,
+            gating_quests: self.gating_quests.clone(),
+            objective_of: self.objective_of.clone(),
         })
     }
 }
@@ -790,7 +785,7 @@ mod tests {
                         for reply in replies {
                             tokio::time::sleep(Duration::from_millis(300)).await;
                             events.publish(&Event::ExtensionResponse {
-                                packet: reply.to_string(),
+                                packet: reply.to_string().into(),
                             });
                         }
                     });
@@ -999,7 +994,7 @@ mod tests {
                 let settle = || tokio::time::sleep(Duration::from_millis(150));
                 let publish = |packet: serde_json::Value| {
                     events.publish(&Event::ExtensionResponse {
-                        packet: packet.to_string(),
+                        packet: packet.to_string().into(),
                     });
                     settle()
                 };
@@ -1092,7 +1087,7 @@ mod tests {
                 events.publish(&Event::ExtensionResponse {
                     packet:
                         json!({ "type": "json", "dataObj": { "cmd": "monsterDrops", "MonMapID": 1, "items": {} } })
-                            .to_string(),
+                            .to_string().into(),
                 });
                 let drops = monster_drops(&loader, replies, &MonsterQuery::Name("Frogzard".into()))
                     .await

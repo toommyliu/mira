@@ -315,8 +315,8 @@ pub(crate) async fn go_to(
 async fn answer(warnings: &Packets<WarningLine>, notices: &Packets<ServerLine>) -> Arrival {
     loop {
         let message = tokio::select! {
-            Ok(warning) = warnings.next() => warning.message,
-            Ok(notice) = notices.next() => notice.message,
+            Ok(warning) = warnings.next() => warning.message.clone(),
+            Ok(notice) = notices.next() => notice.message.clone(),
             else => std::future::pending().await,
         };
         if let Some(refusal) = refused(&message) {
@@ -760,7 +760,8 @@ mod tests {
         events.publish(&Event::ExtensionResponse {
             packet: format!(
                 r#"{{"type":"json","dataObj":{{"cmd":"moveToArea","areaName":"{map}-5"}}}}"#
-            ),
+            )
+            .into(),
         });
     }
 
@@ -921,7 +922,7 @@ mod tests {
                 let refused = serde_json::json!({ "type": "str", "dataObj": [cmd, "-1", message] });
                 for packet in [other, refused] {
                     events.publish(&Event::ExtensionResponse {
-                        packet: packet.to_string(),
+                        packet: packet.to_string().into(),
                     });
                 }
             });
@@ -1022,7 +1023,7 @@ mod tests {
             async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 events.publish(&Event::ExtensionResponse {
-                packet: serde_json::json!({ "type": "str", "dataObj": ["warning", "-1", "Room join failed, destination room is full."] }).to_string(),
+                packet: serde_json::json!({ "type": "str", "dataObj": ["warning", "-1", "Room join failed, destination room is full."] }).to_string().into(),
             });
             }
         );

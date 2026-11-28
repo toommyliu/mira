@@ -408,7 +408,8 @@ mod tests {
                             packet: json!({ "type": "json", "dataObj": {
                                 "cmd": "getDrop", "ItemID": drop.id, "bSuccess": 1
                             } })
-                            .to_string(),
+                            .to_string()
+                            .into(),
                         });
                         Value::Number(drop.id)
                     }
@@ -467,7 +468,7 @@ mod tests {
                 "cmd": "dropItem",
                 "items": { drop.id.to_string(): { "ItemID": drop.id, "sName": drop.name, "iQty": 1 } }
             } })
-            .to_string(),
+            .to_string().into(),
         });
     }
 
@@ -494,7 +495,8 @@ mod tests {
                 events.publish(&Event::ExtensionResponse {
                     packet:
                         json!({ "type": "json", "dataObj": { "cmd": "dropItem", "items": {} } })
-                            .to_string(),
+                            .to_string()
+                            .into(),
                 });
                 settle().await;
                 let list = list.borrow();
@@ -563,7 +565,9 @@ mod tests {
                     list.waiting.push(GEM);
                 }
                 events.publish(&Event::ExtensionResponse {
-                    packet: json!({ "type": "json", "dataObj": { "cmd": "dropItem" } }).to_string(),
+                    packet: json!({ "type": "json", "dataObj": { "cmd": "dropItem" } })
+                        .to_string()
+                        .into(),
                 });
                 settle().await;
                 rules.send_modify(|state| state.config.enabled = false);
@@ -587,7 +591,8 @@ mod tests {
                     list.borrow_mut().waiting.push(PRIZE);
                     events.publish(&Event::ExtensionResponse {
                         packet: json!({ "type": "json", "dataObj": { "cmd": "dropItem" } })
-                            .to_string(),
+                            .to_string()
+                            .into(),
                     });
                 };
                 rules.send_modify(|state| state.config.reject_others = true);

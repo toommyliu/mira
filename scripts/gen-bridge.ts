@@ -444,7 +444,11 @@ function renderRustEvents(events: readonly Entry[]): string {
       if (parameter.kind !== "required") {
         throw new Error(`Event parameters must be required: ${event.location}`);
       }
-      return `${snakeCase(parameter.name, event.location)}: ${rustEventFieldType(parameter.type)}`;
+      const type =
+        parameter.rustType === undefined
+          ? rustEventFieldType(parameter.type)
+          : `crate::bridge::${parameter.rustType}`;
+      return `${snakeCase(parameter.name, event.location)}: ${type}`;
     });
     return fields.length
       ? `${pascalCase(event.name)} { ${fields.join(", ")} },`

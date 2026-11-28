@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
 
 use super::{
@@ -49,13 +47,13 @@ impl Packet for PlayerUpdatePacket {
     const CMD: &'static str = "uotls";
 }
 
-impl From<PlayerUpdatePacket> for PlayerUpdate {
-    fn from(packet: PlayerUpdatePacket) -> Self {
+impl From<&PlayerUpdatePacket> for PlayerUpdate {
+    fn from(packet: &PlayerUpdatePacket) -> Self {
         PlayerUpdate {
-            username: packet.username,
+            username: packet.username.clone(),
             afk: packet.changes.afk,
-            cell: packet.changes.cell,
-            pad: packet.changes.pad,
+            cell: packet.changes.cell.clone(),
+            pad: packet.changes.pad.clone(),
             state: packet.changes.state.and_then(State::from_game),
             joined: packet.changes.everything.is_some(),
         }
@@ -75,8 +73,8 @@ impl Packet for PlayerUpdateLine {
     const CMD: &'static str = "uotls";
 }
 
-impl From<PlayerUpdateLine> for PlayerUpdate {
-    fn from(line: PlayerUpdateLine) -> Self {
+impl From<&PlayerUpdateLine> for PlayerUpdate {
+    fn from(line: &PlayerUpdateLine) -> Self {
         let field = |key: &str| {
             line.changes
                 .split(',')
@@ -90,7 +88,7 @@ impl From<PlayerUpdateLine> for PlayerUpdate {
             .and_then(|state| state.parse().ok())
             .and_then(State::from_game);
         PlayerUpdate {
-            username: line.username,
+            username: line.username.clone(),
             afk,
             cell,
             pad,
@@ -98,17 +96,6 @@ impl From<PlayerUpdateLine> for PlayerUpdate {
             joined: false,
         }
     }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct FightPlayersPacket {
-    #[serde(rename = "p", default)]
-    pub(crate) players: HashMap<String, Option<FightPlayer>>,
-}
-
-impl Packet for FightPlayersPacket {
-    const FORMAT: Format = Format::Json;
-    const CMD: &'static str = "ct";
 }
 
 #[derive(Deserialize)]

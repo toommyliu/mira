@@ -135,7 +135,7 @@ mod tests {
         let packet =
             json!({ "type": "str", "dataObj": ["uotls", "-1", username, format!("afk:{afk}")] });
         events.publish(&Event::ExtensionResponse {
-            packet: packet.to_string(),
+            packet: packet.to_string().into(),
         });
         sleep(Duration::from_millis(10)).await;
     }

@@ -233,7 +233,8 @@ mod tests {
                         packet: json!({ "type": "json", "dataObj": {
                             "cmd": "turnIn", "sItems": format!("{id}:1")
                         } })
-                        .to_string(),
+                        .to_string()
+                        .into(),
                     });
                     Value::Bool(true)
                 }
@@ -388,7 +389,8 @@ mod tests {
                             packet: json!({ "type": "json", "dataObj": {
                                 "cmd": "bankToInv", "ItemID": id.to_string()
                             } })
-                            .to_string(),
+                            .to_string()
+                            .into(),
                         });
                     }
                     Value::Bool(true)

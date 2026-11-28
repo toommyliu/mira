@@ -1,6 +1,8 @@
 mod decode;
 mod game_action;
 mod generated;
+#[cfg(test)]
+mod packet_bench;
 pub(crate) mod packets;
 
 use std::{
@@ -22,7 +24,7 @@ pub(crate) use decode::DecodeError;
 use decode::{arg, decode};
 pub(crate) use game_action::GameAction;
 pub(crate) use generated::*;
-pub(crate) use packets::{Format, Interruption, Packet, Packets};
+pub(crate) use packets::{Format, Interruption, Packet, Packets, Response};
 pub(crate) use ruffle_core::external::Value;
 
 pub(crate) fn from_json(json: serde_json::Value) -> Value {
