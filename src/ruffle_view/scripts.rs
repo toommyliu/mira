@@ -75,6 +75,7 @@ const HEIGHT: f32 = 560.0;
 const MIN_WIDTH: f32 = 800.0;
 const MIN_HEIGHT: f32 = 400.0;
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
+const QUALIFIER_SHRINK: f32 = 1000.0;
 const PATIENCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -475,6 +476,7 @@ fn source_mark(theme: &Theme, state: &SourceState) -> Option<impl IntoElement> {
     Some(
         div()
             .id(label)
+            .debug_selector(|| "source-mark".into())
             .role(gpui::Role::Image)
             .aria_label(label)
             .flex_none()
@@ -1706,16 +1708,11 @@ impl ScriptsWindow {
                 h_flex()
                     .min_w_0()
                     .gap(marks.space(1.5))
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w_full()
-                            .truncate()
-                            .child(row.name.clone()),
-                    )
+                    .child(div().min_w_0().truncate().child(row.name.clone()))
                     .children(row.qualifier.clone().map(|qualifier| {
                         div()
                             .min_w_0()
+                            .flex_shrink(QUALIFIER_SHRINK)
                             .truncate()
                             .text_ellipsis_start()
                             .text_caption(marks.typography)
@@ -5357,6 +5354,44 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert!(
             at_mode < at_offset,
             "tabbing on to Mode scrolls further, even with Offset still marked invalid"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_long_source_name_leaves_room_for_its_problem_mark(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-long-source-{:x}", u64::from_ne_bytes(random)));
+        fs::create_dir_all(temp.join("scripts")).unwrap();
+        let missing = temp.join("a folder whose name is far wider than the sidebar row");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::settings::add_script_folder(missing.clone(), cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let list = scripts.read_with(cx, |scripts, _| scripts.folder_scroll.bounds());
+        let mark = cx.debug_bounds("source-mark").unwrap();
+        assert!(
+            mark.right() <= list.right() - px(8.0),
+            "the problem mark stays inside the sources list: {mark:?} in {list:?}"
         );
         fs::remove_dir_all(temp).unwrap();
     }
