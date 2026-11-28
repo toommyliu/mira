@@ -133,11 +133,14 @@ package mira.generated
       external.externalize("quests.fakeComplete", Quests.fakeComplete);
       external.externalize("quests.get", Quests.get);
       external.externalize("quests.getAccepted", Quests.getAccepted);
+      external.externalize("quests.getDropNames", Quests.getDropNames);
       external.externalize("quests.getLoaded", Quests.getLoaded);
       external.externalize("quests.getMaxTurnIns", Quests.getMaxTurnIns);
+      external.externalize("quests.getPresence", Quests.getPresence);
       external.externalize("quests.isAvailable", Quests.isAvailable);
       external.externalize("quests.isInProgress", Quests.isInProgress);
       external.externalize("quests.load", Quests.load);
+      external.externalize("quests.needsRewardChoice", Quests.needsRewardChoice);
       external.externalize("settings.enemyMagnet", Settings.enemyMagnet);
       external.externalize("settings.infiniteRange", Settings.infiniteRange);
       external.externalize("settings.provokeCell", Settings.provokeCell);
