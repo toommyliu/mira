@@ -27,14 +27,12 @@ export default function* () {
   while (kills < goal) {
     const prey = yield* Combat.hunt(monster, { preferMostMatches: true });
     if (prey === null) {
-      console.log(`no live ${monster} in the map, waiting for a respawn`);
-      yield* Script.sleep("2 seconds");
-      continue;
+      console.log(`couldn't reach a ${monster} in the map`);
+      return;
     }
     console.log(`hunting ${prey.name} (#${prey.monMapId}) in ${prey.cell}`);
-    if (yield* Combat.kill({ monMapId: prey.monMapId })) {
-      kills += 1;
-      console.log(`killed ${kills}/${goal}`);
-    }
+    if (!(yield* Combat.kill({ monMapId: prey.monMapId }))) return;
+    kills += 1;
+    console.log(`killed ${kills}/${goal}`);
   }
 }

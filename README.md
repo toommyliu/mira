@@ -35,17 +35,14 @@ After that, Mira can update itself without macOS blocking it again.
 A script is a TypeScript generator function.
 
 ```ts
-import { Combat, Player, Script } from "mira";
+import { Combat, Player } from "mira";
 
 export default function* () {
   if (!(yield* Player.isReady())) return;
   while (true) {
     const prey = yield* Combat.hunt("Frogzard");
-    if (prey === null) {
-      yield* Script.sleep("2 seconds");
-      continue;
-    }
-    yield* Combat.kill({ monMapId: prey.monMapId });
+    if (prey === null) return;
+    if (!(yield* Combat.kill({ monMapId: prey.monMapId }))) return;
   }
 }
 ```

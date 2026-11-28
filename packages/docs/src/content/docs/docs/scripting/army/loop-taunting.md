@@ -49,7 +49,9 @@ export default function* () {
     ],
     [{ target: "Boss", players: [1, 2, 3, 4], on: { includes: "prepares" } }],
   ]);
-  while (true) yield* Combat.kill("*");
+  while (true) {
+    if (!(yield* Combat.kill("*"))) return;
+  }
 }
 ```
 
