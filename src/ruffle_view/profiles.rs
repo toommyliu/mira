@@ -5,28 +5,27 @@ use std::{
 
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Div, Entity, FocusHandle, Focusable as _,
-    FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent,
-    MouseButton, ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, WeakEntity,
-    Window, WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _,
-    px, size,
+    FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
+    Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, prelude::FluentBuilder as _, px, size,
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
     components::Empty,
     h_flex,
-    nav::{Axis, Step},
     primitives::{
-        Align, Button, Dialog, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
-        MenuItem, Numeric, Scrollbar, Tab, Tabs, ToggleGroup,
+        Alert, Align, Button, Dialog, DropdownMenu, Icon, Input, InputEvent, Kbd, List, ListItem,
+        MenuItem, Numeric, Scrollbar, ToggleGroup,
         button::{Size, Variant},
-        text_field::Find,
     },
     v_flex,
 };
 
 use super::{
-    client::{CloseSession, bar_title, drag_area, refocus_root_when_lost, reveal_tab, window_bar},
+    client::{
+        CloseSession, bar_separator, bar_title, drag_area, refocus_root_when_lost, window_bar,
+    },
     form,
     profile_form::{Form, FormStep, FormTrigger, Item, Rule, Subject},
 };
@@ -42,20 +41,21 @@ use crate::{
 actions!(mira, [OpenCombatProfiles, SaveProfile, NewProfile]);
 
 const CONTEXT: &str = "CombatProfiles";
-const WIDTH: f32 = 1000.0;
+const WIDTH: f32 = 800.0;
 const HEIGHT: f32 = 640.0;
-const MIN_WIDTH: f32 = 860.0;
+const MIN_WIDTH: f32 = 660.0;
 const MIN_HEIGHT: f32 = 420.0;
 
 const PADDING: Pixels = px(16.0);
-const STATUS_WIDTH: Pixels = px(420.0);
-const RENAME_INSET: Pixels = px(9.0);
+const PROFILE_WIDTH: Pixels = px(180.0);
 const SUBJECT_WIDTH: Pixels = px(96.0);
 const SUBJECT_MENU_WIDTH: Pixels = px(140.0);
 const UNIT_WIDTH: Pixels = px(56.0);
+const MILLIS_WIDTH: Pixels = px(72.0);
 const VALUE_WIDTH: Pixels = px(44.0);
 const CONJUNCTION_WIDTH: Pixels = px(24.0);
 const CONDITION_GAP: Pixels = px(8.0);
+const NEW_NAME: &str = "Untitled profile";
 const SLOTS: [u8; 6] = [0, 1, 2, 3, 4, 5];
 const SKILLS: [&str; 6] = [
     "Auto attack",
@@ -189,19 +189,43 @@ fn section_of(item: Item) -> (Section, usize) {
     }
 }
 
+enum Origin {
+    Saved(String),
+    New { name: String, form: Form },
+}
+
 struct Draft {
-    saved: Option<String>,
+    origin: Origin,
     name: String,
     form: Form,
     item: Option<Item>,
 }
 
 impl Draft {
-    fn edited(&self, library: &Library) -> bool {
-        let Some(saved) = &self.saved else {
-            return true;
-        };
-        self.name != *saved || self.form.parse().ok() != library.get(saved)
+    fn of(saved: &str, library: &Library) -> Option<Self> {
+        let saved = library.names().find(|name| same_name(name, saved))?;
+        Some(Self {
+            origin: Origin::Saved(saved.to_owned()),
+            name: saved.to_owned(),
+            form: Form::of(&library.get(saved)?),
+            item: None,
+        })
+    }
+
+    fn saved(&self) -> Option<&str> {
+        match &self.origin {
+            Origin::Saved(saved) => Some(saved),
+            Origin::New { .. } => None,
+        }
+    }
+
+    fn changed(&self, library: &Library) -> bool {
+        match &self.origin {
+            Origin::Saved(saved) => {
+                self.name != *saved || self.form.parse().ok() != library.get(saved)
+            }
+            Origin::New { name, form } => self.name != *name || self.form != *form,
+        }
     }
 
     fn label(&self) -> SharedString {
@@ -212,27 +236,28 @@ impl Draft {
     }
 
     fn unsaved(&self, library: &Library) -> Option<(&'static str, Tone)> {
-        match (&self.saved, self.edited(library)) {
-            (None, _) => Some(("Not saved yet", Tone::Accent)),
-            (Some(_), true) => Some(("Unsaved changes", Tone::Warning)),
-            (Some(_), false) => None,
+        match (&self.origin, self.changed(library)) {
+            (Origin::New { .. }, _) => Some(("Not saved yet", Tone::Accent)),
+            (Origin::Saved(_), true) => Some(("Unsaved changes", Tone::Warning)),
+            (Origin::Saved(_), false) => None,
         }
     }
 
     fn taken<'a>(&'a self, library: &'a Library) -> impl Iterator<Item = &'a str> + 'a {
-        library.names().filter(move |name| {
-            self.saved
-                .as_deref()
-                .is_none_or(|saved| !same_name(saved, name))
-        })
+        library
+            .names()
+            .filter(move |name| self.saved().is_none_or(|saved| !same_name(saved, name)))
+    }
+
+    fn name_rejected(&self, library: &Library) -> bool {
+        check_name(&self.name, self.taken(library)).is_err()
     }
 
     fn name_note(&self, library: &Library) -> Option<(String, Tone)> {
         match check_name(&self.name, self.taken(library)) {
             Err(problem) => Some((problem, Tone::Danger)),
             Ok(name) => self
-                .saved
-                .as_ref()
+                .saved()
                 .filter(|saved| !same_name(saved, &name))
                 .map(|saved| {
                     (
@@ -274,39 +299,42 @@ impl Texts {
     }
 }
 
+enum Blocked {
+    Name,
+    Item(Item, String),
+    Write(String),
+}
+
+enum Leave {
+    To(String),
+    New,
+    Close,
+}
+
 struct Editor {
     focus: FocusHandle,
     library: Arc<Library>,
-    drafts: Vec<Draft>,
-    selected: Option<usize>,
+    draft: Option<Draft>,
+    previous: Option<String>,
     name: Entity<Input>,
-    renaming: Option<String>,
-    search: Entity<Input>,
-    profile_scroll: ScrollHandle,
     lanes_scroll: ScrollHandle,
     inspector_scroll: ScrollHandle,
     texts: Option<Texts>,
     problem: Option<String>,
     deleting: bool,
-    closing: bool,
-    _subscriptions: [Subscription; 4],
+    leaving: Option<Leave>,
+    _subscriptions: [Subscription; 2],
 }
 
 impl Editor {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let library = combat_profiles::library(cx);
-        let drafts: Vec<Draft> = library
+        let draft = library
             .names()
-            .map(|name| Draft {
-                saved: Some(name.to_owned()),
-                name: name.to_owned(),
-                form: Form::of(&library.get(name).expect("a listed profile exists")),
-                item: None,
-            })
-            .collect();
-        let selected = (!drafts.is_empty()).then_some(0);
-        let first = drafts
-            .first()
+            .next()
+            .and_then(|first| Draft::of(first, &library));
+        let first = draft
+            .as_ref()
             .map(|draft| draft.name.clone())
             .unwrap_or_default();
         let name = cx.new(|cx| {
@@ -314,22 +342,8 @@ impl Editor {
             input.set_text(first, cx);
             input
         });
-        let name_focus = name.read(cx).focus_handle(cx);
-        let search = cx.new(|cx| {
-            Input::new("Search profiles", cx)
-                .placeholder("Search")
-                .search()
-        });
         let subscriptions = [
-            cx.on_blur(&name_focus, window, |this, _, cx| {
-                this.renaming = None;
-                cx.notify();
-            }),
             cx.subscribe_in(&name, window, Self::name_event),
-            cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
-                InputEvent::Changed => cx.notify(),
-                InputEvent::Submitted => this.step_profile(0, window, cx),
-            }),
             cx.observe_global::<combat_profiles::Store>(|this, cx| {
                 this.library = combat_profiles::library(cx);
                 cx.notify();
@@ -338,24 +352,21 @@ impl Editor {
         Self {
             focus: cx.focus_handle(),
             library,
-            drafts,
-            selected,
+            draft,
+            previous: None,
             name,
-            renaming: None,
-            search,
-            profile_scroll: ScrollHandle::new(),
             lanes_scroll: ScrollHandle::new(),
             inspector_scroll: ScrollHandle::new(),
             texts: None,
             problem: None,
             deleting: false,
-            closing: false,
+            leaving: None,
             _subscriptions: subscriptions,
         }
     }
 
     fn draft(&self) -> Option<&Draft> {
-        self.selected.and_then(|index| self.drafts.get(index))
+        self.draft.as_ref()
     }
 
     fn item(&self) -> Option<Item> {
@@ -367,45 +378,21 @@ impl Editor {
     }
 
     fn form_mut(&mut self) -> Option<&mut Form> {
-        let index = self.selected?;
-        self.drafts.get_mut(index).map(|draft| &mut draft.form)
+        self.draft.as_mut().map(|draft| &mut draft.form)
     }
 
-    fn edited(&self) -> Vec<&Draft> {
-        self.drafts
-            .iter()
-            .filter(|draft| draft.edited(&self.library))
-            .collect()
+    fn changed(&self) -> bool {
+        self.draft()
+            .is_some_and(|draft| draft.changed(&self.library))
     }
 
-    fn entries(&self, cx: &App) -> Vec<usize> {
-        let query = self.search.read(cx).text().trim().to_lowercase();
-        (0..self.drafts.len())
-            .filter(|index| self.drafts[*index].label().to_lowercase().contains(&query))
-            .collect()
+    fn confirming(&self) -> bool {
+        self.deleting || self.leaving.is_some()
     }
 
-    fn select(&mut self, selected: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != selected {
-            self.show(selected, window, cx);
-        }
-    }
-
-    fn reveal(&self, cx: &App) {
-        let entries = self.entries(cx);
-        if let Some(row) = entries
-            .iter()
-            .position(|entry| Some(*entry) == self.selected)
-        {
-            reveal_tab(&self.profile_scroll, row, entries.len());
-        }
-    }
-
-    fn show(&mut self, selected: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
-        self.selected = selected;
-        self.reveal(cx);
+    fn show(&mut self, draft: Option<Draft>, window: &mut Window, cx: &mut Context<Self>) {
+        self.draft = draft;
         self.problem = None;
-        self.renaming = None;
         let name = self
             .draft()
             .map(|draft| draft.name.clone())
@@ -416,64 +403,60 @@ impl Editor {
     }
 
     fn select_named(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let index = self.drafts.iter().position(|draft| {
-            draft
-                .saved
-                .as_deref()
-                .is_some_and(|saved| same_name(saved, name))
-        });
-        if index.is_some() {
-            self.select(index, window, cx);
+        let shown = self
+            .draft()
+            .and_then(Draft::saved)
+            .is_some_and(|saved| same_name(saved, name));
+        if !shown && !self.confirming() && self.library.names().any(|saved| same_name(saved, name))
+        {
+            self.leave(Leave::To(name.to_owned()), window, cx);
         }
     }
 
-    fn select_near(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let nearest = index.min(self.drafts.len().saturating_sub(1));
-        self.show((!self.drafts.is_empty()).then_some(nearest), window, cx);
+    fn leave(&mut self, leave: Leave, window: &mut Window, cx: &mut Context<Self>) {
+        if self.changed() {
+            self.leaving = Some(leave);
+            cx.notify();
+        } else {
+            self.go(leave, window, cx);
+        }
     }
 
-    fn step_profile(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let entries = self.entries(cx);
-        let next = match entries
-            .iter()
-            .position(|entry| Some(*entry) == self.selected)
-        {
-            Some(at) => at
-                .checked_add_signed(by)
-                .filter(|next| *next < entries.len()),
-            None => (!entries.is_empty()).then_some(0),
+    fn go(&mut self, leave: Leave, window: &mut Window, cx: &mut Context<Self>) {
+        match leave {
+            Leave::To(name) => self.show(Draft::of(&name, &self.library), window, cx),
+            Leave::New => {
+                let form = Form::of(&Profile::generic());
+                self.start(form.clone(), form, NEW_NAME, window, cx);
+            }
+            Leave::Close => window.remove_window(),
+        }
+    }
+
+    fn leave_after_saving(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(leave) = self.leaving.take() else {
+            return;
         };
-        if let Some(next) = next {
-            self.select(Some(entries[next]), window, cx);
+        match self.save_draft(cx) {
+            Ok(()) => self.go(leave, window, cx),
+            Err(blocked) => self.show_blocked(blocked, window, cx),
         }
     }
 
     fn select_item(&mut self, item: Option<Item>, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(draft) = self.selected.and_then(|index| self.drafts.get_mut(index)) {
+        if let Some(draft) = &mut self.draft {
             draft.item = item;
         }
         self.rebuild_texts(window, cx);
         cx.notify();
     }
 
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.draft() else {
-            return;
-        };
-        self.renaming = Some(draft.name.clone());
-        self.search.update(cx, |search, cx| search.set_text("", cx));
-        self.reveal(cx);
-        self.name.read(cx).focus_handle(cx).focus(window, cx);
-        cx.notify();
-    }
-
-    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self.renaming.take() else {
-            return;
-        };
-        self.name.update(cx, |input, cx| input.set_text(name, cx));
-        window.focus(&self.focus, cx);
-        cx.notify();
+    fn edit_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.lanes_scroll.set_offset(gpui::Point::default());
+        self.name.update(cx, |input, cx| {
+            input.select_all(cx);
+            input.focus_handle(cx).focus(window, cx);
+        });
     }
 
     fn name_event(
@@ -486,25 +469,19 @@ impl Editor {
         match event {
             InputEvent::Changed => {
                 let text = input.read(cx).text().to_owned();
-                if let Some(index) = self.selected
-                    && let Some(draft) = self.drafts.get_mut(index)
+                if let Some(draft) = &mut self.draft
                     && draft.name != text
                 {
                     draft.name = text;
+                    self.problem = None;
                     cx.notify();
                 }
-                let invalid = self.draft().is_some_and(|draft| {
-                    draft
-                        .name_note(&self.library)
-                        .is_some_and(|(_, tone)| tone == Tone::Danger)
-                });
+                let invalid = self
+                    .draft()
+                    .is_some_and(|draft| draft.name_rejected(&self.library));
                 input.update(cx, |input, cx| input.set_invalid(invalid, cx));
             }
-            InputEvent::Submitted => {
-                self.renaming = None;
-                window.focus(&self.focus, cx);
-                cx.notify();
-            }
+            InputEvent::Submitted => window.focus(&self.focus, cx),
         }
     }
 
@@ -536,7 +513,7 @@ impl Editor {
             },
         };
         if texts.is_empty() {
-            if let Some(draft) = self.selected.and_then(|index| self.drafts.get_mut(index)) {
+            if let Some(draft) = &mut self.draft {
                 draft.item = None;
             }
             self.texts = None;
@@ -549,7 +526,7 @@ impl Editor {
                 let input = cx.new(|cx| {
                     let mut input = Input::new(label, cx);
                     if field.millis() {
-                        input = input.numeric(MILLIS).suffix("ms");
+                        input = input.numeric(MILLIS);
                     }
                     if let Text::Name(_) | Text::Value(_) = field {
                         input = input.small();
@@ -763,9 +740,7 @@ impl Editor {
 
     fn unique_name(&self, base: &str) -> String {
         let taken = |name: &str| {
-            same_name(name, GENERIC)
-                || self.library.names().any(|saved| same_name(saved, name))
-                || self.drafts.iter().any(|draft| same_name(&draft.name, name))
+            same_name(name, GENERIC) || self.library.names().any(|saved| same_name(saved, name))
         };
         if !taken(base) {
             return base.to_owned();
@@ -776,306 +751,228 @@ impl Editor {
             .expect("some numbered name is free")
     }
 
-    fn add_profile(&mut self, form: Form, base: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn start(
+        &mut self,
+        form: Form,
+        unchanged: Form,
+        base: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let name = self.unique_name(base);
-        self.drafts.push(Draft {
-            saved: None,
+        if let Some(saved) = self.draft().and_then(Draft::saved) {
+            self.previous = Some(saved.to_owned());
+        }
+        let draft = Draft {
+            origin: Origin::New {
+                name: name.clone(),
+                form: unchanged,
+            },
             name,
             form,
             item: None,
-        });
-        self.select(Some(self.drafts.len() - 1), window, cx);
-        self.rename(window, cx);
+        };
+        self.show(Some(draft), window, cx);
+        self.edit_name(window, cx);
     }
 
     fn new_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.add_profile(Form::of(&Profile::generic()), "New profile", window, cx);
+        self.leave(Leave::New, window, cx);
     }
 
     fn duplicate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.draft() else {
             return;
         };
+        let Some(saved) = draft.saved().and_then(|saved| self.library.get(saved)) else {
+            return;
+        };
         let form = draft.form.clone();
         let base = format!("{} copy", draft.name.trim());
-        self.add_profile(form, &base, window, cx);
+        self.start(form, Form::of(&saved), &base, window, cx);
     }
 
     fn revert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.selected else {
+        let Some(draft) = self.draft() else {
             return;
         };
-        let Some(saved) = self.drafts[index].saved.clone() else {
-            self.drafts.remove(index);
-            self.select_near(index, window, cx);
-            return;
+        let back = match draft.saved() {
+            Some(saved) => Draft::of(saved, &self.library).map(|saved| Draft {
+                item: draft.item,
+                ..saved
+            }),
+            None => self
+                .previous
+                .as_deref()
+                .or_else(|| self.library.names().next())
+                .and_then(|name| Draft::of(name, &self.library)),
         };
-        let Some(profile) = self.library.get(&saved) else {
-            return;
-        };
-        let draft = &mut self.drafts[index];
-        draft.form = Form::of(&profile);
-        draft.name = saved.clone();
-        self.name.update(cx, |input, cx| input.set_text(saved, cx));
-        self.problem = None;
-        self.renaming = None;
-        self.rebuild_texts(window, cx);
-        cx.notify();
+        self.show(back, window, cx);
     }
 
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.deleting = false;
-        let Some(index) = self.selected else {
+        let Some(saved) = self.draft().and_then(Draft::saved).map(str::to_owned) else {
             return;
         };
-        if let Some(saved) = &self.drafts[index].saved
-            && let Err(error) = combat_profiles::delete(saved, cx)
-        {
+        let names: Vec<&str> = self.library.names().collect();
+        let next = names
+            .iter()
+            .position(|name| same_name(name, &saved))
+            .and_then(|at| names.get(at + 1).or_else(|| names.get(at.checked_sub(1)?)))
+            .map(|name| (*name).to_owned());
+        if let Err(error) = combat_profiles::delete(&saved, cx) {
             self.problem = Some(format!("Couldn't delete the profile: {error}"));
             cx.notify();
             return;
         }
-        self.drafts.remove(index);
-        self.select_near(index, window, cx);
+        self.library = combat_profiles::library(cx);
+        let next = next.and_then(|name| Draft::of(&name, &self.library));
+        self.show(next, window, cx);
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.selected
-            && let Err((at, problem)) = self.save_draft(index, cx)
-        {
-            self.show_problem(at, problem, window, cx);
+        if let Err(blocked) = self.save_draft(cx) {
+            self.show_blocked(blocked, window, cx);
         }
         cx.notify();
     }
 
-    fn show_problem(
-        &mut self,
-        at: Option<Item>,
-        problem: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if at.is_some() {
-            self.select_item(at, window, cx);
+    fn show_blocked(&mut self, blocked: Blocked, window: &mut Window, cx: &mut Context<Self>) {
+        match blocked {
+            Blocked::Name => self.edit_name(window, cx),
+            Blocked::Item(at, problem) => {
+                self.select_item(Some(at), window, cx);
+                self.problem = Some(problem);
+            }
+            Blocked::Write(problem) => self.problem = Some(problem),
         }
-        self.problem = Some(problem);
         cx.notify();
     }
 
-    fn save_draft(
-        &mut self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Result<(), (Option<Item>, String)> {
-        let draft = &self.drafts[index];
-        let name = check_name(&draft.name, draft.taken(&self.library))
-            .map_err(|problem| (None, problem))?;
+    fn save_draft(&mut self, cx: &mut Context<Self>) -> Result<(), Blocked> {
+        let Some(draft) = &self.draft else {
+            return Ok(());
+        };
+        let name =
+            check_name(&draft.name, draft.taken(&self.library)).map_err(|_| Blocked::Name)?;
         let profile = draft
             .form
             .parse()
-            .map_err(|problem| (Some(problem.at), problem.message))?;
-        combat_profiles::save(draft.saved.as_deref(), name.clone(), profile, cx)
-            .map_err(|error| (None, format!("Couldn't save the profile: {error}")))?;
+            .map_err(|problem| Blocked::Item(problem.at, problem.message))?;
+        combat_profiles::save(draft.saved(), name.clone(), profile, cx)
+            .map_err(|error| Blocked::Write(format!("Couldn't save the profile: {error}")))?;
         self.library = combat_profiles::library(cx);
-        let draft = &mut self.drafts[index];
-        draft.saved = Some(name.clone());
-        draft.name = name;
+        if let Some(draft) = &mut self.draft {
+            draft.origin = Origin::Saved(name.clone());
+            draft.name.clone_from(&name);
+        }
+        if self.name.read(cx).text() != name {
+            self.name.update(cx, |input, cx| input.set_text(name, cx));
+        }
         self.problem = None;
         Ok(())
     }
 
     fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.edited().is_empty() {
+        if !self.changed() {
             return true;
         }
-        self.closing = true;
+        self.leaving = Some(Leave::Close);
         cx.notify();
         false
     }
 
-    fn save_all_and_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let edited: Vec<usize> = (0..self.drafts.len())
-            .filter(|index| self.drafts[*index].edited(&self.library))
+    fn profile_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<DropdownMenu> {
+        let draft = self.draft()?;
+        let shown = draft.label();
+        let saved = draft.saved().map(str::to_owned);
+        let rows: Rc<[(SharedString, Option<String>)]> = self
+            .library
+            .names()
+            .map(|name| match &saved {
+                Some(saved) if same_name(saved, name) => (name.to_owned().into(), None),
+                _ => (name.to_owned().into(), Some(name.to_owned())),
+            })
+            .chain(saved.is_none().then(|| (shown.clone(), None)))
             .collect();
-        for index in edited {
-            if let Err((at, problem)) = self.save_draft(index, cx) {
-                self.closing = false;
-                self.select(Some(index), window, cx);
-                self.show_problem(at, problem, window, cx);
-                return;
-            }
-        }
-        window.remove_window();
+        let this = cx.weak_entity();
+        let menu = DropdownMenu::new("profile-menu")
+            .trigger(
+                Button::new("profile-menu-trigger", format!("Profile: {shown}"))
+                    .variant(Variant::Ghost)
+                    .size(Size::Small)
+                    .shows_value()
+                    .flex_shrink(1.0)
+                    .min_w_0()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w(PROFILE_WIDTH)
+                            .truncate()
+                            .text_color(theme.foreground)
+                            .child(shown),
+                    ),
+            )
+            .items(move |_, _| {
+                let profiles = rows.iter().map(|(label, other)| {
+                    let this = this.clone();
+                    let other = other.clone();
+                    let shown = other.is_none();
+                    MenuItem::action(label.clone(), move |window, cx| {
+                        if let Some(name) = &other {
+                            this.update(cx, |editor, cx| editor.select_named(name, window, cx))
+                                .ok();
+                        }
+                    })
+                    .checked(shown)
+                });
+                let this = this.clone();
+                profiles
+                    .chain([
+                        MenuItem::separator().pinned(),
+                        MenuItem::action("New profile", move |window, cx| {
+                            this.update(cx, |editor, cx| editor.new_profile(window, cx))
+                                .ok();
+                        })
+                        .shortcut("⌘N")
+                        .pinned(),
+                    ])
+                    .collect()
+            });
+        Some(menu)
     }
 
-    fn sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn name_row(&self, theme: &Theme) -> impl IntoElement + use<> {
         let layout = theme.layout;
-        let typography = theme.typography;
-        let entries: Rc<[usize]> = self.entries(cx).into();
-        let listed = !entries.is_empty();
-        let rows: Rc<[ProfileRow]> = entries
-            .iter()
-            .map(|index| {
-                let draft = &self.drafts[*index];
-                let invalid = draft
-                    .name_note(&self.library)
-                    .is_some_and(|(_, tone)| tone == Tone::Danger);
-                ProfileRow {
-                    title: draft.label(),
-                    mark: if invalid {
-                        Some(Tone::Danger)
-                    } else {
-                        draft.unsaved(&self.library).map(|(_, tone)| tone)
-                    },
-                }
-            })
-            .collect();
-        let active = entries
-            .iter()
-            .position(|entry| Some(*entry) == self.selected)
-            .unwrap_or(entries.len());
-        let rename = self.renaming.is_some().then(|| self.name.clone());
-        let this = cx.weak_entity();
-        let selector = this.clone();
-        let selectable = entries.clone();
-        let profiles = Tabs::new("profiles", "Combat profiles", rows.len(), move |index| {
-            let ProfileRow { title, mark } = &rows[index];
-            let entry = entries[index];
-            let current = index == active;
-            let menu = {
-                let this = this.clone();
-                move |_: &mut Window, _: &mut App| profile_menu(&this, entry)
-            };
-            let mut tab = Tab::new(title.clone()).menu(menu.clone());
-            if let (Some(input), true) = (&rename, current) {
-                let canceller = this.clone();
-                tab = tab.child(
-                    div()
-                        .mx(-RENAME_INSET)
-                        .my(layout.space(-1.0))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_key_down(move |event, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                canceller
-                                    .update(cx, |editor, cx| editor.cancel_rename(window, cx))
-                                    .ok();
-                                cx.stop_propagation();
-                            } else if Step::from_key(event, Axis::Vertical).is_some() {
-                                cx.stop_propagation();
-                            }
-                        })
-                        .child(input.clone()),
-                );
-            }
-            if current && rename.is_none() {
-                tab = tab.end_slot(
-                    DropdownMenu::new(("profile-actions", index))
-                        .width(px(180.0))
-                        .trigger(
-                            Button::icon(
-                                ("profile-actions-trigger", index),
-                                Icon::Ellipsis,
-                                "Profile actions",
-                            )
-                            .variant(Variant::Ghost)
-                            .size(Size::XSmall)
-                            .hide_tooltip(),
-                        )
-                        .items(menu),
-                );
-            } else if !current && let Some(tone) = mark {
-                tab = tab.end_slot({
-                    let (icon, label) = match tone {
-                        Tone::Accent => (Icon::FilePlus2, "New draft"),
-                        Tone::Warning => (Icon::Pencil, "Unsaved changes"),
-                        _ => (Icon::CircleAlert, "Invalid draft"),
-                    };
-                    mira_ui::primitives::StatusMark::new(icon, label, *tone)
-                });
-            }
-            tab
-        })
-        .vertical()
-        .selected(active)
-        .track_scroll(&self.profile_scroll)
-        .on_select(move |index, window, cx| {
-            selector
-                .update(cx, |editor, cx| {
-                    editor.select(Some(selectable[index]), window, cx)
-                })
-                .ok();
-        });
-        let issues = combat_profiles::issues(cx).len();
-        let query = self.search.read(cx).text().trim();
-        let no_match = (!listed && !query.is_empty())
-            .then(|| format!("No profiles match \u{201c}{query}\u{201d}."));
-        theme
-            .sidebar_pane()
-            .h_full()
-            .child(
-                div()
-                    .flex_none()
-                    .px(layout.space(2.0))
-                    .pt(layout.space(2.0))
-                    .pb(layout.space(1.5))
-                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        let by = match event.keystroke.key.as_str() {
-                            "up" => -1,
-                            "down" => 1,
-                            _ => return,
-                        };
-                        this.step_profile(by, window, cx);
-                        cx.stop_propagation();
-                    }))
-                    .child(self.search.clone()),
-            )
-            .children(no_match.map(|text| {
-                div()
-                    .px(layout.space(3.0))
-                    .py(layout.space(2.0))
-                    .text_caption(typography)
-                    .text_color(theme.muted_foreground)
-                    .child(text)
+        let note = self
+            .draft()
+            .and_then(|draft| draft.name_note(&self.library));
+        v_flex()
+            .gap(theme.space(4.0))
+            .child(form::row(layout, "Name", true, self.name.clone()))
+            .children(note.map(|(text, tone)| {
+                let text = SharedString::from(text);
+                row_note(theme, text.clone())
+                    .id("profile-name-note")
+                    .role(Role::Status)
+                    .aria_label(text)
+                    .text_color(theme.tone(tone).2)
             }))
-            .child(profiles)
-            .child(drag_area().flex_1())
-            .when(issues > 0, |sidebar| {
-                sidebar.child(
-                    div()
-                        .flex_none()
-                        .p(layout.space(3.0))
-                        .text_caption(typography)
-                        .text_color(theme.foreground)
-                        .child(if issues == 1 {
-                            "1 saved profile couldn't be read, so it's left out.".to_owned()
-                        } else {
-                            format!(
-                                "{issues} saved profiles couldn't be read, so they're left out."
-                            )
-                        }),
-                )
-            })
-            .child(
-                div().flex_none().p(layout.space(2.0)).child(
-                    Button::new("new-profile", "New profile")
-                        .variant(Variant::Ghost)
-                        .w_full()
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .justify_between()
-                                .child("New profile")
-                                .child(div().text_color(theme.muted_foreground).child("⌘N")),
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
-                ),
-            )
+    }
+
+    fn unread_alert(cx: &App) -> Option<Alert> {
+        let title = match combat_profiles::issues(cx).len() {
+            0 => return None,
+            1 => "1 saved profile couldn't be read, so it's left out.".to_owned(),
+            issues => format!("{issues} saved profiles couldn't be read, so they're left out."),
+        };
+        Some(Alert::new("unread-profiles", Tone::Warning, title))
     }
 
     fn section(&self, theme: &Theme, section: Section, cx: &mut Context<Self>) -> AnyElement {
         let layout = theme.layout;
         let (title, subtitle, empty) = section.copy();
-        let editable = self.draft().is_some();
         let form = self.form();
         let cards: Rc<[Card]> = match section {
             Section::Triggers => form
@@ -1127,37 +1024,27 @@ impl Editor {
                 }
             })
             .selected(selected);
-            if editable {
-                let this = cx.weak_entity();
-                let mover = this.clone();
-                list.on_select(move |index, window, cx| {
-                    this.update(cx, |editor, cx| {
-                        editor.select_item(Some(section.item(index)), window, cx)
+            let this = cx.weak_entity();
+            let mover = this.clone();
+            list.on_select(move |index, window, cx| {
+                this.update(cx, |editor, cx| {
+                    editor.select_item(Some(section.item(index)), window, cx)
+                })
+                .ok();
+            })
+            .on_reorder(move |from, to, window, cx| {
+                mover
+                    .update(cx, |editor, cx| {
+                        editor.reorder(section, from, to, window, cx)
                     })
                     .ok();
-                })
-                .on_reorder(move |from, to, window, cx| {
-                    mover
-                        .update(cx, |editor, cx| {
-                            editor.reorder(section, from, to, window, cx)
-                        })
-                        .ok();
-                })
-                .into_any_element()
-            } else {
-                list.into_any_element()
-            }
+            })
+            .into_any_element()
         };
-        let add = editable.then(|| self.add_menu(section, cx));
+        let add = self.add_menu(section, cx);
         v_flex()
             .gap(layout.space(2.0))
-            .child(form::section(
-                title,
-                subtitle,
-                None,
-                div().children(add),
-                theme,
-            ))
+            .child(form::section(title, subtitle, None, add, theme))
             .when(section == Section::Steps(Lane::Rotation), |lane| {
                 lane.child(self.on_cooldown_row(cx))
             })
@@ -1223,53 +1110,72 @@ impl Editor {
         )
     }
 
-    fn save_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let layout = theme.layout;
+    fn footer(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
         let typography = theme.typography;
-        let draft = self.draft();
-        let unsaved = draft.and_then(|draft| draft.unsaved(&self.library));
-        let note = draft.and_then(|draft| draft.name_note(&self.library));
-        let status = match (&self.problem, note, unsaved) {
-            (Some(problem), _, _) => Some((SharedString::from(problem.clone()), theme.destructive)),
-            (None, Some((note, tone)), _) => Some((note.into(), theme.tone(tone).2)),
-            (None, None, Some((text, tone))) => Some((text.into(), theme.tone(tone).2)),
-            (None, None, None) => None,
+        let draft = self.draft()?;
+        let saved = draft.saved().is_some();
+        let unsaved = draft.unsaved(&self.library);
+        let status = match (&self.problem, unsaved) {
+            (Some(problem), _) => Some((SharedString::from(problem.clone()), theme.destructive)),
+            (None, Some((text, tone))) => Some((text.into(), theme.tone(tone).2)),
+            (None, None) => None,
         };
         let revert = unsaved.is_some().then(|| {
-            let label = if draft.is_some_and(|draft| draft.saved.is_some()) {
-                "Revert"
-            } else {
-                "Discard"
-            };
-            Button::new("revert-profile", label)
+            Button::new("revert-profile", if saved { "Revert" } else { "Discard" })
                 .variant(Variant::Ghost)
-                .size(Size::Small)
                 .on_click(cx.listener(|this, _, window, cx| this.revert(window, cx)))
         });
-        h_flex()
-            .min_w_0()
-            .gap(theme.space(2.0))
-            .children(status.map(|(text, color)| {
-                div()
-                    .id("profile-status")
-                    .role(Role::Status)
-                    .aria_label(text.clone())
-                    .max_w(STATUS_WIDTH)
-                    .mr(layout.space(1.5))
-                    .truncate()
-                    .text_caption(typography)
-                    .text_color(color)
-                    .child(text)
-            }))
+        let footer = theme
+            .footer()
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap(theme.space(2.0))
+                    .debug_selector(|| "profile-actions".into())
+                    .child(
+                        Button::new("duplicate-profile", "Duplicate")
+                            .variant(Variant::Ghost)
+                            .disabled(!saved)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.duplicate(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("delete-saved-profile", "Delete…")
+                            .variant(Variant::Ghost)
+                            .disabled(!saved)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.deleting = true;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .justify_end()
+                    .children(status.map(|(text, color)| {
+                        div()
+                            .id("profile-status")
+                            .role(Role::Status)
+                            .aria_label(text.clone())
+                            .min_w_0()
+                            .truncate()
+                            .text_body(typography)
+                            .text_color(color)
+                            .child(text)
+                    })),
+            )
             .children(revert)
             .child(
                 Button::new("save-profile", "Save")
                     .variant(Variant::Primary)
-                    .size(Size::Small)
-                    .end_slot(mira_ui::primitives::Kbd::hint("⌘S"))
+                    .end_slot(Kbd::hint("⌘S"))
                     .disabled(unsaved.is_none())
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
-            )
+            );
+        Some(footer)
     }
 
     fn inspector(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1283,9 +1189,6 @@ impl Editor {
             .pt(layout.space(3.0))
             .overflow_y_scroll()
             .track_scroll(&self.inspector_scroll);
-        if self.draft().is_none() {
-            return pane;
-        }
         let (Some(item), Some(texts)) = (self.item(), &self.texts) else {
             return pane.child(form::note(
                 "Select a trigger or a step to edit it.",
@@ -1309,7 +1212,7 @@ impl Editor {
             SLOTS.map(|key| SharedString::from(key.to_string())),
             usize::from(slot),
         )
-        .small()
+        .full_width()
         .on_select(move |index, _, cx| {
             let _ = skill_this.update(cx, |this, cx| this.set_skill(SLOTS[index], cx));
         });
@@ -1352,7 +1255,7 @@ impl Editor {
                     theme,
                     "Matched anywhere in combat and server messages, ignoring case.",
                 ))
-                .child(mira_ui::primitives::Field::new("Cast",skills))
+                .child(form::row(layout, "Cast", true, skills))
                 .child(row_note(
                     theme,
                     "Casts once, as soon as the skill is ready. Gives up if that takes more than 3 seconds.",
@@ -1361,7 +1264,7 @@ impl Editor {
                 let Some(step) = self.form().lane(lane).get(index) else {
                     return pane;
                 };
-                let mut pane = pane.child(mira_ui::primitives::Field::new("Skill",skills));
+                let mut pane = pane.child(form::row(layout, "Skill", true, skills));
                 if lane == Lane::Rotation {
                     let chosen = match step.on_cooldown {
                         None => 0,
@@ -1415,7 +1318,7 @@ impl Editor {
                     layout,
                     "Pause after",
                     true,
-                    millis_input(texts, Text::Pause),
+                    millis_input(theme, texts, Text::Pause),
                 ))
                 .child(
                     v_flex()
@@ -1486,29 +1389,6 @@ impl Editor {
     }
 }
 
-fn profile_menu(this: &WeakEntity<Editor>, index: usize) -> Vec<MenuItem> {
-    let act = |label: &'static str, run: fn(&mut Editor, &mut Window, &mut Context<Editor>)| {
-        let this = this.clone();
-        MenuItem::action(label, move |window, cx| {
-            this.update(cx, |editor, cx| {
-                editor.select(Some(index), window, cx);
-                run(editor, window, cx);
-            })
-            .ok();
-        })
-    };
-    vec![
-        act("Rename", Editor::rename),
-        act("Duplicate", Editor::duplicate),
-        MenuItem::separator(),
-        act("Delete…", |editor, _, cx| {
-            editor.deleting = true;
-            cx.notify();
-        })
-        .danger(),
-    ]
-}
-
 fn empty_box(theme: &Theme, text: &'static str) -> Div {
     let layout = theme.layout;
     let typography = theme.typography;
@@ -1540,20 +1420,18 @@ fn heading(text: SharedString) -> Div {
         .child(text)
 }
 
-fn row_note(theme: &Theme, text: &'static str) -> Div {
+fn row_note(theme: &Theme, text: impl Into<SharedString>) -> Div {
     let layout = theme.layout;
     form::note(text, true, theme)
         .ml(form::LABEL_WIDTH + layout.space(2.0))
         .mt(layout.space(-1.5))
 }
 
-fn millis_input(texts: &Texts, text: Text) -> impl IntoElement + use<> {
-    div().w(px(96.0)).children(texts.get(text))
-}
-
-struct ProfileRow {
-    title: SharedString,
-    mark: Option<Tone>,
+fn millis_input(theme: &Theme, texts: &Texts, text: Text) -> impl IntoElement + use<> {
+    h_flex()
+        .gap(theme.space(2.0))
+        .child(div().w(MILLIS_WIDTH).children(texts.get(text)))
+        .child(div().text_color(theme.muted_foreground).child("ms"))
 }
 
 struct Card {
@@ -1688,63 +1566,88 @@ fn condition_editor(
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let unsaved: Vec<SharedString> = self.edited().iter().map(|draft| draft.label()).collect();
-        let deleting_name = self.draft().map(Draft::label).unwrap_or_default();
-        let sidebar = self.sidebar(&theme, cx);
-        let sections: Vec<AnyElement> = if self.draft().is_some() {
-            Section::ALL
-                .into_iter()
-                .map(|section| self.section(&theme, section, cx))
-                .collect()
+        let label = self.draft().map(Draft::label).unwrap_or_default();
+        let undo = if self.draft().is_some_and(|draft| draft.saved().is_some()) {
+            "Revert"
         } else {
-            vec![
-                Empty::new(
-                    "No combat profiles",
-                    "Make one to choose the skills auto attack and scripts cast.",
-                )
-                .action(
-                    Button::new("first-profile", "New profile")
-                        .end_slot(mira_ui::primitives::Kbd::hint("⌘N"))
-                        .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),
-                )
-                .into_any_element(),
-            ]
+            "Discard"
         };
-        let save = self.save_controls(&theme, cx);
-        let lanes = div()
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .child(
-                div()
-                    .id("profile")
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .gap(theme.space(4.0))
-                    .p(PADDING)
-                    .overflow_y_scroll()
-                    .track_scroll(&self.lanes_scroll)
-                    .children(sections),
-            )
-            .child(Scrollbar::new(
-                "profile-scrollbar",
-                self.lanes_scroll.clone(),
-            ));
-        let inspector_pane = theme
-            .inspector_pane()
-            .relative()
-            .h_full()
-            .child(self.inspector(&theme, cx))
-            .child(Scrollbar::new(
-                "inspector-scrollbar",
-                self.inspector_scroll.clone(),
-            ));
+        let deleting_name = self
+            .draft()
+            .and_then(Draft::saved)
+            .unwrap_or_default()
+            .to_owned();
+        let body = if self.draft().is_some() {
+            let sections = Section::ALL.map(|section| self.section(&theme, section, cx));
+            let lanes = div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(
+                    div()
+                        .id("profile")
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .gap(theme.space(4.0))
+                        .p(PADDING)
+                        .overflow_y_scroll()
+                        .track_scroll(&self.lanes_scroll)
+                        .children(Self::unread_alert(cx))
+                        .child(self.name_row(&theme))
+                        .children(sections),
+                )
+                .child(Scrollbar::new(
+                    "profile-scrollbar",
+                    self.lanes_scroll.clone(),
+                ));
+            let inspector = theme
+                .inspector_pane()
+                .relative()
+                .h_full()
+                .child(self.inspector(&theme, cx))
+                .child(Scrollbar::new(
+                    "inspector-scrollbar",
+                    self.inspector_scroll.clone(),
+                ));
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(lanes)
+                .child(inspector)
+        } else {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .gap(theme.space(4.0))
+                .p(PADDING)
+                .children(Self::unread_alert(cx))
+                .child(
+                    v_flex().flex_1().justify_center().child(
+                        Empty::new(
+                            "No combat profiles",
+                            "Make one to choose the skills auto attack and scripts cast.",
+                        )
+                        .action(
+                            Button::new("first-profile", "New profile")
+                                .end_slot(Kbd::hint("⌘N"))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.new_profile(window, cx)),
+                                ),
+                        ),
+                    ),
+                )
+        };
+        let profiles = self.profile_menu(&theme, cx);
+        let footer = self.footer(&theme, cx);
         let bar = window_bar(window, cx)
             .child(bar_title("Combat profiles", cx))
-            .child(drag_area().flex_1())
-            .child(save);
+            .when_some(profiles, |bar, profiles| {
+                bar.child(bar_separator(cx)).child(profiles)
+            })
+            .child(drag_area().flex_1());
         div()
             .flex()
             .flex_col()
@@ -1753,9 +1656,16 @@ impl Render for Editor {
             .key_context(format!("{FOCUS_SCOPE} {CONTEXT}").as_str())
             .id("combat-profiles")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &SaveProfile, window, cx| this.save(window, cx)))
-            .on_action(cx.listener(|this, _: &NewProfile, window, cx| this.new_profile(window, cx)))
-            .on_action(Find::in_search(&self.search))
+            .on_action(cx.listener(|this, _: &SaveProfile, window, cx| {
+                if !this.confirming() {
+                    this.save(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewProfile, window, cx| {
+                if !this.confirming() {
+                    this.new_profile(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseSession, window, cx| {
                 if this.may_close(cx) {
                     window.remove_window();
@@ -1764,15 +1674,8 @@ impl Render for Editor {
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(bar)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(sidebar)
-                    .child(lanes)
-                    .child(inspector_pane),
-            )
+            .child(body)
+            .children(footer)
             .child(
                 Dialog::new(
                     "delete-profile",
@@ -1805,35 +1708,37 @@ impl Render for Editor {
                 }),
             )
             .child(
-                Dialog::new("unsaved-profiles", self.closing, "Save your changes?")
-                    .alert()
-                    .description(format!("Unsaved: {}.", unsaved.join(", ")))
-                    .footer_start_slot(
-                        Button::new("discard-profiles", "Don't save")
-                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
-                    )
-                    .action(Button::new("keep-editing", "Cancel").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.closing = false;
+                Dialog::new(
+                    "unsaved-profile",
+                    self.leaving.is_some(),
+                    format!("Save changes to \u{201c}{label}\u{201d}?"),
+                )
+                .alert()
+                .description(format!(
+                    "To leave without saving, cancel and choose {undo}."
+                ))
+                .action(Button::new("keep-editing", "Cancel").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.leaving = None;
+                        cx.notify();
+                    },
+                )))
+                .default_action(
+                    Button::new("save-and-leave", "Save")
+                        .variant(Variant::Primary)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.leave_after_saving(window, cx)),
+                        ),
+                )
+                .on_close({
+                    let this = cx.weak_entity();
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.leaving = None;
                             cx.notify();
-                        },
-                    )))
-                    .action(
-                        Button::new("save-profiles", "Save all")
-                            .variant(Variant::Primary)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_all_and_close(window, cx)
-                            })),
-                    )
-                    .on_close({
-                        let this = cx.weak_entity();
-                        move |_, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.closing = false;
-                                cx.notify();
-                            });
-                        }
-                    }),
+                        });
+                    }
+                }),
             )
     }
 }
@@ -1897,19 +1802,22 @@ mod tests {
         name: &str,
         prepare: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
     ) {
-        snapshot_at(name, size(px(WIDTH), px(HEIGHT)), prepare);
+        snapshot_at(name, size(px(WIDTH), px(HEIGHT)), prepare, &[]);
     }
 
     fn snapshot_at(
         name: &str,
         window_size: gpui::Size<Pixels>,
         prepare: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
+        keys: &'static [&'static str],
     ) {
         let path = library_file(name);
-        for written in mira_ui::snapshot(name, window_size, move |window, cx| {
+        for written in mira_ui::snapshot_after(name, window_size, keys, move |window, cx| {
             combat_profiles::init(path.clone(), cx);
             let editor = cx.new(|cx| Editor::new(window, cx));
             editor.update(cx, |editor, cx| prepare(editor, window, cx));
+            let root = editor.read(cx).focus.clone();
+            window.focus(&root, cx);
             cx.new(|_| Host(editor))
         }) {
             assert!(written.exists(), "{} was not written", written.display());
@@ -1919,15 +1827,12 @@ mod tests {
     #[test]
     fn snapshot_editor() {
         snapshot("profiles-step", |editor, window, cx| {
-            editor.drafts[1].form.steps.pop();
-            editor.new_profile(window, cx);
             editor.select_named("Ultra speaker", window, cx);
             editor.form_mut().unwrap().steps[1].pause = "500".into();
             editor.select_item(Some(Item::Step(Lane::Rotation, 2)), window, cx);
         });
         snapshot("profiles-trigger", |editor, window, cx| {
             editor.select_named("Ultra speaker", window, cx);
-            editor.rename(window, cx);
             editor
                 .name
                 .update(cx, |input, cx| input.set_text("Daily boss", cx));
@@ -1938,22 +1843,33 @@ mod tests {
             size(px(MIN_WIDTH), px(MIN_HEIGHT)),
             |editor, window, cx| {
                 editor.select_named("Ultra speaker", window, cx);
+                editor
+                    .name
+                    .update(cx, |input, cx| input.set_text("Ultra speaker solo", cx));
                 editor.select_item(Some(Item::Step(Lane::Rotation, 2)), window, cx);
             },
+            &[],
         );
         snapshot("profiles-empty", |editor, window, cx| {
-            editor.drafts.clear();
-            editor.select(None, window, cx);
+            editor.show(None, window, cx);
         });
     }
 
     #[test]
-    fn snapshot_no_match() {
-        snapshot("profiles-no-match", |editor, _, cx| {
-            editor
-                .search
-                .update(cx, |input, cx| input.set_text("void", cx));
-        });
+    fn snapshot_menu() {
+        let full = size(px(WIDTH), px(HEIGHT));
+        snapshot_at(
+            "profiles-menu",
+            full,
+            |editor, window, cx| editor.select_named("Ultra speaker", window, cx),
+            &["tab", "down"],
+        );
+        snapshot_at(
+            "profiles-menu-new",
+            full,
+            |editor, window, cx| editor.new_profile(window, cx),
+            &["tab", "down"],
+        );
     }
 
     #[test]
@@ -1961,7 +1877,7 @@ mod tests {
         snapshot("profiles-unsaved", |editor, window, cx| {
             editor.select_named("Ultra speaker", window, cx);
             editor.form_mut().unwrap().steps[1].pause = "500".into();
-            assert!(!editor.may_close(cx));
+            editor.select_named("Farming", window, cx);
             window.defer(cx, |window, cx| {
                 window.dispatch_keystroke(gpui::Keystroke::parse("f19").unwrap(), cx);
             });
@@ -1973,10 +1889,12 @@ mod tests {
         cx: &'a mut gpui::TestAppContext,
     ) -> (Entity<Editor>, &'a mut gpui::VisualTestContext) {
         let path = library_file(name);
+        let characters = path.with_extension("characters");
         cx.update(|cx| {
             mira_ui::init(cx);
             bind_keys(cx);
             combat_profiles::init(path, cx);
+            crate::characters::init(characters, cx);
         });
         let (editor, cx) = cx.add_window_view(|window, cx| {
             window.activate_window();
@@ -1988,8 +1906,18 @@ mod tests {
         (editor, cx)
     }
 
-    fn press(cx: &mut gpui::VisualTestContext, keys: &str) {
-        cx.simulate_keystrokes(keys);
+    fn press(cx: &mut gpui::VisualTestContext, keys: &'static str) {
+        for key in keys.split(' ') {
+            cx.simulate_keystrokes(key);
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse(key).unwrap(),
+            });
+            cx.run_until_parked();
+        }
+    }
+
+    fn type_text(cx: &mut gpui::VisualTestContext, text: &str) {
+        cx.simulate_input(text);
         cx.run_until_parked();
     }
 
@@ -1998,11 +1926,11 @@ mod tests {
         cx.run_until_parked();
     }
 
-    fn profile_row(index: usize) -> gpui::Point<gpui::Pixels> {
-        gpui::point(
-            px(60.0),
-            mira_ui::theme::Layout::default().chrome + px(40.0 + 4.0 + 15.0 + 32.0 * index as f32),
-        )
+    fn show(editor: &Entity<Editor>, name: &str, cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| editor.select_named(name, window, cx))
+        });
+        cx.run_until_parked();
     }
 
     fn shown(editor: &Entity<Editor>, cx: &mut gpui::VisualTestContext) -> Option<String> {
@@ -2011,62 +1939,105 @@ mod tests {
         })
     }
 
-    #[gpui::test]
-    fn arrow_keys_move_between_profiles(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("arrows", cx);
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Daily boss"));
-        click(cx, profile_row(1));
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
-        press(cx, "down");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
-        press(cx, "up up");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Daily boss"));
+    fn saved(cx: &mut gpui::VisualTestContext) -> Vec<String> {
+        cx.update(|_, cx| {
+            combat_profiles::library(cx)
+                .names()
+                .map(str::to_owned)
+                .collect()
+        })
+    }
+
+    fn steps(name: &str, cx: &mut gpui::VisualTestContext) -> usize {
+        cx.update(|_, cx| combat_profiles::library(cx).get(name).unwrap().steps.len())
     }
 
     #[gpui::test]
-    fn the_profile_list_scrolls_to_keep_the_selection_in_view(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("reveal", cx);
+    fn the_title_bar_menu_switches_profiles_and_starts_new_ones(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("menu", cx);
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Daily boss"));
+        press(cx, "tab down u enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
+        press(cx, "down n enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some(NEW_NAME));
+        type_text(cx, "Boss rush");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Boss rush"));
+    }
+
+    #[gpui::test]
+    fn duplicate_copies_the_shown_profile_under_a_new_name(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("duplicate", cx);
+        show(&editor, "Farming", cx);
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                for _ in 0..40 {
-                    editor.add_profile(Form::of(&Profile::generic()), "Extra", window, cx);
-                }
+                editor.add(Section::Steps(Lane::Rotation), 4, window, cx)
             })
         });
         cx.run_until_parked();
-        let scrolled = |cx: &mut gpui::VisualTestContext| {
-            editor.read_with(cx, |editor, _| {
-                let scroll = &editor.profile_scroll;
-                (scroll.offset().y, scroll.max_offset().y)
-            })
-        };
-        click(cx, profile_row(0));
-        press(cx, "home");
-        assert_eq!(scrolled(cx).0, px(0.0));
-        press(cx, "end");
-        let (offset, max) = scrolled(cx);
-        assert!(max > px(0.0));
-        assert_eq!(offset, -max);
-    }
-
-    #[gpui::test]
-    fn the_selected_profiles_menu_opens_from_the_keyboard(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("menu", cx);
-        click(cx, profile_row(0));
-        press(cx, "down shift-f10");
-        press(cx, "down enter");
+        let actions = cx.debug_bounds("profile-actions").expect("the footer");
+        click(cx, actions.origin + gpui::point(px(20.0), px(10.0)));
         assert_eq!(shown(&editor, cx).as_deref(), Some("Farming copy"));
-        assert!(editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+        type_text(cx, "Grinding");
+        press(cx, "enter cmd-s");
+        assert_eq!(
+            saved(cx),
+            ["Daily boss", "Farming", "Grinding", "Ultra speaker"]
+        );
+        assert_eq!((steps("Farming", cx), steps("Grinding", cx)), (3, 4));
     }
 
     #[gpui::test]
-    fn steps_take_arrow_keys_and_stay_selected_when_their_profile_is_chosen_again(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn leaving_unsaved_changes_asks_whether_to_save_them(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = open_editor("leave", cx);
+        let add_step = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.add(Section::Steps(Lane::Rotation), 4, window, cx)
+                })
+            });
+            cx.run_until_parked();
+        };
+        show(&editor, "Farming", cx);
+        add_step(cx);
+        let asking = |cx: &mut gpui::VisualTestContext| {
+            editor.read_with(cx, |editor, _| editor.leaving.is_some())
+        };
+        show(&editor, "Ultra speaker", cx);
+        assert!(asking(cx));
+        press(cx, "escape");
+        assert!(!asking(cx));
+        show(&editor, "Ultra speaker", cx);
+        press(cx, "shift-tab enter");
+        assert!(!asking(cx));
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+        assert!(editor.read_with(cx, |editor, _| editor.changed()));
+        show(&editor, "Ultra speaker", cx);
+        press(cx, "cmd-s");
+        assert!(asking(cx));
+        assert_eq!(steps("Farming", cx), 3);
+        press(cx, "enter");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
+        assert_eq!(steps("Farming", cx), 4);
+
+        press(cx, "cmd-n");
+        show(&editor, "Farming", cx);
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+
+        editor.update(cx, |editor, cx| {
+            editor.deleting = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        press(cx, "cmd-n");
+        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
+    }
+
+    #[gpui::test]
+    fn steps_take_arrow_keys(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("steps", cx);
         let item =
             |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |editor, _| editor.item());
-        click(cx, profile_row(2));
+        show(&editor, "Ultra speaker", cx);
         let third = cx
             .debug_bounds("row-2")
             .expect("the rotation lists three steps");
@@ -2074,99 +2045,70 @@ mod tests {
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 2)));
         press(cx, "up");
         assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
-        click(cx, profile_row(1));
-        assert_eq!(item(cx), None);
-        click(cx, profile_row(2));
-        assert_eq!(item(cx), Some(Item::Step(Lane::Rotation, 1)));
     }
 
     #[gpui::test]
-    fn search_narrows_the_profiles_and_arrows_step_through_the_matches(
+    fn a_new_profiles_name_is_replaced_by_typing_however_it_was_started(
         cx: &mut gpui::TestAppContext,
     ) {
-        let (editor, cx) = open_editor("search", cx);
-        press(cx, "cmd-f");
-        cx.simulate_input("a");
-        cx.run_until_parked();
-        press(cx, "down");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
-        press(cx, "down");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
-        press(cx, "down");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
-        cx.simulate_input("k");
-        cx.run_until_parked();
-        press(cx, "up");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Ultra speaker"));
-        press(cx, "escape up");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
-    }
-
-    #[gpui::test]
-    fn command_n_starts_a_new_profile_named_in_its_row(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("new", cx);
-        press(cx, "cmd-n");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("New profile"));
-        assert!(editor.read_with(cx, |editor, _| editor.renaming.is_some()));
-        cx.simulate_input("Boss rush");
-        press(cx, "enter");
+        cx.update(|window, cx| editor.update(cx, |editor, cx| editor.new_profile(window, cx)));
+        cx.run_until_parked();
+        type_text(cx, "Boss rush");
         assert_eq!(shown(&editor, cx).as_deref(), Some("Boss rush"));
-        assert!(!editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+        press(cx, "cmd-s cmd-n");
+        assert_eq!(shown(&editor, cx).as_deref(), Some(NEW_NAME));
+        type_text(cx, "Void solo");
+        press(cx, "cmd-s");
+        assert_eq!(
+            saved(cx),
+            [
+                "Boss rush",
+                "Daily boss",
+                "Farming",
+                "Ultra speaker",
+                "Void solo"
+            ]
+        );
     }
 
     #[gpui::test]
-    fn escape_puts_the_name_back_and_stops_renaming(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("cancel", cx);
-        click(cx, profile_row(1));
-        press(cx, "shift-f10");
-        press(cx, "enter");
-        cx.simulate_input("Grinding");
-        cx.run_until_parked();
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Grinding"));
-        press(cx, "escape");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Farming"));
-        assert!(!editor.read_with(cx, |editor, _| editor.renaming.is_some()));
+    fn saving_under_a_taken_name_saves_nothing_and_puts_the_caret_in_the_name(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, cx) = open_editor("taken", cx);
+        show(&editor, "Farming", cx);
+        cx.update(|_, cx| {
+            editor.update(cx, |editor, cx| {
+                editor
+                    .name
+                    .update(cx, |input, cx| input.set_text("daily boss", cx));
+            })
+        });
+        press(cx, "cmd-s");
+        assert_eq!(saved(cx), ["Daily boss", "Farming", "Ultra speaker"]);
+        type_text(cx, "Grinding");
+        press(cx, "cmd-s");
+        assert_eq!(saved(cx), ["Daily boss", "Grinding", "Ultra speaker"]);
     }
 
     #[gpui::test]
-    fn renaming_under_a_search_keeps_the_name_field(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("rename-search", cx);
-        press(cx, "cmd-f");
-        cx.simulate_input("farm");
-        cx.run_until_parked();
-        press(cx, "down");
-        cx.update(|window, cx| editor.update(cx, |editor, cx| editor.rename(window, cx)));
-        cx.run_until_parked();
-        cx.simulate_input("Solo");
-        press(cx, "enter");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Solo"));
-    }
-
-    #[gpui::test]
-    fn a_new_profile_under_a_search_shows_its_name_field(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("new-search", cx);
-        press(cx, "cmd-f");
-        cx.simulate_input("zzz");
-        cx.run_until_parked();
-        press(cx, "cmd-n");
-        cx.simulate_input("Boss rush");
-        press(cx, "enter");
-        assert_eq!(shown(&editor, cx).as_deref(), Some("Boss rush"));
-    }
-
-    #[gpui::test]
-    fn discarding_the_last_profile_clears_its_save_problem(cx: &mut gpui::TestAppContext) {
-        let (editor, cx) = open_editor("discard-last", cx);
+    fn discarding_a_new_profile_clears_its_save_problem_and_returns_to_the_last_one(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, cx) = open_editor("discard", cx);
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                editor.drafts.clear();
-                editor.select(None, window, cx);
+                editor.select_named("Farming", window, cx);
                 editor.new_profile(window, cx);
                 editor.add(Section::Triggers, 3, window, cx);
                 editor.save(window, cx);
                 assert!(editor.problem.is_some());
                 editor.revert(window, cx);
-                assert_eq!(editor.draft().map(|draft| draft.name.as_str()), None);
+                assert_eq!(
+                    editor.draft().map(|draft| draft.name.as_str()),
+                    Some("Farming")
+                );
                 assert_eq!(editor.problem, None);
                 assert_eq!(editor.item(), None);
             })
@@ -2174,29 +2116,19 @@ mod tests {
     }
 
     #[gpui::test]
-    fn revert_restores_the_saved_profile_and_discards_a_new_one(cx: &mut gpui::TestAppContext) {
+    fn revert_restores_the_saved_profile(cx: &mut gpui::TestAppContext) {
         let (editor, cx) = open_editor("revert", cx);
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
                 editor.select_named("Farming", window, cx);
                 editor.add(Section::Steps(Lane::Rotation), 4, window, cx);
-                editor.rename(window, cx);
                 editor
                     .name
                     .update(cx, |input, cx| input.set_text("Grinding", cx));
-                assert!(editor.draft().unwrap().edited(&editor.library));
+                assert!(editor.changed());
                 editor.revert(window, cx);
-                let draft = editor.draft().unwrap();
-                assert_eq!(draft.name, "Farming");
-                assert!(!draft.edited(&editor.library));
-                let saved = editor.drafts.len();
-                editor.new_profile(window, cx);
-                editor.revert(window, cx);
-                assert_eq!(editor.drafts.len(), saved);
-                assert_eq!(
-                    editor.draft().map(|draft| draft.name.as_str()),
-                    Some("Ultra speaker")
-                );
+                assert_eq!(editor.draft().unwrap().name, "Farming");
+                assert!(!editor.changed());
             })
         });
     }
@@ -2220,18 +2152,13 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_draft_with_equivalent_text_is_not_edited() {
+    fn a_saved_draft_with_equivalent_text_is_not_changed() {
         let mut library = Library::default();
         library.put(None, "Generic".into(), Profile::generic());
-        let mut draft = Draft {
-            saved: Some("Generic".into()),
-            name: "Generic".into(),
-            form: Form::of(&Profile::generic()),
-            item: None,
-        };
+        let mut draft = Draft::of("Generic", &library).unwrap();
         draft.form.steps[0].pause = "0".into();
-        assert!(!draft.edited(&library));
+        assert!(!draft.changed(&library));
         draft.form.steps[0].pause = "100".into();
-        assert!(draft.edited(&library));
+        assert!(draft.changed(&library));
     }
 }
