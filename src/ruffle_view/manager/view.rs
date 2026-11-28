@@ -1064,11 +1064,23 @@ impl Manager {
                     .min_w(fit.min_width)
                     .tooltip(label.tooltip.clone())
                     .disabled(empty)
-                    .child(div().truncate().child(if fit.named {
-                        label.full()
+                    .child(if fit.named {
+                        h_flex()
+                            .min_w_0()
+                            .gap(theme.space(1.0))
+                            .child(div().flex_none().child(label.verb))
+                            .child(div().min_w_0().truncate().child(label.name.clone()))
+                            .when(label.again, |parts| {
+                                parts.child(
+                                    div()
+                                        .flex_none()
+                                        .debug_selector(|| "start-again".into())
+                                        .child("again"),
+                                )
+                            })
                     } else {
-                        label.short()
-                    }))
+                        div().truncate().child(label.short())
+                    })
                     .end_slot(
                         div()
                             .text_color(theme.primary_foreground.opacity(0.6))
