@@ -845,21 +845,21 @@ mod tests {
 
     #[test]
     fn a_run_keeps_going_only_for_the_character_it_started_on() {
-        let (wildfox, kestrel) = (AccountId::of("wildfox"), AccountId::of("kestrel"));
+        let (main, alt2) = (AccountId::of("main"), AccountId::of("alt2"));
 
-        let mut started = preparing(Some("Wildfox"));
-        assert!(started.bind(&wildfox));
-        assert!(!started.bind(&kestrel));
+        let mut started = preparing(Some("Main"));
+        assert!(started.bind(&main));
+        assert!(!started.bind(&alt2));
 
         let mut unidentified = preparing(None);
-        assert!(unidentified.bind(&kestrel));
-        assert!(!unidentified.bind(&wildfox));
+        assert!(unidentified.bind(&alt2));
+        assert!(!unidentified.bind(&main));
 
-        let mut ended = preparing(Some("wildfox"));
+        let mut ended = preparing(Some("main"));
         if let Some(loaded) = &mut ended.loaded {
             loaded.phase = Phase::Finished(Outcome::Stopped);
         }
-        assert!(ended.bind(&kestrel));
+        assert!(ended.bind(&alt2));
     }
 
     #[test]

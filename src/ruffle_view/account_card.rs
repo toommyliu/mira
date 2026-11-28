@@ -4,18 +4,14 @@ use std::{
 };
 
 use gpui::SharedString;
-use mira_ui::Tone;
 
 use super::{Login, ScriptPhase, ScriptState, Summary, capitalized, scripts::home_relative};
 use crate::accounts::Account;
-
-pub(super) const CHOOSE_IN_GAME: &str = "Choose in game";
 
 #[derive(Clone, Debug)]
 pub(super) enum Presence {
     Open(Summary),
     Waiting {
-        place: usize,
         script: Option<ScriptState>,
         open: Option<Summary>,
     },
@@ -92,14 +88,6 @@ impl Status {
         }
     }
 
-    pub(super) fn tone(self) -> Tone {
-        match self {
-            Status::Failed => Tone::Danger,
-            Status::NeedsYou => Tone::Attention,
-            _ => Tone::Neutral,
-        }
-    }
-
     pub(super) fn needs_you(self) -> bool {
         matches!(self, Status::NeedsYou | Status::Failed)
     }
@@ -170,6 +158,7 @@ pub(super) struct Line {
     pub(super) path: Option<SharedString>,
     pub(super) detail: Option<(SharedString, SharedString)>,
     pub(super) time: Option<SharedString>,
+    about: About,
 }
 
 impl Line {
@@ -180,6 +169,7 @@ impl Line {
             path: None,
             detail: None,
             time: None,
+            about: About::Login,
         }
     }
 
@@ -196,6 +186,7 @@ impl Line {
 
     fn path(mut self, path: &Path) -> Self {
         self.path = Some(home_relative(path));
+        self.about = About::Script;
         self
     }
 
@@ -221,7 +212,20 @@ pub(super) struct Card {
     pub(super) action: Option<Action>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum About {
+    Script,
+    Login,
+}
+
 impl Card {
+    pub(super) fn about(&self) -> About {
+        match &self.job {
+            Job::Line(line) => line.about,
+            Job::Loading(_) => About::Login,
+        }
+    }
+
     pub(super) fn matches(&self, account: &Account, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
@@ -247,13 +251,7 @@ impl Card {
 
 pub(super) fn card(account: &Account, presence: &Presence, done: bool, now: Instant) -> Card {
     let status = status(presence, done);
-    let saved = Line::new(
-        account
-            .server
-            .clone()
-            .unwrap_or_else(|| CHOOSE_IN_GAME.into()),
-        Mood::Quiet,
-    );
+    let saved = Line::new(account.server.clone().unwrap_or_default(), Mood::Quiet);
     let closed = |state: &str, job: Job, action| Card {
         status,
         state: state.to_owned().into(),
@@ -264,15 +262,12 @@ pub(super) fn card(account: &Account, presence: &Presence, done: bool, now: Inst
     };
     match presence {
         Presence::Open(summary) => open(summary, status, saved, now),
-        Presence::Waiting { place, script, .. } => closed(
+        Presence::Waiting { script, .. } => closed(
             "Queued",
-            Job::Line(
-                match script {
-                    Some(script) => Line::new(script.name.clone(), Mood::Quiet).path(&script.entry),
-                    None => Line::new("", Mood::Quiet),
-                }
-                .time(Some(format!("#{place}"))),
-            ),
+            Job::Line(match script {
+                Some(script) => Line::new(script.name.clone(), Mood::Quiet).path(&script.entry),
+                None => Line::new("", Mood::Quiet),
+            }),
             None,
         ),
         Presence::Unopened(error) => closed(
@@ -282,8 +277,10 @@ pub(super) fn card(account: &Account, presence: &Presence, done: bool, now: Inst
         ),
         Presence::Closed(last) => closed(
             "Not open",
-            last.as_ref()
-                .map_or_else(none, |last| Job::Line(ended(last, now))),
+            last.as_ref().map_or_else(
+                || Job::Line(Line::new("", Mood::Quiet)),
+                |last| Job::Line(ended(last, now)),
+            ),
             Some(Action::Launch),
         ),
     }
@@ -423,7 +420,14 @@ fn open(summary: &Summary, status: Status, saved: Line, now: Instant) -> Card {
                     ),
                 }
             }
-            None => ("Online".into(), none(), Some(Action::Show)),
+            None => (
+                "Online".into(),
+                Job::Line(Line {
+                    about: About::Script,
+                    ..Line::new("No script", Mood::Quiet)
+                }),
+                Some(Action::Show),
+            ),
         },
     };
     Card {
@@ -456,10 +460,6 @@ fn ended(script: &ScriptState, now: Instant) -> Line {
         _ => text,
     };
     Line::new(text, mood).path(&script.entry)
-}
-
-fn none() -> Job {
-    Job::Line(Line::new("—", Mood::Quiet))
 }
 
 pub(super) fn span(elapsed: Duration) -> String {
@@ -522,7 +522,6 @@ pub(super) mod tests {
             (Presence::Closed(None), Status::NotOpen),
             (
                 Presence::Waiting {
-                    place: 2,
                     script: None,
                     open: None,
                 },
@@ -575,7 +574,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_card_says_when_its_script_ended_and_where_it_waits_to_log_in() {
+    fn a_card_says_when_its_script_ended_and_which_script_is_queued() {
         let account = Account {
             name: "Main".into(),
             username: "main".into(),
@@ -598,11 +597,15 @@ pub(super) mod tests {
         };
         assert_eq!(job(&ended).0, "daily.ts finished 20m ago");
         let queued = Presence::Waiting {
-            place: 2,
             script: Some(queued("/s/daily.ts")),
             open: None,
         };
-        assert_eq!(job(&queued), ("daily.ts".to_owned(), Some("#2".to_owned())));
+        assert_eq!(job(&queued), ("daily.ts".to_owned(), None));
+        let idle = signing_in(Login::Online);
+        assert_eq!(card(&account, &idle, true, now).status, Status::Done);
+        assert_eq!(card(&account, &idle, true, now).about(), About::Script);
+        let loading = signing_in(Login::Loading(None));
+        assert_eq!(card(&account, &loading, false, now).about(), About::Login);
         assert_eq!(
             card(&account, &Presence::Closed(None), false, now)
                 .place
@@ -611,17 +614,17 @@ pub(super) mod tests {
         );
         let failed = online(
             "/s/daily.ts",
-            ScriptPhase::Failed("couldn't join house-73675086, the room is full".into()),
+            ScriptPhase::Failed("couldn't join house-12345678, the room is full".into()),
         );
         let Job::Line(line) = card(&account, &failed, false, now).job else {
             panic!("a failed script names its error");
         };
-        assert_eq!(line.text, "Couldn't join house-73675086, the room is full");
+        assert_eq!(line.text, "Couldn't join house-12345678, the room is full");
         assert_eq!(
             line.detail,
             Some((
                 "daily.ts failed".into(),
-                "Couldn't join house-73675086, the room is full".into()
+                "Couldn't join house-12345678, the room is full".into()
             ))
         );
     }

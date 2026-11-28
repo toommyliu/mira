@@ -5,7 +5,6 @@ use std::{
 };
 
 use gpui::Global;
-use mira_ui::Tone;
 
 use super::super::account_card::{Presence, Status};
 use crate::{accounts::AccountId, setups::Setup};
@@ -116,33 +115,14 @@ impl Filter {
         }
     }
 
-    pub(super) fn label(self, count: usize, total: usize) -> String {
+    pub(super) fn name(self) -> &'static str {
         match self {
-            Filter::Done if count == total => format!("All {total} done"),
-            Filter::Done => format!("{count} of {total} done"),
-            Filter::Running => format!("{count} running"),
-            Filter::Starting => format!("{count} starting"),
-            Filter::Needs if count == 1 => "1 needs you".to_owned(),
-            Filter::Needs => format!("{count} need you"),
-            Filter::Rest => format!("{count} not started"),
-            Filter::NotOpen => format!("{count} not open"),
-        }
-    }
-
-    pub(super) fn short(self, count: usize, total: usize) -> String {
-        match self {
-            Filter::Done => format!("{count}/{total}"),
-            _ => count.to_string(),
-        }
-    }
-
-    pub(super) fn tone(self, failed: bool) -> Option<Tone> {
-        match self {
-            Filter::Done => Some(Tone::Success),
-            Filter::Running | Filter::Starting => Some(Tone::Neutral),
-            Filter::Needs if failed => Some(Tone::Danger),
-            Filter::Needs => Some(Tone::Attention),
-            Filter::Rest | Filter::NotOpen => None,
+            Filter::Done => "Done",
+            Filter::Running => "Running",
+            Filter::Starting => "Starting",
+            Filter::Needs => "Needs you",
+            Filter::Rest => "Not started",
+            Filter::NotOpen => "Not open",
         }
     }
 }
@@ -263,7 +243,6 @@ mod tests {
             (
                 id("alt2"),
                 Presence::Waiting {
-                    place: 1,
                     script: None,
                     open: Some(dropped),
                 },
@@ -283,7 +262,6 @@ mod tests {
     #[test]
     fn stopping_a_setup_targets_its_own_script_including_ones_still_waiting_to_start() {
         let waiting = Presence::Waiting {
-            place: 1,
             script: Some(queued("/s/daily.ts")),
             open: None,
         };
@@ -329,11 +307,6 @@ mod tests {
             .collect();
         assert_eq!(counts, [1, 1, 0, 2, 2]);
         assert_eq!(count(&statuses, Filter::NotOpen), 1);
-        assert_eq!(Filter::Done.label(6, 6), "All 6 done");
-        assert_eq!(Filter::Needs.label(1, 6), "1 needs you");
-        assert_eq!(
-            Filter::Needs.tone(any_failed(&statuses)),
-            Some(Tone::Danger)
-        );
+        assert!(any_failed(&statuses));
     }
 }

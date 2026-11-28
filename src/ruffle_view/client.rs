@@ -2045,7 +2045,7 @@ mod tests {
                 cx,
             );
         });
-        let (account, entry) = (AccountId::of("wildfox"), PathBuf::from("daily.ts"));
+        let (account, entry) = (AccountId::of("main"), PathBuf::from("daily.ts"));
         let window = cx
             .update(|cx| open(Home::Setup("Daily".into()), false, cx))
             .unwrap();
@@ -2396,7 +2396,7 @@ mod tests {
             let rows: Vec<SessionTab> = [
                 ("The Legendary Hero Of Battleon And Beyond", "Swordhaven (EU) · tercessuinotlim-99999", Tone::Neutral, Some("⌘1".into())),
                 ("xXx_SuperLongUsernameWithoutAnySpaces_xXx", "legion-revenant-fealty-and-exalted-crown-farm.ts is waiting for you", Tone::Attention, Some("⌘2".into())),
-                ("a", "Couldn't join house-73675086, the room is full", Tone::Danger, None),
+                ("a", "Couldn't join house-12345678, the room is full", Tone::Danger, None),
                 ("Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww", "Logging in, attempt 2 of 3", Tone::Neutral, Some("⌘10".into())),
             ]
             .into_iter()
@@ -2409,7 +2409,7 @@ mod tests {
                 details: Details {
                     server: Some("Swordhaven (EU)".into()),
                     script: Some("/Users/player/Mira/scripts/legion/daily-quests-and-weekly-bosses/legion-revenant-fealty-and-exalted-crown-farm.ts".into()),
-                    error: Some("Couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into()),
+                    error: Some("Couldn't join house-12345678, the room is full and the fallback room house-12345679 is full too".into()),
                 },
                 hint,
             })
