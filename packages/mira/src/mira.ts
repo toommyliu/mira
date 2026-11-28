@@ -1239,14 +1239,18 @@ export type EventFilter<T extends EventType> = { readonly type: T } & Partial<
 >;
 
 const openEvents = <T extends EventType>(filter: EventFilter<T>) =>
-  openFeed(
-    (id) => events("subscribe", { id, type: filter.type }),
-    (event: GameEvent) =>
-      Object.entries(filter).every(
-        ([key, value]) => (event as Record<string, unknown>)[key] === value,
-      )
-        ? (event as EventOf<T>)
-        : undefined,
+  openFeed<EventOf<T>, EventOf<T>>(
+    (id) => {
+      const { type, ...fields } = filter;
+      const encoded = Object.entries(fields)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => [
+          key,
+          typeof value === "number" ? { number: String(value) } : value,
+        ]);
+      return events("subscribe", { id, filter: { type, fields: encoded } });
+    },
+    (event) => event,
   );
 
 /** React to game events as they happen. */

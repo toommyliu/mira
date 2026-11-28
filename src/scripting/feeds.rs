@@ -41,12 +41,16 @@ impl Feed {
     }
 
     async fn next(&self) -> Value {
-        let Drained { events, lagged } = self.events.drain().await;
         let mut items = Vec::new();
-        for event in events {
-            (self.read)(event, &mut items);
+        loop {
+            let Drained { events, lagged } = self.events.drain().await;
+            for event in events {
+                (self.read)(event, &mut items);
+            }
+            if lagged || !items.is_empty() {
+                return json!({ "items": items, "lagged": lagged });
+            }
         }
-        json!({ "items": items, "lagged": lagged })
     }
 }
 

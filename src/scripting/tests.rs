@@ -17,7 +17,6 @@ use super::{
     dialog::{Dialog, Request as DG, ToDialogs},
     drops::Request as D,
     environment::{BoostRequest as BR, DropRequest as DR, QuestRequest as QR},
-    events::Request as EV,
     feeds::{FeedId, Request as F},
     house::Request as H,
     http::{Method as HM, Request as HR},
@@ -32,8 +31,8 @@ use super::{
     world::Request as W,
 };
 use crate::{
-    bridge::{CallError, packets::Sender},
-    domain::{events::Kind, rooms::Rooms},
+    bridge::{CallError, Event, Events, packets::Sender},
+    domain::{rooms::Rooms, testing::FakeLoader},
 };
 
 struct Folder(PathBuf);
@@ -1544,8 +1543,8 @@ export default function* () {
     assert_eq!(nexts, 1);
 }
 
-#[test]
-fn waiting_for_an_event_returns_the_first_one_whose_fields_match() {
+#[tokio::test]
+async fn waiting_for_a_filtered_event_keeps_the_native_wait_pending_until_a_match() {
     let folder = Folder::new(&[(
         "main.ts",
         r#"import { Packets, Wait } from "mira";
@@ -1559,40 +1558,123 @@ export default function* () {
 }
 "#,
     )]);
-    let player = FakePlayer::default();
-    let finished = start(
+    let (send, calls) = mpsc::channel();
+    let started = start(
         &folder,
         "main.ts",
         Limits::default(),
+        Box::new(move |message| {
+            if let ToPlayer::Call(call) = message {
+                let _ = send.send(call);
+            }
+        }),
+    );
+    let receive = || calls.recv_timeout(Duration::from_secs(5)).unwrap();
+    let events = Events::default();
+    let feeds = super::feeds::Feeds::default();
+    let loader = std::rc::Rc::new(FakeLoader::new(|callback, _| {
+        panic!("{callback} was called")
+    }));
+
+    let subscribe = receive();
+    let Request::Events(request) = subscribe.request else {
+        panic!(
+            "expected an event subscription, got {:?}",
+            subscribe.request
+        );
+    };
+    subscribe.reply.send(super::events::serve(
+        &loader,
+        |wants| events.subscribe(wants),
+        &feeds,
+        request,
+    ));
+    let trigger = receive();
+    assert_eq!(
+        trigger.request,
+        Request::Packets(PK::SendToServer {
+            packet: "%xt%zm%aggroMon%1%4%".into(),
+        })
+    );
+    trigger.reply.send(Ok(json!(true)));
+
+    let call = receive();
+    let Request::Feeds(request @ F::Next { .. }) = call.request else {
+        panic!("expected a feed wait, got {:?}", call.request);
+    };
+    let mut next = std::pin::pin!(super::feeds::serve(&feeds, request));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    let fight = |monsters| {
+        events.publish(&Event::ExtensionResponse {
+            packet: json!({ "type": "json", "dataObj": { "cmd": "ct", "m": monsters } })
+                .to_string()
+                .into(),
+        });
+    };
+    assert!(next.as_mut().poll(&mut cx).is_pending());
+    fight(json!({ "4": { "intState": 2, "intHP": 50 } }));
+    assert!(next.as_mut().poll(&mut cx).is_pending(), "no monster died");
+    fight(json!({ "3": { "intState": 0 } }));
+    assert!(
+        next.as_mut().poll(&mut cx).is_pending(),
+        "a different monster died"
+    );
+    fight(json!({ "4": { "intState": 0 }, "5": { "intState": 0 } }));
+    let reply = tokio::time::timeout(Duration::from_secs(5), next)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        Ok(json!({ "items": [{ "type": "monsterDeath", "monMapId": 4 }], "lagged": false }))
+    );
+    call.reply.send(reply);
+
+    let close = receive();
+    let Request::Feeds(request @ F::Close { .. }) = close.request else {
+        panic!("expected the feed to close, got {:?}", close.request);
+    };
+    close.reply.send(super::feeds::serve(&feeds, request).await);
+    let finished = started.finish();
+    assert_eq!(finished.outcome, Outcome::Completed);
+    assert_eq!(finished.logs, [r#"{"type":"monsterDeath","monMapId":4}"#]);
+}
+
+#[test]
+fn an_undefined_event_filter_field_does_not_constrain_the_subscription() {
+    let player = FakePlayer::default();
+    let finished = start(
+        &Folder::new(&[(
+            "main.ts",
+            r#"import { Effect } from "effect";
+import { Events, Packets } from "mira";
+
+export default function* () {
+  yield* Events.on({ type: "afk", self: true, afk: undefined }, () =>
+    Packets.sendToServer("%xt%zm%afk%1%false%"),
+  );
+  yield* Effect.sleep("50 millis");
+}
+"#,
+        )]),
+        "main.ts",
+        Limits::default(),
         player.answering(|request, _| match request {
-            Request::Feeds(F::Next { .. }) => batch(json!([
-                { "type": "monsterDeath", "monMapId": 3 },
-                { "type": "monsterDeath", "monMapId": 4 },
-            ])),
-            Request::Packets(PK::SendToServer { .. }) => Some(Ok(json!(true))),
+            Request::Feeds(F::Next { .. }) => None,
             _ => Some(Ok(json!(null))),
         }),
     )
     .finish();
     assert_eq!(finished.outcome, Outcome::Completed);
-    assert_eq!(finished.logs, [r#"{"type":"monsterDeath","monMapId":4}"#]);
-    assert_eq!(
-        player.seen()[..2],
-        [
-            Seen::Call(
-                1,
-                Request::Events(EV::Subscribe {
-                    id: FeedId(1),
-                    kind: Kind::MonsterDeath,
-                })
-            ),
-            Seen::Call(
-                2,
-                Request::Packets(PK::SendToServer {
-                    packet: "%xt%zm%aggroMon%1%4%".into()
-                })
-            ),
-        ]
+    let subscribe: super::events::Request = serde_json::from_value(json!({
+        "op": "subscribe", "id": 1, "filter": { "type": "afk", "fields": [["self", true]] }
+    }))
+    .unwrap();
+    let seen = player.seen();
+    assert!(
+        seen.iter().any(
+            |seen| matches!(seen, Seen::Call(_, Request::Events(request)) if *request == subscribe)
+        ),
+        "{seen:?}"
     );
 }
 
@@ -1622,8 +1704,6 @@ export default function* () {
                     if !delivered.swap(true, std::sync::atomic::Ordering::SeqCst) =>
                 {
                     batch(json!([
-                        { "type": "afk", "username": "player1", "self": true, "afk": false },
-                        { "type": "afk", "username": "player2", "self": false, "afk": true },
                         { "type": "afk", "username": "player1", "self": true, "afk": true },
                     ]))
                 }
