@@ -475,17 +475,19 @@ fn run(
     );
     let capture_bridge = bridge.clone();
     let captured = outputs.clone();
-    spawn_local(
-        &inbox,
-        &tasks,
-        packet_capture::capture(
-            move || capture_bridge.subscribe(packet_capture::wants),
-            automation.watch_capture(),
-            move |batch| {
-                let _ = captured.try_send(Output::Packets(batch));
-            },
-        ),
+    let capture = packet_capture::capture(
+        bridge.clone(),
+        move || capture_bridge.subscribe(packet_capture::wants),
+        automation.watch_capture(),
+        move |batch| {
+            let _ = captured.try_send(Output::Packets(batch));
+        },
     );
+    let capture_ready = bridge.clone();
+    spawn_local(&inbox, &tasks, async move {
+        capture_ready.ready().await;
+        capture.await
+    });
     let loading = bridge.subscribe(|event| matches!(event, Event::Progress { .. } | Event::Loaded));
     let loading_bridge = bridge.clone();
     let loading_outputs = outputs.clone();

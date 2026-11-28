@@ -81,6 +81,7 @@ package mira.generated
       external.externalize("flash.setArrayObject", Main.setArrayObject);
       external.externalize("flash.setGameObject", Main.setGameObject);
       external.externalize("flash.setGameObjectKey", Main.setGameObjectKey);
+      external.externalize("flash.setServerPacketLines", Main.setServerPacketLines);
       external.externalize("house.getItem", House.getItem);
       external.externalize("house.getItems", House.getItems);
       external.externalize("house.getSlots", House.getSlots);
