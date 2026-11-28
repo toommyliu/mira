@@ -125,7 +125,7 @@ fn close_tools(client: gpui::EntityId, cx: &mut gpui::App) {
 }
 
 const UNFOCUSED_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
-const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_millis(500);
+const HIDDEN_TAB_FRAME: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct RuffleView {
     session: Runtime,
@@ -545,7 +545,7 @@ impl RuffleView {
         self.player_bounds = bounds;
         self.native.set_frame(bounds, scale);
         if let Some(viewport) = input::viewport(bounds, scale) {
-            self.session.send(ViewEvent::Resized(viewport));
+            self.session.resize(viewport);
         }
         bounds
     }

@@ -46,7 +46,7 @@ use crate::{
 use backends::{Navigator, Storage, Tasks, Ui, spawn, spawn_local};
 use context_menu::{ContextMenu, MenuSelection, OpenMenu, PlayerInput};
 pub(crate) use surface::Surface;
-use view::{Effect, ViewEvent};
+use view::{Effect, ViewEvent, Viewport};
 
 pub(crate) enum Msg {
     View(ViewEvent),
@@ -128,6 +128,7 @@ impl Inbox {
 pub(crate) struct Runtime {
     inbox: Inbox,
     thread: Option<thread::JoinHandle<()>>,
+    viewport: Option<Viewport>,
 }
 
 impl Runtime {
@@ -176,11 +177,18 @@ impl Runtime {
         Ok(Self {
             inbox,
             thread: Some(thread),
+            viewport: None,
         })
     }
 
     pub(crate) fn send(&self, event: ViewEvent) {
         self.inbox.post(Msg::View(event));
+    }
+
+    pub(crate) fn resize(&mut self, viewport: Viewport) {
+        if self.viewport.replace(viewport) != Some(viewport) {
+            self.send(ViewEvent::Resized(viewport));
+        }
     }
 
     pub(crate) fn inbox(&self) -> Inbox {
@@ -764,6 +772,33 @@ fn stage_fit(player: &mut Player) -> Option<view::StageFit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_layout_sends_no_resize() {
+        let (messages, received) = mpsc::channel();
+        let mut runtime = Runtime {
+            inbox: Inbox {
+                messages,
+                shown_at: Arc::default(),
+            },
+            thread: None,
+            viewport: None,
+        };
+        let first = Viewport::new(500.0, 300.0, 1.0).unwrap();
+        let scaled = Viewport::new(250.0, 150.0, 2.0).unwrap();
+        let resized = Viewport::new(300.0, 150.0, 2.0).unwrap();
+        for viewport in [first, first, scaled, scaled, resized, resized] {
+            runtime.resize(viewport);
+        }
+        let sent: Vec<_> = received
+            .try_iter()
+            .map(|message| match message {
+                Msg::View(ViewEvent::Resized(viewport)) => viewport,
+                _ => panic!("unexpected player message"),
+            })
+            .collect();
+        assert_eq!(sent, [first, scaled, resized]);
+    }
 
     #[test]
     fn display_frames_coalesce_while_input_still_arrives() {

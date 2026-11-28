@@ -37,6 +37,7 @@ pub(super) struct NativeView {
     view: Retained<NSView>,
     input_view: Retained<NSView>,
     layer: Retained<CAMetalLayer>,
+    geometry: Option<(NSRect, f32)>,
     frame_clock: Option<Retained<CADisplayLink>>,
     occlusion_observer: Option<Retained<Callback>>,
 }
@@ -110,6 +111,7 @@ impl NativeView {
             view,
             input_view,
             layer,
+            geometry: None,
             frame_clock: None,
             occlusion_observer: None,
         })
@@ -179,7 +181,7 @@ impl NativeView {
         (self.view.clone(), self.input_view.clone())
     }
 
-    pub(super) fn set_frame(&self, bounds: Bounds<Pixels>, scale: f32) {
+    pub(super) fn set_frame(&mut self, bounds: Bounds<Pixels>, scale: f32) {
         let Some(content) = (unsafe { self.view.superview() }) else {
             return;
         };
@@ -187,9 +189,12 @@ impl NativeView {
         let height = f64::from(f32::from(bounds.size.height));
         let x = f64::from(f32::from(bounds.origin.x));
         let y = content.bounds().size.height - f64::from(f32::from(bounds.origin.y)) - height;
+        let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
+        if self.geometry.replace((frame, scale)) == Some((frame, scale)) {
+            return;
+        }
         CATransaction::begin();
         CATransaction::setDisableActions(true);
-        let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
         self.view.setFrame(frame);
         self.layer.setFrame(frame);
         self.layer.setContentsScale(scale.into());
