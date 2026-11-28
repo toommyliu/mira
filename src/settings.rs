@@ -252,7 +252,7 @@ struct Settings {
     script_folders: Vec<PathBuf>,
     skip_shop_warning: bool,
     skip_update_checks: bool,
-    update_channel: Channel,
+    update_channel: Option<Channel>,
     separate_aqw_settings: bool,
     hidden_recent_scripts: Vec<PathBuf>,
     start_replacements: bool,
@@ -421,7 +421,10 @@ pub(crate) fn set_confirm_close(on: bool, cx: &mut App) {
 }
 
 pub(crate) fn update_channel(cx: &App) -> Channel {
-    cx.global::<Store>().settings.update_channel
+    cx.global::<Store>()
+        .settings
+        .update_channel
+        .unwrap_or_else(Channel::running)
 }
 
 pub(crate) fn check_updates(cx: &App) -> bool {
@@ -1019,6 +1022,7 @@ impl SettingsWindow {
         let quit = QuitShortcut::ALL
             .iter()
             .position(|&mode| mode == settings.quit_shortcut);
+        let channel = settings.update_channel.unwrap_or_else(Channel::running);
         vec![
             Block::Section(Section::default().row(Row::new(
                 "Open at launch",
@@ -1101,14 +1105,12 @@ impl SettingsWindow {
                     ))
                     .row(Row::new(
                         "Channel",
-                        Some(settings.update_channel.description()),
+                        Some(channel.description()),
                         Select::new(
                             "update-channel",
                             "Update channel",
                             Channel::ALL.map(Channel::label),
-                            Channel::ALL
-                                .iter()
-                                .position(|&channel| channel == settings.update_channel),
+                            Channel::ALL.iter().position(|&option| option == channel),
                         )
                         .width(px(136.0))
                         .disabled(matches!(
@@ -1116,9 +1118,9 @@ impl SettingsWindow {
                             Some(crate::updates::Updates::Restarting(_))
                         ))
                         .on_select(|index, _, cx| {
-                            let channel = Channel::ALL[index];
-                            if update_channel(cx) != channel {
-                                change(cx, |settings| settings.update_channel = channel);
+                            let picked = Channel::ALL[index];
+                            if update_channel(cx) != picked {
+                                change(cx, |settings| settings.update_channel = Some(picked));
                                 crate::updates::Updates::channel_changed(cx);
                             }
                         }),
@@ -1635,7 +1637,7 @@ mod tests {
             script_folders: vec![PathBuf::from("/Volumes/USB/bots")],
             skip_shop_warning: true,
             skip_update_checks: true,
-            update_channel: Channel::Nightly,
+            update_channel: Some(Channel::Nightly),
             separate_aqw_settings: true,
             hidden_recent_scripts: vec![PathBuf::from("/Volumes/USB/bots/old.ts")],
             start_replacements: true,
@@ -1661,6 +1663,18 @@ mod tests {
         assert_eq!(saved["player"]["smoothMotion"], true);
         assert_eq!(saved["extras"]["chatRecall"], true);
         assert_eq!(saved["extras"]["copyMenus"], false);
+        assert_eq!(saved["updateChannel"], "nightly");
+        Settings {
+            start: Start::Manager,
+            ..Settings::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert_eq!(
+            Settings::load(&path).unwrap().update_channel,
+            None,
+            "saving another setting leaves the channel following the running build"
+        );
         assert_eq!(
             serde_json::from_str::<Settings>(r#"{"textSize":40}"#)
                 .unwrap()
@@ -2243,7 +2257,7 @@ mod tests {
                 SETTINGS_HEIGHT,
                 Pane::General,
                 Settings {
-                    update_channel: Channel::Nightly,
+                    update_channel: Some(Channel::Nightly),
                     ..Settings::default()
                 },
                 "channel",

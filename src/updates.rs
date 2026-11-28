@@ -42,6 +42,10 @@ pub(crate) enum Channel {
 impl Channel {
     pub(crate) const ALL: [Self; 2] = [Self::Stable, Self::Nightly];
 
+    pub(crate) fn running() -> Self {
+        Self::of(&CURRENT).unwrap_or_default()
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Stable => "Stable",
