@@ -485,6 +485,13 @@ impl Theme {
     pub fn outline_fill(&self) -> Hsla {
         self.input.opacity(if self.dark_mode { 0.3 } else { 0.0 })
     }
+    pub fn plate(&self) -> (Hsla, Hsla) {
+        if self.dark_mode {
+            (self.input.opacity(0.3), self.input)
+        } else {
+            (self.background, gpui::transparent_black())
+        }
+    }
     pub fn ghost_hover(&self) -> Hsla {
         if self.dark_mode {
             self.foreground.opacity(0.05)

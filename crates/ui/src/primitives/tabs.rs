@@ -460,16 +460,8 @@ impl Render {
             .border_1()
             .border_color(gpui::transparent_black())
             .when(current && !self.line, |tab| {
-                tab.bg(if theme.dark_mode {
-                    theme.input.opacity(0.3)
-                } else {
-                    theme.background
-                })
-                .border_color(if theme.dark_mode {
-                    theme.input
-                } else {
-                    gpui::transparent_black()
-                })
+                let (plate, edge) = theme.plate();
+                tab.bg(plate).border_color(edge)
             })
             .when(current && self.ring, |tab| {
                 tab.border_color(theme.ring)
