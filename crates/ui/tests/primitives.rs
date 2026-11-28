@@ -1050,6 +1050,7 @@ fn a_dialog_leaves_focus_where_its_response_moved_it(cx: &mut TestAppContext) {
 
 struct SaveChanges {
     pressed: Rc<Cell<Option<&'static str>>>,
+    saves_by_default: bool,
 }
 
 impl Render for SaveChanges {
@@ -1063,24 +1064,36 @@ impl Render for SaveChanges {
                 .alert()
                 .footer_start_slot(Button::new("discard", "Don't save").on_click(press("discard")))
                 .action(Button::new("cancel", "Cancel").on_click(press("cancel")))
-                .action(Button::new("save", "Save all").on_click(press("save"))),
+                .map(|dialog| {
+                    let save = Button::new("save", "Save all").on_click(press("save"));
+                    if self.saves_by_default {
+                        dialog.default_action(save)
+                    } else {
+                        dialog.action(save)
+                    }
+                }),
         )
     }
 }
 
 #[gpui::test]
-fn return_in_a_dialog_never_starts_on_its_footer_start_control(cx: &mut TestAppContext) {
+fn return_in_a_dialog_starts_on_its_default_action_or_its_first_end_action(
+    cx: &mut TestAppContext,
+) {
     cx.update(mira_ui::init);
-    let pressed = Rc::new(Cell::new(None));
-    let (_, cx) = cx.add_window_view(|window, _| {
-        window.activate_window();
-        SaveChanges {
-            pressed: pressed.clone(),
-        }
-    });
-    cx.run_until_parked();
-    press(cx, "enter");
-    assert_eq!(pressed.get(), Some("cancel"));
+    for (saves_by_default, starts_on) in [(false, "cancel"), (true, "save")] {
+        let pressed = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view(|window, _| {
+            window.activate_window();
+            SaveChanges {
+                pressed: pressed.clone(),
+                saves_by_default,
+            }
+        });
+        cx.run_until_parked();
+        press(cx, "enter");
+        assert_eq!(pressed.get(), Some(starts_on));
+    }
 }
 
 struct BoostPicker;
@@ -1657,6 +1670,9 @@ fn input_undoes_typing_as_one_step_and_redoes_it(cx: &mut TestAppContext) {
     assert_eq!(text(&input, cx), "");
     press(cx, "cmd-shift-z");
     assert_eq!(text(&input, cx), "Battleon");
+    cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("Swordhaven", cx)));
+    press(cx, "cmd-z");
+    assert_eq!(text(&input, cx), "Swordhaven");
 }
 
 #[gpui::test]

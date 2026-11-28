@@ -274,6 +274,7 @@ impl Input {
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.typing = false;
+        self.undo.clear();
         self.redo.clear();
         self.content = text.into();
         self.selected = self.content.len()..self.content.len();
@@ -560,7 +561,7 @@ impl Input {
         self.select_to(self.next_boundary(self.cursor()), cx);
     }
 
-    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
         self.select_text();
         cx.notify();
     }
@@ -953,7 +954,7 @@ impl Render for Input {
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::select_home))

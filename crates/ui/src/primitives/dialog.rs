@@ -21,6 +21,7 @@ pub(crate) struct DialogState {
     focus: FocusHandle,
     footer_start: FocusHandle,
     actions: FocusHandle,
+    default_action: FocusHandle,
     scroll: ScrollHandle,
 }
 
@@ -33,6 +34,7 @@ impl DialogState {
             focus: cx.focus_handle(),
             footer_start: cx.focus_handle(),
             actions: cx.focus_handle(),
+            default_action: cx.focus_handle(),
             scroll: ScrollHandle::new(),
         }
     }
@@ -51,6 +53,7 @@ pub struct Dialog {
     body: Vec<AnyElement>,
     footer_start: Option<AnyElement>,
     actions: Vec<AnyElement>,
+    default_action: Option<usize>,
     on_close: Option<CloseHandler>,
     scroll: Option<ScrollHandle>,
 }
@@ -69,6 +72,7 @@ impl Dialog {
             body: Vec::new(),
             footer_start: None,
             actions: Vec::new(),
+            default_action: None,
             on_close: None,
             scroll: None,
         }
@@ -114,6 +118,11 @@ impl Dialog {
         self
     }
 
+    pub fn default_action(mut self, action: impl IntoElement) -> Self {
+        self.default_action = Some(self.actions.len());
+        self.action(action)
+    }
+
     pub fn on_close(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_close = Some(Rc::new(f));
         self
@@ -132,16 +141,18 @@ impl RenderOnce for Dialog {
         let state = window.use_keyed_state((self.id.clone(), "dialog"), cx, |_, cx| {
             DialogState::new(cx)
         });
-        let (was_open, focus, footer_start, actions, scroll) = {
+        let (was_open, focus, footer_start, actions, default_action, scroll) = {
             let state = state.read(cx);
             (
                 state.was_open,
                 state.focus.clone(),
                 state.footer_start.clone(),
                 state.actions.clone(),
+                state.default_action.clone(),
                 state.scroll.clone(),
             )
         };
+        let default_index = self.default_action;
         let scroll = self.scroll.clone().unwrap_or(scroll);
         if self.open != was_open {
             let opening = self.open;
@@ -159,10 +170,13 @@ impl RenderOnce for Dialog {
             });
             let focus = focus.clone();
             let (footer_start, actions) = (footer_start.clone(), actions.clone());
+            let default_action = default_index.map(|_| default_action.clone());
             window.defer(cx, move |window, cx| {
                 if opening {
                     nav::focus_first(&focus, window, cx);
-                    if footer_start.contains_focused(window, cx) {
+                    if let Some(default_action) = &default_action {
+                        nav::focus_first(default_action, window, cx);
+                    } else if footer_start.contains_focused(window, cx) {
                         nav::focus_first(&actions, window, cx);
                     }
                 } else if let Some(handle) = restore {
@@ -390,19 +404,34 @@ impl RenderOnce for Dialog {
                                                         })
                                                         .justify_end()
                                                         .gap(theme.space(2.0))
-                                                        .children(self.actions.into_iter().map(
-                                                            |action| {
-                                                                if equal_choices {
-                                                                    crate::v_flex()
-                                                                        .flex_1()
-                                                                        .min_w_0()
-                                                                        .child(action)
-                                                                        .into_any_element()
-                                                                } else {
-                                                                    action
-                                                                }
-                                                            },
-                                                        )),
+                                                        .children(
+                                                            self.actions
+                                                                .into_iter()
+                                                                .enumerate()
+                                                                .map(|(index, action)| {
+                                                                    let action = if Some(index)
+                                                                        == default_index
+                                                                    {
+                                                                        crate::v_flex()
+                                                                            .track_focus(
+                                                                                &default_action,
+                                                                            )
+                                                                            .child(action)
+                                                                            .into_any_element()
+                                                                    } else {
+                                                                        action
+                                                                    };
+                                                                    if equal_choices {
+                                                                        crate::v_flex()
+                                                                            .flex_1()
+                                                                            .min_w_0()
+                                                                            .child(action)
+                                                                            .into_any_element()
+                                                                    } else {
+                                                                        action
+                                                                    }
+                                                                }),
+                                                        ),
                                                 ),
                                         )
                                     },
