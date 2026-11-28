@@ -180,17 +180,7 @@ fn announce(cx: &AsyncApp) {
         return;
     };
     let installed = env!("CARGO_PKG_VERSION");
-    let channel = cx.update(|cx| crate::settings::update_channel(cx));
     let (style, message, detail, buttons): (_, String, Option<String>, &[&str]) = match &state {
-        Updates::Current(_) if Channel::of(&CURRENT) != Some(channel) => (
-            NSAlertStyle::Informational,
-            match channel {
-                Channel::Stable => "Waiting for the next stable release".into(),
-                Channel::Nightly => "Waiting for the next nightly build".into(),
-            },
-            Some(format!("You’re running Mira {installed}.")),
-            &["OK"],
-        ),
         Updates::Current(_) => (
             NSAlertStyle::Informational,
             "You’re up to date!".into(),
