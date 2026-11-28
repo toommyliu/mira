@@ -482,7 +482,7 @@ pub(super) fn elements(form: &Entity<InputsForm>, theme: &Theme, cx: &App) -> Ve
                     (Kind::MultiSelect { options, .. }, Draft::Choices(chosen), _) => {
                         let set = Rc::new(set);
                         v_flex()
-                            .gap(layout.space(3.0))
+                            .gap(layout.space(1.0))
                             .children(options.iter().enumerate().map(|(option, name)| {
                                 let set = set.clone();
                                 let chosen = chosen.clone();

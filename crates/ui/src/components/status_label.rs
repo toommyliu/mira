@@ -1,7 +1,7 @@
 use gpui::{
     App, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Role,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -65,10 +65,16 @@ impl RenderOnce for StatusLabel {
                     label.flex_none()
                 }
             })
-            .gap(px(7.0))
+            .gap(theme.space(1.5))
             .text_body(typography)
             .text_color(text)
-            .child(StatusDot::new((self.id.clone(), "dot"), self.activity))
+            .when(
+                matches!(
+                    self.activity,
+                    Activity::Waiting | Activity::NeedsYou | Activity::Failed
+                ),
+                |label| label.child(StatusDot::new((self.id.clone(), "dot"), self.activity)),
+            )
             .child({
                 let shown = if self.single_line {
                     self.label.lines().collect::<Vec<_>>().join(" ").into()

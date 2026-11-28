@@ -74,8 +74,8 @@ const WIDTH: f32 = 880.0;
 const HEIGHT: f32 = 560.0;
 const MIN_WIDTH: f32 = 800.0;
 const MIN_HEIGHT: f32 = 400.0;
-const PADDING: Pixels = px(16.0);
 const QUEUE_RUN_WIDTH: Pixels = px(104.0);
+const QUALIFIER_SHRINK: f32 = 1000.0;
 const PATIENCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,6 +476,7 @@ fn source_mark(theme: &Theme, state: &SourceState) -> Option<impl IntoElement> {
     Some(
         div()
             .id(label)
+            .debug_selector(|| "source-mark".into())
             .role(gpui::Role::Image)
             .aria_label(label)
             .flex_none()
@@ -1365,7 +1366,7 @@ impl ScriptsWindow {
         };
         let card = pending.iter().fold(
             HoverCard::new("updates-card", title)
-                .placement(Placement::new(Side::Right, Align::Start)),
+                .placement(Placement::new(Side::Bottom, Align::Start)),
             |card, pending| {
                 card.row(
                     pending.name.clone(),
@@ -1711,6 +1712,7 @@ impl ScriptsWindow {
                     .children(row.qualifier.clone().map(|qualifier| {
                         div()
                             .min_w_0()
+                            .flex_shrink(QUALIFIER_SHRINK)
                             .truncate()
                             .text_ellipsis_start()
                             .text_caption(marks.typography)
@@ -2397,6 +2399,7 @@ impl ScriptsWindow {
                                 .max_w(folder_width)
                                 .truncate()
                                 .text_ellipsis_start()
+                                .text_right()
                                 .child(folder.clone()),
                         ),
                     None => ListItem::new(entry.name.clone()).selection_check(),
@@ -2486,7 +2489,6 @@ impl Render for ScriptsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let layout = theme.layout;
-        let typography = theme.typography;
         let has_tab = self.shown.is_some();
         let page = self.shown_page(cx);
         let (rows, chosen) = if let Page::Library(source) = &page {
@@ -2569,8 +2571,7 @@ impl Render for ScriptsWindow {
                     .id("script-status")
                     .role(gpui::Role::Status)
                     .aria_label("No tabs open")
-                    .pr(PADDING)
-                    .text_size(typography.secondary)
+                    .pr(theme.space(3.0))
                     .text_color(theme.muted_foreground)
                     .child("No tabs open"),
             ),
@@ -2869,23 +2870,29 @@ fn heading(
 ) -> impl IntoElement {
     let layout = theme.layout;
     let typography = theme.typography;
-    h_flex()
-        .items_start()
-        .gap(layout.space(2.0))
+    v_flex()
+        .min_w_0()
         .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
+            h_flex()
+                .h(typography.body_line)
+                .gap(layout.space(2.0))
                 .child(
                     div()
-                        .text_size(typography.secondary)
-                        .line_height(typography.secondary_line)
-                        .text_color(theme.muted_foreground)
-                        .child(detail),
-                ),
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(name),
+                )
+                .children(action),
         )
-        .children(action)
+        .child(
+            div()
+                .text_size(typography.secondary)
+                .line_height(typography.secondary_line)
+                .text_color(theme.muted_foreground)
+                .child(detail),
+        )
 }
 
 struct QueueRow {
@@ -5347,6 +5354,44 @@ Cells visited: Enter, r1, r2, r3, r4.";
         assert!(
             at_mode < at_offset,
             "tabbing on to Mode scrolls further, even with Offset still marked invalid"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_long_source_name_leaves_room_for_its_problem_mark(cx: &mut gpui::TestAppContext) {
+        let mut random = [0; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("mira-long-source-{:x}", u64::from_ne_bytes(random)));
+        fs::create_dir_all(temp.join("scripts")).unwrap();
+        let missing = temp.join("a folder whose name is far wider than the sidebar row");
+        cx.update(mira_ui::init);
+        let (scripts, cx) = cx.add_window_view(|window, cx| {
+            crate::settings::init(temp.join("settings.json"), |_| {}, cx);
+            crate::settings::add_script_folder(missing.clone(), cx);
+            crate::packages::init(temp.join("packages"), temp.join("github-token"), cx);
+            crate::script_inputs::init(temp.join("inputs.json"), cx);
+            window.activate_window();
+            let client = Client::empty_for_tests(&temp, cx);
+            ScriptsWindow::new(
+                client,
+                temp.join("scripts"),
+                temp.join("types"),
+                Target::Selected,
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let list = scripts.read_with(cx, |scripts, _| scripts.folder_scroll.bounds());
+        let mark = cx.debug_bounds("source-mark").unwrap();
+        assert!(
+            mark.right() <= list.right() - px(8.0),
+            "the problem mark stays inside the sources list: {mark:?} in {list:?}"
         );
         fs::remove_dir_all(temp).unwrap();
     }
