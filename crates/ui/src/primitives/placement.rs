@@ -41,7 +41,6 @@ impl Placement {
     pub(super) fn menubar() -> Self {
         Self {
             side_offset: px(8.0),
-            align_offset: px(-4.0),
             ..Self::new(Side::Bottom, Align::Start)
         }
     }

@@ -59,11 +59,13 @@ const LAST_SERVER: &str = "Last server";
 const MAX_NUMBER: u32 = 999;
 const MAX_TEXT: usize = 32;
 const VISIBLE_CELLS: f32 = 10.5;
+const SPOT_MARK: Pixels = px(12.0);
 const SCROLLBAR_CLEARANCE: Pixels = px(2.0);
 const OPTIONS_WIDTH: f32 = 440.0;
 const COLUMN_GAP: f32 = 6.0;
 const AUTOMATION_WIDTH: f32 = 248.0;
 const RELOGIN_NUMBER_WIDTH: f32 = 48.0;
+const RELOGIN_UNIT: &str = "s";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Setting {
@@ -112,7 +114,7 @@ impl Setting {
 
     fn unit(self) -> Option<&'static str> {
         match self {
-            Setting::Delay | Setting::Backoff | Setting::BackoffCap => Some("s"),
+            Setting::Delay | Setting::Backoff | Setting::BackoffCap => Some(RELOGIN_UNIT),
             _ => None,
         }
     }
@@ -1140,7 +1142,7 @@ fn setting_field(
     cx: &mut App,
 ) -> Field {
     let input = setting_input(setting, automation, enabled, inputs, window, cx);
-    Field::new(setting.label(), input)
+    Field::new(setting.label(), input).disabled(!enabled)
 }
 
 fn row_label(label: &'static str, enabled: bool) -> impl IntoElement {
@@ -1427,9 +1429,9 @@ fn relogin_panel(
                     )))
                     .child(
                         div()
-                            .w(layout.space(3.0))
                             .text_color(theme.muted_foreground)
-                            .children(setting.unit()),
+                            .when(setting.unit().is_none(), |unit| unit.invisible())
+                            .child(setting.unit().unwrap_or(RELOGIN_UNIT)),
                     ),
             )
     };
@@ -1492,7 +1494,10 @@ fn jump_panel(
         .use_keyed_state("jump-cells", cx, |_, _| {
             let scroll = ScrollHandle::new();
             // scroll_to_item is dropped on the first frame, before the list has measured its viewport.
-            let centered = layout.control * (start.row as f32 + 0.5 - VISIBLE_CELLS / 2.0);
+            let above = (start.row as f32 + 0.5 - VISIBLE_CELLS / 2.0)
+                .round()
+                .max(0.0);
+            let centered = layout.control * above;
             scroll.set_offset(point(px(0.0), -centered));
             scroll
         })
@@ -1570,8 +1575,8 @@ fn jump_panel(
             .when(*spot.read(cx) == spot_here, |row| {
                 row.bg(theme.ghost_hover())
             })
-            .child(div().flex_none().w(px(12.0)).when(here, |mark| {
-                mark.child(icon(Icon::Check, theme.foreground).size(px(12.0)))
+            .child(div().flex_none().w(SPOT_MARK).when(here, |mark| {
+                mark.child(icon(Icon::Check, theme.foreground).size(SPOT_MARK))
             }))
             .child(div().min_w_0().truncate().child(label))
             .on_mouse_move(move |_, _, cx| {
@@ -1633,7 +1638,8 @@ fn jump_panel(
     let column = |label| {
         v_flex().flex_1().min_w_0().child(
             div()
-                .px(layout.space(1.5))
+                .pl(layout.space(3.0) + SPOT_MARK)
+                .pr(layout.space(1.5))
                 .pb(layout.space(0.5))
                 .child(heading(label, cx)),
         )
@@ -1672,7 +1678,9 @@ fn jump_panel(
                             .when(cells.is_empty(), |list| list.child(note("No cells", cx)))
                             .children(cells),
                     )
-                    .child(Scrollbar::new("jump-cells-scrollbar", cells_scroll.clone())),
+                    .child(
+                        Scrollbar::new("jump-cells-scrollbar", cells_scroll.clone()).persistent(),
+                    ),
             ),
         )
         .child(
@@ -2124,7 +2132,7 @@ mod tests {
         let settings = std::env::temp_dir().join("mira-windows-menu-snapshot-settings.json");
         for path in mira_ui::snapshot(
             "game-windows-menu",
-            gpui::size(px(320.0), px(220.0)),
+            gpui::size(px(320.0), px(260.0)),
             move |_, cx| {
                 crate::settings::init(settings.clone(), |_| {}, cx);
                 shortcuts::apply(cx);

@@ -22,7 +22,9 @@ use super::{
     script::{CloseTab, Finished},
 };
 use mira_ui::{
-    ActiveTheme as _, Theme, Tone, h_flex,
+    ActiveTheme as _, Theme, Tone,
+    components::Empty,
+    h_flex,
     primitives::{
         Align, Button, Checkbox, CheckedState, Dialog, DropdownMenu, HoverCard, Icon, Kbd,
         MenuItem, Placement, Side, Tab as TabItem, Tabs,
@@ -1585,30 +1587,23 @@ impl Client {
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let layout = theme.layout;
-        let typography = theme.typography;
         div()
             .flex()
-            .flex_col()
             .flex_1()
             .w_full()
             .items_center()
             .justify_center()
-            .gap(layout.space(1.5))
-            .bg(theme.background)
-            .text_size(typography.body)
-            .text_color(theme.muted_foreground)
-            .child("No tabs are open.")
+            .bg(cx.theme().background)
             .child(
-                Button::new("open-session", "New tab")
-                    .variant(Variant::Outline)
-                    .mt(layout.space(2.0))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Err(error) = this.open_session(None, window, cx) {
-                            tracing::error!(%error, "couldn't open a session");
-                        }
-                    })),
+                Empty::new("No tabs open", "Open a tab to play.").action(
+                    Button::new("open-session", "New tab")
+                        .variant(Variant::Outline)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Err(error) = this.open_session(None, window, cx) {
+                                tracing::error!(%error, "couldn't open a session");
+                            }
+                        })),
+                ),
             )
     }
 }
@@ -2182,7 +2177,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         for path in mira_ui::snapshot(
             "hotkey-status",
-            gpui::size(px(640.0), px(200.0)),
+            gpui::size(px(640.0), px(300.0)),
             move |_, cx| {
                 crate::settings::init(folder.join("settings.json"), |_| {}, cx);
                 let client = Client::empty_for_tests(&folder, cx);
