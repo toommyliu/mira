@@ -16,6 +16,7 @@ pub mod text_field {
 mod kbd;
 pub(crate) mod label;
 mod list;
+pub mod marquee;
 mod menu;
 mod menubar;
 mod placement;
@@ -59,6 +60,7 @@ pub use icon::{Icon, icon, small_icon};
 pub use input::{Input, InputEvent, Numeric};
 pub use kbd::Kbd;
 pub use list::{List, ListItem, VirtualList, VirtualListState};
+pub use marquee::Marquee;
 pub use menu::{DropdownMenu, MenuItem, MenuList, divider};
 pub use menubar::Menubar;
 pub use placement::{Align, Placement, Side};
