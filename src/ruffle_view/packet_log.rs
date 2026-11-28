@@ -30,13 +30,6 @@ impl Line {
             Line::Lost { .. } => 0,
         }
     }
-
-    fn from(&self) -> Option<Sender> {
-        match self {
-            Line::Packet(packet) => Some(packet.from),
-            Line::Lost { .. } => None,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -44,8 +37,6 @@ pub(crate) struct PacketLog {
     lines: VecDeque<Line>,
     bytes: usize,
     dropped: u64,
-    client: usize,
-    server: usize,
 }
 
 impl PacketLog {
@@ -65,17 +56,11 @@ impl PacketLog {
                 Captured::Lost { at } => Line::Lost { at },
             };
             self.bytes += line.bytes();
-            if let Some(count) = self.count_of(&line) {
-                *count += 1;
-            }
             self.lines.push_back(line);
         }
         while self.lines.len() > 1 && (self.lines.len() > MAX_LINES || self.bytes > MAX_BYTES) {
             if let Some(line) = self.lines.pop_front() {
                 self.bytes -= line.bytes();
-                if let Some(count) = self.count_of(&line) {
-                    *count -= 1;
-                }
                 self.dropped += 1;
             }
         }
@@ -85,8 +70,6 @@ impl PacketLog {
         self.dropped += self.lines.len() as u64;
         self.lines.clear();
         self.bytes = 0;
-        self.client = 0;
-        self.server = 0;
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -97,27 +80,12 @@ impl PacketLog {
         self.lines.get(index)
     }
 
-    #[cfg(test)]
-    fn lines(&self) -> impl Iterator<Item = &Line> {
+    pub(crate) fn lines(&self) -> impl Iterator<Item = &Line> {
         self.lines.iter()
     }
 
     pub(crate) fn dropped(&self) -> u64 {
         self.dropped
-    }
-
-    pub(crate) fn count(&self, from: Sender) -> usize {
-        match from {
-            Sender::Client => self.client,
-            Sender::Server => self.server,
-        }
-    }
-
-    fn count_of(&mut self, line: &Line) -> Option<&mut usize> {
-        Some(match line.from()? {
-            Sender::Client => &mut self.client,
-            Sender::Server => &mut self.server,
-        })
     }
 }
 
@@ -185,7 +153,8 @@ impl Visible {
         self.ids.get(index).copied()
     }
 
-    pub(crate) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+    #[cfg(test)]
+    fn ids(&self) -> impl Iterator<Item = u64> + '_ {
         self.ids.iter().copied()
     }
 
@@ -258,10 +227,6 @@ mod tests {
         assert_eq!(log.dropped(), 4);
         assert_eq!(texts(&log)[0], "%xt%zm%n%1%4%");
         assert_eq!(texts(&log)[MAX_LINES - 1], "%xt%last%-1%");
-        assert_eq!(
-            (log.count(Sender::Client), log.count(Sender::Server)),
-            (MAX_LINES - 1, 1)
-        );
     }
 
     #[test]
@@ -305,10 +270,7 @@ mod tests {
             },
         ]);
         log.clear();
-        assert_eq!(
-            (log.len(), log.dropped(), log.count(Sender::Client)),
-            (0, 2, 0)
-        );
+        assert_eq!((log.len(), log.dropped()), (0, 2));
     }
 
     #[test]

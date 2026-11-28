@@ -2098,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_search_clear_stands_out_at_rest_and_on_hover() {
+    fn settings_search_clear_fills_only_on_hover() {
         use gpui::Focusable as _;
 
         let dir = crate::storyboard::scratch("settings-search-clear");
@@ -2161,8 +2161,8 @@ mod tests {
                 let hovered = cx.capture_screenshot(owner).unwrap();
                 let hover = hovered.get_pixel(179 * scale, 60 * scale)[0];
                 assert!(
-                    field.abs_diff(button) >= 12 && button.abs_diff(hover) >= 12,
-                    "clear button should stand out against the field and respond to hover: field {field}, button {button}, hover {hover}"
+                    field == button && button.abs_diff(hover) >= 12,
+                    "clear button should match the field at rest and fill on hover: field {field}, button {button}, hover {hover}"
                 );
             },
         );

@@ -996,7 +996,13 @@ impl Render for Input {
             .when(frame == Frame::Boxed, |field| {
                 field
                     .pl(layout.space(2.0))
-                    .pr(px(if clearable || self.password { 2.0 } else { 8.0 }))
+                    .pr(px(if clearable {
+                        3.0
+                    } else if self.password {
+                        2.0
+                    } else {
+                        8.0
+                    }))
                     .rounded(radius)
                     .bg(theme.input_fill())
                     .border_1()

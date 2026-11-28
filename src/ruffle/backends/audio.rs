@@ -34,6 +34,7 @@ pub(crate) struct Audio {
     output: Box<dyn AudioBackend>,
     playing: bool,
     silent: bool,
+    streams: Vec<SoundInstanceHandle>,
 }
 
 impl Audio {
@@ -42,6 +43,7 @@ impl Audio {
             output,
             playing: true,
             silent: false,
+            streams: Vec::new(),
         }
     }
 
@@ -51,22 +53,26 @@ impl Audio {
         }
         self.silent = silent;
         if silent {
-            self.output.stop_all_sounds();
+            // Ruffle holds a clip's timeline back to stay in sync with its stream, so a paused
+            // stream would stall the game.
+            for stream in self.streams.drain(..) {
+                self.output.stop_sound(stream);
+            }
             self.output.pause();
         } else if self.playing {
             self.output.play();
         }
     }
 
-    fn start(
-        &mut self,
-        start: impl FnOnce(&mut dyn AudioBackend) -> Result<SoundInstanceHandle, DecodeError>,
-    ) -> Result<SoundInstanceHandle, DecodeError> {
-        let sound = start(self.output.as_mut())?;
+    fn track_stream(&mut self, stream: SoundInstanceHandle) -> SoundInstanceHandle {
         if self.silent {
-            self.output.stop_sound(sound);
+            self.output.stop_sound(stream);
+        } else {
+            let output = &self.output;
+            self.streams.retain(|&other| output.is_sound_playing(other));
+            self.streams.push(stream);
         }
-        Ok(sound)
+        stream
     }
 }
 
@@ -100,7 +106,11 @@ impl AudioBackend for Audio {
         sound: SoundHandle,
         settings: &swf::SoundInfo,
     ) -> Result<SoundInstanceHandle, DecodeError> {
-        self.start(|output| output.start_sound(sound, settings))
+        let instance = self.output.start_sound(sound, settings)?;
+        if self.silent && settings.num_loops <= 1 {
+            self.output.stop_sound(instance);
+        }
+        Ok(instance)
     }
 
     fn start_stream(
@@ -108,7 +118,8 @@ impl AudioBackend for Audio {
         clip_data: SwfSlice,
         handle: &swf::SoundStreamHead,
     ) -> Result<SoundInstanceHandle, DecodeError> {
-        self.start(|output| output.start_stream(clip_data, handle))
+        let stream = self.output.start_stream(clip_data, handle)?;
+        Ok(self.track_stream(stream))
     }
 
     fn start_substream(
@@ -116,7 +127,8 @@ impl AudioBackend for Audio {
         stream_data: Substream,
         stream_info: &SoundStreamInfo,
     ) -> Result<SoundInstanceHandle, DecodeError> {
-        self.start(|output| output.start_substream(stream_data, stream_info))
+        let stream = self.output.start_substream(stream_data, stream_info)?;
+        Ok(self.track_stream(stream))
     }
 
     fn stop_sound(&mut self, sound: SoundInstanceHandle) {
@@ -166,9 +178,9 @@ impl AudioBackend for Audio {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, rc::Rc, sync::Arc};
 
-    use ruffle_core::{backend::audio::AudioMixer, impl_audio_mixer_backend};
+    use ruffle_core::{backend::audio::AudioMixer, impl_audio_mixer_backend, tag_utils::SwfMovie};
 
     use super::*;
 
@@ -190,52 +202,67 @@ mod tests {
     }
 
     #[test]
-    fn a_muted_game_plays_nothing_and_its_output_stops_until_it_unmutes() {
+    fn a_muted_game_stops_its_output_and_resumes_looping_sounds_when_it_unmutes() {
         let playing = Rc::new(Cell::new(true));
         let mut audio = Audio::new(Box::new(Speaker {
             mixer: AudioMixer::new(2, 44_100),
             playing: playing.clone(),
         }));
+        let format = swf::SoundFormat {
+            compression: swf::AudioCompression::UncompressedUnknownEndian,
+            sample_rate: 44_100,
+            is_stereo: false,
+            is_16_bit: false,
+        };
         let samples = [0u8; 4_410];
         let sound = audio
             .register_sound(&swf::Sound {
                 id: 1,
-                format: swf::SoundFormat {
-                    compression: swf::AudioCompression::UncompressedUnknownEndian,
-                    sample_rate: 44_100,
-                    is_stereo: false,
-                    is_16_bit: false,
-                },
+                format: format.clone(),
                 num_samples: 4_410,
                 data: &samples,
             })
             .unwrap();
-        let settings = swf::SoundInfo {
+        let play = |num_loops| swf::SoundInfo {
             event: swf::SoundEvent::Event,
             in_sample: None,
             out_sample: None,
-            num_loops: 1,
+            num_loops,
             envelope: None,
         };
+        let head = swf::SoundStreamHead {
+            stream_format: format.clone(),
+            playback_format: format,
+            num_samples_per_block: 441,
+            latency_seek: 0,
+        };
+        let clip = SwfSlice::empty(Arc::new(SwfMovie::empty(10, None)));
 
-        let before = audio.start_sound(sound, &settings).unwrap();
-        assert!(audio.is_sound_playing(before));
+        let music = audio.start_sound(sound, &play(9999)).unwrap();
+        let effect = audio.start_sound(sound, &play(1)).unwrap();
+        let stream = audio.start_stream(clip.clone(), &head).unwrap();
+        assert!(audio.is_sound_playing(stream));
 
         audio.silence(true);
-        let muted = audio.start_sound(sound, &settings).unwrap();
-        let also_muted = audio.start_sound(sound, &settings).unwrap();
-        assert!(!audio.is_sound_playing(before));
-        assert!(!audio.is_sound_playing(muted));
-        assert!(!audio.is_sound_playing(also_muted));
-        assert_ne!(muted, also_muted);
         assert!(!playing.get());
+        assert!(audio.is_sound_playing(music));
+        assert!(audio.is_sound_playing(effect));
+        assert!(!audio.is_sound_playing(stream));
+        let muted_music = audio.start_sound(sound, &play(9999)).unwrap();
+        let muted_effect = audio.start_sound(sound, &play(1)).unwrap();
+        let muted_stream = audio.start_stream(clip, &head).unwrap();
+        assert!(audio.is_sound_playing(muted_music));
+        assert!(!audio.is_sound_playing(muted_effect));
+        assert!(!audio.is_sound_playing(muted_stream));
 
         audio.play();
         assert!(!playing.get());
 
         audio.silence(false);
-        let after = audio.start_sound(sound, &settings).unwrap();
-        assert!(audio.is_sound_playing(after));
         assert!(playing.get());
+        assert!(audio.is_sound_playing(music));
+        assert!(audio.is_sound_playing(muted_music));
+        let after = audio.start_sound(sound, &play(1)).unwrap();
+        assert!(audio.is_sound_playing(after));
     }
 }

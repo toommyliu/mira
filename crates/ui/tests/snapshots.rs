@@ -1590,6 +1590,44 @@ fn snapshot_input_drag_selection() {
 }
 
 #[test]
+fn search_clear_button_is_quiet_until_hovered() {
+    use mira_ui::primitives::Input;
+
+    let width = 260;
+    let open = |window: &mut Window, cx: &mut gpui::App| {
+        let input = cx.new(|cx| {
+            let mut input = Input::new("Search", cx).search();
+            input.set_text("axas", cx);
+            input
+        });
+        Scene::open(move |_, _| input.clone().into_any_element(), window, cx)
+    };
+    let window = size(px(width as f32), px(60.0));
+    snapshot("search-clear", window, open);
+    mira_ui::snapshot_with("search-clear-hover", window, open, |cx, owner| {
+        let rest = cx.capture_screenshot(owner).unwrap();
+        hover(cx, owner, 230.0, 30.0);
+        let hovered = cx.capture_screenshot(owner).unwrap();
+        let scale = rest.width() / width;
+        let field = (200 * scale, 24 * scale);
+        let face = (224 * scale, 24 * scale);
+        let glyph = (230 * scale, 30 * scale);
+        assert!(
+            rest[field][0].abs_diff(rest[face][0]) <= 2,
+            "the button must leave the field's fill untouched at rest"
+        );
+        assert!(
+            rest[face][0].abs_diff(hovered[face][0]) >= 10,
+            "hovering the button must show its fill"
+        );
+        assert!(
+            rest[glyph][0].abs_diff(hovered[glyph][0]) >= 40,
+            "the × must take its hover ink"
+        );
+    });
+}
+
+#[test]
 fn snapshot_form() {
     use mira_ui::primitives::{Input, Numeric};
     for path in snapshot("form", size(px(620.0), px(260.0)), |_, cx| {

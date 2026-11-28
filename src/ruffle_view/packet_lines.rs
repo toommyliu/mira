@@ -7,9 +7,10 @@ use gpui::{
     prelude::FluentBuilder as _, px, uniform_list,
 };
 use mira_ui::{
-    ActiveTheme as _, PointerCursor as _, Theme, Tone,
+    ActiveTheme as _, PointerCursor as _, Theme,
+    components::{LogLine, jump_to_latest},
     nav::{self, Axis, Step},
-    primitives::{ContextMenu, Icon, MenuItem, Scrollbar, icon},
+    primitives::{ContextMenu, MenuItem, Scrollbar},
 };
 
 const ID: &str = "packet-lines";
@@ -17,14 +18,10 @@ const ID: &str = "packet-lines";
 fn key(part: impl Into<SharedString>) -> ElementId {
     ElementId::from((ElementId::from(ID), part.into()))
 }
-const ROW_HEIGHT: Pixels = px(20.0);
 const FOLLOW_SLACK: Pixels = px(4.0);
 
 pub(super) struct Row {
-    pub(super) time: Option<SharedString>,
-    pub(super) tag: &'static str,
-    pub(super) tone: Tone,
-    pub(super) text: SharedString,
+    pub(super) line: LogLine,
     pub(super) actions: bool,
 }
 
@@ -102,8 +99,6 @@ pub(super) struct LinesState {
 
 impl RenderOnce for PacketLines {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let layout = cx.theme().layout;
-        let typography = cx.theme().typography;
         let scroll = self.state.scroll.clone();
         let before = self.state.shown.get();
         let selected_line = self.selected.map(|index| self.dropped + index as u64);
@@ -124,7 +119,7 @@ impl RenderOnce for PacketLines {
             let dropped = (self.dropped - before.dropped) as f32;
             base.set_offset(point(
                 offset.x,
-                (offset.y + ROW_HEIGHT * dropped).min(px(0.0)),
+                (offset.y + LogLine::height() * dropped).min(px(0.0)),
             ));
         }
         if selected_line != before.selected
@@ -166,27 +161,18 @@ impl RenderOnce for PacketLines {
                     let picks = on_select.clone();
                     let on_select = on_select.clone();
                     let on_activate = on_activate.clone();
-                    let (_, _, tag_color) = theme.tone(entry.tone);
-                    let line = div()
+                    let label = entry.line.text.clone();
+                    let line = entry
+                        .line
+                        .row(&theme, current)
                         .id(index)
                         .debug_selector(move || format!("line-{index}"))
                         .role(Role::ListBoxOption)
-                        .aria_label(entry.text.clone())
+                        .aria_label(label)
                         .aria_selected(current)
                         .aria_position_in_set(index + 1)
                         .aria_size_of_set(count)
                         .when(current, |line| line.aria_active_descendant())
-                        .flex()
-                        .items_center()
-                        .gap(layout.space(3.0))
-                        .h(ROW_HEIGHT)
-                        .px(layout.space(3.0))
-                        .font_family(theme.mono_family.clone())
-                        .text_size(typography.mono)
-                        .line_height(px(17.0))
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .when(current, |line| line.bg(theme.muted))
                         .pointer_cursor(&theme)
                         .when(entry.actions, |line| {
                             line.on_mouse_down(MouseButton::Right, move |_, window, cx| {
@@ -204,30 +190,7 @@ impl RenderOnce for PacketLines {
                             } else if let Some(on_select) = &on_select {
                                 on_select(index, window, cx);
                             }
-                        })
-                        .when_some(entry.time, |line, time| {
-                            line.child(
-                                div()
-                                    .flex_none()
-                                    .text_color(theme.muted_foreground)
-                                    .child(time),
-                            )
-                        })
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(32.0))
-                                .text_color(tag_color)
-                                .child(entry.tag),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme.muted_foreground)
-                                .child(entry.text),
-                        );
+                        });
                     if !entry.actions {
                         return div().child(line).into_any_element();
                     }
@@ -240,9 +203,7 @@ impl RenderOnce for PacketLines {
                 .collect()
         })
         .track_scroll(&scroll)
-        .size_full()
-        .py(layout.space(1.0))
-        .pr(Scrollbar::GUTTER);
+        .size_full();
         let lines = div()
             .id(ID)
             .role(Role::Log)
@@ -255,7 +216,6 @@ impl RenderOnce for PacketLines {
         div()
             .relative()
             .size_full()
-            .bg(theme.card)
             .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(lines)
             .child(bar)
@@ -273,28 +233,16 @@ impl RenderOnce for PacketLines {
 }
 
 fn jump(theme: &Theme, unseen: u64, scroll: UniformListScrollHandle) -> AnyElement {
-    let layout = theme.layout;
     let label: SharedString = match unseen {
         0 => "Jump to latest".into(),
         1 => "1 new packet".into(),
         n => format!("{n} new packets").into(),
     };
-    let button = mira_ui::primitives::Button::new(key("jump"), label)
-        .variant(mira_ui::primitives::button::Variant::Outline)
-        .start_slot(icon(Icon::ArrowDownToLine, theme.muted_foreground))
-        .on_click(move |_, window, _| {
-            scroll.scroll_to_bottom();
-            window.refresh();
-        });
-    div()
-        .absolute()
-        .bottom(layout.space(3.0))
-        .left_0()
-        .right_0()
-        .flex()
-        .justify_center()
-        .child(button)
-        .into_any_element()
+    jump_to_latest(theme, key("jump"), label, move |window, _| {
+        scroll.scroll_to_bottom();
+        window.refresh();
+    })
+    .into_any_element()
 }
 
 fn keys(
@@ -334,6 +282,8 @@ mod tests {
         Context, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
     };
 
+    use mira_ui::components::LogLevel;
+
     use super::*;
 
     struct Feed {
@@ -355,10 +305,12 @@ mod tests {
                         self.1.clone(),
                         lines.len(),
                         move |index, _| Row {
-                            time: None,
-                            tag: "in",
-                            tone: Tone::Neutral,
-                            text: lines[index].clone().into(),
+                            line: LogLine {
+                                time: None,
+                                tag: Some("in".into()),
+                                level: LogLevel::Info,
+                                text: lines[index].clone().into(),
+                            },
                             actions: false,
                         },
                         |_, _| Vec::new(),

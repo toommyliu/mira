@@ -5,7 +5,7 @@ use std::{
 
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
-    Focusable as _, FontWeight, Global, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
+    Focusable as _, Global, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent,
     ParentElement as _, Pixels, Render, Role, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowHandle, WindowOptions, actions, div, prelude::FluentBuilder as _,
@@ -13,14 +13,15 @@ use gpui::{
 };
 use mira_ui::{
     ActiveTheme as _, FOCUS_SCOPE, StyledExt as _, Theme, Tone,
-    components::Empty,
+    components::{Empty, LogLevel, LogLine},
     h_flex,
     primitives::{
         Align, Badge, Button, DropdownMenu, Icon, Input, InputEvent, List, ListItem, MenuItem,
-        Numeric, Switch, Tab, Tabs, ToggleGroup,
+        Numeric, Select, Tab, Tabs,
         button::{Size, Variant},
         text_field::Find,
     },
+    theme::tabular,
     v_flex,
 };
 
@@ -37,6 +38,7 @@ use crate::{
         spammer::{self, Status},
     },
     bridge::packets::Sender,
+    clock,
     domain::packets::{self as packet, Delivery, Problem, Target},
     file_panel,
     ruffle::Command,
@@ -48,9 +50,13 @@ const WIDTH: f32 = 900.0;
 const HEIGHT: f32 = 640.0;
 const MIN_WIDTH: f32 = 560.0;
 const MIN_HEIGHT: f32 = 420.0;
-const DELAY_WIDTH: Pixels = px(104.0);
+const DELAY_WIDTH: Pixels = px(60.0);
+const TARGET_WIDTH: Pixels = px(88.0);
+const SEARCH_WIDTH: Pixels = px(240.0);
+const SEARCH_MIN_WIDTH: Pixels = px(120.0);
 const TARGETS: [Target; 2] = [Target::Server, Target::Client];
 const EXAMPLE: &str = "%xt%zm%cmd%{room}%…";
+const COMMITS: &[&str] = &["Send", "Add", "Save"];
 const PLACEHOLDERS: &str = "{room}, {map} and {player} fill in when the packet is sent.";
 
 struct Open(WindowHandle<Packets>);
@@ -161,7 +167,6 @@ impl Packets {
             Input::new("Search packets", cx)
                 .placeholder("Search")
                 .search()
-                .small()
         });
         let composer = cx.new(|cx| Input::new("Packet", cx).placeholder(EXAMPLE));
         let adding = cx.new(|cx| Input::new("Packet to queue", cx).placeholder(EXAMPLE));
@@ -173,7 +178,6 @@ impl Packets {
                     step: 100,
                 })
                 .max_length(5)
-                .suffix("ms")
         });
         let subscriptions = vec![
             cx.subscribe(&search, |this, input, event, cx| {
@@ -227,7 +231,7 @@ impl Packets {
             send_scroll: ScrollHandle::new(),
             selected: None,
             inspector_scroll: ScrollHandle::new(),
-            times: false,
+            times: true,
             search,
             composer,
             target: Target::Server,
@@ -474,6 +478,21 @@ impl Packets {
         cx.notify();
     }
 
+    fn clear_queue(&mut self, cx: &mut Context<Self>) {
+        let Some(automation) = self.automation() else {
+            return;
+        };
+        automation.update_spammer(|settings| {
+            settings.packets.clear();
+            settings.enabled = false;
+        });
+        self.queued = None;
+        if self.editing.is_some() {
+            self.cancel_edit(cx);
+        }
+        cx.notify();
+    }
+
     fn move_queued(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         let Some(automation) = self.automation() else {
             return;
@@ -532,14 +551,12 @@ impl Packets {
         let Some(log) = &self.log else {
             return String::new();
         };
-        let log = log.read(cx);
-        self.visible
-            .ids()
-            .filter_map(|id| log.line(id))
+        log.read(cx)
+            .lines()
             .map(|line| {
                 let (at, tag, text) = describe(line);
                 if times {
-                    format!("{}  {tag:<4}  {text}", clock(at))
+                    format!("{}  {tag:<4}  {text}", clock::time(at.into()))
                 } else {
                     format!("{tag:<4}  {text}")
                 }
@@ -630,24 +647,13 @@ impl Packets {
         items
     }
 
-    fn log_menu(
-        &self,
-        (outbound, inbound): (usize, usize),
-        cx: &mut Context<Self>,
-    ) -> DropdownMenu {
+    fn log_menu(&self, logged: bool, cx: &mut Context<Self>) -> DropdownMenu {
         let this = cx.weak_entity();
         let from = self.filter.from;
         let times = self.times;
-        let shown = self.visible.len() > 0;
-        let counts = [
-            ("All packets", None, outbound + inbound),
-            ("Outbound", Some(Sender::Client), outbound),
-            ("Inbound", Some(Sender::Server), inbound),
-        ];
         DropdownMenu::new("log-menu")
             .trigger(
                 Button::icon("log-menu-trigger", Icon::Ellipsis, "Log options")
-                    .size(Size::Small)
                     .variant(Variant::Ghost)
                     .pressed(from.is_some())
                     .hide_tooltip(),
@@ -655,26 +661,35 @@ impl Packets {
             .align(Align::End)
             .items(move |_, _| {
                 let mut items = vec![MenuItem::header("Show")];
-                items.extend(counts.iter().map(|&(label, choice, count)| {
-                    let this = this.clone();
-                    MenuItem::radio(label, from == choice, move |_, cx| {
-                        let _ = this.update(cx, |this, cx| this.set_direction(choice, cx));
-                    })
-                    .end_slot(Badge::new(count.to_string()))
-                }));
-                items.push(MenuItem::separator());
-                items.push(MenuItem::switch("Show times", times, {
-                    let this = this.clone();
-                    move |_, cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.times = !this.times;
-                            cx.notify();
-                        });
-                    }
-                }));
+                items.extend(
+                    [
+                        ("All packets", None),
+                        ("Outbound", Some(Sender::Client)),
+                        ("Inbound", Some(Sender::Server)),
+                    ]
+                    .map(|(label, choice)| {
+                        let this = this.clone();
+                        MenuItem::radio(label, from == choice, move |_, cx| {
+                            let _ = this.update(cx, |this, cx| this.set_direction(choice, cx));
+                        })
+                    }),
+                );
                 items.push(MenuItem::separator());
                 items.push(
-                    MenuItem::action("Copy shown packets", {
+                    MenuItem::action("Show times", {
+                        let this = this.clone();
+                        move |_, cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.times = !this.times;
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .checked(times),
+                );
+                items.push(MenuItem::separator());
+                items.push(
+                    MenuItem::action("Copy packets", {
                         let this = this.clone();
                         move |_, cx| {
                             if let Some(text) = this
@@ -685,16 +700,16 @@ impl Packets {
                             }
                         }
                     })
-                    .disabled(!shown),
+                    .disabled(!logged),
                 );
                 items.push(
-                    MenuItem::action("Export shown packets…", {
+                    MenuItem::action("Export packets…", {
                         let this = this.clone();
                         move |window, cx| {
                             let _ = this.update(cx, |this, cx| this.export(window, cx));
                         }
                     })
-                    .disabled(!shown),
+                    .disabled(!logged),
                 );
                 items
             })
@@ -712,25 +727,35 @@ impl Packets {
         };
         self.visible.refresh(log.read(cx), &self.filter);
         let capturing = automation.capturing();
-        let (empty, counts) = {
-            let log = log.read(cx);
-            (
-                log.len() == 0,
-                (log.count(Sender::Client), log.count(Sender::Server)),
-            )
-        };
+        let empty = log.read(cx).len() == 0;
         let capture = {
             let automation = automation.clone();
-            Switch::new("capture", "Capture", capturing)
-                .on_toggle(move |on, _, _| automation.set_capture(on))
+            let label = if capturing {
+                "Stop capture"
+            } else {
+                "Start capture"
+            };
+            Button::new("capture", label)
+                .variant(if capturing {
+                    Variant::Ghost
+                } else {
+                    Variant::Secondary
+                })
+                .child(steady(label, &["Start capture", "Stop capture"]))
+                .on_click(move |_, _, _| automation.set_capture(!capturing))
         };
         let toolbar = theme
             .toolbar()
+            .child(
+                div()
+                    .w(SEARCH_WIDTH)
+                    .min_w(SEARCH_MIN_WIDTH)
+                    .child(self.search.clone()),
+            )
+            .child(div().flex_1())
             .child(capture)
-            .child(div().flex_1().min_w_0().child(self.search.clone()))
             .child(
                 Button::new("clear-lines", "Clear")
-                    .size(Size::Small)
                     .variant(Variant::Ghost)
                     .disabled(empty)
                     .on_click({
@@ -744,17 +769,22 @@ impl Packets {
                         })
                     }),
             )
-            .child(self.log_menu(counts, cx));
-        let lines = self.lines(theme, empty, capturing, cx);
+            .child(self.log_menu(!empty, cx));
+        let lines = self.lines(empty, capturing, cx);
         let side = window.viewport_size().width >= theme.layout.split_packets;
         let panel = self
             .selected
             .and_then(|id| self.packet(id, cx))
             .map(|packet| self.packet_panel(theme, &packet, side, cx));
+        let trace = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(toolbar)
+            .child(div().flex_1().min_h_0().child(lines));
         v_flex()
             .flex_1()
             .min_h_0()
-            .child(toolbar)
             .child(
                 div()
                     .flex()
@@ -762,24 +792,18 @@ impl Packets {
                     .when(!side, |body| body.flex_col())
                     .flex_1()
                     .min_h_0()
-                    .child(div().flex_1().min_w_0().min_h_0().child(lines))
+                    .child(trace)
                     .children(panel),
             )
             .child(self.composer_bar(theme, cx))
     }
 
-    fn lines(
-        &self,
-        theme: &Theme,
-        empty: bool,
-        capturing: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn lines(&self, empty: bool, capturing: bool, cx: &mut Context<Self>) -> AnyElement {
         if self.visible.len() == 0 {
             let (title, body) = match (empty, capturing) {
                 (true, false) => (
                     "Capture is off",
-                    "Turn on Capture to record this tab's packets.",
+                    "Start capture to record this tab's packets.",
                 ),
                 (true, true) => ("Waiting for packets", "Packets show here as they're sent."),
                 (false, _) => ("No packets match", "Change the search or show all packets."),
@@ -789,7 +813,6 @@ impl Packets {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme.card)
                 .child(Empty::new(title, body))
                 .into_any_element();
         }
@@ -811,10 +834,12 @@ impl Packets {
                         Some(row(log.line(id)?, times))
                     })
                     .unwrap_or_else(|| Row {
-                        time: None,
-                        tag: "",
-                        tone: Tone::Neutral,
-                        text: SharedString::default(),
+                        line: LogLine {
+                            time: None,
+                            tag: None,
+                            level: LogLevel::Info,
+                            text: SharedString::default(),
+                        },
                         actions: false,
                     })
             },
@@ -880,20 +905,15 @@ impl Packets {
         let menu_packet = packet.clone();
         let header = theme
             .toolbar()
-            .text_caption(typography)
-            .child(
-                div()
-                    .flex_none()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(direction),
-            )
+            .child(div().flex_none().text_title(typography).child(direction))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .font_features(tabular())
                     .text_color(theme.muted_foreground)
-                    .child(clock(packet.at)),
+                    .child(clock::time(packet.at.into())),
             )
             .child(
                 Button::new("copy-packet", "Copy")
@@ -952,151 +972,137 @@ impl Packets {
                     .font_family(theme.mono_family.clone())
                     .text_size(typography.mono)
                     .line_height(px(17.0))
-                    .text_color(theme.muted_foreground)
                     .child(text),
             )
     }
 
     fn composer_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let layout = theme.layout;
         let this = cx.weak_entity();
         let empty = Self::typed(&self.composer, cx).is_empty();
-        theme
-            .footer()
-            .flex_col()
-            .items_stretch()
-            .child(
-                h_flex()
-                    .gap(layout.space(2.0))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(theme.muted_foreground)
-                            .child("Send to"),
-                    )
-                    .child(
-                        ToggleGroup::new(
-                            "send-target",
-                            "Send to",
-                            TARGETS.map(target_label).map(SharedString::from).to_vec(),
-                            TARGETS.iter().position(|t| *t == self.target).unwrap_or(0),
-                        )
-                        .on_select(move |index, _, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.target = TARGETS[index];
-                                this.notice = None;
-                                this.composer
-                                    .update(cx, |input, cx| input.set_invalid(false, cx));
-                                cx.notify();
-                            });
-                        }),
-                    )
-                    .child(div().flex_1().min_w_0().child(self.composer.clone()))
-                    .child(
-                        Button::new("send-packet", "Send")
-                            .variant(Variant::Primary)
-                            .disabled(empty)
-                            .on_click(cx.listener(|this, _, _, cx| this.send_composed(cx))),
-                    )
-                    .child(
-                        Button::new("queue-packet", "Add to queue")
-                            .disabled(empty)
-                            .on_click(cx.listener(|this, _, _, cx| this.queue_composed(cx))),
-                    ),
-            )
-            .child(note_line(
-                theme,
-                self.notice
-                    .as_ref()
-                    .map(|notice| (notice.text.clone(), tone_text(theme, notice.tone))),
-            ))
+        let target = target_select("send-target", self.target).on_select(move |index, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.target = TARGETS[index];
+                this.notice = None;
+                this.composer
+                    .update(cx, |input, cx| input.set_invalid(false, cx));
+                cx.notify();
+            });
+        });
+        composer(
+            theme,
+            div().child(self.composer.clone()),
+            h_flex().child(
+                Button::new("send-packet", "Send")
+                    .variant(Variant::Primary)
+                    .child(steady("Send", COMMITS))
+                    .disabled(empty)
+                    .on_click(cx.listener(|this, _, _, cx| this.send_composed(cx))),
+            ),
+            target,
+            self.notice
+                .as_ref()
+                .map(|notice| (notice.text.clone(), tone_text(theme, notice.tone))),
+            h_flex().child(
+                Button::new("queue-packet", "Add to queue")
+                    .size(Size::Small)
+                    .disabled(empty)
+                    .on_click(cx.listener(|this, _, _, cx| this.queue_composed(cx))),
+            ),
+        )
     }
 
     fn send_page(&mut self, theme: &Theme, automation: &Automation, cx: &mut Context<Self>) -> Div {
-        let layout = theme.layout;
-        let typography = theme.typography;
         let settings = automation.spammer();
-        let (status, status_color) = queue_status(&settings, automation.spammer_status(), theme);
-        let switching = automation.clone();
-        let switch = Switch::new("send-queue", "Send queue", settings.enabled)
-            .disabled(settings.packets.is_empty() && !settings.enabled)
-            .on_toggle(move |on, _, _| {
-                switching.update_spammer(|settings| settings.enabled = on);
-            });
-        let targeting = automation.clone();
-        let target = ToggleGroup::new(
-            "queue-target",
-            "Send to",
-            TARGETS.map(target_label).map(SharedString::from).to_vec(),
-            TARGETS
-                .iter()
-                .position(|target| *target == settings.target)
-                .unwrap_or(0),
-        )
-        .on_select(move |index, _, _| {
-            targeting.update_spammer(|settings| settings.target = TARGETS[index]);
-        });
-        let delay = div()
+        let toolbar = self.queue_toolbar(theme, automation, &settings, cx);
+        let bar = self.queue_bar(theme, automation, settings.target, cx);
+        let list = if settings.packets.is_empty() {
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Empty::new(
+                    "No packets queued",
+                    "Add a packet below, or right-click an outbound packet in the log.",
+                ))
+                .into_any_element()
+        } else {
+            self.queued_list(theme, settings.packets, cx)
+        };
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .child(toolbar)
+            .child(div().flex_1().min_h_0().child(list))
+            .child(bar)
+    }
+
+    fn queue_toolbar(
+        &self,
+        theme: &Theme,
+        automation: &Automation,
+        settings: &spammer::Settings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let status = queue_status(settings, automation.spammer_status(), theme);
+        let delay = h_flex()
             .flex_none()
-            .w(DELAY_WIDTH)
-            .child(self.delay.clone())
+            .gap(theme.space(1.5))
+            .child(div().w(DELAY_WIDTH).child(self.delay.clone()))
+            .child(div().text_color(theme.muted_foreground).child("ms"))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.revert_delay(cx);
                 }
             }));
-        let bar = theme
+        let enabled = settings.enabled;
+        let run_label = if enabled { "Stop queue" } else { "Start queue" };
+        let switching = automation.clone();
+        theme
             .toolbar()
-            .child(switch)
-            .child(
-                div()
-                    .id("queue-status")
-                    .role(Role::Status)
-                    .aria_label(status.clone())
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_caption(typography)
-                    .text_color(status_color)
-                    .child(status),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.muted_foreground)
-                    .child("Send to"),
-            )
-            .child(target)
             .child(
                 div()
                     .flex_none()
                     .text_color(theme.muted_foreground)
                     .child("Every"),
             )
-            .child(delay);
-        let list = if settings.packets.is_empty() {
-            div()
-                .text_caption(typography)
-                .text_color(theme.muted_foreground)
-                .child(
-                    "The queue is empty. Add a packet below, or right-click an outbound packet in the log.",
-                )
-                .into_any_element()
-        } else {
-            self.queued_list(theme, settings.packets, cx)
-        };
-        v_flex().flex_1().min_h_0().child(bar).child(
-            v_flex()
-                .id("queue-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&self.send_scroll)
-                .p(layout.space(3.0))
-                .gap(layout.space(2.5))
-                .child(list)
-                .child(self.add_row(theme, cx)),
-        )
+            .child(delay)
+            .child(h_flex().flex_1().min_w_0().justify_end().when_some(
+                status,
+                |slot, (status, color)| {
+                    slot.child(
+                        div()
+                            .id("queue-status")
+                            .role(Role::Status)
+                            .aria_label(status.clone())
+                            .min_w_0()
+                            .truncate()
+                            .text_caption(theme.typography)
+                            .font_features(tabular())
+                            .text_color(color)
+                            .child(status),
+                    )
+                },
+            ))
+            .child(
+                Button::new("send-queue", run_label)
+                    .variant(if enabled {
+                        Variant::Secondary
+                    } else {
+                        Variant::Primary
+                    })
+                    .child(steady(run_label, &["Start queue", "Stop queue"]))
+                    .disabled(settings.packets.is_empty() && !enabled)
+                    .on_click(move |_, _, _| {
+                        switching.update_spammer(|settings| settings.enabled = !enabled);
+                    }),
+            )
+            .child(
+                Button::new("queue-clear", "Clear")
+                    .variant(Variant::Ghost)
+                    .disabled(settings.packets.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_queue(cx))),
+            )
     }
 
     fn queued_list(
@@ -1146,6 +1152,7 @@ impl Packets {
         let moves = this.clone();
         let removes = this;
         div()
+            .size_full()
             .on_key_down(move |event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "backspace" | "delete") {
                     let _ = removes.update(cx, |this, cx| {
@@ -1157,6 +1164,9 @@ impl Packets {
             })
             .child(
                 List::new("queued-packets", "Queued packets", packets.len(), rows)
+                    .fill()
+                    .flush()
+                    .track_scroll(&self.send_scroll)
                     .selected(queued)
                     .on_select(move |index, _, cx| {
                         let _ = picks.update(cx, |this, cx| {
@@ -1174,47 +1184,49 @@ impl Packets {
             .into_any_element()
     }
 
-    fn add_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let layout = theme.layout;
+    fn queue_bar(
+        &self,
+        theme: &Theme,
+        automation: &Automation,
+        queue_target: Target,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let empty = Self::typed(&self.adding, cx).is_empty();
-        let input = div()
-            .flex_1()
-            .min_w_0()
-            .child(self.adding.clone())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+        let field = div().child(self.adding.clone()).on_key_down(cx.listener(
+            |this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.editing.is_some() {
                     this.cancel_edit(cx);
                 }
-            }));
-        let buttons = if self.editing.is_some() {
-            h_flex()
-                .gap(layout.space(2.0))
-                .child(
-                    Button::new("queue-save", "Save")
-                        .variant(Variant::Primary)
-                        .disabled(empty)
-                        .on_click(cx.listener(|this, _, _, cx| this.add_typed(cx))),
-                )
-                .child(
-                    Button::new("queue-cancel", "Cancel")
-                        .on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))),
-                )
+            },
+        ));
+        let editing = self.editing.is_some();
+        let (id, label, variant) = if editing {
+            ("queue-save", "Save", Variant::Primary)
         } else {
-            h_flex().child(
-                Button::new("queue-add", "Add")
-                    .disabled(empty)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_typed(cx))),
-            )
+            ("queue-add", "Add", Variant::Secondary)
         };
-        v_flex()
-            .flex_none()
-            .gap(layout.space(1.5))
-            .child(h_flex().gap(layout.space(2.0)).child(input).child(buttons))
-            .child(note_line(
-                theme,
-                self.add_problem
-                    .map(|problem| (problem.message().into(), theme.destructive)),
-            ))
+        let commit = h_flex().child(
+            Button::new(id, label)
+                .variant(variant)
+                .child(steady(label, COMMITS))
+                .disabled(empty)
+                .on_click(cx.listener(|this, _, _, cx| this.add_typed(cx))),
+        );
+        let actions = h_flex().when(editing, |actions| {
+            actions.child(
+                Button::new("queue-cancel", "Cancel")
+                    .size(Size::Small)
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))),
+            )
+        });
+        let note = self
+            .add_problem
+            .map(|problem| (problem.message().into(), theme.destructive));
+        let targeting = automation.clone();
+        let target = target_select("queue-target", queue_target).on_select(move |index, _, _| {
+            targeting.update_spammer(|settings| settings.target = TARGETS[index]);
+        });
+        composer(theme, field, commit, target, note, actions)
     }
 }
 
@@ -1242,33 +1254,62 @@ fn row_actions(layout: mira_ui::theme::Layout, this: &WeakEntity<Packets>, index
         )
 }
 
-fn note_line(theme: &Theme, status: Option<(SharedString, Hsla)>) -> Div {
+fn composer(
+    theme: &Theme,
+    field: Div,
+    commit: Div,
+    target: Select,
+    note: Option<(SharedString, Hsla)>,
+    actions: Div,
+) -> Div {
     let layout = theme.layout;
-    let typography = theme.typography;
-    h_flex()
-        .gap(layout.space(3.0))
-        .text_caption(typography)
+    let (note, color) = note.unwrap_or_else(|| (PLACEHOLDERS.into(), theme.muted_foreground));
+    theme
+        .footer()
+        .flex_col()
+        .items_stretch()
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(theme.muted_foreground)
-                .child(PLACEHOLDERS),
+            h_flex()
+                .gap(layout.space(2.0))
+                .child(field.flex_1().min_w_0())
+                .child(commit.flex_none()),
         )
-        .when_some(status, |line, (text, color)| {
-            line.child(
-                div()
-                    .id("packet-status")
-                    .role(Role::Status)
-                    .aria_label(text.clone())
-                    .flex_none()
-                    .max_w(relative(0.6))
-                    .truncate()
-                    .text_color(color)
-                    .child(text),
-            )
-        })
+        .child(
+            h_flex()
+                .gap(layout.space(2.0))
+                .child(target.small())
+                .child(
+                    div()
+                        .id("packet-status")
+                        .role(Role::Status)
+                        .aria_label(note.clone())
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_caption(theme.typography)
+                        .text_color(color)
+                        .child(note),
+                )
+                .child(actions.flex_none()),
+        )
+}
+
+fn target_select(id: &'static str, target: Target) -> Select {
+    Select::new(
+        id,
+        "Send to",
+        TARGETS.map(target_label),
+        TARGETS.iter().position(|choice| *choice == target),
+    )
+    .width(TARGET_WIDTH)
+}
+
+fn steady(label: &'static str, labels: &[&'static str]) -> Div {
+    v_flex().items_center().child(label).children(
+        labels
+            .iter()
+            .map(|other| div().h_0().invisible().child(*other)),
+    )
 }
 
 fn tone_text(theme: &Theme, tone: Tone) -> Hsla {
@@ -1319,15 +1360,10 @@ fn queue_status(
     settings: &spammer::Settings,
     status: Status,
     theme: &Theme,
-) -> (SharedString, Hsla) {
+) -> Option<(SharedString, Hsla)> {
     let (text, tone): (SharedString, Tone) = match status {
         Status::Failed(reason) => (format!("Stopped: {reason}").into(), Tone::Danger),
-        _ if !settings.enabled => {
-            return (
-                "Sends each packet in order, then starts over.".into(),
-                theme.muted_foreground,
-            );
-        }
+        _ if !settings.enabled => return None,
         Status::Sent { index, count } => (
             format!("Sent {} of {count}", index + 1).into(),
             Tone::Accent,
@@ -1336,13 +1372,7 @@ fn queue_status(
         Status::Idle if settings.packets.is_empty() => ("Nothing to send".into(), Tone::Warning),
         Status::Idle => ("Starting".into(), Tone::Neutral),
     };
-    (text, tone_text(theme, tone))
-}
-
-fn clock(at: SystemTime) -> String {
-    chrono::DateTime::<chrono::Local>::from(at)
-        .format("%H:%M:%S%.3f")
-        .to_string()
+    Some((text, tone_text(theme, tone)))
 }
 
 fn tag(from: Sender) -> &'static str {
@@ -1362,23 +1392,25 @@ fn describe(line: &Line) -> (SystemTime, &'static str, SharedString) {
 const LOST: &str = "Packets were dropped here because the log fell behind";
 
 fn row(line: &Line, times: bool) -> Row {
-    let (at, tag, tone, text) = match line {
+    let (at, tag, level, text) = match line {
         Line::Packet(packet) => (
             packet.at,
-            tag(packet.from),
-            match packet.from {
-                Sender::Client => Tone::Accent,
-                Sender::Server => Tone::Neutral,
-            },
+            Some(match packet.from {
+                Sender::Client => "out",
+                Sender::Server => "in ",
+            }),
+            LogLevel::Info,
             packet.preview.clone(),
         ),
-        Line::Lost { at } => (*at, "lost", Tone::Warning, LOST.into()),
+        Line::Lost { at } => (*at, None, LogLevel::Warn, LOST.into()),
     };
     Row {
-        time: times.then(|| clock(at).into()),
-        tag,
-        tone,
-        text,
+        line: LogLine {
+            time: times.then(|| clock::aligned_time(at.into()).into()),
+            tag: tag.map(SharedString::new_static),
+            level,
+            text,
+        },
         actions: matches!(line, Line::Packet(_)),
     }
 }
@@ -1386,7 +1418,28 @@ fn row(line: &Line, times: bool) -> Row {
 impl Render for Packets {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let layout = theme.layout;
+        let automation = self.automation().cloned();
+        let pages = automation.as_ref().map(|automation| {
+            let labels = [("Log", 0), ("Send", automation.spammer().packets.len())];
+            let this = cx.weak_entity();
+            Tabs::new("packets-pages", "Pages", labels.len(), move |index| {
+                let (name, count) = labels[index];
+                let tab = Tab::new(name);
+                if count == 0 {
+                    tab
+                } else {
+                    tab.end_slot(Badge::new(count.to_string()))
+                }
+            })
+            .line()
+            .selected(self.page as usize)
+            .on_select(move |index, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.page = [Page::Log, Page::Send][index];
+                    cx.notify();
+                });
+            })
+        });
         let header = shown_tab::header(
             "Packets",
             &self.client,
@@ -1395,12 +1448,8 @@ impl Render for Packets {
             Self::retarget,
             window,
             cx,
-        );
-        let automation = self.automation().cloned();
-        let queued = automation
-            .as_ref()
-            .map_or(0, |automation| automation.spammer().packets.len());
-        let labels = [("Log", 0), ("Send", queued)];
+        )
+        .children(pages);
         let body = match (&automation, self.page) {
             (None, _) => v_flex().flex_1().child(Empty::new(
                 "No tabs open",
@@ -1434,30 +1483,6 @@ impl Render for Packets {
             .child(mira_ui::nav::pointer_probe())
             .child(crate::quit::Overlay)
             .child(header)
-            .child(
-                div().flex_none().px(layout.space(4.0)).child(
-                    Tabs::new("packets-pages", "Pages", labels.len(), move |index| {
-                        let (name, count) = labels[index];
-                        let tab = Tab::new(name);
-                        if count == 0 {
-                            tab
-                        } else {
-                            tab.end_slot(Badge::new(count.to_string()))
-                        }
-                    })
-                    .line()
-                    .selected(self.page as usize)
-                    .on_select({
-                        let this = cx.weak_entity();
-                        move |index, _, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.page = [Page::Log, Page::Send][index];
-                                cx.notify();
-                            });
-                        }
-                    }),
-                ),
-            )
             .child(body)
     }
 }
@@ -1491,33 +1516,151 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_selected_packet_beside_and_below_trace() {
+    fn snapshot_log_and_send_at_opening_and_minimum_size() {
+        use crate::automation::packets::Captured;
         let dir = std::env::temp_dir().join(format!("mira-packets-layout-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for (name, w, h) in [
-            ("packets-selected-min", MIN_WIDTH, MIN_HEIGHT),
-            ("packets-selected", WIDTH, HEIGHT),
+        let traffic = [
+            (Sender::Client, "%xt%zm%moveToCell%84251%Enter%Spawn%"),
+            (
+                Sender::Server,
+                r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"uotls","unm":"artix","o":{"sp":8,"tx":412,"ty":306}}}}"#,
+            ),
+            (Sender::Server, "%xt%server%-1%Battleon is busy right now.%"),
+            (Sender::Client, "%xt%zm%gar%84251%aa>m:3%wvz%"),
+            (
+                Sender::Server,
+                r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"ct","m":[{"intHP":0,"intState":0,"MonMapID":"3"}]}}}"#,
+            ),
+            (Sender::Client, "%xt%zm%getQuests%84251%4567%"),
+        ];
+        let log_menu = (MIN_WIDTH - 26.0, 58.0);
+        let target = (60.0, HEIGHT - 18.0);
+        for (name, page, capturing, (w, h), click) in [
+            ("packets-log", Page::Log, true, (WIDTH, HEIGHT), None),
+            (
+                "packets-log-min",
+                Page::Log,
+                true,
+                (MIN_WIDTH, MIN_HEIGHT),
+                None,
+            ),
+            (
+                "packets-log-menu-min",
+                Page::Log,
+                true,
+                (MIN_WIDTH, MIN_HEIGHT),
+                Some(log_menu),
+            ),
+            ("packets-log-off", Page::Log, false, (WIDTH, HEIGHT), None),
+            (
+                "packets-log-target",
+                Page::Log,
+                false,
+                (WIDTH, HEIGHT),
+                Some(target),
+            ),
+            ("packets-send", Page::Send, true, (WIDTH, HEIGHT), None),
+            (
+                "packets-send-editing",
+                Page::Send,
+                true,
+                (WIDTH, HEIGHT),
+                None,
+            ),
+            (
+                "packets-send-min",
+                Page::Send,
+                true,
+                (MIN_WIDTH, MIN_HEIGHT),
+                None,
+            ),
+            (
+                "packets-send-empty",
+                Page::Send,
+                false,
+                (WIDTH, HEIGHT),
+                None,
+            ),
         ] {
-            for written in mira_ui::snapshot(name, size(px(w), px(h)), |window, cx| {
+            let build = |window: &mut Window, cx: &mut App| {
                 let client = Client::empty_for_tests(&dir, cx);
                 cx.new(|cx| {
                     let mut packets = Packets::new(client, shown_tab::Target::Selected, window, cx);
-                    packets.shown = Some(ShownTab::fake("Battleon", Automation::default()));
+                    let automation = Automation::default();
+                    automation.set_capture(capturing);
                     let mut log = PacketLog::default();
-                    log.extend(
-                        (0..12)
-                            .map(|i| crate::automation::packets::Captured::Packet {
-                                at: std::time::SystemTime::UNIX_EPOCH,
-                                from: crate::bridge::packets::Sender::Server,
-                                text: format!("Room update {i} in Battleon"),
+                    if capturing {
+                        automation.update_spammer(|settings| {
+                            settings.packets = vec![
+                                "%xt%zm%gar%{room}%aa>m:3%wvz%".into(),
+                                "%xt%zm%getQuests%{room}%4567%".into(),
+                                "%xt%zm%acceptQuest%{room}%4567%".into(),
+                            ];
+                            settings.delay = Duration::from_millis(spammer::DELAY_MS.1);
+                            settings.enabled = name == "packets-send";
+                        });
+                        let mut lines: Vec<_> = traffic
+                            .iter()
+                            .cycle()
+                            .take(14)
+                            .map(|&(from, text)| Captured::Packet {
+                                at: SystemTime::UNIX_EPOCH,
+                                from,
+                                text: text.into(),
                             })
-                            .collect(),
-                    );
+                            .collect();
+                        lines.insert(
+                            9,
+                            Captured::Lost {
+                                at: SystemTime::UNIX_EPOCH,
+                            },
+                        );
+                        log.extend(lines);
+                        packets.selected = Some(1);
+                        packets.queued = Some(1);
+                    }
+                    packets.shown = Some(ShownTab::fake("Battleon", automation));
                     packets.log = Some(cx.new(|_| log));
-                    packets.selected = Some(2);
+                    packets.page = page;
+                    packets.revert_delay(cx);
+                    if name == "packets-send-editing" {
+                        packets.editing = Some(1);
+                        packets.adding.update(cx, |input, cx| {
+                            input.set_text("%xt%zm%getQuests%{room}%4567%", cx)
+                        });
+                    }
                     packets
                 })
-            }) {
+            };
+            let interact = |cx: &mut gpui::HeadlessAppContext, window: gpui::AnyWindowHandle| {
+                let Some((x, y)) = click else {
+                    return;
+                };
+                let position = gpui::point(px(x), px(y));
+                for event in [
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        first_mouse: false,
+                        modifiers: Default::default(),
+                    }),
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        modifiers: Default::default(),
+                    }),
+                ] {
+                    cx.update_window(window, |_, window, cx| {
+                        window.dispatch_event(event, cx);
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+            };
+            for written in mira_ui::snapshot_with(name, size(px(w), px(h)), build, interact) {
                 assert!(written.exists());
             }
         }
@@ -1638,6 +1781,34 @@ mod tests {
             automation.spammer().packets,
             ["%xt%zm%a%{room}%", "%xt%zm%c%{room}%"]
         );
+    }
+
+    #[gpui::test]
+    fn clearing_the_queue_stops_it_and_drops_an_edit_but_keeps_a_new_packet_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (packets, automation, cx) = open(cx);
+        let adding = packets.read_with(cx, |packets, _| packets.adding.clone());
+        automation.update_spammer(|settings| settings.enabled = true);
+        cx.update(|window, cx| {
+            packets.update(cx, |packets, cx| packets.edit_queued(1, window, cx))
+        });
+        packets.update(cx, |packets, cx| packets.clear_queue(cx));
+        cx.run_until_parked();
+        assert!(automation.spammer().packets.is_empty());
+        assert_eq!(text(&adding, cx), "");
+
+        typed(cx, "%xt%zm%c%{room}%");
+        press(cx, "enter");
+        let queue = automation.spammer();
+        assert_eq!(queue.packets, ["%xt%zm%c%{room}%"]);
+        assert!(!queue.enabled);
+
+        typed(cx, "%xt%zm%d%");
+        packets.update(cx, |packets, cx| packets.clear_queue(cx));
+        cx.run_until_parked();
+        assert!(automation.spammer().packets.is_empty());
+        assert_eq!(text(&adding, cx), "%xt%zm%d%");
     }
 
     #[gpui::test]

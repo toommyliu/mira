@@ -181,6 +181,46 @@ fn a_long_select_fits_a_window_shorter_than_its_menu(cx: &mut TestAppContext) {
     );
 }
 
+struct NarrowSelect {
+    focus: FocusHandle,
+}
+
+impl Render for NarrowSelect {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui::px;
+        div()
+            .key_context(FOCUS_SCOPE)
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .items_end()
+            .p(px(16.0))
+            .child(div().debug_selector(|| "field".into()).child(
+                Select::new("target", "Send to", ["Server", "Client"], Some(0)).width(px(88.0)),
+            ))
+    }
+}
+
+#[gpui::test]
+fn a_list_wider_than_its_select_starts_at_the_selects_start_edge(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let focus = cx.focus_handle();
+        window.activate_window();
+        window.focus(&focus, cx);
+        NarrowSelect { focus }
+    });
+    cx.run_until_parked();
+    press(cx, "tab");
+    press(cx, "enter");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let field = cx.debug_bounds("field").unwrap();
+    let list = cx.debug_bounds("menu-panel").unwrap();
+    assert!(list.size.width > field.size.width, "{list:?} {field:?}");
+    assert_eq!(list.left(), field.left());
+}
+
 struct Sources {
     focus: FocusHandle,
 }

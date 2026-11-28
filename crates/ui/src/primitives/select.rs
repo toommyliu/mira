@@ -97,7 +97,7 @@ impl Select {
             selected,
             placeholder: "Choose".into(),
             width: Some(px(200.0)),
-            placement: Placement::new(Side::Bottom, Align::Center),
+            placement: Placement::new(Side::Bottom, Align::Start),
             default_open: false,
             disabled: false,
             invalid: false,
