@@ -1026,6 +1026,36 @@ fn the_edit_menu_select_all_checks_every_shown_account(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn the_toolbar_keeps_its_filters_and_commands_inside_the_pane_at_every_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    for (name, view) in [
+        ("toolbar-all", View::All),
+        ("toolbar-setup", View::Setup("Daily".into())),
+    ] {
+        let (_manager, cx, dir) = open_manager(name, view, cx);
+        for width in 720..=1100 {
+            cx.simulate_resize(size(px(width as f32), px(600.0)));
+            cx.run_until_parked();
+            let filters = cx.debug_bounds("toolbar-filters").unwrap();
+            let end = cx.debug_bounds("toolbar-end").unwrap();
+            assert!(
+                filters.right() + px(8.0) <= end.left(),
+                "{name} at {width}: the filters end at {:?} and the commands start at {:?}",
+                filters.right(),
+                end.left()
+            );
+            assert!(
+                end.right() <= px(width as f32 - 12.0),
+                "{name} at {width}: the commands end at {:?}",
+                end.right()
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[gpui::test]
 fn a_setup_set_to_open_in_a_new_window_launches_there_and_leaves_open_accounts_where_they_are(
     cx: &mut gpui::TestAppContext,
 ) {

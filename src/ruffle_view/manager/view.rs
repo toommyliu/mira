@@ -55,9 +55,13 @@ const SCRIPT_ROW_INSET: gpui::Pixels = px(24.0);
 const SERVER_MENU_WIDTH: gpui::Pixels = px(280.0);
 const BAR_ROOM: gpui::Pixels = px(64.0);
 const NARROW_BAR: gpui::Pixels = px(640.0);
-const COMPACT_RUN: gpui::Pixels = px(760.0);
-const COMPACT_ROSTER: gpui::Pixels = px(560.0);
-const START_MIN_WIDTH: gpui::Pixels = px(112.0);
+const TAB_CHROME: gpui::Pixels = px(28.0);
+const TAB_LIST_INSET: gpui::Pixels = px(6.0);
+const BUTTON_CHROME: gpui::Pixels = px(18.0);
+const START_CHROME: gpui::Pixels = px(20.0);
+const START_MENU: gpui::Pixels = px(27.0);
+const START_KEYS: &str = "⌘⏎";
+const SCRIPT_NAME_ROOM: gpui::Pixels = px(64.0);
 const FILTER_MENU_WIDTH: gpui::Pixels = px(176.0);
 
 fn mood_color(theme: &Theme, mood: Mood) -> Hsla {
@@ -184,6 +188,105 @@ fn server_stats(server: &net::Server, theme: &Theme) -> Div {
                 None => 0,
             },
         ))
+}
+
+type ShownFilters = Rc<[(Option<Filter>, usize)]>;
+
+fn filter_name(filter: Option<Filter>) -> &'static str {
+    filter.map_or("All", Filter::name)
+}
+
+struct Measure<'a> {
+    window: &'a Window,
+    theme: &'a Theme,
+}
+
+impl Measure<'_> {
+    fn text(&self, text: &str, size: gpui::Pixels, weight: FontWeight) -> gpui::Pixels {
+        let run = gpui::TextRun {
+            len: text.len(),
+            font: gpui::Font {
+                weight,
+                ..gpui::font(self.theme.font_family.clone())
+            },
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        self.window
+            .text_system()
+            .shape_line(text.to_owned().into(), size, &[run], None)
+            .width
+            .ceil()
+    }
+
+    fn label(&self, text: &str) -> gpui::Pixels {
+        self.text(text, self.theme.typography.body, FontWeight::MEDIUM)
+    }
+
+    fn button(&self, label: &str) -> gpui::Pixels {
+        self.label(label) + BUTTON_CHROME
+    }
+
+    fn tabs(&self, shown: &[(Option<Filter>, usize)]) -> gpui::Pixels {
+        let typography = self.theme.typography;
+        shown
+            .iter()
+            .map(|(filter, count)| {
+                self.label(filter_name(*filter))
+                    + self.text(&count.to_string(), typography.secondary, FontWeight::NORMAL)
+                    + TAB_CHROME
+            })
+            .fold(TAB_LIST_INSET, |total, tab| total + tab)
+    }
+
+    fn filter_button(
+        &self,
+        shown: &[(Option<Filter>, usize)],
+        current: Option<Filter>,
+    ) -> gpui::Pixels {
+        let total = shown.first().map_or(0, |(_, count)| *count);
+        let label = current.map_or_else(
+            || plural(total, "account"),
+            |filter| filter.name().to_owned(),
+        );
+        self.text(&label, self.theme.typography.body, FontWeight::NORMAL) + px(36.0)
+    }
+}
+
+struct StartLabel {
+    verb: &'static str,
+    name: SharedString,
+    again: bool,
+    start: Start,
+    tooltip: String,
+}
+
+impl StartLabel {
+    fn full(&self) -> String {
+        let Self { verb, name, .. } = self;
+        if self.again {
+            format!("{verb} {name} again")
+        } else {
+            format!("{verb} {name}")
+        }
+    }
+
+    fn short(&self) -> String {
+        if self.again {
+            format!("{} again", self.verb)
+        } else {
+            self.verb.to_owned()
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StartFit {
+    compact: bool,
+    named: bool,
+    min_width: gpui::Pixels,
 }
 
 #[derive(Clone, Copy)]
@@ -538,7 +641,7 @@ impl Manager {
                     .flex_none()
                     .justify_between()
                     .pl(layout.space(4.0))
-                    .pr(layout.space(2.0))
+                    .pr(layout.space(2.5))
                     .text_caption(typography)
                     .text_color(theme.muted_foreground)
                     .child("Setups")
@@ -582,10 +685,21 @@ impl Manager {
             )
     }
 
+    fn shown_filters(&self, filters: &'static [Filter], statuses: &[Status]) -> ShownFilters {
+        std::iter::once((None, statuses.len()))
+            .chain(
+                filters
+                    .iter()
+                    .map(|filter| (Some(*filter), count(statuses, *filter)))
+                    .filter(|(filter, count)| *count > 0 || self.filter == *filter),
+            )
+            .collect()
+    }
+
     fn filters(
         &self,
         theme: &Theme,
-        filters: &'static [Filter],
+        shown: ShownFilters,
         statuses: &[Status],
         compact: bool,
         cx: &mut Context<Self>,
@@ -599,19 +713,10 @@ impl Manager {
             },
         );
         let quiet = theme.muted_foreground;
-        let shown: Rc<[(Option<Filter>, usize)]> = std::iter::once((None, statuses.len()))
-            .chain(
-                filters
-                    .iter()
-                    .map(|filter| (Some(*filter), count(statuses, *filter)))
-                    .filter(|(filter, count)| *count > 0 || self.filter == *filter),
-            )
-            .collect();
         let selected = shown
             .iter()
             .position(|(filter, _)| *filter == self.filter)
             .unwrap_or(0);
-        let name = |filter: Option<Filter>| filter.map_or("All", Filter::name);
         let tally = move |filter: Option<Filter>, count: usize| {
             div()
                 .font_features(tabular())
@@ -659,7 +764,7 @@ impl Manager {
         let tabs = shown.clone();
         Tabs::new("status-filter", "Show", shown.len(), move |index| {
             let (filter, count) = tabs[index];
-            Tab::new(name(filter)).end_slot(tally(filter, count))
+            Tab::new(filter_name(filter)).end_slot(tally(filter, count))
         })
         .selected(selected)
         .on_select(move |index, _, cx| {
@@ -668,6 +773,13 @@ impl Manager {
                 .ok();
         })
         .into_any_element()
+    }
+
+    fn filter_slot(&self, filters: AnyElement) -> Div {
+        div()
+            .flex_none()
+            .debug_selector(|| "toolbar-filters".into())
+            .child(filters)
     }
 
     fn header_row(&self, theme: &Theme) -> Div {
@@ -685,18 +797,34 @@ impl Manager {
         &self,
         theme: &Theme,
         statuses: &[Status],
-        compact: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let layout = theme.layout;
+        let measure = Measure { window, theme };
+        let shown = self.shown_filters(&ROSTER_FILTERS, statuses);
+        let add = measure.button("Add account") + px(16.0);
+        let compact =
+            self.toolbar_room(window, theme) < measure.tabs(&shown) + layout.space(2.0) + add;
         self.header_row(theme)
-            .child(self.filters(theme, &ROSTER_FILTERS, statuses, compact, cx))
-            .child(div().flex_1())
+            .child(self.filter_slot(self.filters(theme, shown, statuses, compact, cx)))
             .child(
-                Button::new("add-account", "Add account")
-                    .start_slot(icon(Icon::Plus, theme.secondary_foreground).size(px(14.0)))
-                    .disabled(self.accounts.is_err())
-                    .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
+                div()
+                    .flex_none()
+                    .ml_auto()
+                    .debug_selector(|| "toolbar-end".into())
+                    .child(
+                        Button::new("add-account", "Add account")
+                            .start_slot(icon(Icon::Plus, theme.secondary_foreground).size(px(14.0)))
+                            .disabled(self.accounts.is_err())
+                            .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
+                    ),
             )
+    }
+
+    fn toolbar_room(&self, window: &Window, theme: &Theme) -> gpui::Pixels {
+        let layout = theme.layout;
+        window.viewport_size().width - layout.sidebar - layout.space(3.0) * 2.0
     }
 
     fn watch_header(
@@ -705,7 +833,7 @@ impl Manager {
         setup: &Setup,
         frame: &Frame,
         statuses: &[Status],
-        compact: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let started = cx.global::<Runs>().started(&setup.name);
@@ -728,35 +856,114 @@ impl Manager {
             }
         });
         let can_stop = !setup_work(setup, &frame.presences).is_empty();
+        let layout = theme.layout;
+        let measure = Measure { window, theme };
+        let shown = self.shown_filters(&RUN_FILTERS, statuses);
+        let gap = layout.space(2.0);
+        let start = self.start_label(setup, cx);
+        let short = start
+            .as_ref()
+            .map_or_else(|| "Start".to_owned(), StartLabel::short);
+        let min_width = measure.label(&short)
+            + if start.is_some() {
+                layout.space(1.0) + measure.label(START_KEYS) + START_CHROME
+            } else {
+                px(36.0)
+            };
+        let commands = gap * 2.0
+            + measure.button("Edit")
+            + if can_stop {
+                gap + measure.button("Stop")
+            } else {
+                px(0.0)
+            }
+            + if start.is_some() { START_MENU } else { px(0.0) };
+        let room = self.toolbar_room(window, theme) - commands;
+        let compact = !statuses.is_empty() && room - measure.tabs(&shown) < min_width;
+        let filters = if statuses.is_empty() {
+            px(0.0)
+        } else if compact {
+            measure.filter_button(&shown, self.filter)
+        } else {
+            measure.tabs(&shown)
+        };
+        let named = start.as_ref().is_some_and(|start| {
+            let name = measure.label(&start.name) + measure.label(" ");
+            room - filters - min_width >= name.min(SCRIPT_NAME_ROOM)
+        });
+        let fit = StartFit {
+            compact,
+            named,
+            min_width,
+        };
         self.header_row(theme)
-            .child(self.filters(theme, &RUN_FILTERS, statuses, compact, cx))
-            .child(div().flex_1())
-            .child(
-                Button::new("edit-setup", "Edit")
-                    .variant(Variant::Ghost)
-                    .on_click(cx.listener({
-                        let name = setup.name.clone();
-                        move |this, _, window, cx| this.edit_setup(&name, window, cx)
-                    })),
-            )
-            .when(can_stop, |row| {
-                row.child(
-                    Button::new("stop-setup", "Stop")
-                        .variant(Variant::Ghost)
-                        .on_click(cx.listener(|this, _, _, cx| this.stop_setup(cx))),
-                )
+            .when(!statuses.is_empty(), |row| {
+                row.child(self.filter_slot(self.filters(theme, shown, statuses, fit.compact, cx)))
             })
-            .child(self.start_controls(theme, setup, &frame.scripts, when, cx))
+            .child(
+                h_flex()
+                    .ml_auto()
+                    .min_w_0()
+                    .gap(gap)
+                    .debug_selector(|| "toolbar-end".into())
+                    .child(
+                        Button::new("edit-setup", "Edit")
+                            .variant(Variant::Ghost)
+                            .on_click(cx.listener({
+                                let name = setup.name.clone();
+                                move |this, _, window, cx| this.edit_setup(&name, window, cx)
+                            })),
+                    )
+                    .when(can_stop, |row| {
+                        row.child(
+                            Button::new("stop-setup", "Stop")
+                                .variant(Variant::Ghost)
+                                .on_click(cx.listener(|this, _, _, cx| this.stop_setup(cx))),
+                        )
+                    })
+                    .child(self.start_controls(setup, &frame.scripts, when, start, fit, cx)),
+            )
+    }
+
+    fn start_label(&self, setup: &Setup, cx: &App) -> Option<StartLabel> {
+        let script = setup.script.as_deref()?;
+        let name = script_names::name(script, cx);
+        let done = self.done(setup, cx).len();
+        Some(match self.primary_start(setup, cx) {
+            Some(Start::Fresh) => StartLabel {
+                verb: "Start",
+                again: true,
+                start: Start::Fresh,
+                tooltip: format!("Runs {name} on every account again"),
+                name,
+            },
+            _ if done > 0 => StartLabel {
+                verb: "Continue",
+                again: false,
+                start: Start::Continue,
+                tooltip: format!("Skips the {done} already done"),
+                name,
+            },
+            _ => StartLabel {
+                verb: "Start",
+                again: false,
+                start: Start::Continue,
+                tooltip: home_relative(script).to_string(),
+                name,
+            },
+        })
     }
 
     fn start_controls(
         &self,
-        theme: &Theme,
         setup: &Setup,
         scripts: &[PathBuf],
         when: Option<String>,
+        label: Option<StartLabel>,
+        fit: StartFit,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme().clone();
         let this = cx.weak_entity();
         let name = setup.name.clone();
         let current = setup.script.clone();
@@ -841,40 +1048,27 @@ impl Manager {
                 .trigger(trigger.disabled(empty))
                 .items(items.clone())
         };
-        let Some(script) = setup.script.as_deref() else {
+        let Some(label) = label else {
             return menu(Some("Start")).into_any_element();
         };
-        let name = script_names::name(script, cx);
-        let done = self.done(setup, cx).len();
-        let (label, start, tooltip) = match self.primary_start(setup, cx) {
-            Some(Start::Fresh) => (
-                format!("Start {name} again"),
-                Start::Fresh,
-                format!("Runs {name} on every account again"),
-            ),
-            _ if done > 0 => (
-                format!("Continue {name}"),
-                Start::Continue,
-                format!("Skips the {done} already done"),
-            ),
-            _ => (
-                format!("Start {name}"),
-                Start::Continue,
-                home_relative(script).to_string(),
-            ),
-        };
+        let start = label.start;
         let setup_name = setup.name.clone();
         h_flex()
             .min_w_0()
             .flex_shrink(1000.0)
             .child(
-                Button::new("start-setup", label)
+                Button::new("start-setup", label.full())
                     .variant(Variant::Primary)
                     .joined(Joined::Next)
                     .flex_shrink(1.0)
-                    .min_w(START_MIN_WIDTH)
-                    .tooltip(tooltip)
+                    .min_w(fit.min_width)
+                    .tooltip(label.tooltip.clone())
                     .disabled(empty)
+                    .child(div().truncate().child(if fit.named {
+                        label.full()
+                    } else {
+                        label.short()
+                    }))
                     .end_slot(
                         div()
                             .text_color(theme.primary_foreground.opacity(0.6))
@@ -1181,6 +1375,13 @@ impl Manager {
             .flex_none()
             .text_caption(typography)
             .text_color(status_color(theme, card.status))
+            .map(|status| {
+                if focused {
+                    status.invisible()
+                } else {
+                    status.group_hover(CARD_GROUP, |status| status.invisible())
+                }
+            })
             .child(card.status.label());
         let line = typography.secondary_line + px(2.0);
         let blank =
@@ -1331,8 +1532,10 @@ impl Manager {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .text_color(theme.muted_foreground)
-                .child("No accounts in this setup yet. Use Choose accounts to pick some.")
+                .child(Empty::new(
+                    "No accounts in this setup",
+                    "Use Choose accounts to add some.",
+                ))
                 .into_any_element();
         }
         let columns = self.columns.max(1);
@@ -1796,9 +1999,18 @@ impl Manager {
                     ),
                 )
                 .child(
-                    Field::new("Login server", server)
-                        .description(self.servers.note())
-                        .end_slot(h_flex().h(typography.secondary_line).child(refresh)),
+                    Field::new("Login server", server).end_slot(
+                        h_flex()
+                            .h(typography.secondary_line)
+                            .gap(layout.space(1.5))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(theme.muted_foreground)
+                                    .child(self.servers.note()),
+                            )
+                            .child(refresh),
+                    ),
                 )
                 .children(other.map(|error| {
                     div()
@@ -2024,12 +2236,6 @@ impl Render for Manager {
                 .is_some_and(|editing| editing.setup == setup.name)
         });
         let statuses: Vec<Status> = frame.cards.iter().map(|(_, card)| card.status).collect();
-        let compact = window.viewport_size().width - layout.sidebar
-            < if setup.is_some() {
-                COMPACT_RUN
-            } else {
-                COMPACT_ROSTER
-            };
         let ticking = setup
             .as_ref()
             .is_some_and(|setup| cx.global::<Runs>().started(&setup.name).is_some())
@@ -2084,10 +2290,10 @@ impl Render for Manager {
                         .edit_header(&theme, setup, &frame.scripts, cx)
                         .into_any_element(),
                     Some(setup) => self
-                        .watch_header(&theme, setup, &frame, &statuses, compact, cx)
+                        .watch_header(&theme, setup, &frame, &statuses, window, cx)
                         .into_any_element(),
                     None => self
-                        .roster_header(&theme, &statuses, compact, cx)
+                        .roster_header(&theme, &statuses, window, cx)
                         .into_any_element(),
                 };
                 let grid = match &setup {
@@ -2106,20 +2312,33 @@ impl Render for Manager {
                             })
                             .collect();
                         if shown.is_empty() {
+                            let unfilled = setup.as_ref().filter(|setup| setup.members.is_empty());
+                            let empty =
+                                match (query.trim(), unfilled) {
+                                    ("", Some(setup)) => Empty::new(
+                                        "No accounts in this setup",
+                                        "Edit the setup to choose its accounts.",
+                                    )
+                                    .action(Button::new("edit-empty-setup", "Edit").on_click(
+                                        cx.listener({
+                                            let name = setup.name.clone();
+                                            move |this, _, window, cx| {
+                                                this.edit_setup(&name, window, cx)
+                                            }
+                                        }),
+                                    )),
+                                    ("", None) => Empty::new(
+                                        "No accounts here",
+                                        "No account has this status right now.",
+                                    ),
+                                    _ => Empty::new("No accounts match", "Try a different search."),
+                                };
                             div()
                                 .flex()
                                 .flex_1()
                                 .items_center()
                                 .justify_center()
-                                .text_color(theme.muted_foreground)
-                                .child(match query.trim() {
-                                    "" if setup.as_ref().is_some_and(|setup| setup.members.is_empty()) => {
-                                        "No accounts in this setup yet. Use Choose accounts in Edit."
-                                            .to_owned()
-                                    }
-                                    "" => "No accounts here.".to_owned(),
-                                    query => format!("No accounts match \u{201c}{query}\u{201d}."),
-                                })
+                                .child(empty)
                                 .into_any_element()
                         } else {
                             div()

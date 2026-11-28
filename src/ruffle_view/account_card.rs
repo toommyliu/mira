@@ -349,10 +349,7 @@ fn open(summary: &Summary, status: Status, saved: Line, now: Instant) -> Card {
         ),
         Login::Disconnected => (
             "Disconnected".into(),
-            line(
-                "Lost connection, and auto relogin is off".into(),
-                Mood::Warning,
-            ),
+            line("Disconnected, auto relogin is off".into(), Mood::Warning),
             Some(Action::LogIn),
         ),
         Login::Failed(error) => (

@@ -200,7 +200,7 @@ impl Servers {
                 0 => "Checked just now".into(),
                 minutes => format!("Checked {minutes} min ago").into(),
             },
-            Check::Failed(_) => "Couldn't check the servers. Refresh to try again.".into(),
+            Check::Failed(_) => "Couldn't check servers".into(),
         }
     }
 }
@@ -805,13 +805,15 @@ impl Manager {
         if setup.is_some() {
             let (running, waiting) = (found.running.len(), found.waiting.len());
             description.push_str(&match (running, waiting) {
-                (0, waiting) => format!(
-                    "This stops {} that haven't started. ",
-                    plural(waiting, "script")
-                ),
+                (0, waiting) => {
+                    format!(
+                        "This stops {} waiting to start. ",
+                        plural(waiting, "script")
+                    )
+                }
                 (running, 0) => format!("This stops {}. ", plural(running, "running script")),
                 (running, waiting) => format!(
-                    "This stops {} and {waiting} that haven't started. ",
+                    "This stops {} and {waiting} waiting to start. ",
                     plural(running, "running script")
                 ),
             });
@@ -820,15 +822,6 @@ impl Manager {
             Some(name) => format!("{name} stays logged in."),
             None => "The accounts stay logged in.".to_owned(),
         });
-        if let Some(setup) = setup {
-            let done = self.done(setup, cx).len();
-            if done > 0 {
-                description.push_str(&format!(
-                    " Starting {} again later skips the {done} already done.",
-                    setup.name
-                ));
-            }
-        }
         self.ask(
             Ask::Stop {
                 targets,
