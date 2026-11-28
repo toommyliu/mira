@@ -24,6 +24,7 @@ package mira {
 
 		private static var _gameClass:Class;
 		private static var _handler:*;
+		private static var _serverPacketLines:Boolean = false;
 
 		private var game:*;
 		private var external:Externalizer;
@@ -137,7 +138,11 @@ package mira {
 		}
 
 		private function onDebugMessage(packet:*):void {
-			this.emitSmartFoxDebug(packet.params.message);
+			var message:String = packet.params.message;
+			if (!_serverPacketLines && message.lastIndexOf("[ RECEIVED ]", 0) == 0) {
+				return;
+			}
+			this.emitSmartFoxDebug(message);
 		}
 
 		[BridgeEvent("onProgress")]
@@ -314,6 +319,11 @@ package mira {
 			catch (ex:Error) {
 			}
 			return true;
+		}
+
+		[BridgeExport]
+		public static function setServerPacketLines(enabled:Boolean):void {
+			_serverPacketLines = enabled;
 		}
 
 		[BridgeExport]

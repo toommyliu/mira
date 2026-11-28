@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use tokio::sync::watch;
 
 use crate::bridge::{
-    Drained, Event, Subscription,
+    self, Drained, Event, Loader, Subscription,
     packets::{Sender, raw},
 };
 
@@ -24,15 +24,22 @@ pub(crate) fn wants(event: &Event) -> bool {
 }
 
 pub(crate) async fn capture(
+    loader: impl Loader,
     subscribe: impl Fn() -> Subscription,
     mut capturing: watch::Receiver<bool>,
     send: impl Fn(Vec<Captured>),
 ) {
+    let send_server_lines = |on| {
+        if let Err(error) = bridge::flash::set_server_packet_lines(&loader, on) {
+            tracing::debug!(%error, on, "couldn't switch the loader's server packet lines");
+        }
+    };
     loop {
         if capturing.wait_for(|on| *on).await.is_err() {
             return;
         }
         let packets = subscribe();
+        send_server_lines(true);
         loop {
             tokio::select! {
                 changed = capturing.changed() => {
@@ -46,6 +53,7 @@ pub(crate) async fn capture(
                 drained = packets.drain() => send(batch(drained, SystemTime::now())),
             }
         }
+        send_server_lines(false);
     }
 }
 
@@ -73,7 +81,10 @@ mod tests {
     use tokio::{task::LocalSet, time::sleep};
 
     use super::*;
-    use crate::bridge::Events;
+    use crate::{
+        bridge::{Events, Value},
+        domain::testing::FakeLoader,
+    };
 
     fn line(line: &str) -> Event {
         Event::SmartFoxDebug { line: line.into() }
@@ -97,9 +108,17 @@ mod tests {
                 let events = Rc::new(Events::default());
                 let (capturing, watching) = watch::channel(false);
                 let batches = Rc::new(RefCell::new(Vec::new()));
+                let server_lines = Rc::new(RefCell::new(Vec::new()));
+                let toggled = Rc::clone(&server_lines);
+                let loader = FakeLoader::new(move |callback, args| {
+                    assert_eq!(callback, "flash.setServerPacketLines");
+                    toggled.borrow_mut().push(args[0].clone());
+                    Ok(Value::Undefined)
+                });
                 let subscriber = Rc::clone(&events);
                 let sink = Rc::clone(&batches);
                 tokio::task::spawn_local(capture(
+                    loader,
                     move || subscriber.subscribe(wants),
                     watching,
                     move |batch| sink.borrow_mut().push(batch),
@@ -108,8 +127,10 @@ mod tests {
 
                 events.publish(&line("[Sending - STR]: %xt%zm%before%1%"));
                 step().await;
+                assert_eq!(*server_lines.borrow(), []);
                 capturing.send_replace(true);
                 step().await;
+                assert_eq!(*server_lines.borrow(), [Value::Bool(true)]);
                 events.publish(&line("[Sending - STR]: %xt%zm%afk%1%true%, (len: 24)"));
                 events.publish(&line("Connection lost"));
                 events.publish(&line("[ RECEIVED ]: %xt%afk%-1%, (len: 11)"));
@@ -118,6 +139,10 @@ mod tests {
                 step().await;
                 events.publish(&line("[Sending - STR]: %xt%zm%after%1%"));
                 step().await;
+                assert_eq!(
+                    *server_lines.borrow(),
+                    [Value::Bool(true), Value::Bool(false)]
+                );
 
                 assert_eq!(
                     texts(&batches.borrow()),

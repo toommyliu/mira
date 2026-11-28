@@ -519,6 +519,15 @@ pub(crate) mod flash {
         let reply = loader.call("flash.setGameObjectKey", call_args)?;
         Ok(decode("flash.setGameObjectKey", reply)?)
     }
+
+    pub(crate) fn set_server_packet_lines(
+        loader: &impl Loader,
+        enabled: bool,
+    ) -> Result<(), CallError> {
+        let call_args = vec![Value::Bool(enabled)];
+        let reply = loader.call("flash.setServerPacketLines", call_args)?;
+        Ok(decode("flash.setServerPacketLines", reply)?)
+    }
 }
 
 pub(crate) mod house {
