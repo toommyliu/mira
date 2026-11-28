@@ -149,7 +149,7 @@ pub(crate) async fn run(
             tracing::debug!(%error, "registered quests skipped a check");
         }
         tokio::select! {
-            _ = gained.next() => {}
+            _ = gained.next() => gained.clear(),
             changed = state.changed() => if changed.is_err() {
                 return;
             },
@@ -268,6 +268,7 @@ mod tests {
         unregister_on_complete: bool,
         refuse_complete: bool,
         action_blocked: bool,
+        checks: u32,
         accepted: u32,
         completed: Vec<(f64, f64)>,
     }
@@ -291,7 +292,10 @@ mod tests {
             Ok(match callback {
                 "auth.isLoggedIn" | "world.isLoaded" | "player.isLoaded" => Value::Bool(true),
                 "world.isActionAvailable" => Value::Bool(!log.action_blocked),
-                "quests.getPresence" => Value::List(vec![Value::Bool(true)]),
+                "quests.getPresence" => {
+                    log.checks += 1;
+                    Value::List(vec![Value::Bool(true)])
+                }
                 "quests.needsRewardChoice" => Value::Bool(log.choice),
                 "quests.isInProgress" => Value::Bool(log.in_progress),
                 "quests.isAvailable" => Value::Bool(true),
@@ -371,6 +375,26 @@ mod tests {
                 let log = log.borrow();
                 assert_eq!(log.completed, [(3.0, -1.0)]);
                 assert_eq!(log.accepted, 2, "the repeatable quest is accepted again");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn items_gained_in_a_burst_are_checked_once() {
+        LocalSet::new()
+            .run_until(async {
+                let (log, events, state) = start(Log {
+                    in_progress: true,
+                    ..Log::default()
+                });
+                register(&state, None);
+                settle().await;
+                let before = log.borrow().checks;
+                for _ in 0..5 {
+                    gain_items(&events);
+                }
+                settle().await;
+                assert_eq!(log.borrow().checks - before, 1);
             })
             .await;
     }
