@@ -127,10 +127,16 @@ impl RenderOnce for Marquee {
                             .text_system()
                             .shape_line(measure.clone(), size, &[run], None)
                             .width;
-                        measured.update(cx, |state, _| {
-                            state.room = bounds.size.width;
+                        let room = bounds.size.width;
+                        let resized = measured.update(cx, |state, _| {
+                            let resized = state.room != room || state.text != text;
+                            state.room = room;
                             state.text = text;
+                            resized
                         });
+                        if resized {
+                            window.request_animation_frame();
+                        }
                     },
                     |_, _, _, _| {},
                 )
@@ -150,6 +156,7 @@ impl RenderOnce for Marquee {
             .map(|marquee| match shown {
                 Shown::Scrolled(offset) => marquee.child(
                     div()
+                        .debug_selector(|| "marquee-text".into())
                         .absolute()
                         .top_0()
                         .left(px(-offset))
