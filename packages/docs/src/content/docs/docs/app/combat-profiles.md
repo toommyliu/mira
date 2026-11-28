@@ -8,8 +8,10 @@ A combat profile tells Mira which skills to use and when, without writing code. 
 ## Create a profile
 
 1. Open **Auto attack** on the game bar and select **Edit profiles…**.
-2. In **Combat profiles**, select **New profile**.
+2. In **Combat profiles**, open the profile menu in the title bar and select **New profile**.
 3. Name the profile, configure its skills, and select **Save**.
+
+The same menu switches between profiles. **Duplicate** and **Delete…** at the bottom of the window act on the one shown. Mira edits one profile at a time, so it asks you to save your changes before it shows another. To drop them instead, cancel and select **Revert**, or **Discard** for a profile you haven't saved.
 
 ## Use a profile in a script
 
