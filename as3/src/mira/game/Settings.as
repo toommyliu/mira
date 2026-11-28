@@ -48,7 +48,11 @@ package mira.game {
 
     [BridgeExport]
     public static function skipCutscenes():void {
-      Main.Game.clearExternamSWF();
+      var game:* = Main.Game;
+      if (game.mcExtSWF == null || game.mcExtSWF.numChildren == 0) {
+        return;
+      }
+      game.clearExternamSWF();
       applyWorldVisibility();
     }
 
