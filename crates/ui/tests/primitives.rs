@@ -1667,6 +1667,10 @@ fn clearing_a_search_keeps_it_ready_for_the_next_query(cx: &mut TestAppContext) 
     cx.simulate_click(clear, gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(text(&input, cx), "");
+    press(cx, "cmd-z");
+    assert_eq!(text(&input, cx), "Twig");
+    press(cx, "cmd-shift-z");
+    assert_eq!(text(&input, cx), "");
 
     for key in ["enter", "space"] {
         cx.simulate_input("Yulgar");
@@ -1681,6 +1685,8 @@ fn clearing_a_search_keeps_it_ready_for_the_next_query(cx: &mut TestAppContext) 
     assert_eq!(text(&input, cx), "Battleon");
     press(cx, "escape");
     assert_eq!(text(&input, cx), "");
+    press(cx, "cmd-z");
+    assert_eq!(text(&input, cx), "Battleon");
 }
 
 #[gpui::test]

@@ -635,9 +635,19 @@ impl Input {
         cx.emit(InputEvent::Submitted);
     }
 
+    fn clear(&mut self, cx: &mut Context<Self>) {
+        self.remember(false);
+        self.content = SharedString::default();
+        self.selected = 0..0;
+        self.reversed = false;
+        self.marked = None;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
         if self.search && !self.content.is_empty() {
-            self.set_text("", cx);
+            self.clear(cx);
             return;
         }
         cx.propagate();
@@ -1090,7 +1100,7 @@ impl Render for Input {
             .when(clearable, |field| {
                 let entity = cx.entity();
                 field.child(clear_search_button(&self.focus, move |cx| {
-                    entity.update(cx, |field, cx| field.set_text("", cx));
+                    entity.update(cx, |field, cx| field.clear(cx));
                 }))
             })
     }
