@@ -5,7 +5,8 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::packages::github::GitHub;
+use super::Channel;
+use crate::packages::github::{GitHub, GitHubError};
 
 pub(super) const ZIP: &str = "Mira.zip";
 static REPOSITORY: LazyLock<(&str, &str)> = LazyLock::new(|| {
@@ -17,6 +18,8 @@ static REPOSITORY: LazyLock<(&str, &str)> = LazyLock::new(|| {
 
 #[derive(Deserialize)]
 struct Release {
+    draft: bool,
+    prerelease: bool,
     tag_name: String,
     html_url: String,
     #[serde(default)]
@@ -67,15 +70,15 @@ impl Update {
 }
 
 impl Release {
-    fn update(self, current: &Version) -> Result<Option<Update>> {
-        let Some(version) = self
-            .tag_name
-            .strip_prefix('v')
-            .and_then(|v| Version::parse(v).ok())
-            .filter(|v| v.pre.is_empty() && v > current)
-        else {
-            return Ok(None);
-        };
+    fn version(&self, channel: Channel) -> Option<Version> {
+        if self.draft || self.prerelease != (channel == Channel::Nightly) {
+            return None;
+        }
+        let version = Version::parse(self.tag_name.strip_prefix('v')?).ok()?;
+        (Channel::of(&version) == Some(channel)).then_some(version)
+    }
+
+    fn update(self, version: Version) -> Result<Update> {
         let asset = self
             .assets
             .into_iter()
@@ -89,7 +92,7 @@ impl Release {
             .context("GitHub didn’t provide a checksum for the download")?
             .to_ascii_lowercase();
         ensure!(asset.size > 0, "The download for Mira {version} is empty");
-        Ok(Some(Update {
+        Ok(Update {
             version,
             notes: self
                 .body
@@ -99,16 +102,43 @@ impl Release {
             id: asset.id,
             size: asset.size,
             sha256,
-        }))
+        })
     }
 }
 
-pub(super) async fn latest(github: &GitHub, current: &Version) -> Result<Option<Update>> {
-    let release: Option<Release> = github
-        .latest_release(REPOSITORY.0, REPOSITORY.1)
-        .await
-        .context("Couldn’t check GitHub for updates")?;
-    release.map_or(Ok(None), |release| release.update(current))
+pub(super) async fn latest(
+    github: &GitHub,
+    current: &Version,
+    channel: Channel,
+) -> Result<Option<Update>> {
+    let newest = match channel {
+        Channel::Stable => github
+            .latest_release::<Release>(REPOSITORY.0, REPOSITORY.1)
+            .await
+            .map(|release| release.and_then(|r| Some((r.version(channel)?, r)))),
+        Channel::Nightly => newest_nightly(github).await,
+    }
+    .context("Couldn’t check GitHub for updates")?;
+    newest
+        .filter(|(v, _)| v > current)
+        .map(|(v, r)| r.update(v))
+        .transpose()
+}
+
+async fn newest_nightly(github: &GitHub) -> Result<Option<(Version, Release)>, GitHubError> {
+    let mut page = 1;
+    loop {
+        let releases: Vec<Release> = github.releases(REPOSITORY.0, REPOSITORY.1, page).await?;
+        let last_page = releases.len() < 30;
+        let newest = releases
+            .into_iter()
+            .filter_map(|r| Some((r.version(Channel::Nightly)?, r)))
+            .max_by(|(a, _), (b, _)| a.cmp(b));
+        if newest.is_some() || last_page {
+            return Ok(newest);
+        }
+        page += 1;
+    }
 }
 
 pub(super) async fn download(
@@ -143,6 +173,8 @@ mod tests {
 
     fn release(tag: &str) -> Release {
         Release {
+            draft: false,
+            prerelease: false,
             tag_name: tag.into(),
             html_url: format!("https://github.com/toommyliu/mira/releases/tag/{tag}"),
             body: None,
@@ -158,17 +190,120 @@ mod tests {
     #[test]
     fn offers_only_a_newer_stable_zip_with_a_github_checksum() {
         let current = Version::new(0, 1, 1);
-        let update = release("v0.1.2").update(&current).unwrap().unwrap();
+        let version = release("v0.1.2").version(Channel::Stable).unwrap();
+        let update = release("v0.1.2").update(version.clone()).unwrap();
         assert_eq!(update.version, Version::new(0, 1, 2));
         assert_eq!(update.sha256, "ab".repeat(32));
         for tag in ["v0.1.0", "v0.1.1", "v0.1.2-beta.1", "0.1.2", "unversioned"] {
-            assert!(release(tag).update(&current).unwrap().is_none(), "{tag}");
+            assert!(
+                release(tag)
+                    .version(Channel::Stable)
+                    .is_none_or(|v| v <= current),
+                "{tag}"
+            );
         }
         let mut unverified = release("v0.1.2");
         unverified.assets[0].digest = None;
-        assert!(unverified.update(&current).is_err());
+        assert!(unverified.update(version.clone()).is_err());
         let mut missing = release("v0.1.2");
         missing.assets[0].name = "Mira-osx-arm64-Portable.zip".into();
-        assert!(missing.update(&current).is_err());
+        assert!(missing.update(version.clone()).is_err());
+    }
+
+    #[tokio::test]
+    async fn each_channel_offers_only_its_own_newest_release() {
+        use crate::packages::fake::{Fake, Reply};
+        use serde_json::json;
+        let api = Fake::start();
+        let github = GitHub::at(&api.url(), None).unwrap();
+        let path = format!("/repos/{}/{}/releases", REPOSITORY.0, REPOSITORY.1);
+        let release = |tag: &str, prerelease: bool, draft: bool| {
+            json!({
+                "tag_name": tag, "prerelease": prerelease, "draft": draft, "html_url": "https://example.com",
+                "assets": [{"id": 1, "name": ZIP, "size": 2, "digest": format!("sha256:{}", "aa".repeat(32))}]
+            })
+        };
+        let version = |text: &str| Version::parse(text).unwrap();
+        let offered = async |current: &str, channel: Channel| {
+            latest(&github, &version(current), channel)
+                .await
+                .unwrap()
+                .map(|update| update.version.to_string())
+        };
+        api.route(
+            &format!("{path}/latest"),
+            Reply::json(release("v0.2.1", false, false).to_string()),
+        );
+        api.route(
+            &format!("{path}?page=1"),
+            Reply::json(
+                serde_json::to_string(&vec![release("v0.2.2-nightly.20261128.50", true, true); 30])
+                    .unwrap(),
+            ),
+        );
+        api.route(
+            &format!("{path}?page=2"),
+            Reply::json(
+                json!([
+                    release("v0.2.1-nightly.20261127.41", true, false),
+                    release("v0.2.1", false, false),
+                    release("v0.2.2-nightly.20261128.44", true, false),
+                ])
+                .to_string(),
+            ),
+        );
+        assert_eq!(
+            offered("0.2.0", Channel::Stable).await.as_deref(),
+            Some("0.2.1")
+        );
+        assert_eq!(
+            offered("0.2.0", Channel::Nightly).await.as_deref(),
+            Some("0.2.2-nightly.20261128.44")
+        );
+        assert_eq!(
+            offered("0.2.1-nightly.20261127.41", Channel::Stable)
+                .await
+                .as_deref(),
+            Some("0.2.1")
+        );
+        assert_eq!(
+            offered("0.2.2-nightly.20261128.44", Channel::Stable).await,
+            None
+        );
+        api.route(
+            &format!("{path}?page=2"),
+            Reply::json(json!([release("v0.2.1-nightly.20261127.41", true, false)]).to_string()),
+        );
+        assert_eq!(
+            offered("0.2.1-nightly.20261127.41", Channel::Nightly).await,
+            None
+        );
+        assert_eq!(
+            offered("0.2.0", Channel::Nightly).await.as_deref(),
+            Some("0.2.1-nightly.20261127.41")
+        );
+    }
+
+    #[test]
+    fn only_published_nightly_tags_are_eligible_for_the_nightly_channel() {
+        let mut r = release("v0.2.1-nightly.20261127.42");
+        assert!(r.version(Channel::Nightly).is_none());
+        r.prerelease = true;
+        assert!(r.version(Channel::Stable).is_none());
+        let nightly = r.version(Channel::Nightly).unwrap();
+        assert!(nightly > Version::new(0, 2, 0) && nightly < Version::new(0, 2, 1));
+        r.draft = true;
+        assert!(r.version(Channel::Nightly).is_none());
+        r.draft = false;
+        for tag in [
+            "v0.2.1-beta.1",
+            "v0.2.1",
+            "v0.2.1-nightly.20261127.x",
+            "v0.2.1-nightly.2026112.42",
+            "v0.2.1-nightly.20261127.42+abc",
+        ] {
+            r.tag_name = tag.into();
+            assert!(r.version(Channel::Nightly).is_none(), "{tag}");
+        }
     }
 }

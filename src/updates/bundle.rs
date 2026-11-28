@@ -102,7 +102,7 @@ impl Staged {
         ensure!(
             app.join("Contents/MacOS/mira").is_file()
                 && info(&app, "CFBundleIdentifier")? == info(&staged.target, "CFBundleIdentifier")?
-                && info(&app, "CFBundleShortVersionString")? == staged.version.to_string(),
+                && release_version(&app)? == staged.version,
             "The download isn’t Mira {}",
             staged.version
         );
@@ -160,6 +160,12 @@ pub(super) fn reopen(app: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn release_version(app: &Path) -> Result<Version> {
+    let version =
+        info(app, "MiraReleaseVersion").or_else(|_| info(app, "CFBundleShortVersionString"))?;
+    Ok(Version::parse(&version)?)
+}
+
 pub(super) fn info(app: &Path, key: &str) -> Result<String> {
     let output = run(Command::new("/usr/bin/plutil")
         .args(["-extract", key, "raw", "-o", "-"])
@@ -201,6 +207,17 @@ mod tests {
     fn zip(root: &Path, version: &str) -> PathBuf {
         let source = root.join(format!("build-{version}"));
         let app = app(&source, version, version);
+        if let Some((base, _)) = version.split_once('-') {
+            let plist = app.join("Contents/Info.plist");
+            run(Command::new("/usr/bin/plutil")
+                .args(["-replace", "CFBundleShortVersionString", "-string", base])
+                .arg(&plist))
+            .unwrap();
+            run(Command::new("/usr/bin/plutil")
+                .args(["-insert", "MiraReleaseVersion", "-string", version])
+                .arg(plist))
+            .unwrap();
+        }
         let zip = root.join(format!("{version}.zip"));
         run(Command::new("/usr/bin/ditto")
             .args(["-c", "-k", "--keepParent"])
@@ -255,5 +272,29 @@ mod tests {
             "0.2.0"
         );
         assert!(!staged.dir.exists());
+
+        for run in [41, 42] {
+            let version = format!("0.2.1-nightly.20261127.{run}");
+            let staged = Staged::unpack(
+                target.clone(),
+                Staged::workspace(&target).unwrap(),
+                &zip(&root, &version),
+                Version::parse(&version).unwrap(),
+            )
+            .unwrap();
+            staged.install().unwrap();
+            assert_eq!(
+                info(&target, "CFBundleShortVersionString").unwrap(),
+                "0.2.1"
+            );
+            assert_eq!(release_version(&target).unwrap().to_string(), version);
+        }
+        let mismatch = Staged::unpack(
+            target.clone(),
+            Staged::workspace(&target).unwrap(),
+            &zip(&root, "0.2.1-nightly.20261127.43"),
+            Version::parse("0.2.1-nightly.20261127.44").unwrap(),
+        );
+        assert!(mismatch.is_err());
     }
 }

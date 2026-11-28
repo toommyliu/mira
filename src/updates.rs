@@ -14,6 +14,7 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSView};
 use objc2_foundation::{NSString, ns_string};
 use semver::Version;
+use serde::{Deserialize, Serialize};
 
 use bundle::Staged;
 use release::Update;
@@ -29,6 +30,52 @@ const SPIN: Duration = Duration::from_secs(1);
 const COOLDOWN: Duration = Duration::from_secs(30);
 static CURRENT: LazyLock<Version> =
     LazyLock::new(|| Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo package version"));
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Channel {
+    #[default]
+    Stable,
+    Nightly,
+}
+
+impl Channel {
+    pub(crate) const ALL: [Self; 2] = [Self::Stable, Self::Nightly];
+
+    pub(crate) fn running() -> Self {
+        Self::of(&CURRENT).unwrap_or_default()
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::Nightly => "Nightly",
+        }
+    }
+
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::Stable => "Get new versions of Mira when they’re released.",
+            Self::Nightly => "Get Mira changes early, up to a few times a day.",
+        }
+    }
+
+    fn of(version: &Version) -> Option<Self> {
+        if !version.build.is_empty() {
+            return None;
+        }
+        if version.pre.is_empty() {
+            return Some(Self::Stable);
+        }
+        let (date, run) = version
+            .pre
+            .as_str()
+            .strip_prefix("nightly.")?
+            .split_once('.')?;
+        let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+        (date.len() == 8 && digits(date) && digits(run)).then_some(Self::Nightly)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum Updates {
@@ -54,6 +101,11 @@ pub(crate) enum Updates {
 }
 
 impl Global for Updates {}
+
+#[derive(Default)]
+struct ChannelGeneration(u64);
+
+impl Global for ChannelGeneration {}
 
 #[derive(Default)]
 struct InFlight(Option<(Vec<async_channel::Sender<()>>, bool)>);
@@ -87,10 +139,13 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, cx| {
         crate::packages::packages(cx)
             .update(cx, |packages, cx| packages.check_when_idle(false, cx));
+        let generation = cx.default_global::<ChannelGeneration>().0;
         let checking = Updates::check(true, cx);
         cx.spawn(async move |cx| {
             checking.await;
-            announce(cx);
+            if cx.update(|cx| cx.global::<ChannelGeneration>().0 == generation) {
+                announce(cx);
+            }
         })
         .detach();
     });
@@ -282,11 +337,24 @@ impl Updates {
         }
     }
 
+    pub(crate) fn channel_changed(cx: &mut App) {
+        match cx.try_global::<Self>() {
+            Some(Self::Unavailable(_) | Self::Restarting(_)) | None => return,
+            Some(Self::Ready { staged, .. }) => staged.discard(),
+            _ => {}
+        }
+        cx.default_global::<ChannelGeneration>().0 += 1;
+        InFlight::finish(cx);
+        cx.set_global(Self::Idle);
+        Self::check(false, cx).detach();
+    }
+
     pub(crate) fn check(manual: bool, cx: &mut App) -> Task<()> {
         if let Some(running) = InFlight::join(manual, cx) {
             return running;
         }
         let started = cx.background_executor().now();
+        let generation = cx.default_global::<ChannelGeneration>().0;
         let offered = match cx.try_global::<Self>() {
             Some(&Self::Current(at)) if started.duration_since(at) < COOLDOWN => {
                 cx.set_global(Self::Checking);
@@ -294,6 +362,9 @@ impl Updates {
                 return cx.spawn(async move |cx| {
                     cx.background_executor().timer(SPIN).await;
                     cx.update(|cx| {
+                        if cx.global::<ChannelGeneration>().0 != generation {
+                            return;
+                        }
                         InFlight::finish(cx);
                         if matches!(cx.try_global::<Self>(), Some(Self::Checking)) {
                             cx.set_global(Self::Current(at));
@@ -317,7 +388,9 @@ impl Updates {
             cx.set_global(Self::Checking);
         }
         InFlight::begin(manual, cx);
-        let task = cx.background_spawn(async move { block_on(release::latest(&github, &CURRENT)) });
+        let channel = crate::settings::update_channel(cx);
+        let task = cx
+            .background_spawn(async move { block_on(release::latest(&github, &CURRENT, channel)) });
         cx.spawn(async move |cx| {
             let result = task.await;
             let executor = cx.background_executor().clone();
@@ -325,6 +398,9 @@ impl Updates {
                 executor.timer(left).await;
             }
             cx.update(|cx| {
+                if cx.global::<ChannelGeneration>().0 != generation {
+                    return;
+                }
                 let manual = InFlight::finish(cx);
                 if !matches!(
                     cx.try_global::<Self>(),
@@ -359,6 +435,7 @@ impl Updates {
             return;
         };
         let update = update.clone();
+        let generation = cx.default_global::<ChannelGeneration>().0;
         let github = github(cx);
         cx.set_global(Self::Downloading {
             update: update.clone(),
@@ -378,6 +455,9 @@ impl Updates {
         cx.spawn(async move |cx| {
             while let Ok(progress) = progress.recv().await {
                 cx.update(|cx| {
+                    if cx.global::<ChannelGeneration>().0 != generation {
+                        return;
+                    }
                     cx.set_global(Self::Downloading {
                         update: update.clone(),
                         progress,
@@ -386,6 +466,12 @@ impl Updates {
             }
             let result = task.await;
             cx.update(|cx| {
+                if cx.global::<ChannelGeneration>().0 != generation {
+                    if let Ok(staged) = result {
+                        staged.discard();
+                    }
+                    return;
+                }
                 cx.set_global(match result {
                     Ok(staged) => Self::Ready {
                         update,

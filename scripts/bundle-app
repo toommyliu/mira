@@ -17,6 +17,11 @@ source="$(cd "$(dirname "$0")/.." && pwd)/assets/$icon.icon"
 mkdir -p "$2/Contents/MacOS" "$2/Contents/Resources"
 contents=$(cd "$2/Contents" && pwd)
 version=$3
+short_version=${version%%-*}
+case $version in
+    *-nightly.*) build=${version##*.} ;;
+    *) build=${GITHUB_RUN_NUMBER:-$short_version} ;;
+esac
 cp -c "$1" "$contents/MacOS/mira"
 if [ ! -e "$contents/Resources/Assets.car" ] || [ -n "$(find "$source" "$0" -newer "$contents/Resources/Assets.car")" ]; then
     icon_plist=$(mktemp)
@@ -38,8 +43,9 @@ cat > "$contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key><string>$icon</string>
     <key>CFBundleIconName</key><string>$icon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$version</string>
-    <key>CFBundleVersion</key><string>$version</string>
+    <key>CFBundleShortVersionString</key><string>$short_version</string>
+    <key>CFBundleVersion</key><string>$build</string>
+    <key>MiraReleaseVersion</key><string>$version</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
