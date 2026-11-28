@@ -4717,3 +4717,49 @@ fn resizing_a_paused_log_keeps_its_scrollbar_from_jumping_to_the_end(cx: &mut Te
         "dragging the thumb up jumped the log to its newest row"
     );
 }
+
+struct ScriptPath {
+    width: Rc<Cell<f32>>,
+}
+
+impl Render for ScriptPath {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            div()
+                .debug_selector(|| "marquee-box".into())
+                .w(gpui::px(self.width.get()))
+                .child(mira_ui::primitives::Marquee::new(
+                    "path",
+                    "~/Library/Application Support/Mira/scripts/daily.ts",
+                )),
+        )
+    }
+}
+
+#[gpui::test]
+fn a_scrolled_path_keeps_its_end_in_view_when_its_box_narrows(cx: &mut TestAppContext) {
+    cx.update(mira_ui::init);
+    let width = Rc::new(Cell::new(160.0));
+    let (view, cx) = cx.add_window_view(|_, _| ScriptPath {
+        width: width.clone(),
+    });
+    cx.run_until_parked();
+    let pointer = cx.debug_bounds("marquee-box").unwrap().center();
+    cx.simulate_mouse_move(pointer, None, gpui::Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(10));
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let gap = |cx: &mut VisualTestContext| {
+        cx.debug_bounds("marquee-text").unwrap().right()
+            - cx.debug_bounds("marquee-box").unwrap().right()
+    };
+    assert!(gap(cx).abs() < gpui::px(1.0), "{:?}", gap(cx));
+
+    width.set(120.0);
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    assert!(gap(cx).abs() < gpui::px(1.0), "{:?}", gap(cx));
+}

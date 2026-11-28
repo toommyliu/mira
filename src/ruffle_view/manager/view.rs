@@ -15,9 +15,9 @@ use mira_ui::{
     components::Empty,
     h_flex,
     primitives::{
-        Alert, Align, Badge, Button, Checkbox, CheckedState, ContextMenu, Dialog, DropdownMenu,
-        Field, Flow, HoverCard, Icon, MenuItem, Placement, Pose, Scrollbar, SegmentedProgress,
-        Side, Signal, Sortable, Tab, Tabs, Tooltip,
+        Alert, Align, Button, ContextMenu, Dialog, DropdownMenu, Field, Flow, HoverCard, Icon,
+        Marquee, MenuItem, Placement, Pose, Scrollbar, SegmentedProgress, Side, Signal, Sortable,
+        Tab, Tabs,
         button::{Joined, Size, Variant},
         icon, small_icon, text_field,
     },
@@ -37,9 +37,7 @@ use crate::{
     accounts::{Account, AccountId},
     net,
     ruffle_view::{
-        account_card::{
-            Action, CHOOSE_IN_GAME, Card, Job, Line, Mood, Presence, Status, ago, card, status,
-        },
+        account_card::{About, Action, Card, Job, Line, Mood, Presence, Status, ago, card, status},
         client::{CloseSession, bar_title, drag_area, window_bar},
         script_names,
         scripts::{fit_path_to, home_relative},
@@ -48,14 +46,19 @@ use crate::{
 };
 
 const CARD_GROUP: &str = "account-card";
-const SCRIPT_MENU_WIDTH: gpui::Pixels = px(260.0);
-const SCRIPT_PATH_WIDTH: gpui::Pixels = px(186.0);
-const SERVER_MENU_WIDTH: gpui::Pixels = px(360.0);
+const NO_SERVER: &str = "Choose a server";
+const SCRIPT_MENU_WIDTH: gpui::Pixels = px(224.0);
+const SCRIPT_PICKER_WIDTH: gpui::Pixels = px(260.0);
+const CHECK_GUTTER: gpui::Pixels = px(32.0);
+const REMOVE_SLOT: gpui::Pixels = px(18.0);
+const SCRIPT_ROW_INSET: gpui::Pixels = px(24.0);
+const SERVER_MENU_WIDTH: gpui::Pixels = px(280.0);
 const BAR_ROOM: gpui::Pixels = px(64.0);
 const NARROW_BAR: gpui::Pixels = px(640.0);
-const COMPACT_HEADER: gpui::Pixels = px(760.0);
+const COMPACT_RUN: gpui::Pixels = px(760.0);
+const COMPACT_ROSTER: gpui::Pixels = px(560.0);
 const START_MIN_WIDTH: gpui::Pixels = px(112.0);
-const QUICK_ACTION_ROOM: gpui::Pixels = px(44.0);
+const FILTER_MENU_WIDTH: gpui::Pixels = px(176.0);
 
 fn mood_color(theme: &Theme, mood: Mood) -> Hsla {
     match mood {
@@ -66,15 +69,30 @@ fn mood_color(theme: &Theme, mood: Mood) -> Hsla {
     }
 }
 
-fn dot(theme: &Theme, tone: Option<Tone>) -> Div {
-    let dot = div().flex_none().size(px(6.0)).rounded_full();
-    match tone {
-        Some(Tone::Success) => dot.bg(theme.primary),
-        Some(Tone::Attention) => dot.bg(theme.warning),
-        Some(Tone::Danger) => dot.bg(theme.destructive),
-        Some(_) => dot.bg(theme.muted_foreground.opacity(0.6)),
-        None => dot.border_1().border_color(theme.muted_foreground),
+fn status_color(theme: &Theme, status: Status) -> Hsla {
+    match status {
+        Status::Failed => theme.destructive,
+        Status::NeedsYou => theme.warning,
+        _ => theme.muted_foreground,
     }
+}
+
+fn fact_icon(theme: &Theme, glyph: Icon, label: &'static str) -> impl IntoElement + use<> {
+    div()
+        .id(label)
+        .role(Role::Image)
+        .aria_label(label)
+        .flex_none()
+        .child(icon(glyph, theme.muted_foreground).size(px(12.0)))
+}
+
+fn card_height(theme: &Theme) -> gpui::Pixels {
+    let typography = theme.typography;
+    theme.space(3.0) * 2.0
+        + px(2.0)
+        + theme.space(1.0)
+        + typography.body_line
+        + (typography.secondary_line + px(2.0)) * 3.0
 }
 
 fn attention(theme: &Theme, statuses: &[Status]) -> Option<AnyElement> {
@@ -104,23 +122,26 @@ fn server_items(
     theme: &Theme,
     pick: &PickServer,
 ) -> Vec<MenuItem> {
-    let item = |label: String, server: Option<String>| {
+    let item = |server: String| {
         let pick = pick.clone();
-        let checked = current == Some(server.as_deref());
-        MenuItem::action(label, move |window, cx| pick(server.clone(), window, cx)).checked(checked)
+        let checked = current == Some(Some(server.as_str()));
+        MenuItem::action(server.clone(), move |window, cx| {
+            pick(Some(server.clone()), window, cx)
+        })
+        .checked(checked)
     };
-    let mut items = vec![
-        item(CHOOSE_IN_GAME.to_owned(), None).pinned(),
-        MenuItem::separator().pinned(),
-    ];
-    items.extend(servers.iter().map(|server| {
-        item(server.name.clone(), Some(server.name.clone())).end_slot(server_stats(server, theme))
-    }));
+    let mut items: Vec<MenuItem> = servers
+        .iter()
+        .map(|server| item(server.name.clone()).end_slot(server_stats(server, theme)))
+        .collect();
     if let Some(saved) = current
         .flatten()
         .filter(|saved| !servers.iter().any(|server| server.name == *saved))
     {
-        items.push(item(saved.to_owned(), Some(saved.to_owned())));
+        items.push(item(saved.to_owned()));
+    }
+    if items.is_empty() {
+        items.push(MenuItem::action("No servers to show", |_, _| {}).disabled(true));
     }
     items
 }
@@ -130,34 +151,32 @@ fn server_stats(server: &net::Server, theme: &Theme) -> Div {
     let typography = theme.typography;
     let (players, color) = if !server.online {
         (SharedString::from("Offline"), theme.muted_foreground)
+    } else if server.players >= server.capacity {
+        ("Full".into(), theme.foreground)
     } else {
-        (
-            format!("{}/{}", server.players, server.capacity).into(),
-            if server.players >= server.capacity {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            },
-        )
+        (server.players.to_string().into(), theme.muted_foreground)
     };
+    let ping = server.ping.map(|ping| ping.as_millis());
     h_flex()
-        .gap(layout.space(2.5))
+        .flex_none()
+        .gap(layout.space(3.0))
         .ml(layout.space(4.0))
         .text_size(typography.secondary)
         .font_features(tabular())
-        .when(server.members, |stats| stats.child(Badge::new("Member")))
+        .text_color(theme.muted_foreground)
+        .when(server.members, |stats| stats.child("Members"))
         .child(div().text_color(color).child(players))
         .child(
             div()
-                .w(px(44.0))
+                .w(typography.secondary * 3.5)
                 .flex()
                 .justify_end()
-                .text_color(theme.muted_foreground)
-                .children(server.ping.map(|ping| format!("{} ms", ping.as_millis()))),
+                .whitespace_nowrap()
+                .children(ping.map(|ping| format!("{ping} ms"))),
         )
         .child(Signal::new(
             format!("{} connection", server.name),
-            match server.ping.map(|ping| ping.as_millis()) {
+            match ping {
                 _ if !server.online => 0,
                 Some(0..100) => 3,
                 Some(100..200) => 2,
@@ -167,16 +186,28 @@ fn server_stats(server: &net::Server, theme: &Theme) -> Div {
         ))
 }
 
+#[derive(Clone, Copy)]
+enum Recents<'a> {
+    Removable,
+    Listed,
+    Checked(Option<&'a Path>),
+}
+
 fn script_items(
     this: &WeakEntity<Manager>,
     scripts: &[PathBuf],
     header: &'static str,
-    current: Option<Option<&Path>>,
+    recents: Recents,
     window: &Window,
     cx: &App,
     run: Pick,
 ) -> Vec<MenuItem> {
     let theme = cx.theme();
+    let room = match recents {
+        Recents::Removable => SCRIPT_MENU_WIDTH - REMOVE_SLOT,
+        Recents::Listed => SCRIPT_MENU_WIDTH - CHECK_GUTTER,
+        Recents::Checked(_) => SCRIPT_PICKER_WIDTH - CHECK_GUTTER,
+    } - SCRIPT_ROW_INSET;
     let item = |label: SharedString, script: Option<PathBuf>| {
         let this = this.clone();
         let run = run.clone();
@@ -186,7 +217,7 @@ fn script_items(
         })
     };
     let mut listed: Vec<&Path> = scripts.iter().map(PathBuf::as_path).collect();
-    if let Some(Some(current)) = current
+    if let Recents::Checked(Some(current)) = recents
         && !listed.contains(&current)
     {
         listed.insert(0, current);
@@ -196,21 +227,19 @@ fn script_items(
         items.push(MenuItem::header(header));
         items.extend(listed.into_iter().map(|script| {
             let folder = script.parent().map(home_relative).unwrap_or_default();
-            let hidden = script.to_path_buf();
-            let refresh = this.clone();
             let row = item(script_names::name(script, cx), Some(script.to_path_buf()))
-                .description(fit_path_to(&folder, SCRIPT_PATH_WIDTH, window, theme));
-            let row = if current == Some(Some(script)) {
-                row
-            } else {
-                row.dismiss("Remove from recent", move |_, cx| {
-                    crate::settings::hide_recent_script(hidden.clone(), cx);
-                    refresh.update(cx, |_, cx| cx.notify()).ok();
-                })
-            };
-            match current {
-                Some(current) => row.checked(current == Some(script)),
-                None => row,
+                .description(fit_path_to(&folder, room, window, theme));
+            match recents {
+                Recents::Removable => {
+                    let hidden = script.to_path_buf();
+                    let refresh = this.clone();
+                    row.dismiss("Remove from recent", move |_, cx| {
+                        crate::settings::hide_recent_script(hidden.clone(), cx);
+                        refresh.update(cx, |_, cx| cx.notify()).ok();
+                    })
+                }
+                Recents::Listed => row,
+                Recents::Checked(current) => row.checked(current == Some(script)),
             }
         }));
         items.push(MenuItem::separator());
@@ -276,7 +305,7 @@ fn account_menu(
                 &this,
                 &scripts,
                 "Recent",
-                None,
+                Recents::Removable,
                 window,
                 cx,
                 run_pick(targets.to_vec()),
@@ -429,29 +458,17 @@ impl Manager {
             .collect()
         };
         let tertiary = theme.muted_foreground;
-        let label = {
+        let marked = {
             let theme = theme.clone();
-            move |name: SharedString, statuses: &[Status]| {
-                h_flex()
-                    .min_w_0()
-                    .gap(theme.space(1.5))
-                    .child(div().min_w_0().truncate().child(name))
-                    .children(attention(&theme, statuses))
+            move |tab: Tab, statuses: &[Status]| match attention(&theme, statuses) {
+                Some(mark) => tab.end_slot(mark),
+                None => tab,
             }
         };
-        let count = move |count: usize| {
-            div()
-                .text_caption(typography)
-                .text_color(tertiary)
-                .child(count.to_string())
-        };
         let all_statuses: Rc<[Status]> = base(&mut accounts.iter().map(Account::id)).into();
-        let total = accounts.len();
-        let all_label = label.clone();
+        let all_marked = marked.clone();
         let all = Tabs::new("all-accounts", "Accounts", 1, move |_| {
-            Tab::new("All accounts")
-                .child(all_label("All accounts".into(), &all_statuses))
-                .end_slot(count(total))
+            all_marked(Tab::new("All accounts"), &all_statuses)
         })
         .page_sidebar()
         .small()
@@ -489,23 +506,15 @@ impl Manager {
             let caption = div()
                 .text_caption(typography)
                 .text_color(tertiary)
-                .truncate()
-                .text_ellipsis_start()
-                .child(description.clone());
-            let tab = Tab::new(row.name.clone())
-                .description(description)
-                .child(label(row.name.clone(), &row.statuses))
-                .detail(caption)
-                .end_slot(count(row.statuses.len()))
-                .menu(move |_, _| setup_menu(&this, &menu_name));
-            match &row.script {
-                Some(path) => tab.hover_card(
-                    HoverCard::new(("setup-path", index), row.name.clone())
-                        .placement(Placement::new(Side::Right, Align::Start))
-                        .path_row("Script", path.clone()),
-                ),
-                None => tab,
-            }
+                .child(Marquee::new(("setup-script", index), description.clone()));
+            marked(
+                Tab::new(row.name.clone())
+                    .description(description)
+                    .child(div().truncate().child(row.name.clone()))
+                    .detail(caption)
+                    .menu(move |_, _| setup_menu(&this, &menu_name)),
+                &row.statuses,
+            )
         })
         .page_sidebar()
         .small()
@@ -573,47 +582,92 @@ impl Manager {
             )
     }
 
-    fn filter_buttons(
+    fn filters(
         &self,
         theme: &Theme,
-        filters: &[Filter],
+        filters: &'static [Filter],
         statuses: &[Status],
         compact: bool,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let failed = any_failed(statuses);
-        let total = statuses.len();
-        filters
+    ) -> AnyElement {
+        let ink = status_color(
+            theme,
+            if any_failed(statuses) {
+                Status::Failed
+            } else {
+                Status::NeedsYou
+            },
+        );
+        let quiet = theme.muted_foreground;
+        let shown: Rc<[(Option<Filter>, usize)]> = std::iter::once((None, statuses.len()))
+            .chain(
+                filters
+                    .iter()
+                    .map(|filter| (Some(*filter), count(statuses, *filter)))
+                    .filter(|(filter, count)| *count > 0 || self.filter == *filter),
+            )
+            .collect();
+        let selected = shown
             .iter()
-            .filter_map(|filter| {
-                let count = count(statuses, *filter);
-                let on = self.filter == Some(*filter);
-                if count == 0 && !on {
-                    return None;
-                }
-                let filter = *filter;
-                let label = filter.label(count, total);
-                Some(
+            .position(|(filter, _)| *filter == self.filter)
+            .unwrap_or(0);
+        let name = |filter: Option<Filter>| filter.map_or("All", Filter::name);
+        let tally = move |filter: Option<Filter>, count: usize| {
+            div()
+                .font_features(tabular())
+                .text_color(if filter == Some(Filter::Needs) {
+                    ink
+                } else {
+                    quiet
+                })
+                .child(count.to_string())
+        };
+        let this = cx.weak_entity();
+        if compact {
+            let (current, total) = (shown[selected].0, statuses.len());
+            let all = move |filter: Option<Filter>| filter.map_or("All accounts", Filter::name);
+            return DropdownMenu::new("status-filter")
+                .width(FILTER_MENU_WIDTH)
+                .trigger(
                     Button::new(
-                        SharedString::from(format!("filter-{filter:?}")),
-                        if compact {
-                            filter.short(count, total)
-                        } else {
-                            label.clone()
-                        },
+                        "status-filter-trigger",
+                        current.map_or_else(
+                            || plural(total, "account"),
+                            |filter| filter.name().to_owned(),
+                        ),
                     )
-                    .variant(Variant::Ghost)
-                    .size(Size::XSmall)
-                    .when(compact, |button| button.tooltip(label))
-                    .pressed(on)
-                    .start_slot(dot(theme, filter.tone(failed)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_filter((!on).then_some(filter), cx)
-                    }))
-                    .into_any_element(),
+                    .variant(Variant::Outline)
+                    .shows_value(),
                 )
-            })
-            .collect()
+                .items(move |_, _| {
+                    shown
+                        .iter()
+                        .map(|(filter, count)| {
+                            let this = this.clone();
+                            let filter = *filter;
+                            MenuItem::action(all(filter), move |_, cx| {
+                                this.update(cx, |manager, cx| manager.set_filter(filter, cx))
+                                    .ok();
+                            })
+                            .end_slot(tally(filter, *count))
+                            .checked(filter == current)
+                        })
+                        .collect()
+                })
+                .into_any_element();
+        }
+        let tabs = shown.clone();
+        Tabs::new("status-filter", "Show", shown.len(), move |index| {
+            let (filter, count) = tabs[index];
+            Tab::new(name(filter)).end_slot(tally(filter, count))
+        })
+        .selected(selected)
+        .on_select(move |index, _, cx| {
+            let filter = shown[index].0;
+            this.update(cx, |manager, cx| manager.set_filter(filter, cx))
+                .ok();
+        })
+        .into_any_element()
     }
 
     fn header_row(&self, theme: &Theme) -> Div {
@@ -634,25 +688,12 @@ impl Manager {
         compact: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
         self.header_row(theme)
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_none()
-                            .pr(layout.space(1.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(plural(statuses.len(), "account")),
-                    )
-                    .children(self.filter_buttons(theme, &ROSTER_FILTERS, statuses, compact, cx)),
-            )
+            .child(self.filters(theme, &ROSTER_FILTERS, statuses, compact, cx))
+            .child(div().flex_1())
             .child(
                 Button::new("add-account", "Add account")
-                    .size(Size::Small)
+                    .start_slot(icon(Icon::Plus, theme.secondary_foreground).size(px(14.0)))
                     .disabled(self.accounts.is_err())
                     .on_click(cx.listener(|this, _, _, cx| this.edit(None, cx))),
             )
@@ -667,10 +708,8 @@ impl Manager {
         compact: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let layout = theme.layout;
         let started = cx.global::<Runs>().started(&setup.name);
-        let done = count(statuses, Filter::Done);
-        let complete = !statuses.is_empty() && done == statuses.len();
+        let complete = !statuses.is_empty() && count(statuses, Filter::Done) == statuses.len();
         let when = started.map(|started| {
             let finished = setup
                 .script
@@ -689,81 +728,25 @@ impl Manager {
             }
         });
         let can_stop = !setup_work(setup, &frame.presences).is_empty();
-        let failed = any_failed(statuses);
-        let bar = RUN_FILTERS
-            .iter()
-            .filter_map(|filter| Some((count(statuses, *filter), filter.tone(failed)?)))
-            .fold(
-                SegmentedProgress::new(
-                    "run-bar",
-                    RUN_FILTERS
-                        .iter()
-                        .map(|filter| (count(statuses, *filter), filter))
-                        .filter(|(count, _)| *count > 0)
-                        .map(|(count, filter)| filter.label(count, statuses.len()))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    statuses.len(),
-                ),
-                |bar, (count, tone)| bar.part(count, tone),
-            );
-        v_flex()
-            .flex_none()
+        self.header_row(theme)
+            .child(self.filters(theme, &RUN_FILTERS, statuses, compact, cx))
+            .child(div().flex_1())
             .child(
-                self.header_row(theme)
-                    .child(
-                        h_flex()
-                            .flex_grow(1.0)
-                            .flex_shrink(1.0)
-                            .min_w_0()
-                            .overflow_hidden()
-                            .children(self.filter_buttons(
-                                theme,
-                                &RUN_FILTERS,
-                                statuses,
-                                compact,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        Button::new("edit-setup", "Edit")
-                            .variant(Variant::Ghost)
-                            .size(Size::Small)
-                            .on_click(cx.listener({
-                                let name = setup.name.clone();
-                                move |this, _, window, cx| this.edit_setup(&name, window, cx)
-                            })),
-                    )
-                    .when(can_stop, |row| {
-                        row.child(
-                            Button::new("stop-setup", "Stop")
-                                .variant(Variant::Ghost)
-                                .size(Size::Small)
-                                .on_click(cx.listener(|this, _, _, cx| this.stop_setup(cx))),
-                        )
-                    })
-                    .child(self.start_controls(theme, setup, &frame.scripts, cx)),
-            )
-            .child(
-                h_flex()
-                    .gap(layout.space(3.0))
-                    .px(layout.space(3.0))
-                    .pt(layout.space(1.5))
-                    .pb(layout.space(2.0))
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .min_h(theme.typography.secondary_line)
-                            .child(div().flex_1().child(bar)),
-                    )
-                    .children(when.map(|when| {
-                        div()
-                            .flex_none()
-                            .text_caption(theme.typography)
-                            .text_color(theme.muted_foreground)
-                            .child(when)
+                Button::new("edit-setup", "Edit")
+                    .variant(Variant::Ghost)
+                    .on_click(cx.listener({
+                        let name = setup.name.clone();
+                        move |this, _, window, cx| this.edit_setup(&name, window, cx)
                     })),
             )
+            .when(can_stop, |row| {
+                row.child(
+                    Button::new("stop-setup", "Stop")
+                        .variant(Variant::Ghost)
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_setup(cx))),
+                )
+            })
+            .child(self.start_controls(theme, setup, &frame.scripts, when, cx))
     }
 
     fn start_controls(
@@ -771,6 +754,7 @@ impl Manager {
         theme: &Theme,
         setup: &Setup,
         scripts: &[PathBuf],
+        when: Option<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let this = cx.weak_entity();
@@ -782,6 +766,9 @@ impl Manager {
         let empty = setup.members.is_empty();
         let items = move |window: &mut Window, cx: &mut App| {
             let mut items = Vec::new();
+            if let Some(when) = &when {
+                items.push(MenuItem::header(when.clone()));
+            }
             if started && current.is_some() {
                 let this = this.clone();
                 let name = name.clone();
@@ -793,22 +780,26 @@ impl Manager {
                 }));
                 items.push(MenuItem::separator());
             }
-            let start_name = name.clone();
-            let pick: Pick = Rc::new(move |manager, script, window, cx| match script {
-                Some(script) => manager.start_with(&start_name, script, cx),
-                None => manager.choose_start(start_name.clone(), window, cx),
-            });
-            items.extend(script_items(
-                &this,
-                &scripts,
-                "Start with",
-                Some(current.as_deref()),
-                window,
-                cx,
-                pick,
-            ));
-            items.push(MenuItem::separator());
-            items.push(MenuItem::header("Window"));
+            if current.is_none() {
+                let start_name = name.clone();
+                let pick: Pick = Rc::new(move |manager, script, window, cx| match script {
+                    Some(script) => manager.start_with(&start_name, script, cx),
+                    None => manager.choose_start(start_name.clone(), window, cx),
+                });
+                if scripts.is_empty() {
+                    items.push(MenuItem::header("Start with"));
+                }
+                items.extend(script_items(
+                    &this,
+                    &scripts,
+                    "Start with",
+                    Recents::Listed,
+                    window,
+                    cx,
+                    pick,
+                ));
+                items.push(MenuItem::separator());
+            }
             let toggle = |label: &'static str, on: bool, edit: fn(&mut crate::setups::Launch)| {
                 let this = this.clone();
                 let name = name.clone();
@@ -819,6 +810,7 @@ impl Manager {
                 .checked(on)
                 .keep_open()
             };
+            items.push(MenuItem::header("Window"));
             items.push(toggle(
                 "Open in a new window",
                 launch.new_window,
@@ -833,7 +825,6 @@ impl Manager {
             let trigger = match label {
                 Some(label) => Button::new("start-with-trigger", label)
                     .variant(Variant::Primary)
-                    .size(Size::Small)
                     .end_slot(small_icon(Icon::ChevronDown, theme.primary_foreground)),
                 None => Button::icon(
                     "start-with-trigger",
@@ -841,7 +832,6 @@ impl Manager {
                     "More ways to start",
                 )
                 .variant(Variant::Primary)
-                .size(Size::Small)
                 .joined(Joined::Previous),
             };
             DropdownMenu::new("start-with")
@@ -880,7 +870,6 @@ impl Manager {
             .child(
                 Button::new("start-setup", label)
                     .variant(Variant::Primary)
-                    .size(Size::Small)
                     .joined(Joined::Next)
                     .flex_shrink(1.0)
                     .min_w(START_MIN_WIDTH)
@@ -920,7 +909,7 @@ impl Manager {
         let current = setup.script.clone();
         let scripts = scripts.to_vec();
         let script_menu = DropdownMenu::new("setup-script")
-            .width(SCRIPT_MENU_WIDTH)
+            .width(SCRIPT_PICKER_WIDTH)
             .max_height(px(360.0))
             .trigger(
                 Button::new(
@@ -962,7 +951,7 @@ impl Manager {
                     &this,
                     &scripts,
                     "Recent",
-                    Some(current.as_deref()),
+                    Recents::Checked(current.as_deref()),
                     window,
                     cx,
                     pick,
@@ -1071,87 +1060,51 @@ impl Manager {
         let focused = self.cursor.as_ref() == Some(&id)
             && self.focus.is_focused(window)
             && mira_ui::nav::keyboard_input(window, cx);
-        let in_setup = self.setup().is_some();
+        let presence = frame.presences.get(&id);
+        let open = presence.is_some_and(Presence::opened);
         let items = account_menu(
             cx.weak_entity(),
             account.clone(),
-            frame.presences.get(&id).cloned(),
+            presence.cloned(),
             frame.scripts.clone(),
-            in_setup,
+            self.setup().is_some(),
         );
         let more_items = items.clone();
-        let more_id = SharedString::from(format!("card-more-{}", account.username));
+        let tint = theme
+            .primary
+            .opacity(if theme.dark_mode { 0.1 } else { 0.05 });
         let surface = if checked {
-            theme.background.blend(
-                theme
-                    .primary
-                    .opacity(if theme.dark_mode { 0.1 } else { 0.05 }),
-            )
+            theme.background.blend(tint)
         } else {
             theme.card
         };
-        let more = DropdownMenu::new(more_id)
-            .align(Align::End)
-            .trigger(
-                Button::icon(
-                    SharedString::from(format!("card-more-trigger-{}", account.username)),
-                    Icon::Ellipsis,
-                    format!("Account actions for {}", account.name),
-                )
-                .size(Size::XSmall)
-                .hide_tooltip(),
+        let more = DropdownMenu::new(SharedString::from(format!(
+            "card-more-{}",
+            account.username
+        )))
+        .align(Align::End)
+        .trigger(
+            Button::icon(
+                SharedString::from(format!("card-more-trigger-{}", account.username)),
+                Icon::Ellipsis,
+                format!("Account actions for {}", account.name),
             )
-            .items(move |window, cx| more_items(window, cx));
-        let reveal = |slot: Div, shown: bool| {
-            if shown {
+            .size(Size::XSmall)
+            .hide_tooltip(),
+        )
+        .items(move |window, cx| more_items(window, cx));
+        let reveal = |slot: Div| {
+            if focused {
                 slot
             } else {
                 slot.invisible()
                     .group_hover(CARD_GROUP, |slot| slot.visible())
             }
         };
-        let badge = Badge::new(card.status.label()).tone(card.status.tone());
-        let badge = if card.state.as_ref() == card.status.label() {
-            badge.into_any_element()
-        } else {
-            div()
-                .flex_none()
-                .child(Tooltip::new(
-                    SharedString::from(format!("card-state-{}", account.username)),
-                    card.state.clone(),
-                    badge,
-                ))
-                .into_any_element()
-        };
-        let row = |glyph: Icon, label: &'static str, body: AnyElement| {
-            h_flex()
-                .min_w_0()
-                .h(px(20.0))
-                .gap(layout.space(2.0))
-                .child(
-                    div()
-                        .id(label)
-                        .role(Role::Image)
-                        .aria_label(label)
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .child(icon(glyph, theme.muted_foreground).size(px(12.0))),
-                )
-                .child(body)
-        };
-        let text = |line: &Line| {
-            div()
-                .min_w_0()
-                .truncate()
-                .text_caption(typography)
-                .text_color(mood_color(theme, line.mood))
-                .child(line.text.clone())
-        };
+        let fix = card.status.needs_you();
         let action = card.action.map(|action| {
             let target = account.clone();
-            let fix = card.status.needs_you();
-            let button = Button::new(
+            Button::new(
                 SharedString::from(format!("card-action-{}", account.username)),
                 action.label(),
             )
@@ -1161,49 +1114,25 @@ impl Manager {
                 Variant::Ghost
             })
             .size(Size::XSmall)
-            .on_click(cx.listener(move |this, _, _, cx| match action {
-                Action::EditLogin => this.edit(Some(&target), cx),
-                Action::Restart => this.restart(&target, cx),
-                Action::LogIn | Action::Launch => this.launch(vec![target.clone()], cx),
-                Action::Show => this.show_account(target.clone(), cx),
-                Action::Stop => this.stop(vec![target.clone()], cx),
-            }));
-            (button, fix)
+            .on_click(cx.listener(move |this, _, _, cx| this.perform(action, &target, cx)))
         });
-        let time = match &card.job {
-            Job::Line(line) => line.time.clone().map(|time| {
-                div()
-                    .flex_none()
-                    .text_caption(typography)
-                    .font_features(tabular())
-                    .text_color(theme.muted_foreground)
-                    .child(time)
-            }),
-            Job::Loading(_) => None,
+        let (pinned, quick) = if fix { (action, None) } else { (None, action) };
+        let text = |line: &Line| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(mood_color(theme, line.mood))
+                .child(line.text.clone())
         };
-        let end = match (action, time) {
-            (Some((button, true)), _) => Some(div().flex_none().child(button)),
-            (Some((button, false)), Some(time)) => Some(
-                div()
-                    .relative()
-                    .flex_none()
-                    .min_w(QUICK_ACTION_ROOM)
-                    .flex()
-                    .justify_end()
-                    .child(if focused {
-                        time.invisible()
-                    } else {
-                        time.group_hover(CARD_GROUP, |time| time.invisible())
-                    })
-                    .child(reveal(div().absolute().top(px(-2.0)).right_0(), focused).child(button)),
-            ),
-            (Some((button, false)), None) => Some(reveal(div().flex_none(), focused).child(button)),
-            (None, time) => time,
+        let aside = |text: SharedString| {
+            div()
+                .flex_none()
+                .font_features(tabular())
+                .text_color(theme.muted_foreground)
+                .child(text)
         };
         let job = match &card.job {
             Job::Loading(Some(percent)) => h_flex()
-                .flex_1()
-                .min_w_0()
                 .gap(layout.space(2.0))
                 .child(
                     div().flex_1().child(
@@ -1215,24 +1144,10 @@ impl Manager {
                         .part(usize::from(*percent), Tone::Success),
                     ),
                 )
-                .child(
-                    div()
-                        .text_caption(typography)
-                        .font_features(tabular())
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{percent}%")),
-                ),
-            Job::Loading(None) => h_flex().flex_1().min_w_0().child(text(&Line {
-                text: "Loading".into(),
-                mood: Mood::Quiet,
-                path: None,
-                detail: None,
-                time: None,
-            })),
+                .child(aside(format!("{percent}%").into())),
+            Job::Loading(None) => h_flex().child(aside("Loading".into())),
             Job::Line(line) => h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap(layout.space(1.5))
+                .gap(layout.space(2.0))
                 .child({
                     let id = SharedString::from(format!("card-line-{}", account.username));
                     match (&line.detail, &line.path) {
@@ -1259,9 +1174,25 @@ impl Manager {
                 })
                 .when(line.path.is_none() && line.detail.is_none(), |row| {
                     row.child(div().flex_1())
-                }),
-        }
-        .children(end);
+                })
+                .children(line.time.clone().map(aside)),
+        };
+        let status = div()
+            .flex_none()
+            .text_caption(typography)
+            .text_color(status_color(theme, card.status))
+            .child(card.status.label());
+        let line = typography.secondary_line + px(2.0);
+        let blank =
+            matches!(&card.job, Job::Line(line) if line.text.is_empty() && line.time.is_none());
+        let fact = |glyph: Icon, label: &'static str, body: Div| {
+            h_flex()
+                .min_w_0()
+                .h(line)
+                .gap(layout.space(1.5))
+                .child(fact_icon(theme, glyph, label))
+                .child(body)
+        };
         let clicked = id.clone();
         let element = v_flex()
             .id(SharedString::from(format!("account-{}", account.username)))
@@ -1269,24 +1200,21 @@ impl Manager {
             .relative()
             .h_full()
             .min_w_0()
-            .gap(layout.space(1.5))
-            .px(layout.space(3.0))
-            .pt(layout.space(2.5))
-            .pb(layout.space(2.0))
-            .rounded(theme.radius.panel)
+            .min_h(card_height(theme))
+            .gap(layout.space(1.0))
+            .p(layout.space(3.0))
+            .rounded(theme.radius.control)
             .border_1()
             .map(|card| {
                 if checked {
-                    card.border_color(theme.primary)
-                        .bg(theme
-                            .primary
-                            .opacity(if theme.dark_mode { 0.1 } else { 0.05 }))
+                    card.border_color(theme.ring).bg(tint)
                 } else {
                     card.border_color(theme.surface_edge()).bg(theme.card)
                 }
             })
             .role(Role::CheckBox)
             .aria_label(account.name.clone())
+            .aria_description(card.state.clone())
             .aria_toggled(if checked {
                 Toggled::True
             } else {
@@ -1299,67 +1227,74 @@ impl Manager {
             .child(
                 h_flex()
                     .min_w_0()
+                    .h(typography.body_line)
                     .gap(layout.space(2.0))
-                    .child(Checkbox::indicator(
-                        if checked {
-                            CheckedState::Checked
-                        } else {
-                            CheckedState::Unchecked
-                        },
-                        theme,
-                    ))
                     .child(
                         div()
+                            .flex_1()
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
+                            .when(!open, |name| name.text_color(theme.muted_foreground))
                             .child(account.name.clone()),
                     )
-                    .child(badge),
+                    .child(status),
             )
             .child(
                 v_flex()
                     .min_w_0()
-                    .child(row(Icon::FileCode, "Script", job.into_any_element()))
-                    .child(row(
-                        Icon::MapPin,
-                        "Location",
-                        text(&card.place).into_any_element(),
-                    ))
-                    .child(row(
-                        Icon::User,
-                        "Character",
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_caption(typography)
-                            .text_color(if card.who.is_some() {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .child(card.who.clone().unwrap_or_else(|| "—".into()))
-                            .into_any_element(),
-                    )),
+                    .text_size(typography.secondary)
+                    .line_height(line)
+                    .flex_1()
+                    .when(!blank, |facts| {
+                        let (glyph, label) = match card.about() {
+                            About::Script => (Icon::FileCode, "Script"),
+                            About::Login => (Icon::LogIn, "Login"),
+                        };
+                        facts.child(fact(glyph, label, job.flex_1().min_w_0()))
+                    })
+                    .when(!card.place.text.is_empty(), |facts| {
+                        facts.child(fact(Icon::MapPin, "Location", text(&card.place)))
+                    })
+                    .when(card.who.is_some() || pinned.is_some(), |facts| {
+                        facts.child(
+                            h_flex()
+                                .min_w_0()
+                                .h(line)
+                                .gap(layout.space(2.0))
+                                .when(card.who.is_none(), |row| row.mt_auto())
+                                .child(div().flex_1().min_w_0().children(card.who.clone().map(
+                                    |who| {
+                                        fact(
+                                            Icon::User,
+                                            "Character",
+                                            div().min_w_0().truncate().child(who),
+                                        )
+                                    },
+                                )))
+                                .children(pinned),
+                        )
+                    }),
             )
             .child(
                 reveal(
-                    div()
+                    h_flex()
                         .absolute()
-                        .top(layout.space(2.5))
+                        .top(layout.space(3.0))
                         .right(layout.space(2.0))
+                        .gap(px(2.0))
                         .pl(layout.space(5.0))
                         .bg(gpui::linear_gradient(
                             90.0,
                             gpui::linear_color_stop(surface.opacity(0.0), 0.0),
-                            gpui::linear_color_stop(surface, 0.5),
+                            gpui::linear_color_stop(surface, 0.4),
                         )),
-                    focused,
                 )
+                .children(quick)
                 .child(more),
             )
             .when(focused, |card| {
-                card.child(theme.ring_around(theme.ring, theme.radius.panel, px(1.0)))
+                card.child(theme.ring_around(theme.ring, theme.radius.control, px(1.0)))
             });
         ContextMenu::new(
             SharedString::from(format!("account-menu-{}", account.username)),
@@ -1368,6 +1303,16 @@ impl Manager {
         .items(move |window, cx| items(window, cx))
         .child(element)
         .into_any_element()
+    }
+
+    fn perform(&mut self, action: Action, target: &Account, cx: &mut Context<Self>) {
+        match action {
+            Action::EditLogin => self.edit(Some(target), cx),
+            Action::Restart => self.restart(target, cx),
+            Action::LogIn | Action::Launch => self.launch(vec![target.clone()], cx),
+            Action::Show => self.show_account(target.clone(), cx),
+            Action::Stop => self.stop(vec![target.clone()], cx),
+        }
     }
 
     fn edit_grid(
@@ -1442,11 +1387,12 @@ impl Manager {
                 let typography = theme.typography;
                 let (account, card) = &cards[index];
                 let current = cursor.as_ref() == Some(&account.id());
+                let height = typography.secondary_line + px(2.0);
                 let line = |glyph: Icon, label: &'static str, value: SharedString, quiet: bool| {
                     h_flex()
                         .min_w_0()
-                        .h(px(20.0))
-                        .gap(theme.space(2.0))
+                        .h(height)
+                        .gap(theme.space(1.5))
                         .child(
                             div()
                                 .id(label)
@@ -1459,7 +1405,7 @@ impl Manager {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_caption(typography)
+                                .text_size(typography.secondary)
                                 .text_color(if quiet {
                                     theme.muted_foreground
                                 } else {
@@ -1472,36 +1418,34 @@ impl Manager {
                     .id(index)
                     .relative()
                     .w(card_width)
-                    .h_full()
-                    .gap(theme.space(1.5))
-                    .px(theme.space(3.0))
-                    .pt(theme.space(2.5))
-                    .pb(theme.space(2.0))
-                    .rounded(theme.radius.panel)
+                    .min_h(
+                        theme.space(3.0) * 2.0
+                            + theme.space(1.0)
+                            + typography.body_line
+                            + height * 2.0,
+                    )
+                    .gap(theme.space(1.0))
+                    .p(theme.space(3.0))
+                    .rounded(theme.radius.control)
                     .bg(theme.card)
                     .cursor_grab()
                     .when(pose == Pose::Lifted, |card| {
                         card.shadow(theme.popup_shadow())
                     })
-                    .child(theme.surface_ring(theme.radius.panel))
+                    .child(theme.surface_ring(theme.radius.control))
                     .role(Role::ListItem)
                     .aria_label(format!("{}, {} of {count}", account.name, index + 1))
                     .child(
                         h_flex()
                             .min_w_0()
-                            .h(px(20.0))
-                            .gap(theme.space(2.0))
+                            .h(typography.body_line)
+                            .gap(theme.space(1.5))
+                            .child(div().flex_none().child(
+                                icon(Icon::GripVertical, theme.muted_foreground).size(px(12.0)),
+                            ))
                             .child(
                                 div()
-                                    .flex_none()
-                                    .size(theme.layout.check)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(icon(Icon::GripVertical, theme.muted_foreground)),
-                            )
-                            .child(
-                                div()
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .font_weight(FontWeight::MEDIUM)
@@ -1510,25 +1454,17 @@ impl Manager {
                     )
                     .child(
                         v_flex()
-                            .child(line(
-                                Icon::Server,
-                                "Login server",
-                                account
-                                    .server
+                            .children(account.server.clone().map(|server| {
+                                line(Icon::Server, "Login server", server.into(), true)
+                            }))
+                            .children(
+                                card.who
                                     .clone()
-                                    .unwrap_or_else(|| CHOOSE_IN_GAME.into())
-                                    .into(),
-                                true,
-                            ))
-                            .child(line(
-                                Icon::User,
-                                "Character",
-                                card.who.clone().unwrap_or_else(|| "—".into()),
-                                card.who.is_none(),
-                            )),
+                                    .map(|who| line(Icon::User, "Character", who, false)),
+                            ),
                     )
                     .when(current, |card| {
-                        card.child(theme.ring_around(theme.ring, theme.radius.panel, px(1.0)))
+                        card.child(theme.ring_around(theme.ring, theme.radius.control, px(1.0)))
                     })
                     .into_any_element()
             },
@@ -1593,7 +1529,15 @@ impl Manager {
             .max_height(px(320.0))
             .trigger(menu_button("run-selected-trigger", "Run script"))
             .items(move |window, cx| {
-                script_items(&this, &scripts, "Recent", None, window, cx, run.clone())
+                script_items(
+                    &this,
+                    &scripts,
+                    "Recent",
+                    Recents::Removable,
+                    window,
+                    cx,
+                    run.clone(),
+                )
             });
         let launchable = selected
             .iter()
@@ -1786,11 +1730,10 @@ impl Manager {
         });
         let server = DropdownMenu::new("account-server")
             .max_height(px(320.0))
-            .width(SERVER_MENU_WIDTH)
             .trigger(
                 Button::new(
                     "account-server-trigger",
-                    current.clone().unwrap_or_else(|| CHOOSE_IN_GAME.into()),
+                    current.clone().unwrap_or_else(|| NO_SERVER.into()),
                 )
                 .variant(Variant::Outline)
                 .w_full()
@@ -1803,7 +1746,12 @@ impl Manager {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .child(current.clone().unwrap_or_else(|| CHOOSE_IN_GAME.into())),
+                                .when(current.is_none(), |label| {
+                                    label
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(theme.muted_foreground)
+                                })
+                                .child(current.clone().unwrap_or_else(|| NO_SERVER.into())),
                         )
                         .child(div().flex_1())
                         .children(stats)
@@ -2076,7 +2024,12 @@ impl Render for Manager {
                 .is_some_and(|editing| editing.setup == setup.name)
         });
         let statuses: Vec<Status> = frame.cards.iter().map(|(_, card)| card.status).collect();
-        let compact = window.viewport_size().width - layout.sidebar < COMPACT_HEADER;
+        let compact = window.viewport_size().width - layout.sidebar
+            < if setup.is_some() {
+                COMPACT_RUN
+            } else {
+                COMPACT_ROSTER
+            };
         let ticking = setup
             .as_ref()
             .is_some_and(|setup| cx.global::<Runs>().started(&setup.name).is_some())

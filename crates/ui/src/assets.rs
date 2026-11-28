@@ -22,6 +22,7 @@ impl AssetSource for Assets {
             "icons/spinner-arc.svg" => include_str!("../assets/icons/spinner-arc.svg"),
             "icons/grip-vertical.svg" => include_str!("../assets/icons/lucide/grip-vertical.svg"),
             "icons/file-code.svg" => include_str!("../assets/icons/lucide/file-code.svg"),
+            "icons/log-in.svg" => include_str!("../assets/icons/lucide/log-in.svg"),
             "icons/map-pin.svg" => include_str!("../assets/icons/lucide/map-pin.svg"),
             "icons/server.svg" => include_str!("../assets/icons/lucide/server.svg"),
             "icons/user.svg" => include_str!("../assets/icons/lucide/user.svg"),

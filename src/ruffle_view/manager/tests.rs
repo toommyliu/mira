@@ -23,26 +23,31 @@ use crate::{
 };
 
 const ROSTER: [(&str, &str, u32, &str); 10] = [
-    ("wildfox", "Twig", 100, "ArchPaladin"),
-    ("xyrafin", "Twig", 100, "Legion Revenant"),
-    ("kestrel", "Twig", 100, "Void Highlord"),
-    ("marble", "Twig", 97, "Verus DoomKnight"),
-    ("lamplight7", "Twig", 100, "Lord Of Order"),
-    ("sorrel", "Twig", 88, "Chaos Avenger"),
-    ("notwildfox", "Twig", 100, "Dragon of Time"),
-    ("forest of tall pines", "Twig", 64, "Chrono ShadowHunter"),
-    ("amber", "", 100, "Blaze Binder"),
-    ("burner", "Twig", 12, "Rogue"),
+    ("main", "Twig", 100, "ArchPaladin"),
+    ("alt1", "Twig", 100, "Legion Revenant"),
+    ("alt2", "Twig", 100, "Void Highlord"),
+    ("alt3", "Twig", 97, "Verus DoomKnight"),
+    ("alt4", "Twig", 100, "Lord Of Order"),
+    ("alt5", "Twig", 88, "Chaos Avenger"),
+    ("alt6", "Twig", 100, "Dragon of Time"),
+    (
+        "account with a long name",
+        "Twig",
+        64,
+        "Chrono ShadowHunter",
+    ),
+    ("alt7", "", 100, "Blaze Binder"),
+    ("alt8", "Twig", 12, "Rogue"),
 ];
 const DAILY: [&str; 8] = [
-    "wildfox",
-    "kestrel",
-    "sorrel",
-    "notwildfox",
-    "xyrafin",
-    "lamplight7",
-    "marble",
-    "forestoftallpines",
+    "main",
+    "alt2",
+    "alt5",
+    "alt6",
+    "alt1",
+    "alt4",
+    "alt3",
+    "accountwithalongname",
 ];
 
 fn script(name: &str) -> PathBuf {
@@ -133,17 +138,17 @@ fn fake(scene: Scene, now: Instant) -> (Fake, Option<Instant>) {
             };
             presences.extend([
                 (
-                    id("wildfox"),
-                    online("wildfox", "yulgar", "Enter", Some(running(14))),
+                    id("main"),
+                    online("main", "yulgar", "Enter", Some(running(14))),
                 ),
                 (
-                    id("kestrel"),
-                    online("kestrel", "darkoviaforest", "r1", Some(running(9))),
+                    id("alt2"),
+                    online("alt2", "darkoviaforest", "r1", Some(running(9))),
                 ),
                 (
-                    id("notwildfox"),
+                    id("alt6"),
                     online(
-                        "notwildfox",
+                        "alt6",
                         "battleon",
                         "Enter",
                         Some(ended(
@@ -154,34 +159,33 @@ fn fake(scene: Scene, now: Instant) -> (Fake, Option<Instant>) {
                     ),
                 ),
                 (
-                    id("xyrafin"),
+                    id("alt1"),
                     online(
-                        "xyrafin",
+                        "alt1",
                         "tercessuinotlim",
                         "m2",
                         Some(ended("daily.ts", ScriptPhase::NeedsInput, minutes(11))),
                     ),
                 ),
-                (id("burner"), online("burner", "battleon", "Enter", None)),
+                (id("alt8"), online("alt8", "battleon", "Enter", None)),
                 (
-                    id("sorrel"),
+                    id("alt5"),
                     signing_in(Login::Failed("login didn't reach server selection".into())),
                 ),
-                (id("marble"), signing_in(Login::Loading(Some(46)))),
+                (id("alt3"), signing_in(Login::Loading(Some(46)))),
                 (
-                    id("forestoftallpines"),
+                    id("accountwithalongname"),
                     Presence::Waiting {
-                        place: 1,
                         script: Some(waiting("daily.ts")),
                         open: None,
                     },
                 ),
                 (
-                    id("lamplight7"),
+                    id("alt4"),
                     Presence::Closed(Some(ended("daily.ts", ScriptPhase::Finished, minutes(20)))),
                 ),
             ]);
-            finished.insert(id("lamplight7"), minutes(20));
+            finished.insert(id("alt4"), minutes(20));
             Some(minutes(32))
         }
         Scene::Done => {
@@ -239,7 +243,7 @@ fn write_accounts(dir: &std::path::Path) -> PathBuf {
                 {
                     "name": "Warlord farm",
                     "script": script("warlord.ts"),
-                    "members": [{ "username": "wildfox" }, { "username": "kestrel" }],
+                    "members": [{ "username": "main" }, { "username": "alt2" }],
                     "launch": { "newWindow": true, "grid": true },
                 },
             ],
@@ -277,6 +281,32 @@ fn hover_at(x: f32, y: f32) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyW
             cx.run_until_parked();
         }
         cx.advance_clock(Duration::from_secs(1));
+    }
+}
+
+fn click_at(x: f32, y: f32) -> impl Fn(&mut gpui::HeadlessAppContext, gpui::AnyWindowHandle) {
+    move |cx, owner| {
+        let position = gpui::point(px(x), px(y));
+        cx.update_window(owner, |_, window, cx| {
+            for event in [
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    position,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                }),
+                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    position,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                }),
+            ] {
+                window.dispatch_event(event, cx);
+            }
+        })
+        .unwrap();
+        cx.run_until_parked();
     }
 }
 
@@ -350,6 +380,14 @@ fn snapshot_a_setup_before_during_and_after_a_run() {
         Some("Daily"),
         |_, _, _| {},
     );
+    shoot_with(
+        "manager-start-menu",
+        opening(),
+        Scene::MidRun,
+        Some("Daily"),
+        click_at(975.0, 62.0),
+        |manager, _, cx| manager.set_launch("Daily", |launch| launch.grid = true, cx),
+    );
     shoot(
         "manager-done",
         opening(),
@@ -374,7 +412,7 @@ fn snapshot_manager_hover_states() {
         size(px(720.0), px(420.0)),
         Scene::MidRun,
         None,
-        hover_at(265.0, 129.0),
+        hover_at(262.0, 122.0),
         |_, _, _| {},
     );
     shoot_with(
@@ -382,7 +420,7 @@ fn snapshot_manager_hover_states() {
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        hover_at(280.0, 269.0),
+        hover_at(270.0, 249.0),
         |_, _, _| {},
     );
     shoot_with(
@@ -390,7 +428,7 @@ fn snapshot_manager_hover_states() {
         opening(),
         Scene::MidRun,
         Some("Daily"),
-        hover_at(600.0, 400.0),
+        hover_at(600.0, 350.0),
         |_, _, _| {},
     );
     shoot_with(
@@ -446,7 +484,7 @@ fn snapshot_manager_hover_states() {
         hover_at(975.0, 18.0),
         |manager, window, cx| {
             manager.search.update(cx, |search, cx| {
-                search.set_text("wildfox", cx);
+                search.set_text("main", cx);
                 search.focus_handle(cx).focus(window, cx);
             });
         },
@@ -462,8 +500,8 @@ fn snapshot_editing_a_setup() {
         None,
         |manager, window, cx| {
             manager.view = View::Setup("Daily".into());
-            manager.cursor = Some(id("wildfox"));
-            manager.checked.insert(id("wildfox"));
+            manager.cursor = Some(id("main"));
+            manager.checked.insert(id("main"));
             manager.edit_setup("Daily", window, cx)
         },
     );
@@ -472,9 +510,7 @@ fn snapshot_editing_a_setup() {
 #[test]
 fn snapshot_a_selection_at_opening_and_minimum_size() {
     let select = |manager: &mut Manager, _: &mut Window, _: &mut Context<Manager>| {
-        manager
-            .checked
-            .extend(["wildfox", "kestrel", "burner"].map(id));
+        manager.checked.extend(["main", "alt2", "alt8"].map(id));
     };
     shoot("manager-selected", opening(), Scene::MidRun, None, select);
     shoot(
@@ -501,7 +537,7 @@ fn snapshot_every_confirmation() {
         Scene::MidRun,
         Some("Daily"),
         |manager, _, cx| {
-            let targets = accounts(manager, &["kestrel", "wildfox"]);
+            let targets = accounts(manager, &["alt2", "main"]);
             manager.run(targets, script("hunt.ts"), cx)
         },
     );
@@ -513,9 +549,9 @@ fn snapshot_every_confirmation() {
         |manager, _, cx| {
             if let Some(fake) = &mut manager.fake {
                 fake.presences.insert(
-                    id("wildfox"),
+                    id("main"),
                     online(
-                        "wildfox",
+                        "main",
                         "yulgar",
                         "Enter",
                         Some(ended("hunt.ts", ScriptPhase::Running, Instant::now())),
@@ -531,7 +567,7 @@ fn snapshot_every_confirmation() {
         Scene::MidRun,
         None,
         |manager, _, cx| {
-            let targets = accounts(manager, &["kestrel", "xyrafin", "burner"]);
+            let targets = accounts(manager, &["alt2", "alt1", "alt8"]);
             manager.close(targets, cx)
         },
     );
@@ -555,14 +591,45 @@ fn snapshot_every_confirmation() {
         Scene::MidRun,
         None,
         |manager, _, cx| {
-            let kestrel = accounts(manager, &["kestrel"]).remove(0);
+            let alt2 = accounts(manager, &["alt2"]).remove(0);
             manager.servers.list = vec![
                 crate::net::Server::sample("Twilly", 846, 1000, 59),
                 crate::net::Server::sample("Twig", 451, 1000, 57),
                 crate::net::Server::sample("Swordhaven (EU)", 172, 1000, 161),
             ];
             manager.servers.check = super::Check::Done(Instant::now());
-            manager.edit(Some(&kestrel), cx)
+            manager.edit(Some(&alt2), cx)
+        },
+    );
+    shoot_with(
+        "manager-server-menu",
+        opening(),
+        Scene::MidRun,
+        None,
+        click_at(500.0, 373.0),
+        |manager, _, cx| {
+            let alt2 = accounts(manager, &["alt2"]).remove(0);
+            let mut members = crate::net::Server::sample("Sir Ver", 1000, 1000, 240);
+            members.members = true;
+            let mut offline = crate::net::Server::sample("Galanoth", 0, 1000, 0);
+            offline.online = false;
+            offline.ping = None;
+            manager.servers.list = vec![
+                crate::net::Server::sample("Twilly", 846, 1000, 59),
+                crate::net::Server::sample("Twig", 451, 1000, 57),
+                crate::net::Server::sample("Swordhaven (EU)", 172, 1000, 161),
+                members,
+                offline,
+                crate::net::Server::sample("Artix", 990, 1000, 61),
+                crate::net::Server::sample("Alteon", 8, 1000, 63),
+                crate::net::Server::sample("Espada", 54, 1000, 60),
+                crate::net::Server::sample("Gravelyn", 120, 1000, 64),
+                crate::net::Server::sample("Safiria", 77, 1000, 58),
+                crate::net::Server::sample("Sepulchure", 301, 1000, 62),
+                crate::net::Server::sample("Yorumi", 412, 1000, 1204),
+            ];
+            manager.servers.check = super::Check::Done(Instant::now());
+            manager.edit(Some(&alt2), cx)
         },
     );
 }
@@ -596,7 +663,6 @@ fn snapshot_every_card_state() {
         (
             "queued-to-log-in",
             Presence::Waiting {
-                place: 2,
                 script: Some(waiting("daily.ts")),
                 open: None,
             },
@@ -637,7 +703,7 @@ fn snapshot_every_card_state() {
         (
             "script-failed",
             playing(daily(
-                ScriptPhase::Failed("couldn't join house-73675086, the room is full".into()),
+                ScriptPhase::Failed("couldn't join house-12345678, the room is full".into()),
                 minutes(1),
             )),
         ),
@@ -733,57 +799,39 @@ fn open_manager<'a>(
 }
 
 #[gpui::test]
-fn setup_rows_preview_paths_on_hover_and_switch_on_click(cx: &mut gpui::TestAppContext) {
+fn setup_rows_switch_on_click_and_script_lines_preview_their_paths(cx: &mut gpui::TestAppContext) {
     let (manager, cx, dir) = open_manager("setup-row-hover", View::All, cx);
     cx.simulate_resize(size(px(720.0), px(420.0)));
     cx.update(|_, cx| cx.set_reduce_motion(true));
     cx.run_until_parked();
     let mods = gpui::Modifiers::none();
-    let account_script = gpui::point(px(265.0), px(129.0));
+    let account_script = gpui::point(px(262.0), px(122.0));
     cx.simulate_mouse_move(account_script, None, mods);
     cx.run_until_parked();
-    assert!(cx.debug_bounds("card-line-wildfox-card").is_none());
+    assert!(cx.debug_bounds("card-line-main-card").is_none());
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert!(cx.debug_bounds("card-line-wildfox-card").is_some());
+    assert!(cx.debug_bounds("card-line-main-card").is_some());
     cx.simulate_mouse_move(gpui::point(px(8.0), px(300.0)), None, mods);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    let daily_name = gpui::point(px(32.0), px(116.0));
-    cx.simulate_mouse_move(daily_name, None, mods);
-    cx.simulate_click(daily_name, mods);
-    cx.executor().advance_clock(Duration::from_secs(1));
+
+    let daily_path = gpui::point(px(100.0), px(136.0));
+    cx.simulate_mouse_move(daily_path, None, mods);
+    cx.simulate_click(daily_path, mods);
     cx.run_until_parked();
     assert!(manager.read_with(cx, |m, _| m.view == View::Setup("Daily".into())));
-    assert!(cx.debug_bounds("setup-path-0-card").is_none());
 
     let warlord_padding = gpui::point(px(175.0), px(180.0));
     cx.simulate_mouse_move(warlord_padding, None, mods);
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("setup-path-1-card").is_none());
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("setup-path-1-card").is_some());
     cx.simulate_click(warlord_padding, mods);
     cx.run_until_parked();
     assert!(manager.read_with(cx, |m, _| m.view == View::Setup("Warlord farm".into())));
-    assert!(cx.debug_bounds("setup-path-1-card").is_none());
 
     let daily_actions = gpui::point(px(184.0), px(115.0));
     cx.simulate_mouse_move(daily_actions, None, mods);
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("setup-path-0-card").is_some());
     cx.simulate_click(daily_actions, mods);
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("setup-path-0-card").is_none(),
-        "opening the actions menu dismisses the preview"
-    );
-    cx.executor().advance_clock(Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("setup-path-0-card").is_none());
     let edit = gpui::point(px(225.0), px(148.0));
     cx.simulate_mouse_move(edit, None, mods);
     cx.simulate_click(edit, mods);
@@ -851,22 +899,20 @@ fn stopping_a_script_names_it_by_its_meta(cx: &mut gpui::TestAppContext) {
             ..ScriptState::queued(&hunt, cx)
         };
         if let Some(fake) = &mut manager.fake {
-            fake.presences.insert(
-                id("wildfox"),
-                online("wildfox", "yulgar", "Enter", Some(running)),
-            );
+            fake.presences
+                .insert(id("main"), online("main", "yulgar", "Enter", Some(running)));
         }
     });
     cx.run_until_parked();
     let title = manager.update(cx, |manager, cx| {
-        let targets = accounts(manager, &["wildfox"]);
+        let targets = accounts(manager, &["main"]);
         manager.stop(targets, cx);
         match &manager.confirm.as_ref().unwrap().ask {
             Ask::Stop { title, .. } => title.clone(),
             _ => panic!("stopping asks first"),
         }
     });
-    assert_eq!(title, "Stop Hunt on wildfox?");
+    assert_eq!(title, "Stop Hunt on main?");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -876,7 +922,7 @@ fn closing_a_running_account_asks_only_while_the_setting_is_on(cx: &mut gpui::Te
     let asks = |cx: &mut gpui::VisualTestContext| {
         manager.update(cx, |manager, cx| {
             manager.confirm = None;
-            let targets = accounts(manager, &["kestrel"]);
+            let targets = accounts(manager, &["alt2"]);
             manager.close(targets, cx);
             manager
                 .confirm
@@ -968,6 +1014,14 @@ fn the_edit_menu_select_all_checks_every_shown_account(cx: &mut gpui::TestAppCon
         assert!(!manager.checked.is_empty());
         assert_eq!(manager.checked.len(), manager.shown(cx).len());
     });
+    cx.simulate_click(gpui::point(px(250.0), px(62.0)), gpui::Modifiers::none());
+    cx.run_until_parked();
+    manager.read_with(cx, |manager, _| {
+        assert!(
+            !manager.checked.is_empty(),
+            "picking the filter that's already showing keeps the selection"
+        );
+    });
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -995,21 +1049,21 @@ fn a_setup_set_to_open_in_a_new_window_launches_there_and_leaves_open_accounts_w
     };
     manager.update(cx, |manager, cx| {
         manager.fake = None;
-        let alone = accounts(manager, &["wildfox", "burner"]);
+        let alone = accounts(manager, &["main", "alt8"]);
         manager.launch(alone, cx);
     });
     start(cx);
-    let shared = window("burner", cx).unwrap();
-    let setup = window("kestrel", cx).unwrap();
+    let shared = window("alt8", cx).unwrap();
+    let setup = window("alt2", cx).unwrap();
     assert_ne!(setup, shared);
-    assert_eq!(window("wildfox", cx), Some(shared));
+    assert_eq!(window("main", cx), Some(shared));
     manager.update(cx, |manager, cx| {
-        let kestrel = accounts(manager, &["kestrel"]);
-        manager.close_now(kestrel, cx);
+        let alt2 = accounts(manager, &["alt2"]);
+        manager.close_now(alt2, cx);
     });
-    assert_eq!(window("kestrel", cx), None);
+    assert_eq!(window("alt2", cx), None);
     start(cx);
-    assert_eq!(window("kestrel", cx), Some(setup));
+    assert_eq!(window("alt2", cx), Some(setup));
     assert_eq!(cx.update(|_, cx| client::clients(cx).len()), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1076,10 +1130,10 @@ fn trying_again_loads_accounts_once_the_file_is_fixed(cx: &mut gpui::TestAppCont
     );
     cx.run_until_parked();
     cx.simulate_keystrokes("cmd-f");
-    cx.simulate_input("wildfox");
+    cx.simulate_input("main");
     assert_eq!(
         manager.read_with(cx, |manager, cx| manager.search.read(cx).text().to_owned()),
-        "wildfox"
+        "main"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1123,7 +1177,7 @@ fn snapshot_stress() {
                 "battleon",
                 state(
                     ScriptPhase::Failed(
-                        "couldn't join house-73675086, the room is full and the fallback room house-73675087 is full too".into(),
+                        "couldn't join house-12345678, the room is full and the fallback room house-12345679 is full too".into(),
                     ),
                     minutes(1),
                 ),
@@ -1138,7 +1192,6 @@ fn snapshot_stress() {
             "Wwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
             "wide",
             Presence::Waiting {
-                place: 128,
                 script: Some(waiting(long_script)),
                 open: None,
             },

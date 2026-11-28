@@ -336,9 +336,8 @@ fn presence_across(clients: &[&Client], account: &AccountId, cx: &App) -> Presen
 }
 
 fn presence(client: &Client, account: &AccountId, cx: &App) -> Presence {
-    if let Some((place, _)) = client.waiting(account) {
+    if client.waiting(account).is_some() {
         return Presence::Waiting {
-            place,
             script: client
                 .waiting_script(account)
                 .map(|script| ScriptState::queued(&script, cx)),
@@ -930,6 +929,9 @@ impl Manager {
     }
 
     fn set_filter(&mut self, filter: Option<Filter>, cx: &mut Context<Self>) {
+        if self.filter == filter {
+            return;
+        }
         self.filter = filter;
         self.checked.clear();
         cx.notify();

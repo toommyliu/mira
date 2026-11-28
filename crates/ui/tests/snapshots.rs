@@ -366,6 +366,69 @@ fn a_clicked_switch_animates_for_the_travel_time_then_rests_on() {
 }
 
 #[test]
+fn a_hovered_path_rewinds_to_its_start_reads_through_and_rests_on_its_end() {
+    use mira_ui::{
+        FRAME,
+        primitives::marquee::{HOLD, INTENT, Marquee, REWIND},
+    };
+    use std::time::Duration;
+
+    let lead = INTENT + REWIND + HOLD;
+    let recording = mira_ui::record(
+        "marquee-hover",
+        size(px(200.0), px(40.0)),
+        lead + Duration::from_secs(4),
+        |window, cx| {
+            Scene::open(
+                |_, _| {
+                    div()
+                        .w(px(168.0))
+                        .child(Marquee::new(
+                            "path",
+                            "~/Library/Application Support/Mira/scripts/daily.ts",
+                        ))
+                        .into_any_element()
+                },
+                window,
+                cx,
+            )
+        },
+        |cx, owner| hover(cx, owner, 60.0, 22.0),
+    );
+    let summary = std::fs::read_to_string(&recording.summary).unwrap();
+    let changed = |from: Duration, to: Duration| {
+        recording
+            .frames
+            .iter()
+            .filter(|frame| frame.at > from && frame.at <= to && frame.changed > 0)
+            .count()
+    };
+    assert_eq!(
+        changed(Duration::ZERO, INTENT - FRAME),
+        0,
+        "a pointer passing over shouldn't move the path\n{summary}"
+    );
+    assert!(
+        changed(INTENT, INTENT + REWIND) > 4,
+        "the path should slide back to its start\n{summary}"
+    );
+    assert_eq!(
+        changed(INTENT + REWIND + FRAME, lead - FRAME),
+        0,
+        "the path should hold at its start\n{summary}"
+    );
+    assert!(
+        changed(lead, lead + Duration::from_secs(1)) > 30,
+        "the path should scroll while it's read\n{summary}"
+    );
+    let settled = recording.settled_at();
+    assert!(
+        settled > lead + Duration::from_secs(1) && settled < lead + Duration::from_secs(4),
+        "the path should stop once its end shows\n{summary}"
+    );
+}
+
+#[test]
 fn snapshot_controls() {
     scene("controls", 620.0, 340.0, |_, _| {
         div()
