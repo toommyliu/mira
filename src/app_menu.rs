@@ -1,6 +1,10 @@
 use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
 use mira_ui::primitives::text_field;
-use objc2_app_kit::NSApplication;
+use objc2::runtime::AnyObject;
+use objc2_app_kit::{
+    NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionVersion, NSApplication,
+};
+use objc2_foundation::{NSDictionary, NSString, ns_string};
 
 use crate::{quit::Quit, ruffle_view as game, settings};
 
@@ -34,9 +38,22 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 fn show_about() {
-    if let Some(main) = objc2::MainThreadMarker::new() {
-        NSApplication::sharedApplication(main).orderFrontStandardAboutPanel(None);
-    }
+    let Some(main) = objc2::MainThreadMarker::new() else {
+        return;
+    };
+    let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
+    let keys = unsafe {
+        [
+            NSAboutPanelOptionApplicationVersion,
+            NSAboutPanelOptionVersion,
+        ]
+    };
+    // An empty build version stops AppKit from appending CFBundleVersion, the workflow run number.
+    let values: [&AnyObject; 2] = [&version, ns_string!("")];
+    let options = NSDictionary::from_slices(&keys, &values);
+    unsafe {
+        NSApplication::sharedApplication(main).orderFrontStandardAboutPanelWithOptions(&options)
+    };
 }
 
 fn in_active_window(cx: &mut App, act: fn(&Window)) {
