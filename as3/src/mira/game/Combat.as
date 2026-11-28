@@ -215,7 +215,7 @@ package mira.game {
       return skill != null && isCastable(world, skill) && !isCoolingDown(world, skill);
     }
 
-    private static function isCastable(world:Object, skill:Object):Boolean {
+    private static function isCastable(world:Object, skill:Object, disabled:* = null):Boolean {
       var self:Object = world.myAvatar;
       var leaf:Object = self.dataLeaf;
       if (!skill.isOK || skill.skillLock || skill.lock || leaf.intState == 0) {
@@ -230,7 +230,7 @@ package mira.game {
         return false;
       }
 
-      if ((skill.sp != null && !hasSpiritPower(leaf, skill.sp)) || isDisabled(world, leaf)) {
+      if ((skill.sp != null && !hasSpiritPower(leaf, skill.sp)) || (disabled === null ? isDisabled(world, leaf) : disabled)) {
         return false;
       }
 
@@ -262,10 +262,11 @@ package mira.game {
       }
 
       var leaf:Object = self.dataLeaf;
+      var disabled:Boolean = isDisabled(world, leaf);
       var skills:Array = [];
       for (var index:int = 0; index <= CONSUMABLE_SKILL_INDEX; index++) {
         var skill:Object = world.actions.active[index];
-        skills.push(skill ? { cooldown: getSkillCooldownRemainingValue(skill), castable: isCastable(world, skill) } : null);
+        skills.push(skill ? { cooldown: getSkillCooldownRemainingValue(skill), castable: isCastable(world, skill, disabled) } : null);
       }
 
       var target:Object = self.target;
