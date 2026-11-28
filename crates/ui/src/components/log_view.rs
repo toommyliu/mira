@@ -52,6 +52,67 @@ pub struct LogRow {
     pub opens_section: bool,
 }
 
+pub struct LogLine {
+    pub time: Option<SharedString>,
+    pub tag: Option<SharedString>,
+    pub level: LogLevel,
+    pub text: SharedString,
+}
+
+impl LogLine {
+    pub fn height() -> Pixels {
+        LINE + ROW_INSET * 2.0
+    }
+
+    pub fn row(self, theme: &Theme, selected: bool) -> Div {
+        row_frame(theme, self.level, selected)
+            .pt(ROW_INSET - OPTICAL_LIFT)
+            .pb(ROW_INSET + OPTICAL_LIFT)
+            .children(self.time.map(|at| time(theme, at)))
+            .children(self.tag.map(|tag| {
+                mono(theme)
+                    .flex_none()
+                    .text_color(theme.muted_foreground)
+                    .child(tag)
+            }))
+            .child(
+                mono(theme)
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(ink(theme, self.level))
+                    .child(self.text),
+            )
+    }
+}
+
+pub fn jump_to_latest(
+    theme: &Theme,
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom(theme.space(3.0))
+        .flex()
+        .justify_center()
+        .child(
+            theme
+                .floating_bar()
+                .debug_selector(|| "log-jump".into())
+                .pl(theme.space(1.0))
+                .child(
+                    Button::new(id, label)
+                        .variant(Variant::Ghost)
+                        .size(Size::Small)
+                        .on_click(move |_, window, cx| on_click(window, cx)),
+                ),
+        )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Selection {
     anchor: usize,
@@ -289,7 +350,7 @@ fn time(theme: &Theme, time: SharedString) -> Div {
 
 fn divider(theme: &Theme, label: SharedString, selected: bool) -> Div {
     row_frame(theme, LogLevel::Info, selected)
-        .h(LINE + ROW_INSET * 2.0)
+        .h(LogLine::height())
         .items_center()
         .child(
             mono(theme)
@@ -336,21 +397,13 @@ fn line(theme: &Theme, row: LogRow, selected: bool, first: bool) -> Div {
 
 fn pinned(theme: &Theme, row: LogRow, shift: Pixels) -> AnyElement {
     let content = match row.body {
-        LogBody::Text(text) => {
-            let first = text.lines().next().unwrap_or_default().to_owned();
-            row_frame(theme, row.level, false)
-                .pt(ROW_INSET - OPTICAL_LIFT)
-                .pb(ROW_INSET + OPTICAL_LIFT)
-                .child(time(theme, row.time))
-                .child(
-                    mono(theme)
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(ink(theme, row.level))
-                        .child(first),
-                )
+        LogBody::Text(text) => LogLine {
+            time: Some(row.time),
+            tag: None,
+            level: row.level,
+            text: text.lines().next().unwrap_or_default().to_owned().into(),
         }
+        .row(theme, false),
         LogBody::Divider(label) => divider(theme, label, false),
     };
     div()
@@ -383,7 +436,7 @@ fn pinned_at(list: &ListState, section_of: &SectionOf) -> Option<(usize, Pixels)
 }
 
 fn pinned_height() -> Pixels {
-    LINE + ROW_INSET * 2.0 + px(1.0)
+    LogLine::height() + px(1.0)
 }
 
 impl RenderOnce for LogView {
@@ -448,28 +501,15 @@ impl RenderOnce for LogView {
         };
         let jump = (!following).then(|| {
             let state = self.state.clone();
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom(theme.space(3.0))
-                .flex()
-                .justify_center()
-                .child(
-                    theme
-                        .floating_bar()
-                        .debug_selector(|| "log-jump".into())
-                        .pl(theme.space(1.0))
-                        .child(
-                            Button::new((self.id.clone(), "jump"), "Jump to latest")
-                                .variant(Variant::Ghost)
-                                .size(Size::Small)
-                                .on_click(move |_, window, _| {
-                                    state.jump_to_latest();
-                                    window.refresh();
-                                }),
-                        ),
-                )
+            jump_to_latest(
+                &theme,
+                (self.id.clone(), "jump"),
+                "Jump to latest",
+                move |window, _| {
+                    state.jump_to_latest();
+                    window.refresh();
+                },
+            )
         });
 
         let keys = self.state.clone();
