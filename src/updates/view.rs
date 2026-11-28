@@ -21,7 +21,7 @@ fn failed_mark(cx: &App) -> impl IntoElement {
     div()
         .id("update-failed")
         .role(Role::Image)
-        .aria_label("Update failed")
+        .aria_label("Check failed")
         .flex_none()
         .child(icon(Icon::TriangleAlert, cx.theme().warning).size(px(12.0)))
 }
@@ -48,12 +48,7 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
         Updates::Ready { .. } => "Ready to restart".to_owned(),
         Updates::Restarting(_) => "Restarting…".to_owned(),
     };
-    let failed = matches!(
-        state,
-        Updates::Failed(_)
-            | Updates::Available { error: Some(_), .. }
-            | Updates::Ready { error: Some(_), .. }
-    );
+    let failed = matches!(state, Updates::Failed(_));
     let action = match button(Placement::new(Side::Top, Align::Start), cx) {
         Some(update) => update.into_any_element(),
         None => {
@@ -74,34 +69,36 @@ pub(crate) fn footer(cx: &App) -> impl IntoElement {
             .into_any_element()
         }
     };
-    v_flex()
+    h_flex()
         .debug_selector(|| "settings-update-footer".into())
         .flex_none()
+        .items_end()
+        .justify_between()
+        .gap(theme.space(2.0))
         .m(theme.space(2.0))
         .pl(theme.space(2.0))
         .text_caption(theme.typography)
         .text_color(theme.muted_foreground)
         .child(
-            div()
-                .debug_selector(|| "settings-update-version".into())
-                .truncate()
-                .text_color(theme.foreground)
-                .child(VERSION),
-        )
-        .child(
-            h_flex()
-                .h(theme.typography.secondary_line)
-                .gap(theme.space(2.0))
-                .justify_between()
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .debug_selector(|| "settings-update-version".into())
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(VERSION),
+                )
                 .child(
                     h_flex()
-                        .min_w_0()
+                        .h(theme.typography.secondary_line)
                         .gap(theme.space(1.5))
                         .child(div().min_w_0().truncate().child(status))
                         .when(failed, |row| row.child(failed_mark(cx))),
-                )
-                .child(action),
+                ),
         )
+        .child(div().flex_none().child(action))
 }
 
 #[derive(Debug, Default, PartialEq)]

@@ -41,7 +41,7 @@ pub(super) struct ScriptDialogs {
 const MAX_LABEL: usize = 24;
 const MAX_TITLE: usize = 60;
 const WIDTH: Pixels = px(420.0);
-const STOP_INSET: Pixels = px(10.0);
+const STOP_INSET: Pixels = px(8.0);
 
 #[derive(Debug, PartialEq)]
 struct Content {
@@ -332,10 +332,7 @@ impl Render for ScriptDialogs {
                         .debug_selector(|| "script-dialog-fade-bottom".into()),
                 )
             })
-            .child(Scrollbar::new(
-                "script-dialog-scrollbar",
-                self.scroll.clone(),
-            ));
+            .child(Scrollbar::new("script-dialog-scrollbar", self.scroll.clone()).persistent());
         let body = v_flex()
             .min_h_0()
             .gap(layout.space(3.0))
