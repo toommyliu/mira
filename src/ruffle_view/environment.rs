@@ -1563,10 +1563,14 @@ impl Render for Environment {
         });
         let body = match &automation {
             Some(automation) => self.body(&theme, automation, window, cx),
-            None => v_flex().flex_1().child(Empty::new(
-                "No tabs open",
-                "Open a tab to set its drops, quests and boosts.",
-            )),
+            None => v_flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .child(Empty::new(
+                    "No tabs open",
+                    "Open a tab to set its drops, quests and boosts.",
+                )),
         };
         div()
             .flex()

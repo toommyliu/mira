@@ -48,9 +48,10 @@ const MIN_HEIGHT: f32 = 420.0;
 
 const PADDING: Pixels = px(16.0);
 const PROFILE_WIDTH: Pixels = px(180.0);
-const SUBJECT_WIDTH: Pixels = px(96.0);
+const SUBJECT_WIDTH: Pixels = px(104.0);
 const SUBJECT_MENU_WIDTH: Pixels = px(140.0);
 const UNIT_WIDTH: Pixels = px(56.0);
+const STAT_UNIT_WIDTH: Pixels = px(44.0);
 const MILLIS_WIDTH: Pixels = px(72.0);
 const VALUE_WIDTH: Pixels = px(44.0);
 const CONJUNCTION_WIDTH: Pixels = px(24.0);
@@ -1016,8 +1017,8 @@ impl Editor {
             let count = cards.len();
             let list = List::new(section.id(), title, count, move |index| {
                 let card = &cards[index];
-                let item =
-                    ListItem::new(card.summary.clone()).start_slot(Kbd::new(card.slot.to_string()));
+                let item = ListItem::new(card.summary.clone())
+                    .start_slot(Kbd::new(card.slot.to_string()).lit(selected == Some(index)));
                 match &card.detail {
                     Some(detail) => item.end_slot(detail.clone()),
                     None => item,
@@ -1186,7 +1187,6 @@ impl Editor {
             .size_full()
             .gap(theme.space(4.0))
             .p(PADDING)
-            .pt(layout.space(3.0))
             .overflow_y_scroll()
             .track_scroll(&self.inspector_scroll);
         let (Some(item), Some(texts)) = (self.item(), &self.texts) else {
@@ -1218,6 +1218,7 @@ impl Editor {
         });
         let pane = pane.child(
             h_flex()
+                .flex_none()
                 .h(layout.control)
                 .justify_between()
                 .gap(layout.space(2.0))
@@ -1325,6 +1326,7 @@ impl Editor {
                         .gap(layout.space(1.5))
                         .child(
                             h_flex()
+                                .flex_none()
                                 .h(layout.control)
                                 .justify_between()
                                 .child(heading("Conditions".into()))
@@ -1429,7 +1431,7 @@ fn row_note(theme: &Theme, text: impl Into<SharedString>) -> Div {
 
 fn millis_input(theme: &Theme, texts: &Texts, text: Text) -> impl IntoElement + use<> {
     h_flex()
-        .gap(theme.space(2.0))
+        .gap(theme.space(1.5))
         .child(div().w(MILLIS_WIDTH).children(texts.get(text)))
         .child(div().text_color(theme.muted_foreground).child("ms"))
 }
@@ -1466,9 +1468,12 @@ fn condition_editor(
                     .child(
                         h_flex()
                             .flex_1()
+                            .min_w_0()
                             .justify_between()
-                            .child(condition.subject.label())
-                            .child(mira_ui::primitives::icon(
+                            .gap(layout.space(1.5))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .child(div().min_w_0().truncate().child(condition.subject.label()))
+                            .child(mira_ui::primitives::small_icon(
                                 Icon::ChevronDown,
                                 theme.muted_foreground,
                             )),
@@ -1515,7 +1520,7 @@ fn condition_editor(
         },
     )
     .size(Size::Small)
-    .w(UNIT_WIDTH)
+    .w(if aura { UNIT_WIDTH } else { STAT_UNIT_WIDTH })
     .on_click(edit(if aura {
         |rule: &mut Rule| {
             rule.measure = match rule.measure {
@@ -1541,8 +1546,7 @@ fn condition_editor(
             .gap(CONDITION_GAP)
             .child(subject)
             .child(measure)
-            .child(div().flex_1())
-            .child(remove)
+            .child(div().flex_none().ml_auto().child(remove))
             .into_any_element();
     }
     v_flex()
@@ -1598,19 +1602,16 @@ impl Render for Editor {
                         .child(self.name_row(&theme))
                         .children(sections),
                 )
-                .child(Scrollbar::new(
-                    "profile-scrollbar",
-                    self.lanes_scroll.clone(),
-                ));
+                .child(Scrollbar::new("profile-scrollbar", self.lanes_scroll.clone()).persistent());
             let inspector = theme
                 .inspector_pane()
                 .relative()
                 .h_full()
                 .child(self.inspector(&theme, cx))
-                .child(Scrollbar::new(
-                    "inspector-scrollbar",
-                    self.inspector_scroll.clone(),
-                ));
+                .child(
+                    Scrollbar::new("inspector-scrollbar", self.inspector_scroll.clone())
+                        .persistent(),
+                );
             div()
                 .flex()
                 .flex_1()

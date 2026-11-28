@@ -883,6 +883,7 @@ impl LoaderGrabber {
                     v_flex()
                         .flex_1()
                         .min_w_0()
+                        .self_start()
                         .children(name.map(|name| {
                             div()
                                 .id("grab-source-title")
@@ -1130,9 +1131,9 @@ impl LoaderGrabber {
                     .pt(layout.space(3.0))
                     .child(self.inspector(theme, entry, cx)),
             )
-            .children(
-                scroll.map(|scroll| Scrollbar::new("grab-inspector-scrollbar", scroll.clone())),
-            )
+            .children(scroll.map(|scroll| {
+                Scrollbar::new("grab-inspector-scrollbar", scroll.clone()).persistent()
+            }))
     }
 
     fn inspector(
@@ -1274,7 +1275,7 @@ impl LoaderGrabber {
             let selector = format!("{scope}-fact-{index}");
             let this = cx.weak_entity();
             let copies = [
-                (format!("Copy {label}"), value.clone()),
+                (copy_command(label), value.clone()),
                 ("Copy all facts".to_owned(), all.to_string()),
             ];
             ContextMenu::new((scope.clone(), index), *label)
@@ -1542,11 +1543,14 @@ fn tooltip(act: &Act) -> Option<&'static str> {
     }
 }
 
-fn copy_id(id_label: &str) -> String {
-    match id_label {
-        "Item ID" => "Copy item ID".into(),
-        "Quest ID" => "Copy quest ID".into(),
-        other => format!("Copy {other}"),
+fn copy_command(label: &str) -> String {
+    let first_word = label.split(' ').next().unwrap_or_default();
+    let mut letters = label.chars();
+    match letters.next() {
+        Some(first) if !first_word.chars().skip(1).any(char::is_uppercase) => {
+            format!("Copy {}{}", first.to_lowercase(), letters.as_str())
+        }
+        _ => format!("Copy {label}"),
     }
 }
 
@@ -1575,7 +1579,7 @@ fn record_menu(
 ) -> Vec<MenuItem> {
     let copies = [
         ("Copy name".to_owned(), entry.name.clone()),
-        (copy_id(entry.id_label), entry.id.clone()),
+        (copy_command(entry.id_label), entry.id.clone()),
         ("Copy JSON".to_owned(), entry.json.clone()),
     ];
     let whole = source.name().to_lowercase();
