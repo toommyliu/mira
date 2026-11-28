@@ -237,7 +237,9 @@ impl RuffleView {
                     if this
                         .update(cx, |this: &mut Self, cx| {
                             this.stats = report;
-                            cx.notify();
+                            if this.selected || this.tiled {
+                                cx.notify();
+                            }
                         })
                         .is_err()
                     {
