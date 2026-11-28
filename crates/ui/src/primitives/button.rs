@@ -386,9 +386,9 @@ impl RenderOnce for Button {
                     clear,
                 ),
                 Variant::Inset => (
+                    clear,
                     theme.foreground.opacity(0.08),
-                    theme.foreground.opacity(0.16),
-                    theme.foreground,
+                    theme.muted_foreground,
                     clear,
                 ),
                 Variant::Danger => (
@@ -432,6 +432,13 @@ impl RenderOnce for Button {
         let icon_size = self.icon_size.unwrap_or(self.size.icon_size());
         let tip = self.tooltip.clone();
         let describe = tip.clone().filter(|tip| *tip != self.label);
+        let glyph = self.icon.map(|glyph| {
+            icon(glyph, fg)
+                .size(icon_size)
+                .when(self.variant == Variant::Inset && !inert, |icon| {
+                    icon.group_hover(FACE_GROUP, |icon| icon.text_color(theme.foreground))
+                })
+        });
         let content = h_flex()
             .id("content")
             .flex_1()
@@ -452,8 +459,8 @@ impl RenderOnce for Button {
             .when_some(self.start, |content, start| {
                 content.child(h_flex().flex_none().child(start))
             })
-            .map(|content| match (self.icon, self.children.is_empty()) {
-                (Some(glyph), true) => content.child(icon(glyph, fg).size(icon_size)),
+            .map(|content| match (glyph, self.children.is_empty()) {
+                (Some(glyph), true) => content.child(glyph),
                 (_, true) => content.child(div().truncate().child(self.label.clone())),
                 (_, false) => content.children(self.children),
             })
