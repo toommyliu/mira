@@ -31,6 +31,8 @@ pub(crate) type ItemsBuilder = Rc<dyn Fn(&mut Window, &mut App) -> Vec<MenuItem>
 pub(crate) const MENU_MAX_HEIGHT: Pixels = px(360.0);
 pub(crate) const SELECT_MAX_HEIGHT: Pixels = px(288.0);
 pub(crate) const PANEL_INSET: Pixels = px(4.0);
+const LEAD_SLOT: Pixels = px(14.0);
+const CHECK_SLOT: Pixels = px(12.0);
 const DISMISS_SIZE: Pixels = px(18.0);
 pub(crate) use super::placement::COLLISION_MARGIN as WINDOW_MARGIN;
 
@@ -722,23 +724,24 @@ fn reveal_highlighted(
     highlighted: Option<usize>,
     scrolled: Range<usize>,
     window: &mut Window,
-) {
+) -> Option<usize> {
     if !menu.reveal.get() {
-        return;
+        return None;
     }
     let Some(index) = highlighted
         .filter(|index| scrolled.contains(index))
         .map(|index| index - scrolled.start)
     else {
         menu.reveal.set(false);
-        return;
+        return None;
     };
     if menu.rest_scroll.bounds().size.height <= Pixels::ZERO {
         window.request_animation_frame();
-        return;
+        return Some(index);
     }
     menu.reveal.set(false);
     menu.rest_scroll.scroll_to_item(index);
+    Some(index)
 }
 
 fn current(metas: &[Meta], menu: &MenuState) -> (Option<usize>, Option<(usize, Option<usize>)>) {
@@ -765,15 +768,30 @@ fn scrolled(items: &[MenuItem]) -> Range<usize> {
     start..end
 }
 
-fn checked(items: &[MenuItem], scrolled: &Range<usize>) -> Option<(usize, SharedString)> {
+struct Checked {
+    index: usize,
+    label: SharedString,
+    leads: bool,
+}
+
+fn checks_lead(items: &[MenuItem]) -> bool {
+    items
+        .iter()
+        .any(|item| item.checked.is_some() && item.mark != Mark::Switch)
+        && items.iter().any(|item| item.shortcut.is_some())
+}
+
+fn checked(items: &[MenuItem], scrolled: &Range<usize>) -> Option<Checked> {
     let mut checked = items
         .iter()
         .enumerate()
         .filter(|(_, item)| item.checked == Some(true) && item.mark != Mark::Switch);
     let (index, item) = checked.next().filter(|_| checked.next().is_none())?;
-    scrolled
-        .contains(&index)
-        .then(|| (index - scrolled.start, item.label.clone()))
+    scrolled.contains(&index).then(|| Checked {
+        index: index - scrolled.start,
+        label: item.label.clone(),
+        leads: checks_lead(items),
+    })
 }
 
 fn split(mut rows: Vec<AnyElement>, scrolled: &Range<usize>) -> [Vec<AnyElement>; 3] {
@@ -848,10 +866,10 @@ fn rows(
     let gutter = items
         .iter()
         .any(|item| item.checked.is_some() && item.mark != Mark::Switch);
-    let checks_lead = gutter && items.iter().any(|item| item.shortcut.is_some());
+    let checks_lead = checks_lead(&items);
     let dismissible = items.iter().any(|item| item.dismiss.is_some());
     let lead = checks_lead || items.iter().any(|item| item.current.is_some());
-    let lead_slot = layout.space(3.5);
+    let lead_slot = LEAD_SLOT;
     let count = metas.iter().filter(|meta| meta.navigable).count();
     let mut position = 0;
     items
@@ -1009,7 +1027,7 @@ fn rows(
                         })
                         .when(gutter && !checks_lead && mark != Mark::Switch, |row| {
                             row.child(
-                                div().flex_none().w(theme.space(3.0)).when(
+                                div().flex_none().w(CHECK_SLOT).when(
                                     checked == Some(true) && mark != Mark::Switch,
                                     |gutter| gutter.child(Icon::Check),
                                 ),
@@ -1236,8 +1254,8 @@ pub(super) fn popup_panel(
     let prev_state = state.clone();
     let rest_scroll = menu.rest_scroll.clone();
     let scrolled = scrolled(&items);
-    let checked = checked(&items, &scrolled);
-    reveal_highlighted(menu, highlighted, scrolled.clone(), window);
+    let revealing = reveal_highlighted(menu, highlighted, scrolled.clone(), window);
+    let checked = checked(&items, &scrolled).filter(|checked| revealing != Some(checked.index));
     let [before, rest, after] = split(
         rows(
             items,
@@ -1319,12 +1337,17 @@ fn away(handle: &ScrollHandle, index: usize) -> Option<Away> {
 fn scroll_to_checked(
     id: ElementId,
     away: Away,
-    label: SharedString,
-    index: usize,
+    Checked {
+        index,
+        label,
+        leads,
+    }: Checked,
     handle: &ScrollHandle,
     theme: &Theme,
 ) -> Div {
     let handle = handle.clone();
+    let layout = theme.layout;
+    let half = layout.space(3.0);
     let glyph = match away {
         Away::Above => Icon::ArrowUp,
         Away::Below => Icon::ArrowDown,
@@ -1339,7 +1362,7 @@ fn scroll_to_checked(
         .flex()
         .items_center()
         .justify_center()
-        .size(theme.layout.space(6.0))
+        .size(half * 2.0)
         .rounded_full()
         .bg(theme.popover)
         .shadow(theme.popup_shadow())
@@ -1361,8 +1384,22 @@ fn scroll_to_checked(
             Away::Below => edge.bottom(PANEL_INSET),
         })
         .flex()
-        .justify_center()
+        .map(|edge| {
+            if leads {
+                edge.pl(PANEL_INSET + layout.space(2.0) + LEAD_SLOT / 2.0 - half)
+            } else {
+                edge.justify_end().pr(Scrollbar::GUTTER
+                    + px(2.0)
+                    + layout.space(2.0)
+                    + CHECK_SLOT / 2.0
+                    - half)
+            }
+        })
         .child(button)
+}
+
+fn overflows(handle: &ScrollHandle) -> bool {
+    handle.max_offset().y > Pixels::ZERO
 }
 
 fn scrolling(
@@ -1371,11 +1408,11 @@ fn scrolling(
     fixed: bool,
     rows: Vec<AnyElement>,
     handle: &ScrollHandle,
-    checked: Option<(usize, SharedString)>,
+    checked: Option<Checked>,
     theme: &Theme,
 ) -> Div {
-    let overflows = handle.max_offset().y > Pixels::ZERO;
-    let index = checked.as_ref().map(|(index, _)| *index);
+    let overflows = overflows(handle);
+    let index = checked.as_ref().map(|checked| checked.index);
     let shown = index.and_then(|index| away(handle, index));
     let measured = handle.clone();
     div()
@@ -1383,7 +1420,7 @@ fn scrolling(
         .flex()
         .flex_col()
         .min_h_0()
-        .mr(-PANEL_INSET)
+        .mx(-PANEL_INSET)
         .child(
             div()
                 .id(id.clone())
@@ -1392,6 +1429,7 @@ fn scrolling(
                 .min_h_0()
                 .max_h(height)
                 .when(fixed, |rest| rest.h(height))
+                .pl(PANEL_INSET)
                 .pr(if overflows {
                     Scrollbar::GUTTER + px(2.0)
                 } else {
@@ -1404,7 +1442,7 @@ fn scrolling(
         .child(
             canvas(
                 move |_, window, _| {
-                    if (measured.max_offset().y > Pixels::ZERO) != overflows
+                    if self::overflows(&measured) != overflows
                         || index.and_then(|index| away(&measured, index)) != shown
                     {
                         window.request_animation_frame();
@@ -1415,15 +1453,8 @@ fn scrolling(
             .absolute()
             .size_0(),
         )
-        .children(shown.zip(checked).map(|(away, (index, label))| {
-            scroll_to_checked(
-                (id.clone(), "checked").into(),
-                away,
-                label,
-                index,
-                handle,
-                theme,
-            )
+        .children(shown.zip(checked).map(|(away, checked)| {
+            scroll_to_checked((id.clone(), "checked").into(), away, checked, handle, theme)
         }))
         .child(Scrollbar::new((id, "scrollbar"), handle.clone()).persistent())
 }
@@ -1469,8 +1500,9 @@ impl RenderOnce for MenuList {
         let keys_metas = metas.clone();
         let leave_state = state.clone();
         let scrolled = scrolled(&self.items);
-        let checked = checked(&self.items, &scrolled);
-        reveal_highlighted(state.read(cx), highlighted, scrolled.clone(), window);
+        let revealing = reveal_highlighted(state.read(cx), highlighted, scrolled.clone(), window);
+        let checked =
+            checked(&self.items, &scrolled).filter(|checked| revealing != Some(checked.index));
         let [before, rest, after] = split(
             rows(
                 self.items,

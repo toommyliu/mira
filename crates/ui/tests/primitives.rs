@@ -479,6 +479,11 @@ fn an_arrow_scrolls_back_to_the_checked_row(cx: &mut TestAppContext) {
     let current = cx.debug_bounds("current").unwrap();
     assert!(current.top() > px(240.0), "{current:?}");
     let arrow = cx.debug_bounds("scroll-to-checked").unwrap();
+    let panel = cx.debug_bounds("menu-panel").unwrap();
+    assert!(
+        arrow.left() > panel.center().x && arrow.right() < panel.right(),
+        "the arrow sits over the check column, clear of the row labels: {arrow:?} in {panel:?}"
+    );
     cx.simulate_click(arrow.center(), Modifiers::none());
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();

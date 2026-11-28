@@ -13,6 +13,7 @@ pub struct Field {
     end: Option<AnyElement>,
     control: AnyElement,
     inline: bool,
+    disabled: bool,
 }
 
 impl Field {
@@ -24,6 +25,7 @@ impl Field {
             end: None,
             control: control.into_any_element(),
             inline: false,
+            disabled: false,
         }
     }
 
@@ -44,6 +46,11 @@ impl Field {
 
     pub fn inline(mut self) -> Self {
         self.inline = true;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 }
@@ -67,7 +74,15 @@ impl RenderOnce for Field {
             .line_height(typography.body_line)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.foreground)
-            .child(div().flex_1().min_w_0().child(self.label))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .when(self.disabled, |label| {
+                        label.opacity(crate::theme::DISABLED_OPACITY)
+                    })
+                    .child(self.label),
+            )
             .children(self.end);
         div()
             .flex()
